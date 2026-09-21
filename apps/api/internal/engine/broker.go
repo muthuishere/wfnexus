@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
 // broker fans persisted run events out to live SSE subscribers.

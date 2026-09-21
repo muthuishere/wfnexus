@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // runDAG executes a workflow whose steps declare `needs`: every step whose

@@ -5,7 +5,7 @@
 
 ## Context
 
-The repository is called `bug-fixer-platform` and the first workflow is
+The repository is called `wfnexus` and the first workflow is
 `bug-fix`, so it is easy to read the product as "a bug fixer". That would be the
 wrong shape to build toward: it makes the engine a detail of one pipeline, and
 every new capability gets bent toward bug fixing.

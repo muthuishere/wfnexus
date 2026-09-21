@@ -1,4 +1,4 @@
-module github.com/muthuishere/bug-fixer-platform/spikes
+module github.com/muthuishere/wfnexus/spikes
 
 go 1.24
 

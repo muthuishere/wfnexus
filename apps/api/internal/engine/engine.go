@@ -21,12 +21,12 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 type Engine struct {
@@ -132,10 +132,10 @@ func (e *Engine) McpServers() []string {
 }
 
 // Models is the model catalog an authoring UI offers: the configured default
-// first, then anything BFP_MODELS lists.
+// first, then anything WFX_MODELS lists.
 func (e *Engine) Models() []string {
 	out := []string{e.cfg.Model}
-	for _, m := range strings.Split(os.Getenv("BFP_MODELS"), ",") {
+	for _, m := range strings.Split(os.Getenv("WFX_MODELS"), ",") {
 		if m = strings.TrimSpace(m); m != "" && m != e.cfg.Model {
 			out = append(out, m)
 		}

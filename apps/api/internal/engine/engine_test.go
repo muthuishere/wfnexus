@@ -12,12 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // These tests run the real engine against a scripted LLM. They need the local

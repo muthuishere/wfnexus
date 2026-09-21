@@ -13,9 +13,9 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 const maxEventOutput = 4000

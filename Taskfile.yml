@@ -11,11 +11,11 @@ tasks:
   api:
     desc: Run the Go API (migrates on boot)
     dir: apps/api
-    env: { BFP_ROOT: "{{.ROOT_DIR}}" }
+    env: { WFX_ROOT: "{{.ROOT_DIR}}" }
     cmds: [go run .]
   api:build:
     dir: apps/api
-    cmds: [go build -o ../../bin/bfp-api .]
+    cmds: [go build -o ../../bin/wfnexus .]
   ui:
     desc: Vite dev server on :5173 proxying /api → :8090
     dir: apps/ui

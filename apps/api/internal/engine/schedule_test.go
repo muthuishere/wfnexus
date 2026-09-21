@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 func dagStep(id string, needs ...string) workflow.Step {

@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // decisionRecord is what we store and show: the typed answers plus the two

@@ -8,7 +8,7 @@ import (
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // --- guardrails: policy on tool calls -------------------------------------

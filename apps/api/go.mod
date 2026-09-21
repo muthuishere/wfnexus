@@ -1,4 +1,4 @@
-module github.com/muthuishere/bug-fixer-platform/apps/api
+module github.com/muthuishere/wfnexus/apps/api
 
 go 1.26.0
 

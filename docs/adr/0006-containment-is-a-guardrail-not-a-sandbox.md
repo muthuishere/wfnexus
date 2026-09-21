@@ -11,7 +11,7 @@ that workspace by injecting `workdir`. This was believed to be containment.
 It is not. On a live run the `draft-pr` agent executed:
 
 ```
-cd /Users/…/bug-fixer-platform && git log --all --grep=reorder
+cd /Users/…/wfnexus && git log --all --grep=reorder
 ```
 
 and then `git checkout -b`, `git stash` and `git reset` — **in the platform's

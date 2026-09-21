@@ -13,7 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/registry"
+	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
 )
 
 // ProviderKind is how a provider produces a turn.

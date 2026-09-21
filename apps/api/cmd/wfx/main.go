@@ -31,7 +31,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 func main() {
@@ -101,7 +101,7 @@ func usage() {
   bfp cancel <run-id>
   bfp registry [skills|tools|providers|classifiers|mcp]
 
-The API is $BFP_API (default http://127.0.0.1:8090). Add --json to any
+The API is $WFX_API (default http://127.0.0.1:8090). Add --json to any
 listing for machine-readable output.
 `)
 }
@@ -109,7 +109,7 @@ listing for machine-readable output.
 // ---- transport -------------------------------------------------------------
 
 func base() string {
-	if v := os.Getenv("BFP_API"); v != "" {
+	if v := os.Getenv("WFX_API"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
 	return "http://127.0.0.1:8090"
@@ -131,7 +131,7 @@ func call(method, path string, body any, out any) error {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s — is the API running? (BFP_API=%s)", err, base())
+		return fmt.Errorf("%s — is the API running? (WFX_API=%s)", err, base())
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(res.Body)

@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/migrations"
+	"github.com/muthuishere/wfnexus/apps/api/migrations"
 )
 
 type Run struct {

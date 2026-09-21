@@ -15,7 +15,7 @@ import (
 //
 // Observed for real: a draft-pr agent ran
 //
-//	cd /Users/…/bug-fixer-platform && git log --all --grep=reorder
+//	cd /Users/…/wfnexus && git log --all --grep=reorder
 //
 // and then `git checkout -b`, `git stash` and `git reset` — in the PLATFORM'S
 // OWN repository rather than the run's worktree. It knew that path because the

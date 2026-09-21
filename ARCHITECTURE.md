@@ -130,7 +130,7 @@ The engine pins every `bash` call to the run's workspace. That is advisory, and
 a live run proved it. A `draft-pr` agent ran:
 
 ```
-cd /Users/…/bug-fixer-platform && git log --all --grep=reorder
+cd /Users/…/wfnexus && git log --all --grep=reorder
 ```
 
 then `git checkout -b`, `git stash` and `git reset` — **in the platform's own

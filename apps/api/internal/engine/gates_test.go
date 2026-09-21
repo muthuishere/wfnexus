@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // twoStep builds a definition whose first step carries the gate under test.

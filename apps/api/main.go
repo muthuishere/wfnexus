@@ -1,4 +1,4 @@
-// bug-fixer-platform API: workflow engine on toolnexus, Postgres state, S3 artifacts.
+// wfnexus API: workflow engine on toolnexus, Postgres state, S3 artifacts.
 package main
 
 import (
@@ -7,14 +7,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/api"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/engine"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/api"
+	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 func main() {
@@ -58,6 +58,6 @@ func main() {
 
 	eng := engine.New(cfg, st, bl, defs, reg, cat)
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.UIDir), ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("bug-fixer-platform api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
+	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())
 }

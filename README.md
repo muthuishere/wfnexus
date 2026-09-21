@@ -1,4 +1,4 @@
-# bug-fixer-platform
+# wfnexus
 
 **Typed pipelines for coding agents.** One Go binary, your Postgres, your repo.
 

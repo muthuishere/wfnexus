@@ -7,7 +7,7 @@ import (
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // The judge tier is tested against the STATIC backend: live answers move run to

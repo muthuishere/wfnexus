@@ -90,7 +90,7 @@ func Save(dir string, d *Definition, cat Catalog) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, d.Name+".yaml")
-	header := "# Managed by the bug-fixer-platform workflow builder.\n" +
+	header := "# Managed by the wfnexus workflow builder.\n" +
 		"# Hand edits are fine; the builder round-trips through the same loader.\n"
 	if err := os.WriteFile(path, append([]byte(header), raw...), 0o644); err != nil {
 		return "", err

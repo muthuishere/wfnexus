@@ -7,7 +7,7 @@ import (
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // The exact escape that happened: the agent cd'd into the platform's own repo
@@ -15,7 +15,7 @@ import (
 func TestContainmentBlocksTheRealEscape(t *testing.T) {
 	ws := t.TempDir()
 	rail := containmentGuardrail(ws)
-	cmd := `cd /Users/muthuishere/muthu/gitworkspace/bug-fixer-platform && pwd && find . -name "*.py" | head -20`
+	cmd := `cd /Users/muthuishere/muthu/gitworkspace/wfnexus && pwd && find . -name "*.py" | head -20`
 	reason := rail(tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": cmd}})
 	if reason == "" {
 		t.Fatal("the observed escape was allowed")

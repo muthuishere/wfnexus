@@ -27,7 +27,7 @@ import (
 	"sync"
 	"testing"
 
-	devinadapter "github.com/muthuishere/bug-fixer-platform/apps/api/internal/devinadapter"
+	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 )
 
