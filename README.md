@@ -87,6 +87,12 @@ Prompts are Go templates over `.Input`, `.Steps.<step-id>.<field>`, `.WorkDir` a
 
 Gates: `needs_input` (pause, ask), `fail` (stop), `skip_to` (jump).
 
+## Isolation
+
+Each run gets its own **git worktree** of the target repo (`isolate: true`, the default), so N runs
+can work the same repository in parallel without fighting over the index or HEAD. `repo_url` clones
+per run instead. Set `isolate: false` to let the agent work directly in your checkout.
+
 ## Layout
 
 ```
@@ -116,6 +122,6 @@ GET  /api/runs/{id}/artifacts/{id}     302 → presigned S3 (or ?inline=1)
 
 ## Status
 
-Working end to end against a real repo with a real bug. Not yet done:
-worktree-per-run parallelism, a queue for concurrent runs, auth, and the "safe outputs" split that
-keeps a GitHub write token out of the LLM steps (see the features-to-steal list in the research doc).
+Working end to end against a real repo with a real bug. Not yet done: a queue/limit for concurrent
+runs, auth, and the "safe outputs" split that keeps a GitHub write token out of the LLM steps (see
+the features-to-steal list in the research doc).

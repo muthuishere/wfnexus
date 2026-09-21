@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,7 +53,9 @@ func (e *Engine) ReloadDefinitions() error {
 	return nil
 }
 
-func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) { return e.broker.Subscribe(runID) }
+func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
+	return e.broker.Subscribe(runID)
+}
 
 func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string, payload any) {
 	ev, err := e.store.AppendEvent(context.WithoutCancel(ctx), runID, stepID, kind, payload)
@@ -303,7 +306,10 @@ func (e *Engine) prepareWorkspace(ctx context.Context, runID uuid.UUID, input ma
 		if _, err := os.Stat(p); err != nil {
 			return "", err
 		}
-		return p, nil
+		if isolate, ok := input["isolate"].(bool); ok && !isolate {
+			return p, nil // explicit opt-out: the agent works in the user's checkout
+		}
+		return e.worktree(ctx, runID, p, input)
 	}
 	dir := filepath.Join(e.cfg.WorkDir, runID.String(), "repo")
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
@@ -329,5 +335,31 @@ func (e *Engine) prepareWorkspace(ctx context.Context, runID uuid.UUID, input ma
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone: %v: %s", err, out)
 	}
+	return dir, nil
+}
+
+// worktree gives each run its own git worktree of a local repo, so concurrent
+// runs against the same repository never fight over the index or HEAD. Falls
+// back to the original path when the repo does not support worktrees.
+func (e *Engine) worktree(ctx context.Context, runID uuid.UUID, repo string, input map[string]any) (string, error) {
+	dir := filepath.Join(e.cfg.WorkDir, runID.String(), "worktree")
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return dir, nil
+	}
+	base, _ := input["base_branch"].(string)
+	if base == "" {
+		base = "HEAD"
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", err
+	}
+	// detached worktree: the run branches from base itself, never moving the parent's HEAD
+	cmd := exec.CommandContext(ctx, "git", "-C", repo, "worktree", "add", "--detach", dir, base)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		e.emit(ctx, runID, "", "log", map[string]any{"text": fmt.Sprintf("git worktree unavailable (%s), using the repo directly: %s", err, bytes.TrimSpace(out))})
+		return repo, nil
+	}
+	e.emit(ctx, runID, "", "log", map[string]any{"text": "worktree " + dir + " from " + base})
 	return dir, nil
 }

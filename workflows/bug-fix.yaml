@@ -11,6 +11,7 @@ input_schema:
     repo_path:    { type: string, title: "…or local repo path" }
     base_branch:  { type: string, title: "Base branch", default: main }
     extra_context: { type: string, title: "Extra context (logs, versions, answers)", format: textarea }
+    isolate:      { type: boolean, title: "Isolate in a git worktree (recommended)", default: true }
 
 steps:
   - id: validate-bug

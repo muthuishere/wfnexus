@@ -115,6 +115,7 @@ func BuildToolPrompt(base string, tools json.RawMessage) string {
 		// Both drifts below were observed from a live devin run: the payload
 		// placed in `answer` as an object, and a function called by writing its
 		// arguments into `answer` instead of into tool_calls.
+		"Every call you already made is shown above with its TOOL RESULT — never repeat a call whose result is already there; use the result.\n" +
 		"`answer` MUST be a plain string of prose. Structured data NEVER goes in `answer` — if a function takes it, that is a tool_calls entry with the data in `arguments`. Calling a function by describing it in `answer` does nothing.\n\n")
 	b.WriteString(base)
 	return b.String()
