@@ -73,9 +73,9 @@ func TestBuiltinToolsWork(t *testing.T) {
 	back := &byName{reply: func(_ string, calls int) string {
 		switch calls {
 		case 0:
-			return toolCall("write", map[string]any{"filePath": target, "content": "written by the builtin"})
+			return toolCall("write", map[string]any{"path": target, "content": "written by the builtin"})
 		case 1:
-			return toolCall("read", map[string]any{"filePath": target})
+			return toolCall("read", map[string]any{"path": target})
 		default:
 			return answer("done")
 		}

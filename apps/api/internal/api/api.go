@@ -50,6 +50,7 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Post("/runs/{id}/approve", s.approve)
 		r.Post("/runs/{id}/reject", s.reject)
 		r.Post("/runs/{id}/input", s.provideInput)
+		r.Post("/runs/{id}/answer", s.answer)
 		r.Post("/runs/{id}/retry", s.retry)
 		r.Post("/runs/{id}/cancel", s.cancel)
 		r.Get("/runs/{id}/artifacts/{artifactId}", s.artifact)
@@ -221,6 +222,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 type stepBody struct {
 	StepID string         `json:"stepId"`
 	Reason string         `json:"reason"`
+	Answer string         `json:"answer"`
 	Input  map[string]any `json:"input"`
 }
 
@@ -271,6 +273,19 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.ProvideInput(r.Context(), id, b.Input); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// answer resolves an ask_human suspension.
+func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
+	id, b, ok := s.decodeStep(w, r)
+	if !ok {
+		return
+	}
+	if err := s.eng.AnswerQuestion(r.Context(), id, b.StepID, b.Answer); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

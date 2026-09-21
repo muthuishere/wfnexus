@@ -4,7 +4,7 @@
 // Proves or disproves, for the platform's per-step team support:
 //   - a parent with Team gets a `task` tool; without Team it does not
 //   - the child runs on its own transcript with ONLY its scoped tools
-//   - TotalTokens on the parent covers the whole tree
+//   - where the WHOLE-TREE token total actually lives
 package main
 
 import (
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"sync"
 
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
@@ -49,21 +51,49 @@ func main() {
 		Budget: &agents.Budget{MaxTokens: 40000, MaxTurns: 8},
 	})
 
+	// observability: every tool call the WHOLE tree makes
+	var mu sync.Mutex
+	var toolCalls []string
+	onMetric := func(ev tn.MetricEvent) {
+		if ev.Event == "tool" {
+			mu.Lock()
+			toolCalls = append(toolCalls, ev.Tool)
+			mu.Unlock()
+		}
+	}
+
 	llm := &agents.LLMOptions{BaseURL: "https://openrouter.ai/api/v1", Style: tn.StyleOpenAI, APIKey: key, Model: model}
 
-	res, _ := lead.Run(agents.Options{LLM: llm}, "What is wrong with apply_discount? Delegate the lookup, then answer in one sentence.")
+	res, rt := lead.Run(agents.Options{LLM: llm, OnMetric: onMetric}, "What is wrong with apply_discount? Delegate the lookup, then answer in one sentence.")
 
 	fmt.Println("== spike 01: teams ==")
-	fmt.Printf("status      : %s\n", res.Status)
-	fmt.Printf("turns       : %d\n", res.Turns)
-	fmt.Printf("totalTokens : %d  (whole tree)\n", res.TotalTokens)
-	fmt.Printf("child tool called: %d time(s)  <- proves the child ran with its scoped tool\n", lookupCalls)
-	fmt.Printf("text        : %s\n", trunc(res.Text, 400))
+	fmt.Printf("status               : %s\n", res.Status)
+	fmt.Printf("turns (parent)       : %d\n", res.Turns)
+	fmt.Printf("TaskResult.TotalTokens: %d   <- PARENT LLM USAGE ONLY (r.Usage.TotalTokens)\n", res.TotalTokens)
+	fmt.Printf("rt.UsageTokens(Root) : %d   <- WHOLE-TREE rollup (parent + every child)\n", rt.UsageTokens(rt.Root))
+	fmt.Printf("tool calls (tree)    : %v\n", toolCalls)
+	fmt.Printf("child tool called    : %d time(s)  <- proves the child ran with its scoped tool\n", lookupCalls)
+	fmt.Printf("text                 : %s\n", trunc(res.Text, 300))
+
+	fmt.Println("\n-- runtime trace --")
+	for _, l := range rt.Trace() {
+		fmt.Println("  " + l)
+	}
 
 	// control: the same agent with no team must have no task tool
-	solo := agents.New("solo", agents.Spec{Does: "x", Soul: "Answer in one word.", Tools: []tn.Tool{}})
-	reg := solo.Registry()
-	fmt.Printf("\ncontrol: solo agent registry size=%d, team=%v (no team => no task tool)\n", len(reg), reg["solo"].Team)
+	solo := agents.New("solo", agents.Spec{Does: "x", Soul: "Answer in one word."})
+	sreg := solo.Registry()
+	lreg := lead.Registry()
+	fmt.Printf("\ncontrol: solo registry=%v team=%v (empty team => no task tool)\n", keys(sreg), sreg["solo"].Team)
+	fmt.Printf("control: lead registry=%v team=%v (transitive closure incl. child)\n", keys(lreg), lreg["lead"].Team)
+}
+
+func keys(m map[string]agents.Def) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func envOr(k, def string) string {
@@ -74,6 +104,7 @@ func envOr(k, def string) string {
 }
 
 func trunc(s string, n int) string {
+	s = strings.TrimSpace(s)
 	if len(s) > n {
 		return s[:n] + "…"
 	}

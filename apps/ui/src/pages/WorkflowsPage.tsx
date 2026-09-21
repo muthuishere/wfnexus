@@ -1,42 +1,47 @@
 import { useEffect, useState } from 'react'
 import { api, type Workflow } from '../api'
+import StepHarness from '../components/StepHarness'
 
 export default function WorkflowsPage() {
-  const [wfs, setWfs] = useState<Workflow[]>([])
+  const [wfs, setWfs] = useState<Workflow[]>()
   const [err, setErr] = useState('')
-  const load = () => api.workflows().then(setWfs).catch(e => setErr(e.message))
-  useEffect(() => { load() }, [])
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  useEffect(() => { api.workflows().then(setWfs).catch(e => setErr(e.message)) }, [])
+  const reload = () => api.reload().then(w => { setWfs(w); setErr('') }).catch(e => setErr(e.message))
+
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 14 }}>
-        <h1>Workflows</h1>
-        <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => api.reload().then(setWfs).catch(e => setErr(e.message))}>Reload YAML</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <div>
+          <h1>Workflows</h1>
+          <div className="muted">Each step is a whole agent — its own soul, skills, tools, team, budget and output contract.</div>
+        </div>
+        <button className="ghost" style={{ marginLeft: 'auto' }} onClick={reload}>Reload YAML</button>
       </div>
       {err && <div className="banner err">{err}</div>}
-      {wfs.map(w => (
-        <div className="card" key={w.name}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div><h2>{w.name}</h2><div className="muted">{w.description}</div><div className="mono muted" style={{ marginTop: 4 }}>{w.path}</div></div>
-            <a href={`#/workflows/${w.name}/new`} style={{ marginLeft: 'auto' }}><button>New run</button></a>
-          </div>
-          <div className="steps" style={{ marginTop: 14 }}>
-            {w.steps.map((s, i) => (
-              <div className="step" key={s.id} style={{ cursor: 'default' }}>
-                <div className="dot" />
-                <div style={{ flex: 1 }}>
-                  <div><b>{i + 1}. {s.name}</b> {s.requiresApproval && <span className="badge awaiting_approval">approval gate</span>} <span className="muted"> {s.description}</span></div>
-                  <div className="chips" style={{ marginTop: 4 }}>
-                    {s.skills.map(x => <span key={x}>skill:{x}</span>)}
-                    {s.tools.map(x => <span key={x}>tool:{x}</span>)}
-                    {(s.mcp || []).map(x => <span key={x}>mcp:{x}</span>)}
-                    <span>→ {Object.keys(s.outputSchema?.properties || {}).join(', ')}</span>
-                  </div>
-                </div>
+      {!wfs && !err && <div className="muted">loading…</div>}
+      {wfs?.length === 0 && <div className="card muted">No workflows loaded. Drop a YAML file in <span className="mono">workflows/</span> and hit Reload.</div>}
+      {wfs?.map(w => {
+        const shown = open[w.name] !== false
+        return (
+          <div className="card" key={w.name}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <h2>{w.name} <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>{w.steps.length} steps</span></h2>
+                <div className="muted">{w.description}</div>
+                <div className="mono muted" style={{ marginTop: 4 }}>{w.path}</div>
               </div>
-            ))}
-          </div>
-        </div>
-      ))}
+              <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
+                <button className="ghost" onClick={() => setOpen({ ...open, [w.name]: !shown })}>{shown ? 'Collapse' : 'Expand'} steps</button>
+                <a href={`#/workflows/${w.name}/new`}><button>New run</button></a>
+              </div>
+            </div>
+            {shown && (
+              <div className="agents">
+                {w.steps.map((s, i) => <StepHarness key={s.id} step={s} index={i} />)}
+              </div>)}
+          </div>)
+      })}
     </>
   )
 }

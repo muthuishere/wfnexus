@@ -107,6 +107,27 @@ func (f *fakeLLM) toolNamesOffered(i int) []string {
 	return out
 }
 
+// toolResults returns every tool-result message the model was fed, so a test
+// can assert what the model actually SAW (a guardrail denial, for instance).
+func (f *fakeLLM) toolResults() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, req := range f.requests {
+		msgs, _ := req["messages"].([]any)
+		for _, m := range msgs {
+			mm, _ := m.(map[string]any)
+			if mm["role"] != "tool" {
+				continue
+			}
+			if c, ok := mm["content"].(string); ok {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // promptOf returns the concatenated user text of request i.
 func (f *fakeLLM) promptOf(i int) string {
 	f.mu.Lock()
@@ -128,7 +149,9 @@ func (f *fakeLLM) promptOf(i int) string {
 	return b.String()
 }
 
-func submit(args map[string]any) turn { return turn{calls: []call{{name: "submit_output", args: args}}} }
+func submit(args map[string]any) turn {
+	return turn{calls: []call{{name: "submit_output", args: args}}}
+}
 
 // finish is the wrap-up reply every step ends on: after submit_output the loop
 // asks the model once more, and a reply with no tool calls closes the step.

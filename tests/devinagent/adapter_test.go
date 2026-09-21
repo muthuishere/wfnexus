@@ -486,7 +486,7 @@ func TestPresetsBuildTheRightArgv(t *testing.T) {
 		want  []string
 	}{
 		{"devin", devinadapter.Devin(devinadapter.CLI{Model: "opus"}),
-			[]string{"--prompt-file", devinadapter.PlaceholderFile, "-p", "--permission-mode", "auto", "--model", "opus"}},
+			[]string{"--prompt-file", devinadapter.PlaceholderFile, "-p", "--permission-mode", devinadapter.PermissionBypass, "--model", "opus"}},
 		{"claude", devinadapter.Claude(devinadapter.CLI{}),
 			[]string{"-p", devinadapter.PlaceholderPrompt}},
 		{"copilot", devinadapter.Copilot(devinadapter.CLI{}),

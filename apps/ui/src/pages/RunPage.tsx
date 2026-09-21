@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Event, type RunDetail } from '../api'
 import EventLog from '../components/EventLog'
+import DecisionPanel from '../components/DecisionPanel'
+import ApprovalBanner from '../components/ApprovalBanner'
+import NeedsInputForm from '../components/NeedsInputForm'
+import OutputContract from '../components/OutputContract'
 
 export default function RunPage({ id }: { id: string }) {
   const [d, setD] = useState<RunDetail>()
   const [events, setEvents] = useState<Event[]>([])
   const [sel, setSel] = useState<string>('')
-  const [answers, setAnswers] = useState<Record<string, string>>({})
   const [err, setErr] = useState('')
 
   const refresh = useCallback(() => api.run(id).then(setD).catch(e => setErr(e.message)), [id])
@@ -15,25 +18,27 @@ export default function RunPage({ id }: { id: string }) {
     // SSE replays the backlog from 0, so the log is complete after a reload too.
     return api.events(id, 0, ev => {
       setEvents(prev => (prev.some(p => p.id === ev.id) ? prev : [...prev, ev]))
-      if (ev.kind === 'run.status' || ev.kind === 'step.status' || ev.kind === 'artifact') refresh()
+      if (['run.status', 'step.status', 'artifact', 'decision'].includes(ev.kind)) refresh()
     })
   }, [id, refresh])
 
   const run = d?.run
-  const stepDefs = d?.definition?.steps || []
+  const stepDefs = useMemo(() => d?.definition?.steps || [], [d])
   const byId = useMemo(() => Object.fromEntries((d?.steps || []).map(s => [s.stepId, s])), [d])
   const current = sel || run?.currentStep || stepDefs[0]?.id || ''
   const curDef = stepDefs.find(s => s.id === current)
   const curRun = byId[current]
-  const act = (fn: Promise<any>) => fn.then(() => { setErr(''); refresh() }).catch(e => setErr(e.message))
+  const act = (fn: Promise<unknown>) => fn.then(() => { setErr(''); refresh() }).catch(e => setErr(e.message))
 
   if (!run) return <div className="muted">{err || 'loading…'}</div>
-  const missing: string[] = run.status === 'needs_input' ? (byId[run.currentStep]?.output?.missing_info || []) : []
+  const halted = byId[run.currentStep]
+  const haltedDef = stepDefs.find(s => s.id === run.currentStep)
+  const finalUrl = Object.values(byId).find(s => s.output?.pr_url)?.output?.pr_url as string | undefined
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-        <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
           <h1>{run.input?.title || run.workflow}</h1>
           <div className="muted mono">{run.workflow} · {run.id}</div>
         </div>
@@ -43,31 +48,25 @@ export default function RunPage({ id }: { id: string }) {
       {err && <div className="banner err">{err}</div>}
 
       {run.status === 'awaiting_approval' && (
-        <div className="banner warn">
-          <b>Approval required</b> before step <span className="mono">{run.currentStep}</span> — it publishes outside this machine.
-          <div className="actions">
-            <button onClick={() => act(api.approve(run.id, run.currentStep))}>Approve &amp; publish</button>
-            <button className="danger" onClick={() => act(api.reject(run.id, run.currentStep, prompt('Reason?') || 'rejected'))}>Reject</button>
-          </div>
-        </div>)}
+        <ApprovalBanner
+          step={haltedDef} stepId={run.currentStep}
+          onApprove={() => act(api.approve(run.id, run.currentStep))}
+          onReject={reason => act(api.reject(run.id, run.currentStep, reason))} />)}
 
       {run.status === 'needs_input' && (
-        <div className="banner warn">
-          <b>More information needed</b> — {run.error}
-          {missing.map((q, i) => (<div key={i}><label>{q}</label><input value={answers[q] || ''} onChange={e => setAnswers({ ...answers, [q]: e.target.value })} /></div>))}
-          {missing.length === 0 && <div><label>extra_context</label><textarea value={answers._ || ''} onChange={e => setAnswers({ _: e.target.value })} /></div>}
-          <div className="actions">
-            <button onClick={() => act(api.input(run.id, {
-              extra_context: [run.input?.extra_context, ...Object.entries(answers).map(([q, a]) => (q === '_' ? a : `${q}\n→ ${a}`))].filter(Boolean).join('\n\n'),
-            }))}>Submit &amp; continue</button>
-          </div>
+        <NeedsInputForm
+          stepId={run.currentStep} reason={run.error} stepRun={halted}
+          onSubmit={text => act(api.input(run.id, {
+            extra_context: [run.input?.extra_context, text].filter(Boolean).join('\n\n'),
+          }))} />)}
+
+      {run.status === 'failed' && (
+        <div className="banner err"><b>Run failed</b> at <span className="mono">{run.currentStep}</span>: {run.error}
+          <div className="actions"><button onClick={() => act(api.retry(run.id, run.currentStep))}>Retry step</button></div>
         </div>)}
 
-      {run.status === 'failed' && <div className="banner err"><b>Run failed</b> at <span className="mono">{run.currentStep}</span>: {run.error}
-        <div className="actions"><button onClick={() => act(api.retry(run.id, run.currentStep))}>Retry step</button></div></div>}
-
-      {run.status === 'done' && byId['finalize-pr']?.output?.pr_url && (
-        <div className="banner ok"><b>PR published</b> — <a href={byId['finalize-pr'].output.pr_url} target="_blank" rel="noreferrer">{byId['finalize-pr'].output.pr_url}</a></div>)}
+      {run.status === 'done' && finalUrl && (
+        <div className="banner ok"><b>PR published</b> — <a href={finalUrl} target="_blank" rel="noreferrer">{finalUrl}</a></div>)}
 
       <div className="grid cols-2">
         <div>
@@ -79,11 +78,12 @@ export default function RunPage({ id }: { id: string }) {
                 return (
                   <div key={s.id} className={`step ${current === s.id ? 'active' : ''}`} onClick={() => setSel(s.id)}>
                     <div className={`dot ${st?.status || 'pending'}`} />
-                    <div style={{ flex: 1 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div><b>{i + 1}. {s.name}</b> {s.requiresApproval && <span className="badge awaiting_approval">gate</span>}</div>
                       <div className="muted" style={{ fontSize: 12 }}>
                         <span className={`badge ${st?.status || 'pending'}`}>{st?.status || 'pending'}</span>
                         {!!st?.turns && <> · {st.turns} turns · {st.attempts} attempt{st.attempts > 1 ? 's' : ''}</>}
+                        {st?.decision && <> · <span className="badge running">judged</span></>}
                       </div>
                       <div className="chips">{s.skills.map(x => <span key={x}>{x}</span>)}</div>
                     </div>
@@ -108,21 +108,28 @@ export default function RunPage({ id }: { id: string }) {
 
         <div>
           <div className="card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h2>{curDef?.name || current}</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h2 style={{ margin: 0 }}>{curDef?.name || current}</h2>
               <span className={`badge ${curRun?.status || 'pending'}`}>{curRun?.status || 'pending'}</span>
               {curRun && curRun.status !== 'running' && <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, current))}>Re-run from here</button>}
             </div>
             <div className="kv" style={{ marginTop: 10 }}>
               <b>skills</b><span className="mono">{curDef?.skills.join(', ') || '—'}</span>
               <b>tools</b><span className="mono">{curDef?.tools.join(', ') || '—'}</span>
+              <b>mcp</b><span className="mono">{curDef?.mcp?.join(', ') || '—'}</span>
+              <b>team</b><span className="mono">{curDef?.team?.map(m => m.id).join(', ') || '—'}</span>
+              <b>guardrails</b><span className="mono">{curDef?.guardrails?.length ? `${curDef.guardrails.length} deny rules` : '—'}</span>
               <b>model</b><span className="mono">{curDef?.model || 'default'}</span>
               <b>usage</b><span className="mono">{curRun?.usage ? JSON.stringify(curRun.usage) : '—'}</span>
             </div>
             {curRun?.error && <div className="banner err" style={{ marginTop: 10 }}>{curRun.error}</div>}
             {curRun?.output && <><h3 style={{ marginTop: 14 }}>Validated output</h3><pre>{JSON.stringify(curRun.output, null, 2)}</pre></>}
-            {curDef && <><h3 style={{ marginTop: 14 }}>Output contract</h3><pre>{JSON.stringify(curDef.outputSchema, null, 2)}</pre></>}
+            <h3 style={{ marginTop: 14 }}>Output contract</h3>
+            <OutputContract schema={curDef?.outputSchema} />
           </div>
+
+          <DecisionPanel decision={curRun?.decision} step={curDef} />
+
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center' }}><h3>Activity · {current}</h3>
               <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => setSel('')}>All steps</button></div>

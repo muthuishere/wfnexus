@@ -31,18 +31,22 @@ type Run struct {
 }
 
 type StepRun struct {
-	ID         uuid.UUID       `json:"id"`
-	RunID      uuid.UUID       `json:"runId"`
-	StepID     string          `json:"stepId"`
-	Position   int             `json:"position"`
-	Status     string          `json:"status"`
-	Attempts   int             `json:"attempts"`
-	Turns      int             `json:"turns"`
-	Prompt     string          `json:"prompt"`
-	Output     json.RawMessage `json:"output"`
-	RawText    string          `json:"rawText"`
-	Error      string          `json:"error"`
-	Usage      json.RawMessage `json:"usage"`
+	ID       uuid.UUID       `json:"id"`
+	RunID    uuid.UUID       `json:"runId"`
+	StepID   string          `json:"stepId"`
+	Position int             `json:"position"`
+	Status   string          `json:"status"`
+	Attempts int             `json:"attempts"`
+	Turns    int             `json:"turns"`
+	Prompt   string          `json:"prompt"`
+	Output   json.RawMessage `json:"output"`
+	RawText  string          `json:"rawText"`
+	Error    string          `json:"error"`
+	Usage    json.RawMessage `json:"usage"`
+	// Pending is the toolnexus suspension Request this step parked on, if any.
+	Pending json.RawMessage `json:"pending"`
+	// Decision is the classifier answer set for this step, if it declared one.
+	Decision   json.RawMessage `json:"decision"`
 	StartedAt  *time.Time      `json:"startedAt"`
 	FinishedAt *time.Time      `json:"finishedAt"`
 }
@@ -159,12 +163,12 @@ func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error 
 
 // ---- step runs ----
 
-const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, started_at, finished_at`
+const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at`
 
 func scanStep(row pgx.Row) (*StepRun, error) {
 	st := &StepRun{}
 	err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Position, &st.Status, &st.Attempts, &st.Turns,
-		&st.Prompt, &st.Output, &st.RawText, &st.Error, &st.Usage, &st.StartedAt, &st.FinishedAt)
+		&st.Prompt, &st.Output, &st.RawText, &st.Error, &st.Usage, &st.Pending, &st.Decision, &st.StartedAt, &st.FinishedAt)
 	return st, err
 }
 
@@ -198,16 +202,20 @@ func (s *Store) ListSteps(ctx context.Context, runID uuid.UUID) ([]*StepRun, err
 }
 
 type StepPatch struct {
-	Status     *string
-	Attempts   *int
-	Turns      *int
-	Prompt     *string
-	Output     json.RawMessage
-	RawText    *string
-	Error      *string
-	Usage      json.RawMessage
-	StartedAt  *time.Time
-	FinishedAt *time.Time
+	Status   *string
+	Attempts *int
+	Turns    *int
+	Prompt   *string
+	Output   json.RawMessage
+	RawText  *string
+	Error    *string
+	Usage    json.RawMessage
+	Pending  json.RawMessage
+	Decision json.RawMessage
+	// ClearPending wipes a stored suspension (set when the step re-runs).
+	ClearPending bool
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
 }
 
 func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p StepPatch) error {
@@ -220,19 +228,30 @@ func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p
 		raw_text    = COALESCE($8, raw_text),
 		error       = COALESCE($9, error),
 		usage       = COALESCE($10, usage),
-		started_at  = COALESCE($11, started_at),
-		finished_at = COALESCE($12, finished_at)
+		pending     = CASE WHEN $11::text = 'clear' THEN NULL ELSE COALESCE($12, pending) END,
+		decision    = COALESCE($13, decision),
+		started_at  = COALESCE($14, started_at),
+		finished_at = COALESCE($15, finished_at)
 		WHERE run_id=$1 AND step_id=$2`,
 		runID, stepID, p.Status, p.Attempts, p.Turns, p.Prompt, nullableJSON(p.Output), p.RawText, p.Error,
-		nullableJSON(p.Usage), p.StartedAt, p.FinishedAt)
+		nullableJSON(p.Usage), pendingOp(p), nullableJSON(p.Pending), nullableJSON(p.Decision), p.StartedAt, p.FinishedAt)
 	return err
 }
 
 // ResetStepsFrom marks the given step and everything after it pending again (used by retry / re-run).
 func (s *Store) ResetStepsFrom(ctx context.Context, runID uuid.UUID, position int) error {
 	_, err := s.pool.Exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
-		started_at=NULL, finished_at=NULL WHERE run_id=$1 AND position>=$2`, runID, position)
+		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL WHERE run_id=$1 AND position>=$2`, runID, position)
 	return err
+}
+
+// pendingOp distinguishes "leave pending alone" from "clear it": a step that
+// resumes must drop the question it was parked on.
+func pendingOp(p StepPatch) string {
+	if p.ClearPending {
+		return "clear"
+	}
+	return ""
 }
 
 func nullableJSON(j json.RawMessage) any {

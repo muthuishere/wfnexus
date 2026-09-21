@@ -24,6 +24,14 @@ type Config struct {
 	LLMBaseURL   string
 	LLMStyle     string
 	Model        string
+	// LLMAPIKeyEnv names the env var holding the provider key — the NAME, never
+	// the value, so a key cannot end up in config, logs or an event.
+	LLMAPIKeyEnv string
+	// Classifier (the judge tier). systemone over OpenRouter is what the spikes
+	// verified; the library's default base returns 400 Unknown model.
+	ClassifierBaseURL   string
+	ClassifierModel     string
+	ClassifierAPIKeyEnv string
 }
 
 func env(k, def string) string {
@@ -52,5 +60,11 @@ func Load() Config {
 		LLMBaseURL:   env("LLM_BASE_URL", "https://openrouter.ai/api/v1"),
 		LLMStyle:     env("LLM_STYLE", "openai"),
 		Model:        env("BFP_MODEL", "anthropic/claude-sonnet-4.5"),
+
+		LLMAPIKeyEnv: env("BFP_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
+
+		ClassifierBaseURL:   env("BFP_CLASSIFIER_BASE_URL", "https://openrouter.ai/api/v1"),
+		ClassifierModel:     env("BFP_CLASSIFIER_MODEL", "typesafe/jev-1.13"),
+		ClassifierAPIKeyEnv: env("BFP_CLASSIFIER_API_KEY_ENV", "OPENROUTER_API_KEY"),
 	}
 }

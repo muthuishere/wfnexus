@@ -40,3 +40,56 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px
 .banner { padding: 12px 14px; border-radius: 8px; margin-bottom: 14px; border: 1px solid } .banner.warn { border-color: var(--warn); background: #2b2410 } .banner.err { border-color: var(--err); background: #2b1414 } .banner.ok { border-color: var(--ok); background: #10261d }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px }
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 10px; font-size: 13px } .kv b { color: var(--muted); font-weight: 500 }
+
+/* ── step-as-agent cards (Workflows) ─────────────────────────────────────── */
+.agents { display: flex; flex-direction: column; gap: 12px; margin-top: 14px }
+.agentcard { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); padding: 12px 14px }
+.agenthead { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap }
+.agenthead .num { width: 24px; height: 24px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 12px; font-family: var(--mono); flex: none }
+.agenthead .limits { font-size: 11px; text-align: right }
+.titleline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.hgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px } @media (max-width: 860px) { .hgrid { grid-template-columns: 1fr } }
+.hpanel { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px }
+.hpanel h3 { margin: 0 0 5px } .hpanel .chips span.off { color: var(--muted); opacity: .7; font-style: italic }
+.soul { font-family: var(--mono); font-size: 12px; color: var(--text); white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; max-height: 160px; overflow: auto }
+.teamlist { display: flex; flex-direction: column; gap: 8px }
+.member { border-left: 2px solid var(--accent); padding-left: 8px }
+.guard { margin-bottom: 6px; font-size: 12px } .guard .badge { margin-right: 6px }
+.question { margin-bottom: 8px } .question .opts { margin: 4px 0 0 10px; font-size: 12px }
+.gate { font-size: 12px; margin-bottom: 4px }
+.contract .field { display: grid; grid-template-columns: minmax(120px, 180px) minmax(90px, 160px) 1fr; gap: 6px 10px; padding: 3px 0; font-size: 12px; align-items: baseline }
+@media (max-width: 720px) { .contract .field { grid-template-columns: 1fr } }
+.contract .name { font-family: var(--mono); color: var(--muted) }
+.contract .name.req { color: var(--text); font-weight: 600 }
+.contract .name.req::after { content: ' *'; color: var(--warn) }
+.contract .type { color: var(--info) }
+
+/* ── skills & tools registry ─────────────────────────────────────────────── */
+.roots { margin: 0 0 8px; padding-left: 20px } .roots li { padding: 2px 0; font-size: 13px }
+.group { margin-top: 14px } .skills { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px }
+@media (max-width: 1000px) { .skills { grid-template-columns: 1fr } }
+.skill { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--panel2) }
+.skill .loc { font-size: 11px; margin-top: 4px; word-break: break-all }
+.skill .shadow { margin-top: 6px; font-size: 11px; color: var(--warn); border-left: 2px solid var(--warn); padding-left: 8px }
+.badge.src-project { color: var(--accent); background: #1a2340 } .badge.src-claude { color: var(--info); background: #10314a } .badge.src-agents { color: var(--ok); background: #0f3b2c }
+.skipped-card { border-color: var(--err) }
+.skipped { border-left: 2px solid var(--err); padding: 4px 0 4px 8px; margin-top: 8px; font-size: 12px; word-break: break-all }
+.tools { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px }
+@media (max-width: 1000px) { .tools { grid-template-columns: 1fr } }
+.tool { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--panel2) }
+.tool .muted { font-size: 12px; margin-top: 2px }
+
+/* ── judge decision ──────────────────────────────────────────────────────── */
+.decision .answer { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px }
+.decision .ahead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.decision .verdict { color: var(--accent); font-weight: 600 }
+.bars { margin-top: 6px; display: flex; flex-direction: column; gap: 3px }
+.bar { display: grid; grid-template-columns: minmax(80px, 160px) 1fr 44px; gap: 8px; align-items: center; font-size: 11px }
+.bar .track { height: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; overflow: hidden }
+.bar .fill { display: block; height: 100%; background: var(--accent) }
+.bar .val { text-align: right; color: var(--muted) }
+
+/* ── human-in-the-loop ───────────────────────────────────────────────────── */
+.hitl p { margin: 8px 0 } .hitlhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.ev.delegation { border-left-color: var(--warn); background: #1d1a12 }
+.ev .tag { color: var(--warn); font-weight: 600; margin-right: 6px }

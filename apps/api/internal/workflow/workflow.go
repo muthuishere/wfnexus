@@ -428,6 +428,7 @@ type TemplateData struct {
 	Input   map[string]any // run input
 	Steps   map[string]any // previous step outputs, keyed by step id
 	Output  map[string]any // current step output (gate messages only)
+	Decide  map[string]any // this step's judge answers, keyed by question
 }
 
 var funcs = template.FuncMap{

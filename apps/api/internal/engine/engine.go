@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	tn "github.com/muthuishere/toolnexus/golang"
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
@@ -32,6 +34,10 @@ type Engine struct {
 	defs   map[string]*workflow.Definition
 	skills *skills.Registry
 	broker *broker
+	// classifierOpts overrides the judge backend; tests set the static one.
+	classifierOpts *tn.ClassifierOptions
+	// transport overrides the LLM HTTP transport (tests script it).
+	transport http.RoundTripper
 
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
@@ -40,6 +46,13 @@ type Engine struct {
 func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry) *Engine {
 	return &Engine{cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{}}
 }
+
+// UseTransport overrides the LLM HTTP transport (tests script the wire).
+func (e *Engine) UseTransport(rt http.RoundTripper) { e.transport = rt }
+
+// UseClassifier overrides the judge backend (tests use the static one, which
+// needs no network and never guesses at an unrecorded state).
+func (e *Engine) UseClassifier(opts tn.ClassifierOptions) { e.classifierOpts = &opts }
 
 // Skills is the registry backing every step's skill allowlist.
 func (e *Engine) Skills() *skills.Registry { return e.skills }
@@ -157,6 +170,44 @@ func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason str
 	return nil
 }
 
+// AnswerQuestion resolves a step that suspended on ask_human.
+//
+// It deliberately does NOT call Runtime.Resume: that replays the whole turn
+// from the original prompt with an empty history, re-running tools and paying
+// for the turn twice, and the runtime does not survive a process restart
+// anyway (spikes/03). The step is our durability boundary, so the answer is
+// folded into the run input and the step re-runs from its prompt — which is
+// also why steps must be idempotent in effect.
+func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID, answer string) error {
+	st, err := e.store.GetStep(ctx, runID, stepID)
+	if err != nil {
+		return err
+	}
+	if len(st.Pending) == 0 {
+		return fmt.Errorf("step %s is not waiting on a question", stepID)
+	}
+	var req tn.Request
+	if err := json.Unmarshal(st.Pending, &req); err != nil {
+		return err
+	}
+	run, err := e.store.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	var input map[string]any
+	_ = json.Unmarshal(run.Input, &input)
+	if input == nil {
+		input = map[string]any{}
+	}
+	prior, _ := input["answers"].(string)
+	input["answers"] = strings.TrimSpace(prior + "\n\nQ: " + req.Prompt + "\nA: " + answer)
+	if err := e.store.UpdateRunInput(ctx, runID, mustJSON(input)); err != nil {
+		return err
+	}
+	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "operator answered: " + req.Prompt})
+	return e.Retry(ctx, runID, stepID)
+}
+
 // ProvideInput merges answers into the run input and re-runs from the step that asked.
 func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[string]any) error {
 	run, err := e.store.GetRun(ctx, runID)
@@ -267,12 +318,43 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		}
 		e.setRun(ctx, runID, "running", step.ID, "")
 		data := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
-		out, err := e.executeStep(ctx, runID, def, step, data)
+
+		// The judge runs BEFORE the agent: typed questions on a small model can
+		// route or halt for a fraction of a cent instead of a full agent run.
+		rec, vals, err := e.decide(ctx, runID, step, data)
 		if err != nil {
 			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(err.Error()), FinishedAt: now()})
 			e.setRun(ctx, runID, "failed", step.ID, err.Error())
 			return nil
 		}
+		if rec != nil {
+			e.setStep(ctx, runID, step.ID, store.StepPatch{Decision: mustJSON(rec)})
+			data.Decide = vals
+			if jump, stop := e.applyDecideGates(ctx, runID, def, step, vals, data); stop {
+				return nil
+			} else if jump >= 0 {
+				e.skipRange(ctx, runID, def, i+1, jump)
+				i = jump - 1
+				continue
+			}
+		}
+
+		res, err := e.executeStep(ctx, runID, def, step, data)
+		if err != nil {
+			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(err.Error()), FinishedAt: now()})
+			e.setRun(ctx, runID, "failed", step.ID, err.Error())
+			return nil
+		}
+		if res.Pending != nil {
+			// The agent asked a question. The Request is plain data, so the run
+			// parks here and the answer may arrive in another process, later.
+			e.setStep(ctx, runID, step.ID, store.StepPatch{
+				Status: str("needs_input"), Pending: mustJSON(res.Pending), Error: str(res.Pending.Prompt),
+			})
+			e.setRun(ctx, runID, "needs_input", step.ID, res.Pending.Prompt)
+			return nil
+		}
+		out := res.Output
 		outputs[step.ID] = out
 		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("done"), Output: mustJSON(out), FinishedAt: now()})
 
@@ -308,6 +390,44 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	}
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
+}
+
+// applyDecideGates branches on the judge's answers. It returns the index to
+// jump to (or -1), and whether the run stopped here.
+func (e *Engine) applyDecideGates(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, vals map[string]any, data workflow.TemplateData) (int, bool) {
+	if step.Decide == nil {
+		return -1, false
+	}
+	for _, g := range step.Decide.Gates {
+		if !decideGate(g, vals) {
+			continue
+		}
+		msg, _ := workflow.Render(g.Message, data)
+		switch g.Action {
+		case "needs_input":
+			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
+			e.setRun(ctx, runID, "needs_input", step.ID, msg)
+			return -1, true
+		case "fail":
+			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
+			e.setRun(ctx, runID, "failed", step.ID, msg)
+			return -1, true
+		case "skip_to":
+			pos, _ := def.Step(g.SkipTo)
+			if pos >= 0 {
+				e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("skipped"), FinishedAt: now()})
+				return pos, false
+			}
+		}
+	}
+	return -1, false
+}
+
+// skipRange marks the steps between two positions skipped.
+func (e *Engine) skipRange(ctx context.Context, runID uuid.UUID, def *workflow.Definition, from, to int) {
+	for j := from; j < to && j < len(def.Steps); j++ {
+		e.setStep(ctx, runID, def.Steps[j].ID, store.StepPatch{Status: str("skipped")})
+	}
 }
 
 func gateHit(g workflow.Gate, out map[string]any) bool {

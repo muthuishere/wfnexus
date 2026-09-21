@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +191,90 @@ func TestLiveCommandAgentDirect(t *testing.T) {
 	t.Logf("devin said: %q", out)
 	if !strings.Contains(strings.ToUpper(out), "PONG") {
 		t.Errorf("expected PONG, got %q", out)
+	}
+}
+
+// Live: a real MCP server plus a skill plus a native tool, answered by the real
+// devin CLI choosing its own calls. The scripted tests prove the wiring; this
+// proves a real model can actually drive it.
+func TestLiveAllSources(t *testing.T) {
+	a := liveAgent(t)
+
+	var pinged int
+	upstream, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{
+		Builtins: false,
+		ExtraTools: []toolnexus.Tool{
+			toolnexus.NativeTool("service_owner", "Returns which team owns a service.",
+				toolnexus.JSONSchema{
+					"type":       "object",
+					"properties": map[string]any{"service": map[string]any{"type": "string"}},
+					"required":   []string{"service"},
+				},
+				func(_ context.Context, args map[string]any) (string, error) {
+					pinged++
+					return `{"service":"pricing","owner":"payments-team","oncall":"ravi"}`, nil
+				}),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := upstream.Serve("127.0.0.1:0", toolnexus.ServeOptions{
+		MCP: &toolnexus.MCPServeConfig{Name: "directory"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Stop()
+
+	// Builtins stay ON — the default. The model gets toolnexus's own
+	// shell/file tools alongside everything else, and must use THOSE rather
+	// than the CLI's native ones (the contract forbids its own), so the file
+	// below only appears if a toolnexus builtin really executed.
+	note := filepath.Join(t.TempDir(), "oncall.txt")
+
+	var got *Triage
+	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{
+		SkillsDir:  []string{"./skills"},
+		ExtraTools: []toolnexus.Tool{submitTool(&got)},
+		McpConfig: toolnexus.McpConfig{
+			"directory": {Type: "remote", URL: handle.URL + "/mcp"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := a.InProcessOptions()
+	opts.MaxTurns = 8
+	opts.MaxTurns = 10
+	opts.SystemPrompt = "You triage bugs. In order: load the bug-triage skill; look up who owns the 'pricing' service with the directory tool; use the `write` tool to write the on-call name to " + note + "; then call submit_answer. Put the owning team in notes."
+
+	res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), liveBugReport, tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	used := map[string]bool{}
+	for _, c := range res.ToolCalls {
+		used[c.Name] = true
+		t.Logf("called %s -> %.80s", c.Name, c.Output)
+	}
+	if !used["skill"] {
+		t.Error("the model never loaded the skill")
+	}
+	if pinged == 0 {
+		t.Error("the MCP server's tool was never called")
+	}
+	if b, err := os.ReadFile(note); err != nil {
+		t.Errorf("no builtin wrote the file: %v", err)
+	} else if !strings.Contains(strings.ToLower(string(b)), "ravi") {
+		t.Errorf("the builtin wrote %q, which does not carry the MCP result", b)
+	}
+	if got == nil {
+		t.Fatalf("no structured answer; status=%s turns=%d", res.Status, res.Turns)
+	}
+	if !strings.Contains(strings.ToLower(got.Notes+got.Summary+got.RootCause), "payments") {
+		t.Errorf("the MCP result never made it into the answer: %+v", got)
 	}
 }

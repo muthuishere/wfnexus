@@ -9,6 +9,23 @@ import (
 	"strings"
 )
 
+// Devin permission modes, as the CLI names them.
+const (
+	// PermissionAuto auto-approves read-only tools only.
+	PermissionAuto = "auto"
+	// PermissionAcceptEdits also auto-approves workspace edits.
+	PermissionAcceptEdits = "accept-edits"
+	// PermissionSmart additionally auto-runs what a fast model judges safe.
+	PermissionSmart = "smart"
+	// PermissionBypass auto-approves everything — devin's "dangerous" mode.
+	// This is the DEFAULT here: the adapter drives the CLI non-interactively,
+	// so a prompt has no one to answer it and the turn just blocks until the
+	// timeout. The contract already tells the model not to use its own tools,
+	// and the work the host cares about runs in the host process, not in the
+	// CLI. Set CLI.PermissionMode to narrow it.
+	PermissionBypass = "dangerous"
+)
+
 // Placeholders substituted into CommandAgent.Args before exec.
 const (
 	// PlaceholderFile is replaced by the path of the rendered prompt file.
@@ -98,7 +115,8 @@ type CLI struct {
 	Bin string
 	// Model is passed to the CLI's model flag. "" ⇒ the account default.
 	Model string
-	// PermissionMode applies to CLIs that have one (devin). "" ⇒ "auto".
+	// PermissionMode applies to CLIs that have one (devin).
+	// "" ⇒ PermissionBypass.
 	PermissionMode string
 	// ExtraArgs are appended to the template.
 	ExtraArgs []string
@@ -126,7 +144,7 @@ func (c CLI) permissionMode() string {
 	if c.PermissionMode != "" {
 		return c.PermissionMode
 	}
-	return "auto"
+	return PermissionBypass
 }
 
 // Name implements Agent.
