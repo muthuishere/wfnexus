@@ -1,25 +1,77 @@
 name: bug-fix
-description: Validate a bug report, reproduce it, draft a fix as a PR, validate the PR, then publish it.
+description: >-
+  Validate a bug report, reproduce it, draft a fix as a PR, validate the PR,
+  then publish it. Every step is an agent with its own identity, scoped tools,
+  budget and policy; the publishing step is the only one allowed to reach the
+  outside world, and only after a human approves.
 
 input_schema:
   type: object
   required: [title, description]
   properties:
-    title:        { type: string, title: "Bug title" }
-    description:  { type: string, title: "Bug description", format: textarea }
-    repo_url:     { type: string, title: "Repo URL (cloned per run)" }
-    repo_path:    { type: string, title: "…or local repo path" }
-    base_branch:  { type: string, title: "Base branch", default: main }
+    title:         { type: string, title: "Bug title" }
+    description:   { type: string, title: "Bug description", format: textarea }
+    repo_url:      { type: string, title: "Repo URL (cloned per run)" }
+    repo_path:     { type: string, title: "…or local repo path" }
+    base_branch:   { type: string, title: "Base branch", default: main }
     extra_context: { type: string, title: "Extra context (logs, versions, answers)", format: textarea }
-    isolate:      { type: boolean, title: "Isolate in a git worktree (recommended)", default: true }
+    isolate:       { type: boolean, title: "Isolate in a git worktree (recommended)", default: true }
 
 steps:
+  # ---------------------------------------------------------------- validate
   - id: validate-bug
     name: Validate bug
     description: Decide whether the report is actionable and what is missing.
-    skills: [validate-bug]
+    soul: >-
+      You are a triage engineer. You are sceptical by default: a report is not
+      actionable until the code you can see makes it plausible. You never invent
+      details the reporter did not give, and you would rather ask one precise
+      question than guess.
+    skills: [validate-bug, repo-navigator]
     tools: [read, grep, glob, bash]
-    max_turns: 15
+    budget: { max_turns: 15, max_tool_calls: 40, max_wall_sec: 300 }
+
+    # The judge runs BEFORE the agent: a fraction of a cent decides whether the
+    # report is worth an agent run at all.
+    decide:
+      state: |
+        Bug title: {{ .Input.title }}
+
+        {{ .Input.description }}
+
+        {{ if .Input.extra_context }}Reporter's extra context:
+        {{ .Input.extra_context }}{{ end }}
+      questions:
+        fixability:
+          type: score
+          instructions: >-
+            Rate how likely an automated coding agent is to fix this report
+            unaided, judging only the report's own content.
+          levels:
+            - "no chance: no reproducible behaviour is described, only a feeling that something is wrong"
+            - "possible: the wrong behaviour is clear, but neither the trigger nor the expected result is stated"
+            - "likely: the trigger is stated and the expected result is either stated or obvious"
+            - "certain: the failing call, the observed value and the expected value are all stated"
+        is_security:
+          type: noul
+          instructions: Is this report describing a security problem?
+          "true": the report describes data exposure, privilege escalation, injection or authentication bypass
+          "false": the report describes ordinary incorrect behaviour with no security consequence
+      gates:
+        - question: is_security
+          at_least: 0.6
+          action: fail
+          message: >-
+            This looks like a security report, so it is not going through the
+            automated pipeline. Route it to the security queue and handle the
+            disclosure path by hand.
+        - question: fixability
+          below: 1.0
+          action: needs_input
+          message: >-
+            The report does not yet describe reproducible behaviour. Add what you
+            did, what happened, and what you expected instead.
+
     prompt: |
       Bug report to validate:
 
@@ -29,9 +81,14 @@ steps:
 
       {{ if .Input.extra_context }}Extra context from the reporter:
       {{ .Input.extra_context }}{{ end }}
+      {{ if .Input.answers }}Answers already given by the operator:
+      {{ .Input.answers }}{{ end }}
 
-      Load the `validate-bug` skill and follow it. Inspect the repository to check the
-      bug is plausible against the actual code. Then call submit_output.
+      A judge already rated this report's fixability at {{ .Decide.fixability }}
+      (0 = hopeless, 3 = fully specified). Treat that as a prior, not a verdict.
+
+      Load the `validate-bug` skill and follow it. Inspect the repository to check
+      the bug is plausible against the actual code, then call submit_output.
     output_schema:
       type: object
       additionalProperties: false
@@ -49,13 +106,37 @@ steps:
         action: needs_input
         message: "Need more information: {{ join .Output.missing_info \" | \" }}"
 
+  # --------------------------------------------------------------- reproduce
   - id: reproduce-bug
     name: Reproduce bug
     description: Reproduce the bug with a failing test or script.
+    soul: >-
+      You are an engineer who trusts only a red test. A reproduction that fails
+      for an unrelated reason — a missing fixture, an import error — is not a
+      reproduction, and you fix the harness before claiming one. You delegate
+      code reading to your explorer rather than filling your own context with it.
     skills: [reproduce-bug, repo-navigator]
     tools: [bash, read, write, edit, grep, glob, todowrite]
-    max_turns: 40
-    timeout_sec: 900
+    ask_human: true
+    budget: { max_turns: 40, max_tokens: 400000, max_tool_calls: 200, max_wall_sec: 900, max_concurrent: 2 }
+    team:
+      - id: explorer
+        does: >-
+          Read-only research inside the repository: finds where a symptom's code
+          lives, reports the call path and the relevant source, and never edits.
+        soul: >-
+          You look things up and report exactly what you found, with file:line.
+          You never edit, never run anything that writes, and never speculate
+          beyond what the source shows.
+        skills: [repo-navigator]
+        tools: [read, grep, glob]
+        budget: { max_turns: 15, max_tool_calls: 60 }
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "gh pr", "git remote add", "curl ", "wget "]
+        reason: >-
+          this step reproduces a bug locally; it has no business reaching the
+          network or a remote, and publishing happens only after human approval
     prompt: |
       Validated bug summary: {{ .Steps.validate-bug.summary }}
       Suspected component: {{ .Steps.validate-bug.component }}
@@ -63,9 +144,17 @@ steps:
 
       Original report:
       {{ .Input.description }}
+      {{ if .Input.answers }}
+      Answers from the operator:
+      {{ .Input.answers }}{{ end }}
 
-      Load the `reproduce-bug` skill and follow it. Produce a deterministic reproduction
-      (preferably a failing automated test committed in the repo) and call submit_output.
+      Load the `reproduce-bug` skill and follow it. Delegate code lookups to your
+      `explorer` team member via the task tool rather than reading widely
+      yourself. Produce a deterministic reproduction — preferably a failing
+      automated test committed in the repo — then call submit_output.
+
+      If you are genuinely blocked on something only the reporter knows, use
+      ask_human once rather than guessing.
     output_schema:
       type: object
       additionalProperties: false
@@ -82,24 +171,54 @@ steps:
       - field: reproduced
         equals: false
         action: needs_input
-        message: "Could not reproduce. Hypothesis: {{ .Output.root_cause_hypothesis }}. Provide steps/logs in extra_context."
+        message: "Could not reproduce. Best hypothesis: {{ .Output.root_cause_hypothesis }}. Add steps or logs to extra_context."
 
+  # ---------------------------------------------------------------- draft PR
   - id: draft-pr
     name: Draft PR
     description: Implement the fix on a branch with tests.
+    soul: >-
+      You are the engineer who owns this fix. You change the smallest amount of
+      code that removes the root cause, you match the surrounding style, and you
+      do not refactor anything you were not asked to. You commit locally and stop
+      there — publishing is someone else's decision.
     skills: [fix-author, repo-navigator]
     tools: [bash, read, write, edit, apply_patch, grep, glob, todowrite]
-    max_turns: 60
-    timeout_sec: 1800
+    budget: { max_turns: 60, max_tokens: 600000, max_tool_calls: 300, max_wall_sec: 1800, max_concurrent: 2 }
+    team:
+      - id: explorer
+        does: >-
+          Read-only research: finds callers of a symbol, related tests, and prior
+          art for a pattern, so the author does not have to read the repo widely.
+        soul: >-
+          You look things up and report exactly what you found, with file:line.
+          You never edit and never run anything that writes.
+        skills: [repo-navigator]
+        tools: [read, grep, glob]
+        budget: { max_turns: 15, max_tool_calls: 60 }
+    # The safe-outputs rule: no LLM step before the approval gate may publish.
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "gh pr", "gh release", "git remote set-url"]
+        reason: >-
+          publishing is owner-gated in this workflow — commit locally and let the
+          approval gate decide; the publish step has the only push rights
+      - deny: bash
+        args_contain: ["git reset --hard", "git clean -fd", "rm -rf /"]
+        reason: destructive repository operations are not part of drafting a fix
     prompt: |
       Fix the bug. Reproduction:
       {{ json .Steps.reproduce-bug }}
 
       Bug summary: {{ .Steps.validate-bug.summary }}
 
-      Load the `fix-author` skill and follow it: create a branch, implement the minimal
-      correct fix, make the reproduction pass, keep the whole test suite green, commit.
-      Do NOT push and do NOT open a PR. Then call submit_output.
+      Load the `fix-author` skill and follow it: create a branch, implement the
+      minimal correct fix, make the reproduction pass, keep the whole suite
+      green, and commit. Use your `explorer` to find callers and prior art
+      instead of reading the repo yourself.
+
+      Do NOT push and do NOT open a PR — the tools to do so are denied here on
+      purpose. Then call submit_output.
     output_schema:
       type: object
       additionalProperties: false
@@ -113,23 +232,39 @@ steps:
         tests_pass:    { type: boolean }
         risks:         { type: array, items: { type: string } }
 
+  # ------------------------------------------------------------- validate PR
   - id: validate-pr
     name: Validate PR
     description: Independent review of the diff — runs tests, hunts regressions.
+    soul: >-
+      You are an adversarial reviewer who did not write this code and does not
+      trust it. You verify every claim by running it yourself; a passing test you
+      did not watch pass is a rumour. You approve only when you have tried to
+      break it and failed.
     skills: [pr-reviewer]
     tools: [bash, read, grep, glob]
-    max_turns: 30
-    timeout_sec: 900
+    budget: { max_turns: 30, max_tool_calls: 120, max_wall_sec: 900 }
+    guardrails:
+      - deny: "*"
+        args_contain: ["git push", "gh pr create", "gh pr merge"]
+        reason: a reviewer records a verdict; it does not publish or merge
+      - deny: write
+        reason: this step reviews the diff and must not change it
+      - deny: edit
+        reason: this step reviews the diff and must not change it
     prompt: |
       Review the fix on branch `{{ .Steps.draft-pr.branch }}` against `{{ .Input.base_branch }}`.
+
       Claimed summary:
       {{ .Steps.draft-pr.summary }}
 
       Files changed: {{ join .Steps.draft-pr.files_changed ", " }}
       Test command: {{ .Steps.draft-pr.test_command }}
+      Author's claimed risks: {{ list .Steps.draft-pr.risks }}
 
       Load the `pr-reviewer` skill. You did not write this code — be adversarial.
-      Re-run the reproduction and the suite yourself. Then call submit_output.
+      Re-run the reproduction and the whole suite yourself; do not trust
+      tests_pass. Then call submit_output.
     output_schema:
       type: object
       additionalProperties: false
@@ -152,31 +287,45 @@ steps:
       - field: approved
         equals: false
         action: fail
-        message: "Review rejected the fix — see findings on validate-pr. Retry from draft-pr after adjusting."
+        message: "Review rejected the fix — see findings on validate-pr. Retry from draft-pr after addressing them."
 
+  # ------------------------------------------------------------- publish PR
   - id: finalize-pr
     name: Publish PR
     description: Push the branch and open the real pull request.
     requires_approval: true
+    soul: >-
+      You perform one outward-facing action that a human has already approved.
+      You are exact, you change nothing about the code, and you verify the result
+      by reading the PR back rather than trusting an exit code.
     skills: [pr-publisher]
     tools: [bash, read]
-    max_turns: 15
+    budget: { max_turns: 15, max_tool_calls: 30, max_wall_sec: 300 }
+    guardrails:
+      - deny: bash
+        args_contain: ["git reset", "git rebase", "git commit", "--force", "-f origin"]
+        reason: >-
+          publishing pushes the reviewed commits unchanged; rewriting history
+          here would publish something nobody reviewed
     prompt: |
       The fix on branch `{{ .Steps.draft-pr.branch }}` was reviewed and approved by a human.
+
       PR title: {{ .Input.title }}
+
       PR body (markdown):
       {{ .Steps.draft-pr.summary }}
 
-      Review notes: {{ .Steps.validate-pr.reasoning }}
+      Reviewer's notes: {{ .Steps.validate-pr.reasoning }}
 
-      Load the `pr-publisher` skill: push the branch and open the PR with `gh` against
-      `{{ .Input.base_branch }}`. Then call submit_output.
+      Load the `pr-publisher` skill: push the branch and open the PR with `gh`
+      against `{{ .Input.base_branch }}`. Read the PR back to confirm it exists,
+      then call submit_output.
     output_schema:
       type: object
       additionalProperties: false
       required: [pr_url, branch, pushed]
       properties:
-        pr_url: { type: string }
+        pr_url:    { type: string }
         pr_number: { type: integer }
-        branch: { type: string }
-        pushed: { type: boolean }
+        branch:    { type: string }
+        pushed:    { type: boolean }
