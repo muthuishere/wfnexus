@@ -6,7 +6,12 @@ import (
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
+
+// printer is required by jsonschema's LocalizedString — passing nil panics.
+var printer = message.NewPrinter(language.English)
 
 // compileSchema compiles a JSON schema given as a Go map.
 func compileSchema(name string, schema map[string]any) (*jsonschema.Schema, error) {
@@ -31,7 +36,7 @@ func validateJSON(s *jsonschema.Schema, v any) error {
 			if loc == "" {
 				loc = "(root)"
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %s", loc, c.ErrorKind.LocalizedString(nil)))
+			lines = append(lines, fmt.Sprintf("- %s: %s", loc, c.ErrorKind.LocalizedString(printer)))
 		}
 		return fmt.Errorf("output does not match the required schema:\n%s", strings.Join(lines, "\n"))
 	}
