@@ -44,7 +44,7 @@ func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, workdir st
 		Does: step.Description,
 		// The runtime sets SystemPrompt = Soul, so the skills catalogue has to be
 		// folded in here; nothing else advertises it on this path.
-		Soul:       withSkills(step.Soul, tk),
+		Soul:       stepSoul(step, workdir, tk),
 		Tools:      tk.Tools(),
 		Team:       team,
 		Model:      step.Model,
@@ -78,6 +78,45 @@ func (e *Engine) buildTeam(ctx context.Context, step *workflow.Step, workdir str
 		}))
 	}
 	return team, tks, nil
+}
+
+// stepSoul composes what the step's agent is told: its own identity, where it
+// works, how its result is recorded, and HOW MANY TURNS IT HAS.
+//
+// The turn budget is not decoration. A review step was given 40 turns, spent
+// all of them reading a 777-line diff (27 bash, 11 read) and never submitted,
+// so the run failed with nothing recorded although the work was nearly done.
+// The agent had no way to know it was near a limit: it explored as if
+// unbounded and discovered the ceiling by being cut off.
+func stepSoul(step *workflow.Step, workdir string, tk *tn.Toolkit) string {
+	var b strings.Builder
+	if step.Soul != "" {
+		b.WriteString(step.Soul)
+		b.WriteString("\n\n")
+	}
+	if workdir != "" {
+		fmt.Fprintf(&b, "You are working in %s. Run shell commands there and use paths relative to it; "+
+			"do not cd outside it.\n", workdir)
+	}
+	b.WriteString("When your work is complete, call `submit_output` exactly once with JSON matching its " +
+		"schema. That call is the ONLY way your result is recorded.\n")
+	if turns := effectiveTurns(step); turns > 0 {
+		fmt.Fprintf(&b, "You have at most %d turns for this step and cannot ask for more. Budget them: "+
+			"gather what you need, then submit. If you are running short, submit your best result with "+
+			"what you have and say plainly what is uncertain — a submitted partial answer is recorded, "+
+			"an unsubmitted perfect one is lost.\n", turns)
+	}
+	return withSkills(b.String(), tk)
+}
+
+// effectiveTurns is the ceiling the step will actually get: the tighter of its
+// own cap and its budget, which is the number the agent needs to hear.
+func effectiveTurns(step *workflow.Step) int {
+	n := step.MaxTurns
+	if step.Budget != nil && step.Budget.MaxTurns > 0 && (n == 0 || step.Budget.MaxTurns < n) {
+		n = step.Budget.MaxTurns
+	}
+	return n
 }
 
 // withSkills appends the toolkit's skills catalogue to an agent's soul.

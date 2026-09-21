@@ -1,0 +1,154 @@
+name: triage
+description: >-
+  Goal-planned triage: classify an incoming report, then take whichever route
+  the classification actually warrants. No step names another — the order is
+  derived from facts, and re-derived after every step.
+
+goal: triaged
+max_parallel: 3
+
+input_schema:
+  type: object
+  required: [report, repo_path]
+  properties:
+    report:    { type: string, title: "The report", format: textarea }
+    repo_path: { type: string, title: "Local repo path" }
+    isolate:   { type: boolean, title: "Isolate in a git worktree", default: true }
+
+steps:
+  # ---- establishes `classification` -----------------------------------------
+  - id: classify
+    name: Classify the report
+    description: Decide what kind of report this is and how solid it is.
+    soul: >-
+      You classify, you do not solve. You are precise about what the report
+      actually says and silent about what it does not.
+    consumes: [report]
+    produces: [classification]
+    skills: [validate-bug, repo-navigator]
+    tools: [read, grep, glob, bash]
+    budget: { max_turns: 15, max_tool_calls: 40, max_wall_sec: 300 }
+    guardrails:
+      - deny: "*"
+        args_contain: ["git push", "gh pr", "git commit"]
+        reason: triage reads and classifies; it never changes the repository
+    prompt: |
+      Classify this report against the repository at {{ .WorkDir }}:
+
+      {{ .Input.report }}
+
+      Decide what KIND of report it is and whether it is specific enough to act
+      on. Check the claim against the actual code before you call it plausible.
+      Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [kind, actionable, summary, component, confidence]
+      properties:
+        kind:       { type: string, enum: [bug, question, feature_request, docs, duplicate, unclear] }
+        actionable: { type: boolean, description: "true if someone could act on this as written" }
+        summary:    { type: string }
+        component:  { type: string }
+        confidence: { type: string, enum: [high, medium, low] }
+        missing:    { type: array, items: { type: string } }
+
+  # ---- three alternative producers of `triaged` ------------------------------
+  # Each guards on a real value from `classification`; the planner picks.
+
+  - id: investigate
+    name: Investigate the bug
+    description: Locate the code at fault and say what is actually wrong.
+    soul: >-
+      You find the defect and explain it in terms of the code, with file:line.
+      You do not fix it — someone else decides whether to.
+    consumes: [classification]
+    produces: [triaged]
+    when:
+      - { path: classification.kind, equals: bug }
+      - { path: classification.actionable, equals: true }
+    skills: [repo-navigator, validate-bug]
+    tools: [read, grep, glob, bash]
+    budget: { max_turns: 30, max_tool_calls: 100, max_wall_sec: 600 }
+    guardrails:
+      - deny: write
+        reason: investigation reports; it does not edit
+      - deny: edit
+        reason: investigation reports; it does not edit
+    prompt: |
+      A report was classified as an actionable bug in `{{ .Steps.classify.component }}`:
+
+      {{ .Steps.classify.summary }}
+
+      Find the code at fault and explain what is wrong, with file:line. Say what
+      a fix would have to change, and what it must not break. Do not edit
+      anything. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [located, explanation, next_action]
+      properties:
+        located:     { type: boolean }
+        locations:   { type: array, items: { type: string }, description: "file:line" }
+        explanation: { type: string }
+        risk:        { type: string, enum: [high, medium, low] }
+        next_action: { type: string, enum: [fix_now, needs_design, wont_fix, needs_more_info] }
+
+  - id: answer
+    name: Answer the question
+    description: Answer a question from what the repository actually shows.
+    soul: >-
+      You answer from the code in front of you and cite it. When the code does
+      not answer the question, you say so rather than filling the gap.
+    consumes: [classification]
+    produces: [triaged]
+    when:
+      - { path: classification.kind, equals: question }
+    skills: [repo-navigator]
+    tools: [read, grep, glob]
+    budget: { max_turns: 20, max_tool_calls: 60, max_wall_sec: 300 }
+    prompt: |
+      Someone asked:
+
+      {{ .Input.report }}
+
+      Answer it from the repository at {{ .WorkDir }}, citing file:line for
+      every claim. If the code does not answer it, say exactly what is missing.
+      Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [answered, answer, citations]
+      properties:
+        answered:  { type: boolean }
+        answer:    { type: string }
+        citations: { type: array, items: { type: string } }
+
+  - id: request-detail
+    name: Ask for what is missing
+    description: Turn an unactionable report into the smallest set of questions.
+    soul: >-
+      You ask the fewest questions that would make the report actionable, and
+      each one is answerable without guesswork.
+    consumes: [classification]
+    produces: [triaged]
+    when:
+      - { path: classification.actionable, equals: false }
+    tools: [read]
+    budget: { max_turns: 8, max_wall_sec: 120 }
+    prompt: |
+      This report could not be acted on:
+
+      {{ .Input.report }}
+
+      The classifier said it is `{{ .Steps.classify.kind }}` and noted:
+      {{ list .Steps.classify.missing }}
+
+      Write the smallest set of questions that would make it actionable. Then
+      call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [questions, why]
+      properties:
+        questions: { type: array, items: { type: string } }
+        why:       { type: string, description: "what cannot be determined without them" }

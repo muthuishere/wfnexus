@@ -122,6 +122,10 @@ type Decide struct {
 }
 
 type Step struct {
+	// JobID is the job this step was flattened out of, when the workflow used
+	// the jobs form. Empty for a flat step list.
+	JobID string `yaml:"-" json:"jobId,omitempty"`
+
 	ID          string `yaml:"id" json:"id"`
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
@@ -142,6 +146,16 @@ type Step struct {
 	RequiresApproval bool   `yaml:"requires_approval,omitempty" json:"requiresApproval,omitempty"`
 	Gates            []Gate `yaml:"gates,omitempty" json:"gates,omitempty"`
 
+	// Run makes this step a DETERMINISTIC NODE rather than an agent: the shell
+	// command is executed in the run's workspace, no model is called, and it
+	// costs nothing. Exactly GitHub Actions' `run:`. A step has `run` or
+	// `prompt`, never both.
+	//
+	// Its output is fixed — {ok, exitCode, stdout, stderr} — so a `when` guard
+	// or a gate can branch on `tests.ok` the same way it branches on an agent's
+	// output. Use it for the parts of a workflow that do not need judgment:
+	// running a suite, a linter, a git operation.
+	Run string `yaml:"run,omitempty" json:"run,omitempty"`
 	// Soul is the agent's identity for this step (its system prompt).
 	Soul string `yaml:"soul,omitempty" json:"soul,omitempty"`
 	// Budget caps this step's agent subtree.
@@ -182,6 +196,19 @@ type Definition struct {
 	Description string         `yaml:"description" json:"description"`
 	InputSchema map[string]any `yaml:"input_schema" json:"inputSchema"`
 	Steps       []Step         `yaml:"steps" json:"steps"`
+	// Jobs are the GitHub-Actions-shaped form: jobs run in parallel, `needs`
+	// orders them, and each holds an ordered list of steps. Flattened into
+	// Steps at load time (see jobs.go), so nothing downstream knows about them.
+	Jobs map[string]*Job `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+	// Uses expand reusable TASKS into steps at load time (see task.go).
+	Uses []Use `yaml:"uses,omitempty" json:"uses,omitempty"`
+	// Template marks a workflow as a starting point to copy rather than run.
+	Template bool `yaml:"template,omitempty" json:"template,omitempty"`
+	// authoredNeeds records whether the AUTHOR wrote any dependency, as opposed
+	// to the synthetic edges job flattening creates to chain a job's own steps.
+	// Only authored edges conflict with a derived plan; a job's internal
+	// chaining is an implementation detail of the job.
+	authoredNeeds bool
 	// Goal is the fact the workflow must establish. Declaring it turns execution
 	// over to the planner: the order is derived from what each step consumes and
 	// produces, and re-derived after every step.
@@ -217,14 +244,25 @@ func (d *Definition) validate(cat Catalog) error {
 	}
 	seen := map[string]bool{}
 	for i, s := range d.Steps {
-		if s.ID == "" || s.Prompt == "" {
-			return fmt.Errorf("%s: step %d needs id and prompt", d.Name, i)
+		if s.ID == "" {
+			return fmt.Errorf("%s: step %d needs an id", d.Name, i)
+		}
+		if s.Prompt == "" && s.Run == "" {
+			return fmt.Errorf("%s/%s: a step needs either `prompt` (an agent) or `run` (a command)", d.Name, s.ID)
+		}
+		if s.Prompt != "" && s.Run != "" {
+			return fmt.Errorf("%s/%s: a step is an agent OR a command, not both — `prompt` and `run` are mutually exclusive", d.Name, s.ID)
+		}
+		if s.Run != "" {
+			if len(s.Skills) > 0 || len(s.Team) > 0 || s.Decide != nil {
+				return fmt.Errorf("%s/%s: a `run` step calls no model, so skills, team and decide have no meaning on it", d.Name, s.ID)
+			}
 		}
 		if seen[s.ID] {
 			return fmt.Errorf("%s: duplicate step id %q", d.Name, s.ID)
 		}
 		seen[s.ID] = true
-		if s.OutputSchema == nil {
+		if s.OutputSchema == nil && s.Run == "" {
 			return fmt.Errorf("%s: step %q needs output_schema", d.Name, s.ID)
 		}
 		if cat != nil {
@@ -296,7 +334,7 @@ func (d *Definition) validatePlan() error {
 	if !d.IsPlanned() {
 		return nil
 	}
-	if d.IsDAG() {
+	if d.authoredNeeds {
 		return fmt.Errorf("%s: a workflow declares its order EITHER with `needs` OR with consumes/produces and a goal — not both, because the two would disagree the moment a guard fails", d.Name)
 	}
 	for _, s := range d.Steps {
@@ -437,6 +475,17 @@ func (d *Definition) Ready(done map[string]bool, started map[string]bool) []*Ste
 
 // LoadDir reads every *.yaml / *.yml in dir.
 func LoadDir(dir string, cat Catalog) (map[string]*Definition, error) {
+	return LoadDirWithTasks(dir, "", cat)
+}
+
+// LoadDirWithTasks loads workflows, expanding any reusable tasks found in
+// tasksDir before validation — so a task's steps are checked exactly like
+// hand-written ones.
+func LoadDirWithTasks(dir, tasksDir string, cat Catalog) (map[string]*Definition, error) {
+	tasks, err := LoadTasks(tasksDir)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -457,6 +506,17 @@ func LoadDir(dir string, cat Catalog) (map[string]*Definition, error) {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		d.Path = p
+		for _, st := range d.Steps {
+			if len(st.Needs) > 0 {
+				d.authoredNeeds = true
+			}
+		}
+		if err := d.expandUses(tasks); err != nil {
+			return nil, err
+		}
+		if err := d.expandJobs(tasks); err != nil {
+			return nil, err
+		}
 		normalize(d)
 		if err := d.validate(cat); err != nil {
 			return nil, err
@@ -488,6 +548,9 @@ func normalize(d *Definition) {
 		}
 		if s.Retry != nil && s.Retry.MaxAttempts == 0 {
 			s.Retry.MaxAttempts = 1
+		}
+		if s.Run != "" && s.OutputSchema == nil {
+			s.OutputSchema = RunOutputSchema()
 		}
 	}
 }
@@ -627,6 +690,22 @@ func degenerate(criteria map[string]string) bool {
 		}
 	}
 	return allEmpty || allSelf || allSame
+}
+
+// RunOutputSchema is the fixed contract of a `run` node, so a guard can branch
+// on `build.ok` exactly as it would on an agent's output.
+func RunOutputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"ok", "exitCode"},
+		"properties": map[string]any{
+			"ok":       map[string]any{"type": "boolean", "description": "exit code was zero"},
+			"exitCode": map[string]any{"type": "integer"},
+			"stdout":   map[string]any{"type": "string"},
+			"stderr":   map[string]any{"type": "string"},
+		},
+	}
 }
 
 func Sorted(m map[string]*Definition) []*Definition {

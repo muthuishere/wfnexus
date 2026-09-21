@@ -60,7 +60,7 @@ steps:
       You do not inflate severities to look thorough.
     skills: [change-reviewer, repo-navigator]
     tools: [bash, read, grep, glob]
-    budget: { max_turns: 40, max_tokens: 400000, max_tool_calls: 150, max_wall_sec: 900 }
+    budget: { max_turns: 80, max_tokens: 600000, max_tool_calls: 250, max_wall_sec: 1800 }
     guardrails:
       - deny: "*"
         args_contain: ["git push", "git commit", "gh pr", "git checkout -b"]
@@ -84,6 +84,11 @@ steps:
       {{ .Input.focus }}{{ end }}
 
       Load the `change-reviewer` skill and follow it. Run the suite yourself.
+
+      Review breadth-first: read the whole diff before going deep on any hunk,
+      and keep enough turns in hand to submit. A submitted review with three
+      solid findings beats an unsubmitted one with ten.
+
       Then call submit_output.
     output_schema:
       type: object
