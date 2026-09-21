@@ -9,7 +9,9 @@ import { Field, IssueList, Section } from '../components/builder/Bits'
 
 export default function WorkflowBuilderPage({ name }: { name?: string }) {
   const editing = !!name
-  const [draft, setDraft] = useState<WorkflowDraft>()
+  // The blank template is the initial state, not an effect — #/workflows/new
+  // should render an editable workflow on the first paint.
+  const [draft, setDraft] = useState<WorkflowDraft | undefined>(() => (name ? undefined : templateDraft(undefined, 'read')))
   const [skills, setSkills] = useState<Skill[]>([])
   const [tools, setTools] = useState<BuiltinTool[]>([])
   const [catalogErr, setCatalogErr] = useState('')
@@ -29,14 +31,11 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
   }, [])
 
   useEffect(() => {
+    if (!name) return
     let live = true
-    if (name) {
-      api.workflow(name)
-        .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [] }) })
-        .catch(e => live && setLoadErr(e instanceof Error ? e.message : String(e)))
-    } else {
-      setDraft(templateDraft(undefined, 'read'))
-    }
+    api.workflow(name)
+      .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [] }) })
+      .catch(e => live && setLoadErr(e instanceof Error ? e.message : String(e)))
     return () => { live = false }
   }, [name])
 

@@ -6,6 +6,10 @@ import type { WorkflowDraft, Step } from '../api'
 
 const pad = (n: number) => ' '.repeat(n)
 const plainKey = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+// A bare `true:` key is read as a boolean, not the string "true", so the noul
+// question's true/false keys must be quoted — the reference workflow quotes
+// them for exactly this reason.
+const boolish = /^(true|false|yes|no|on|off|null)$/i
 // Anything that could start a flow collection, a comment, an anchor, a tag or a
 // number is quoted; so is a word YAML 1.1 would read as a boolean.
 const needsQuote = /^$|^[\s>|@`%&*!?#-]|[:#]\s|[:#]$|^(true|false|yes|no|on|off|null|~)$|^[-+.]?\d|[\n"'{}[\],]|\s$/i
@@ -32,7 +36,7 @@ function dumpMap(obj: object, ind: number, out: string[]) {
 }
 
 function dumpEntry(k: string, v: unknown, ind: number, out: string[]) {
-  const key = plainKey.test(k) ? k : JSON.stringify(k)
+  const key = plainKey.test(k) && !boolish.test(k) ? k : JSON.stringify(k)
   const head = `${pad(ind)}${key}: `
   if (Array.isArray(v)) {
     if (v.length === 0) { out.push(`${head}[]`); return }

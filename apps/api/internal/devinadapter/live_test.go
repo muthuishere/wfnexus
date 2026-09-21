@@ -366,3 +366,44 @@ func TestLiveACPWarmsUp(t *testing.T) {
 		t.Errorf("no warm-up: first %.1fs, third %.1fs", times[0].Seconds(), times[2].Seconds())
 	}
 }
+
+// The ACP client is not devin-specific: the same code, unchanged, against
+// `opencode acp`. If this passes, presets are argv + quirks, not protocol.
+func TestLiveOpencodeACP(t *testing.T) {
+	if os.Getenv("DEVINADAPTER_LIVE") != "1" {
+		t.Skip("set DEVINADAPTER_LIVE=1")
+	}
+	if _, err := exec.LookPath("opencode"); err != nil {
+		t.Skipf("opencode not on PATH: %v", err)
+	}
+
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: "opencode"})
+	defer acp.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	start := time.Now()
+	out, err := acp.Execute(ctx, devinadapter.Turn{
+		Index: 1, Attempt: 1, Workdir: t.TempDir(),
+		Prompt: "Reply with exactly this one word and nothing else: PONG",
+	})
+	if err != nil {
+		t.Fatalf("opencode acp: %v", err)
+	}
+	t.Logf("opencode answered in %.1fs: %.80q", time.Since(start).Seconds(), strings.TrimSpace(out))
+	if !strings.Contains(strings.ToUpper(out), "PONG") {
+		t.Errorf("unexpected reply: %q", out)
+	}
+
+	// Second prompt on the warm session.
+	start = time.Now()
+	out2, err := acp.Execute(ctx, devinadapter.Turn{
+		Index: 2, Attempt: 1, Workdir: t.TempDir(),
+		Prompt: "Reply with exactly this one word and nothing else: PING",
+	})
+	if err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	t.Logf("second prompt in %.1fs: %.80q", time.Since(start).Seconds(), strings.TrimSpace(out2))
+}

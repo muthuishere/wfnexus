@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,46 @@ func (e *Engine) ReloadDefinitions() error {
 	e.defs, e.skills = defs, reg
 	e.mu.Unlock()
 	return nil
+}
+
+// CheckWorkflow is SaveWorkflow without the write.
+func (e *Engine) CheckWorkflow(d *workflow.Definition) error {
+	e.mu.Lock()
+	reg := e.skills
+	e.mu.Unlock()
+	return workflow.Check(d, reg)
+}
+
+// McpServers lists the server names a step may be granted, so an authoring UI
+// offers a choice instead of free text whose typo surfaces at run time.
+func (e *Engine) McpServers() []string {
+	raw, err := os.ReadFile(e.cfg.McpConfig)
+	if err != nil {
+		return []string{}
+	}
+	var all map[string]any
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return []string{}
+	}
+	servers, _ := all["mcpServers"].(map[string]any)
+	out := make([]string, 0, len(servers))
+	for name := range servers {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Models is the model catalog an authoring UI offers: the configured default
+// first, then anything BFP_MODELS lists.
+func (e *Engine) Models() []string {
+	out := []string{e.cfg.Model}
+	for _, m := range strings.Split(os.Getenv("BFP_MODELS"), ",") {
+		if m = strings.TrimSpace(m); m != "" && m != e.cfg.Model {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // SaveWorkflow validates and persists an authored definition, then reloads so

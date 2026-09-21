@@ -20,6 +20,39 @@ func ValidName(name string) error {
 	return nil
 }
 
+// Check validates a definition without writing anything — the authoritative
+// verdict for an authoring UI, which should not have to create a file to learn
+// whether what it built is legal.
+func Check(d *Definition, cat Catalog) error {
+	if err := ValidName(d.Name); err != nil {
+		return err
+	}
+	normalize(d)
+	if err := d.validate(cat); err != nil {
+		return err
+	}
+	raw, err := yaml.Marshal(d)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "bfp-check-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	if err := os.WriteFile(filepath.Join(tmp, d.Name+".yaml"), raw, 0o644); err != nil {
+		return err
+	}
+	loaded, err := LoadDir(tmp, cat)
+	if err != nil {
+		return fmt.Errorf("the definition does not survive a round trip: %w", err)
+	}
+	if _, ok := loaded[d.Name]; !ok {
+		return fmt.Errorf("the definition did not load back under %q", d.Name)
+	}
+	return nil
+}
+
 // Save validates a definition and, only if it is loadable, writes it to dir as
 // YAML. Validation runs against a temporary copy, so a rejected definition
 // never lands on disk and cannot break the next boot.

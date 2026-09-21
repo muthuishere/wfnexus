@@ -43,6 +43,9 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/workflows", s.listWorkflows)
 		r.Post("/workflows/reload", s.reloadWorkflows)
 		r.Get("/workflows/{name}", s.getWorkflow)
+		r.Post("/workflows/validate", s.validateWorkflow)
+		r.Get("/mcp", s.listMcp)
+		r.Get("/models", s.listModels)
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
@@ -101,6 +104,31 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, d)
+}
+
+// validateWorkflow is the authoritative verdict with no side effect, so the
+// builder never has to write a file to find out whether it is legal.
+func (s *Server) validateWorkflow(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Definition *workflow.Definition `json:"definition"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Definition == nil {
+		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
+		return
+	}
+	if err := s.eng.CheckWorkflow(body.Definition); err != nil {
+		writeJSON(w, 200, map[string]any{"valid": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"valid": true, "definition": body.Definition})
+}
+
+func (s *Server) listMcp(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, s.eng.McpServers())
+}
+
+func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, s.eng.Models())
 }
 
 // saveWorkflow validates an authored definition and writes it only if it

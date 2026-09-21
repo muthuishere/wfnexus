@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { JSONSchema } from '../../api'
 import { renameKey, SCALAR_TYPES, schemaProps } from '../../builder/model'
 
@@ -40,8 +40,6 @@ export default function SchemaEditor({ schema, onChange, label, hint }: {
     setProp(`field_${n}`, { type: 'string', description: '' })
   }
 
-  useEffect(() => { if (raw === null) setRawErr('') }, [raw])
-
   if (raw !== null) {
     return (
       <div className="schemaed">
@@ -55,7 +53,7 @@ export default function SchemaEditor({ schema, onChange, label, hint }: {
               onChange(parsed as JSONSchema); setRaw(null); setRawErr('')
             } catch (e) { setRawErr(e instanceof Error ? e.message : String(e)) }
           }}>Apply</button>
-          <button type="button" className="ghost small" onClick={() => setRaw(null)}>Discard</button>
+          <button type="button" className="ghost small" onClick={() => { setRaw(null); setRawErr('') }}>Discard</button>
         </div>
         <textarea style={{ minHeight: 220 }} value={raw} onChange={e => setRaw(e.target.value)} spellCheck={false} />
         {rawErr
