@@ -61,8 +61,14 @@ type Options struct {
 	// Workdir is where prompt files are written. "" ⇒ the current directory.
 	// A CommandAgent also runs its process here.
 	Workdir string
-	// Timeout bounds a single turn. 0 ⇒ 10 minutes.
+	// Timeout bounds a single turn, repair attempts included. 0 ⇒ 10 minutes.
 	Timeout time.Duration
+	// Repairs is how many extra attempts a turn gets when the reply fails
+	// validation: the offending output and the parse error go back to the
+	// backend so it can correct itself. 0 ⇒ 2. Negative ⇒ no repair, the first
+	// bad reply fails the run. It is never a silent fallback — once the budget
+	// is spent the turn returns an error rather than a guess.
+	Repairs int
 	// KeepPromptFiles leaves the rendered prompt files on disk for inspection.
 	KeepPromptFiles bool
 	// Trace, when non-nil, receives every exchange — the prompt file path, the
@@ -72,11 +78,16 @@ type Options struct {
 
 // Exchange is one turn through the command seam, handed to Options.Trace.
 type Exchange struct {
-	Turn       int
+	Turn int
+	// Attempt is 1 for the turn itself, 2+ for a repair attempt.
+	Attempt    int
 	PromptFile string
 	Prompt     string
 	Reply      string
-	Err        error
+	// ParseErr is set when the reply failed validation, which is what triggers
+	// the next attempt.
+	ParseErr error
+	Err      error
 }
 
 // Adapter is the http.RoundTripper that stands in for an OpenAI-style model.
@@ -102,6 +113,12 @@ func New(opts Options) *Adapter {
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 10 * time.Minute
+	}
+	if opts.Repairs == 0 {
+		opts.Repairs = 2
+	}
+	if opts.Repairs < 0 {
+		opts.Repairs = 0
 	}
 	return &Adapter{opts: opts}
 }
@@ -151,22 +168,24 @@ func (a *Adapter) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("devinadapter: decode request: %w", err)
 	}
 
-	prompt := RenderTranscript(in.Messages)
-	if len(in.Tools) > 0 {
-		prompt = BuildToolPrompt(prompt, in.Tools)
+	prompt := BuildPrompt(RenderTranscript(in.Messages), in.Tools)
+
+	// The model toolnexus asked for wins over the adapter's default, so one
+	// Adapter can serve several clients on different models.
+	model := a.opts.Model
+	if model == "" {
+		model = in.Model
 	}
 
-	text, err := a.call(req.Context(), prompt)
+	msg, finish, err := a.call(req.Context(), prompt, model)
 	if err != nil {
 		return nil, err
 	}
-
-	msg, finish := ParseToolReply(text)
 	out, err := json.Marshal(map[string]any{
 		"id":      "chatcmpl_" + randHex(),
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
-		"model":   a.modelName(in.Model),
+		"model":   model,
 		"choices": []any{map[string]any{
 			"index":         0,
 			"message":       msg,
@@ -192,17 +211,35 @@ func (a *Adapter) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func (a *Adapter) modelName(requested string) string {
-	if a.opts.Model != "" {
-		return a.opts.Model
+// call runs one turn: render to a file, invoke the backend, validate the
+// reply. A reply that fails validation is sent back with the complaint, up to
+// Repairs times; after that the turn errors out. Nothing is guessed.
+func (a *Adapter) call(ctx context.Context, prompt, model string) (map[string]any, string, error) {
+	turn := int(a.turn.Add(1))
+
+	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
+	defer cancel()
+
+	var lastErr error
+	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
+		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
+		if err != nil {
+			return nil, "", err
+		}
+		msg, finish, perr := ParseReply(text)
+		if perr == nil {
+			return msg, finish, nil
+		}
+		lastErr = perr
+		prompt = BuildRepairPrompt(text, perr)
 	}
-	return requested
+	return nil, "", fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w",
+		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr)
 }
 
-// call writes the prompt to a file and hands it to the Agent.
-func (a *Adapter) call(ctx context.Context, prompt string) (string, error) {
-	turn := int(a.turn.Add(1))
-	ex := Exchange{Turn: turn, Prompt: prompt}
+// invoke writes the prompt to a file and hands it to the Agent.
+func (a *Adapter) invoke(ctx context.Context, turn, attempt int, prompt, model string, prev error) (string, error) {
+	ex := Exchange{Turn: turn, Attempt: attempt, Prompt: prompt, ParseErr: prev}
 
 	f, err := os.CreateTemp(a.opts.Workdir, "devin-prompt-*.md")
 	if err != nil {
@@ -220,13 +257,12 @@ func (a *Adapter) call(ctx context.Context, prompt string) (string, error) {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
-	defer cancel()
-
 	text, err := a.opts.Agent.Execute(ctx, Turn{
 		Index:      turn,
+		Attempt:    attempt,
 		PromptFile: ex.PromptFile,
 		Prompt:     prompt,
+		Model:      model,
 		Workdir:    a.opts.Workdir,
 	})
 	ex.Reply, ex.Err = text, err

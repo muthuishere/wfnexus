@@ -24,6 +24,7 @@ type Run struct {
 	Status      string          `json:"status"`
 	Input       json.RawMessage `json:"input"`
 	CurrentStep string          `json:"currentStep"`
+	BaseRef     string          `json:"baseRef"`
 	Error       string          `json:"error"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
@@ -108,11 +109,11 @@ func (s *Store) CreateRun(ctx context.Context, workflow string, input json.RawMe
 	return r, err
 }
 
-const runCols = `id, workflow, status, input, current_step, error, created_at, updated_at`
+const runCols = `id, workflow, status, input, current_step, base_ref, error, created_at, updated_at`
 
 func scanRun(row pgx.Row) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Workflow, &r.Status, &r.Input, &r.CurrentStep, &r.Error, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Workflow, &r.Status, &r.Input, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -146,6 +147,13 @@ func (s *Store) UpdateRun(ctx context.Context, id uuid.UUID, status, currentStep
 
 func (s *Store) UpdateRunInput(ctx context.Context, id uuid.UUID, input json.RawMessage) error {
 	_, err := s.pool.Exec(ctx, `UPDATE workflow_runs SET input=$2, updated_at=now() WHERE id=$1`, id, input)
+	return err
+}
+
+// SetBaseRef records the commit a run started from, once. Later resumes read it
+// back so every step's diff is measured from the same point.
+func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE workflow_runs SET base_ref=$2 WHERE id=$1 AND base_ref=''`, id, ref)
 	return err
 }
 

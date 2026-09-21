@@ -214,7 +214,15 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
-	baseRef := gitRev(ctx, workdir)
+	// the base is recorded once per run, so a resume does not re-anchor diffs
+	baseRef := run.BaseRef
+	if baseRef == "" {
+		if baseRef = gitRev(ctx, workdir); baseRef != "" {
+			if err := e.store.SetBaseRef(ctx, runID, baseRef); err != nil {
+				log.Printf("engine: set base ref: %v", err)
+			}
+		}
+	}
 
 	steps, err := e.store.ListSteps(ctx, runID)
 	if err != nil {
