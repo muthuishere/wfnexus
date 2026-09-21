@@ -188,6 +188,15 @@ func (d *Definition) validate(cat Catalog) error {
 				return fmt.Errorf("%s/%s: not built-in tools: %s", d.Name, s.ID, strings.Join(miss, ", "))
 			}
 		}
+		if err := s.validateTeam(d.Name, cat); err != nil {
+			return err
+		}
+		if err := s.validateGuardrails(d.Name, cat); err != nil {
+			return err
+		}
+		if err := s.validateDecide(d.Name); err != nil {
+			return err
+		}
 		for _, g := range s.Gates {
 			switch g.Action {
 			case "needs_input", "fail":
@@ -263,6 +272,143 @@ func normalize(d *Definition) {
 			s.MaxAttempts = 3
 		}
 	}
+}
+
+// validateTeam checks each sub-agent is complete and scoped to real capabilities.
+func (s *Step) validateTeam(wf string, cat Catalog) error {
+	seen := map[string]bool{}
+	for _, m := range s.Team {
+		if m.ID == "" || m.Does == "" {
+			return fmt.Errorf("%s/%s: every team member needs an id and a `does` (the routing description the model reads)", wf, s.ID)
+		}
+		if seen[m.ID] {
+			return fmt.Errorf("%s/%s: duplicate team member %q", wf, s.ID, m.ID)
+		}
+		seen[m.ID] = true
+		if m.ID == s.ID {
+			return fmt.Errorf("%s/%s: a team member may not share the step's id", wf, s.ID)
+		}
+		if cat == nil {
+			continue
+		}
+		if miss := cat.Missing(m.Skills); len(miss) > 0 {
+			return fmt.Errorf("%s/%s/%s: skills not in the registry: %s", wf, s.ID, m.ID, strings.Join(miss, ", "))
+		}
+		if miss := cat.MissingBuiltins(m.Tools); len(miss) > 0 {
+			return fmt.Errorf("%s/%s/%s: not built-in tools: %s", wf, s.ID, m.ID, strings.Join(miss, ", "))
+		}
+	}
+	return nil
+}
+
+// validateGuardrails checks each policy rule names a real tool and a reason —
+// a denial with no reason is invisible to the model that receives it.
+func (s *Step) validateGuardrails(wf string, cat Catalog) error {
+	for _, g := range s.Guardrails {
+		if g.Deny == "" {
+			return fmt.Errorf("%s/%s: a guardrail needs `deny` (a tool name, or * for any)", wf, s.ID)
+		}
+		if g.Reason == "" {
+			return fmt.Errorf("%s/%s: guardrail on %q needs a reason — the model is shown it as the tool result", wf, s.ID, g.Deny)
+		}
+		if g.Deny != "*" && cat != nil {
+			// a guardrail may name an MCP or skill tool, so only flag a name that
+			// looks like a built-in typo: unknown AND the step grants built-ins
+			if miss := cat.MissingBuiltins([]string{g.Deny}); len(miss) > 0 && len(s.Tools) > 0 && !toolGranted(s.Tools, g.Deny) {
+				continue // not a built-in and not granted here — could be an MCP tool; allow it
+			}
+		}
+	}
+	return nil
+}
+
+func toolGranted(tools []string, name string) bool {
+	for _, t := range tools {
+		if t == name {
+			return true
+		}
+	}
+	return false
+}
+
+// validateDecide enforces the classifier's client-side limits and the encoding
+// obligation: an option described only by its own id ranks at chance.
+func (s *Step) validateDecide(wf string) error {
+	if s.Decide == nil {
+		return nil
+	}
+	if len(s.Decide.Questions) == 0 {
+		return fmt.Errorf("%s/%s: decide needs at least one question", wf, s.ID)
+	}
+	for key, q := range s.Decide.Questions {
+		if q.Instructions == "" {
+			return fmt.Errorf("%s/%s: decide question %q needs instructions", wf, s.ID, key)
+		}
+		switch q.Type {
+		case "noul":
+		case "choice":
+			if len(q.Options) < 1 || len(q.Options) > 255 {
+				return fmt.Errorf("%s/%s: decide question %q needs 1..255 options, got %d", wf, s.ID, key, len(q.Options))
+			}
+			if degenerate(q.Options) {
+				return fmt.Errorf("%s/%s: decide question %q describes its options degenerately (empty, or the id repeated) — "+
+					"an option must say what PICKING IT would mean, or the answer ranks at chance", wf, s.ID, key)
+			}
+		case "score":
+			if len(q.Levels) < 2 || len(q.Levels) > 10 {
+				return fmt.Errorf("%s/%s: decide question %q needs an ordered rubric of 2..10 levels, got %d", wf, s.ID, key, len(q.Levels))
+			}
+		default:
+			return fmt.Errorf("%s/%s: decide question %q has unknown type %q (noul|choice|score)", wf, s.ID, key, q.Type)
+		}
+	}
+	for _, g := range s.Decide.Gates {
+		if _, ok := s.Decide.Questions[g.Question]; !ok {
+			return fmt.Errorf("%s/%s: decide gate references unknown question %q", wf, s.ID, g.Question)
+		}
+		n := 0
+		for _, set := range []bool{g.Below != nil, g.AtLeast != nil, g.Is != ""} {
+			if set {
+				n++
+			}
+		}
+		if n != 1 {
+			return fmt.Errorf("%s/%s: decide gate on %q needs exactly one of below / at_least / is", wf, s.ID, g.Question)
+		}
+		switch g.Action {
+		case "needs_input", "fail":
+		case "skip_to":
+			if g.SkipTo == "" {
+				return fmt.Errorf("%s/%s: decide skip_to gate needs skip_to", wf, s.ID)
+			}
+		default:
+			return fmt.Errorf("%s/%s: decide gate has unknown action %q", wf, s.ID, g.Action)
+		}
+	}
+	return nil
+}
+
+// degenerate reports the criteria shapes toolnexus warns about: every value
+// empty, every value equal to its own key, or every value identical.
+func degenerate(criteria map[string]string) bool {
+	if len(criteria) < 2 {
+		return false
+	}
+	allEmpty, allSelf, first, allSame := true, true, "", true
+	for k, v := range criteria {
+		if strings.TrimSpace(v) != "" {
+			allEmpty = false
+		}
+		if v != k {
+			allSelf = false
+		}
+		if first == "" {
+			first = v
+		} else if v != first {
+			allSame = false
+		}
+	}
+	return allEmpty || allSelf || allSame
 }
 
 func Sorted(m map[string]*Definition) []*Definition {

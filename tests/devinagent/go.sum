@@ -6,6 +6,8 @@ github.com/mark3labs/mcp-go v0.48.0 h1:o+MXuGW/HCeR2ny5LcAcZQn2bo6I2xaZMEHnpRG+d
 github.com/mark3labs/mcp-go v0.48.0/go.mod h1:JKTC7R2LLVagkEWK7Kwu7DbmA6iIvnNAod6yrHiQMag=
 github.com/muthuishere/toolnexus/golang v0.18.0 h1:4zfrN7nz5up1SNEDuCKmSVWoV0/WcVDroexDrdcnJgE=
 github.com/muthuishere/toolnexus/golang v0.18.0/go.mod h1:pZkMvKsq6vVF2UjUpZTeudgLjxavoPE9QRDHNt4hJQw=
+github.com/muthuishere/toolnexus/golang v0.18.1 h1:oFnC6WAt9ZrFG7TUtIjMVOnsZastilEy/c5hb38OxQQ=
+github.com/muthuishere/toolnexus/golang v0.18.1/go.mod h1:pZkMvKsq6vVF2UjUpZTeudgLjxavoPE9QRDHNt4hJQw=
 github.com/spf13/cast v1.7.1 h1:cuNEagBQEHWN1FnbGEjCXL2szYEXqfJPbP2HNUaca9Y=
 github.com/spf13/cast v1.7.1/go.mod h1:ancEpBxwJDODSW/UG4rDrAqiKolqNNh2DX3mk86cAdo=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=
