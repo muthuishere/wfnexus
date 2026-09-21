@@ -27,6 +27,25 @@ because that module exists to verify unreleased behaviour.
    any test we write must use a name that sorts *after* the nested directory's
    first segment (`synced`), e.g. `xlsx`.
 
+## Behaviour that changes when we bump (reported by upstream, 2026-09-22)
+
+Four of these reach a host that reads tool output. Assert them when we bump.
+
+- **`grep` now emits a RELATIVE, slash-separated path** (`rel:line:text`), not a
+  machine-absolute one. Five of five ports had been sorting on the relative path
+  and printing the absolute one.
+- **`glob`, `grep` and the `<skill_files>` sample SORT BEFORE CAPPING.**
+  Previously the walk broke at the limit, so the *filesystem* chose which
+  results the model saw — a different set on a different machine, and on some
+  filesystems between two runs of the same process. This changes **which files
+  appear**, not merely their order. Steps that lean on a skill's sibling files
+  may behave differently.
+- **Provider errors are typed** (`ProviderError` with status / body / retryAfter,
+  account identifiers redacted). Our issue #92 is why. Our `scrub()` stays as
+  defence in depth, but error matching moves.
+- **The duplicate-skill winner flipped**: a top-level skill now always beats a
+  nested copy of the same name — so a name may resolve to a different **body**.
+
 ## Also parked
 
 `apps/api/internal/devinadapter` is another session's work, behind the
