@@ -3,3 +3,7 @@ node_modules/
 apps/ui/dist/
 .env
 *.env
+
+# Local-only module replacements (never commit a machine path in go.mod)
+go.work
+go.work.sum
