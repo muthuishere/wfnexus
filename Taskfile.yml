@@ -2,32 +2,96 @@ version: "3"
 
 dotenv: [".env"]
 
+vars:
+  BIN: "{{.ROOT_DIR}}/bin"
+
 tasks:
+  default:
+    cmds: [task --list]
+
+  # ---- run it ---------------------------------------------------------------
   infra:up:
-    desc: Start Postgres (5460) + MinIO (9030 api / 9031 console)
+    desc: Postgres (5460) + MinIO (9030 api, 9031 console)
     cmds: [docker compose up -d]
   infra:down:
     cmds: [docker compose down]
+  infra:psql:
+    desc: A psql shell on the platform database
+    cmds: [docker exec -it bfp-postgres psql -U bfp -d bfp]
+
   api:
-    desc: Run the Go API (migrates on boot)
+    desc: Run the server (applies migrations on boot)
     dir: apps/api
     env: { WFX_ROOT: "{{.ROOT_DIR}}" }
     cmds: [go run .]
-  api:build:
-    dir: apps/api
-    cmds: [go build -o ../../bin/wfnexus .]
   ui:
-    desc: Vite dev server on :5173 proxying /api → :8090
+    desc: Vite dev server on :5173, proxying /api to :8090
     dir: apps/ui
     cmds: [npm run dev]
+  dev:
+    desc: Everything a working session needs — infra, then the server
+    deps: [infra:up]
+    cmds: [task: api]
+
+  # ---- build ----------------------------------------------------------------
+  build:
+    desc: Both binaries — wfnexus (server) and wfx (CLI)
+    deps: [build:api, build:cli, ui:build]
+  build:api:
+    dir: apps/api
+    cmds: ["go build -o {{.BIN}}/wfnexus ."]
+  build:cli:
+    dir: apps/api
+    cmds: ["go build -o {{.BIN}}/wfx ./cmd/wfx"]
   ui:build:
     dir: apps/ui
     cmds: [npm run build]
-  dev:
-    desc: infra + api + ui
-    deps: [infra:up]
+  install:
+    desc: Put wfx on your PATH (~/.local/bin)
+    deps: [build:cli]
     cmds:
-      - task: api
+      - mkdir -p ~/.local/bin
+      - "cp {{.BIN}}/wfx ~/.local/bin/wfx"
+      - "echo 'wfx installed — try: wfx workflows'"
+
+  # ---- check ----------------------------------------------------------------
+  check:
+    desc: Everything CI would run
+    cmds: [task: test, task: vet, task: ui:check, task: workflows:validate]
   test:
     dir: apps/api
+    cmds: [go test ./internal/... ./cmd/...]
+  test:race:
+    desc: The concurrency paths — the planner and the scheduler run steps in parallel
+    dir: apps/api
+    cmds: [go test -race ./internal/engine/ ./internal/planner/]
+  vet:
+    dir: apps/api
+    cmds:
+      - go vet ./internal/... . ./cmd/...
+      - gofmt -l internal cmd main.go
+  ui:check:
+    dir: apps/ui
+    cmds:
+      - npx tsc --noEmit -p tsconfig.app.json
+      - npm run build
+  workflows:validate:
+    desc: Validate every workflow against the live registries
+    deps: [build:cli]
+    cmds:
+      - for: { var: FILES }
+        cmd: "{{.BIN}}/wfx validate {{.ITEM}}"
+    vars:
+      FILES:
+        sh: ls workflows/*.yaml
+
+  # ---- the knowledge graph --------------------------------------------------
+  graph:
+    desc: Rebuild the ctx-optimize store for this repo
+    cmds: [ctx-optimize up]
+
+  # ---- spikes ---------------------------------------------------------------
+  spikes:
+    desc: Verify unreleased toolnexus behaviour (needs the replace in go.work)
+    dir: spikes
     cmds: [go test ./...]

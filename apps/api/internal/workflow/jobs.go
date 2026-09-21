@@ -70,11 +70,10 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 	if len(d.Steps) > 0 {
 		return fmt.Errorf("%s: a workflow declares `jobs` OR a flat `steps` list, not both", d.Name)
 	}
-	names := make([]string, 0, len(d.Jobs))
-	for id := range d.Jobs {
-		names = append(names, id)
+	names, err := jobOrder(d.Jobs)
+	if err != nil {
+		return fmt.Errorf("%s: %w", d.Name, err)
 	}
-	sort.Strings(names)
 
 	last := map[string]string{}   // job id -> its final step id
 	firsts := map[string]string{} // job id -> its first step id
@@ -142,6 +141,59 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 	}
 	d.Steps = out
 	return nil
+}
+
+// jobOrder returns the jobs in DEPENDENCY order, ties broken by name. The
+// graph would be correct either way — every edge is explicit — but a reader
+// scanning a flattened workflow, the CLI's `workflows show`, and the UI's step
+// list all read top to bottom, and a list that contradicts the execution order
+// is a small lie told on every screen.
+func jobOrder(jobs map[string]*Job) ([]string, error) {
+	names := make([]string, 0, len(jobs))
+	for id := range jobs {
+		names = append(names, id)
+	}
+	sort.Strings(names)
+
+	const (
+		white = 0
+		grey  = 1
+		black = 2
+	)
+	colour := map[string]int{}
+	var out []string
+	var path []string
+	var visit func(string) error
+	visit = func(id string) error {
+		switch colour[id] {
+		case grey:
+			return fmt.Errorf("job dependency cycle: %s", strings.Join(append(path, id), " → "))
+		case black:
+			return nil
+		}
+		colour[id] = grey
+		path = append(path, id)
+		deps := append([]string(nil), jobs[id].Needs...)
+		sort.Strings(deps)
+		for _, dep := range deps {
+			if _, ok := jobs[dep]; !ok {
+				return fmt.Errorf("job %q needs unknown job %q", id, dep)
+			}
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		colour[id] = black
+		out = append(out, id)
+		return nil
+	}
+	for _, id := range names {
+		if err := visit(id); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func attach(steps []Step, id string, fn func(*Step)) {

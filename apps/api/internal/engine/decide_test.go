@@ -50,27 +50,44 @@ func decideStep(gates []workflow.DecideGate) *workflow.Definition {
 // recordDecision builds the static corpus entry for the step above.
 func recordDecision(t *testing.T, step *workflow.Step, fixability float64, security float64) tn.ClassifierOptions {
 	t.Helper()
-	qs, err := toQuestions(step.Decide.Questions)
+	dec := step.Decide
+	if dec == nil {
+		dec = step.Judge
+	}
+	qs, err := toQuestions(dec.Questions)
 	if err != nil {
 		t.Fatal(err)
+	}
+	answers := map[string]any{}
+	for key, q := range dec.Questions {
+		switch q.Type {
+		case "choice":
+			best := ""
+			for id := range q.Options {
+				if best == "" || id < best {
+					best = id
+				}
+			}
+			answers[key] = map[string]any{"type": "choice", "choice": best,
+				"confidence": 0.9, "probabilities": map[string]any{best: 0.9}}
+		case "noul":
+			answers[key] = map[string]any{"type": "noul", "noul": security}
+		case "score":
+			answers[key] = map[string]any{"type": "score", "score": fixability, "confidence": 0.81,
+				"probabilities": map[string]any{"0": 0.1, "1": 0.2, "2": 0.7},
+				"legend":        map[string]any{"0": "no chance", "1": "possible", "2": "likely"}}
+		}
 	}
 	resp := map[string]any{
 		"model":      "jev-1.13",
 		"calibrated": true,
 		"usage":      map[string]any{"input_tokens": 120, "output_tokens": 8},
-		"answers": map[string]any{
-			"fixability": map[string]any{
-				"type": "score", "score": fixability, "confidence": 0.81,
-				"probabilities": map[string]any{"0": 0.1, "1": 0.2, "2": 0.7},
-				"legend":        map[string]any{"0": "no chance", "1": "possible", "2": "likely"},
-			},
-			"is_security": map[string]any{"type": "noul", "noul": security},
-		},
+		"answers":    answers,
 	}
 	raw, _ := json.Marshal(resp)
 	return tn.ClassifierOptions{
 		Style: tn.StyleStatic, Model: "jev-1.13",
-		Decisions: []tn.RecordedDecision{{State: step.Decide.State, Questions: qs, Response: raw}},
+		Decisions: []tn.RecordedDecision{{State: dec.State, Questions: qs, Response: raw}},
 	}
 }
 

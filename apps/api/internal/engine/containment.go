@@ -42,6 +42,17 @@ func containmentGuardrail(workdir string) agents.Guardrail {
 			return ""
 		}
 		cmd, _ := ev.Args["command"].(string)
+		// An absolute path outside the workspace needs no directory change at
+		// all. Measured escapes this catches, all of which the directory-change
+		// scanner missed entirely: `cat /etc/passwd`, `echo x > /tmp/pwned`,
+		// `rsync -a . /tmp/exfil/`, `find / -execdir …`.
+		for _, path := range absolutePaths(cmd) {
+			if outside(root, path) && !systemReadable(path) {
+				return fmt.Sprintf(
+					"this command touches %q, which is outside the run's workspace (%s). "+
+						"Work only inside the workspace, with paths relative to it.", path, workdir)
+			}
+		}
 		for _, target := range escapeTargets(cmd) {
 			if outside(root, target) {
 				return fmt.Sprintf(
@@ -87,6 +98,37 @@ func escapeTargets(cmd string) []string {
 		}
 	}
 	return out
+}
+
+// absolutePaths returns every absolute-looking path token in a command. It is
+// deliberately blunt: a token starting with `/` that is not an option.
+func absolutePaths(cmd string) []string {
+	var out []string
+	for _, tok := range shellTokens(cmd) {
+		t := strings.TrimLeft(tok, "<>|&")
+		if len(t) < 1 || t[0] != '/' {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// systemReadable allows the read-only system locations a normal command needs —
+// an interpreter, a binary, a shared library. Anything here is reachable
+// without this guardrail's help anyway (`python3` resolves through PATH), so
+// denying them buys nothing and breaks ordinary work.
+//
+// This list is the honest weakness of the whole approach: it enumerates what is
+// ALLOWED OUT, which is the same escape-enumeration mistake one level down. Real
+// containment enumerates what is reachable IN, which is ADR 0015's job.
+func systemReadable(path string) bool {
+	for _, prefix := range []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/opt/homebrew/", "/System/", "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // shellTokens splits on whitespace and the separators that begin a new command,

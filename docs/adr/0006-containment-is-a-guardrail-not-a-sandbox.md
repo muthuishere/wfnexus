@@ -36,6 +36,43 @@ can be *shown* to stay inside.
 Commands are tokenised rather than pattern-matched: Go's regexp has no
 backreferences, and tokenising handles quoting honestly.
 
+## Measured, 2026-09-22 — what it actually blocks
+
+A peer reported that `env -C <dir> <cmd>` would defeat the tokeniser. Probing it
+rather than reasoning about it produced a more useful answer in both
+directions.
+
+`env -C`, `make -C` and `tar -C` were **already denied**: the scanner matches a
+bare `-C` token whatever command precedes it, which the prose above understated
+by naming only `git -C`. But the probe found five escapes that were wide open,
+and they are worse, because **none of them changes directory at all**:
+
+| probe | before | after |
+|---|---|---|
+| `cat /etc/passwd` | ALLOWED | denied |
+| `echo pwned > /tmp/pwned` | ALLOWED | denied |
+| `rsync -a . /tmp/exfil/` | ALLOWED | denied |
+| `find / -name secret -execdir cat {} \;` | ALLOWED | denied |
+| `python3 -c "os.chdir('/etc'); …"` | ALLOWED | denied |
+
+An absolute path needs no `cd`. The guardrail was scanning for directory
+*changes* and therefore could not see the simplest exfiltration there is. It now
+also denies any absolute path resolving outside the workspace, with a read-only
+allowance for `/usr`, `/bin`, `/lib`, `/System`, Homebrew and the standard
+streams — an interpreter has to be reachable or nothing runs.
+
+**That allowance is the honest weakness, and it restates the whole problem one
+level down: it enumerates what may leave.** The rule this keeps proving is the
+one the peer's research states best:
+
+> every mechanism that fails works by **enumerating escapes**;
+> every mechanism that works **enumerates inclusions**.
+
+This guardrail enumerates escapes. It is therefore a filter, not a boundary, and
+each round of probing will keep finding more — `find -execdir` took one probe to
+find and there will be another. Do not read the table above as "now it is safe";
+read it as "these five specific holes are closed".
+
 ## Consequences
 
 - **This is a guardrail, not a sandbox, and the distinction is not pedantic.**

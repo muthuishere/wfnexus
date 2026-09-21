@@ -1,0 +1,98 @@
+name: ci-triage
+description: >-
+  GitHub-Actions-shaped, and only one job pays for an agent. A command runs the
+  suite, a judge routes on what it found, and the agent is called solely when
+  there is something worth its cost.
+
+on_demand: true
+
+input_schema:
+  type: object
+  required: [repo_path]
+  properties:
+    repo_path:    { type: string, title: "Local repo path" }
+    test_command: { type: string, title: "Test command", default: "go test ./... 2>&1 | tail -40" }
+    isolate:      { type: boolean, title: "Isolate in a git worktree", default: true }
+
+jobs:
+  # ---- a command node: no model, no cost -----------------------------------
+  suite:
+    name: Run the suite
+    description: Deterministic. Its exit code is a fact the rest of the workflow reads.
+    timeout_sec: 900
+    steps:
+      - id: test
+        run: "{{ .Input.test_command }}"
+
+  # ---- a judge node: a decision, for a fraction of a cent ------------------
+  route:
+    name: Decide whether this is worth an agent
+    needs: [suite]
+    steps:
+      - id: verdict
+        judge:
+          state: |
+            The test command exited with code {{ .Steps.suite.test.exitCode }}.
+
+            Output:
+            {{ .Steps.suite.test.stdout }}
+            {{ .Steps.suite.test.stderr }}
+          questions:
+            severity:
+              type: score
+              instructions: >-
+                Rate how badly this test run is broken, from its output alone.
+              levels:
+                - "green: everything passed, or nothing ran because there is nothing to run"
+                - "flaky: a failure that reads as timing, ordering or environment rather than code"
+                - "broken: a genuine assertion or compile failure in the code under test"
+                - "catastrophic: the suite could not run at all — the build is down"
+            worth_an_agent:
+              type: noul
+              instructions: Is this worth spending an agent on right now?
+              "true": the output names a specific failing test or a compile error someone could act on
+              "false": it passed, or the output is too thin to act on without more information
+
+  # ---- the expensive node, guarded ------------------------------------------
+  diagnose:
+    name: Diagnose the failure
+    needs: [route]
+    if:
+      - { path: route.verdict.worth_an_agent, exists: true }
+    defaults:
+      add_tools: [read, grep, glob, bash]
+      add_skills: [repo-navigator]
+      budget: { max_turns: 30, max_tool_calls: 90, max_wall_sec: 600 }
+    steps:
+      - id: investigate
+        description: Find what actually broke and say what a fix would change.
+        soul: >-
+          You explain failures in terms of the code, with file:line. You do not
+          fix anything — you make the next decision cheap for whoever does.
+        guardrails:
+          - deny: write
+            reason: diagnosis reports; it does not edit
+          - deny: edit
+            reason: diagnosis reports; it does not edit
+          - deny: bash
+            args_contain: ["git push", "gh pr", "git commit"]
+            reason: this workflow never changes the repository
+        prompt: |
+          The suite exited {{ .Steps.suite.test.exitCode }} and a judge rated its
+          severity {{ .Steps.route.verdict.severity }} (0 green … 3 catastrophic).
+
+          Output:
+          {{ .Steps.suite.test.stdout }}
+          {{ .Steps.suite.test.stderr }}
+
+          Find what broke. Cite file:line. Say what a fix would have to change
+          and what it must not break. Then call submit_output.
+        output_schema:
+          type: object
+          additionalProperties: false
+          required: [diagnosis, locations, confidence]
+          properties:
+            diagnosis:  { type: string }
+            locations:  { type: array, items: { type: string } }
+            confidence: { type: string, enum: [high, medium, low] }
+            fix_sketch: { type: string }

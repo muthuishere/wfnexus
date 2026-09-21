@@ -177,6 +177,23 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		}
 	}
 
+	// A run or judge node produces its facts without an agent; only a prompt
+	// node pays for one.
+	if !isAgent(step) {
+		out, err := e.executeNode(ctx, runID, step, data)
+		if err != nil {
+			e.failStep(ctx, runID, step.ID, err)
+			return nil, stepHalted
+		}
+		e.setStep(ctx, runID, step.ID, store.StepPatch{
+			Status: str("done"), Output: mustJSON(out), FinishedAt: now(),
+		})
+		if halted := e.applyOutputGates(ctx, runID, step, out, data); halted {
+			return nil, stepHalted
+		}
+		return out, stepDone
+	}
+
 	res, err := e.executeWithRetry(ctx, runID, def, step, data)
 	if err != nil {
 		e.failStep(ctx, runID, step.ID, err)
@@ -193,23 +210,60 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		Status: str("done"), Output: mustJSON(res.Output), FinishedAt: now(),
 	})
 
+	if halted := e.applyOutputGates(ctx, runID, step, res.Output, data); halted {
+		return nil, stepHalted
+	}
+	return res.Output, stepDone
+}
+
+// executeNode runs the non-agent kinds, with the step's retry policy applied
+// exactly as it is to an agent — a flaky command deserves the same treatment.
+func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
+	attempts := 1
+	if step.Retry != nil && step.Retry.MaxAttempts > attempts {
+		attempts = step.Retry.MaxAttempts
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var out map[string]any
+		var err error
+		if step.Judge != nil {
+			out, err = e.runJudge(ctx, runID, step, data)
+		} else {
+			out, err = e.runCommand(ctx, runID, step, data)
+		}
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if attempt == attempts || ctx.Err() != nil {
+			break
+		}
+		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("retrying"), Error: str(scrub(err.Error()))})
+	}
+	return nil, lastErr
+}
+
+// applyOutputGates runs a step's gates against its output. Shared by every node
+// kind so a gate means the same thing whatever produced the facts.
+func (e *Engine) applyOutputGates(ctx context.Context, runID uuid.UUID, step *workflow.Step, out map[string]any, data workflow.TemplateData) bool {
 	for _, g := range step.Gates {
-		if !gateHit(g, res.Output) {
+		if !gateHit(g, out) {
 			continue
 		}
-		data.Output = res.Output
+		data.Output = out
 		msg, _ := workflow.Render(g.Message, data)
 		switch g.Action {
 		case "needs_input":
 			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
-			return nil, stepHalted
+			return true
 		case "fail":
 			e.setRun(ctx, runID, "failed", step.ID, msg)
-			return nil, stepHalted
+			return true
 		}
 	}
-	return res.Output, stepDone
+	return false
 }
 
 // executeWithRetry re-runs a whole failed step according to its retry policy.

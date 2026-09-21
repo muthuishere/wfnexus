@@ -146,6 +146,16 @@ type Step struct {
 	RequiresApproval bool   `yaml:"requires_approval,omitempty" json:"requiresApproval,omitempty"`
 	Gates            []Gate `yaml:"gates,omitempty" json:"gates,omitempty"`
 
+	// Judge makes this step a pure DECISION NODE: typed classifier questions on
+	// a small model, no agent, no tools. It produces its answers as facts, so a
+	// later step's `when` guard or a gate branches on `route.desk` exactly as it
+	// would on an agent's output.
+	//
+	// It is the same machinery as a step's `decide` block, promoted to a node of
+	// its own — because routing is often the WHOLE of what a step should do, and
+	// paying for an agent to make one decision is the waste this tier exists to
+	// remove.
+	Judge *Decide `yaml:"judge,omitempty" json:"judge,omitempty"`
 	// Run makes this step a DETERMINISTIC NODE rather than an agent: the shell
 	// command is executed in the run's workspace, no model is called, and it
 	// costs nothing. Exactly GitHub Actions' `run:`. A step has `run` or
@@ -247,11 +257,25 @@ func (d *Definition) validate(cat Catalog) error {
 		if s.ID == "" {
 			return fmt.Errorf("%s: step %d needs an id", d.Name, i)
 		}
-		if s.Prompt == "" && s.Run == "" {
-			return fmt.Errorf("%s/%s: a step needs either `prompt` (an agent) or `run` (a command)", d.Name, s.ID)
+		kinds := 0
+		for _, set := range []bool{s.Prompt != "", s.Run != "", s.Judge != nil} {
+			if set {
+				kinds++
+			}
 		}
-		if s.Prompt != "" && s.Run != "" {
-			return fmt.Errorf("%s/%s: a step is an agent OR a command, not both — `prompt` and `run` are mutually exclusive", d.Name, s.ID)
+		if kinds == 0 {
+			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command) or `judge` (a decision)", d.Name, s.ID)
+		}
+		if kinds > 1 {
+			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command or a decision — `prompt`, `run` and `judge` are mutually exclusive", d.Name, s.ID)
+		}
+		if s.Judge != nil {
+			if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Team) > 0 {
+				return fmt.Errorf("%s/%s: a `judge` step calls no agent, so skills, tools and team have no meaning on it", d.Name, s.ID)
+			}
+			if err := validateQuestions(d.Name, s.ID, s.Judge); err != nil {
+				return err
+			}
 		}
 		if s.Run != "" {
 			if len(s.Skills) > 0 || len(s.Team) > 0 || s.Decide != nil {
@@ -262,7 +286,7 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: duplicate step id %q", d.Name, s.ID)
 		}
 		seen[s.ID] = true
-		if s.OutputSchema == nil && s.Run == "" {
+		if s.OutputSchema == nil && s.Run == "" && s.Judge == nil {
 			return fmt.Errorf("%s: step %q needs output_schema", d.Name, s.ID)
 		}
 		if cat != nil {
@@ -552,6 +576,9 @@ func normalize(d *Definition) {
 		if s.Run != "" && s.OutputSchema == nil {
 			s.OutputSchema = RunOutputSchema()
 		}
+		if s.Judge != nil && s.OutputSchema == nil {
+			s.OutputSchema = JudgeOutputSchema(s.Judge)
+		}
 	}
 }
 
@@ -618,10 +645,17 @@ func (s *Step) validateDecide(wf string) error {
 	if s.Decide == nil {
 		return nil
 	}
-	if len(s.Decide.Questions) == 0 {
+	return validateQuestions(wf, s.ID, s.Decide)
+}
+
+// validateQuestions enforces the classifier's client-side limits and the
+// encoding obligation, for both a step's `decide` block and a `judge` node.
+func validateQuestions(wf, stepID string, dec *Decide) error {
+	s := struct{ ID string }{stepID}
+	if len(dec.Questions) == 0 {
 		return fmt.Errorf("%s/%s: decide needs at least one question", wf, s.ID)
 	}
-	for key, q := range s.Decide.Questions {
+	for key, q := range dec.Questions {
 		if q.Instructions == "" {
 			return fmt.Errorf("%s/%s: decide question %q needs instructions", wf, s.ID, key)
 		}
@@ -643,8 +677,8 @@ func (s *Step) validateDecide(wf string) error {
 			return fmt.Errorf("%s/%s: decide question %q has unknown type %q (noul|choice|score)", wf, s.ID, key, q.Type)
 		}
 	}
-	for _, g := range s.Decide.Gates {
-		if _, ok := s.Decide.Questions[g.Question]; !ok {
+	for _, g := range dec.Gates {
+		if _, ok := dec.Questions[g.Question]; !ok {
 			return fmt.Errorf("%s/%s: decide gate references unknown question %q", wf, s.ID, g.Question)
 		}
 		n := 0
@@ -690,6 +724,35 @@ func degenerate(criteria map[string]string) bool {
 		}
 	}
 	return allEmpty || allSelf || allSame
+}
+
+// JudgeOutputSchema derives a judge node's contract from its questions, so the
+// answers are validated like any other step output: a noul is a number in 0..1,
+// a choice is one of the options offered, a score is a number on the rubric.
+func JudgeOutputSchema(dec *Decide) map[string]any {
+	props := map[string]any{}
+	required := []any{}
+	for key, q := range dec.Questions {
+		switch q.Type {
+		case "noul":
+			props[key] = map[string]any{"type": "number", "minimum": 0, "maximum": 1}
+		case "choice":
+			opts := make([]any, 0, len(q.Options))
+			for id := range q.Options {
+				opts = append(opts, id)
+			}
+			sort.Slice(opts, func(i, j int) bool { return opts[i].(string) < opts[j].(string) })
+			props[key] = map[string]any{"type": "string", "enum": opts}
+		case "score":
+			props[key] = map[string]any{"type": "number", "minimum": 0, "maximum": float64(len(q.Levels) - 1)}
+		}
+		required = append(required, key)
+	}
+	sort.Slice(required, func(i, j int) bool { return required[i].(string) < required[j].(string) })
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": required, "properties": props,
+	}
 }
 
 // RunOutputSchema is the fixed contract of a `run` node, so a guard can branch
