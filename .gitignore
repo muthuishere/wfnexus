@@ -7,3 +7,8 @@ apps/ui/dist/
 # Local-only module replacements (never commit a machine path in go.mod)
 go.work
 go.work.sum
+
+# ctx-optimize: commit the config, not the generated store
+.ctxoptimize/*
+!.ctxoptimize/config.json
+!.ctxoptimize/instructions.md
