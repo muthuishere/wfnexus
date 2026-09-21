@@ -37,14 +37,26 @@ Four of these reach a host that reads tool output. Assert them when we bump.
 - **`glob`, `grep` and the `<skill_files>` sample SORT BEFORE CAPPING.**
   Previously the walk broke at the limit, so the *filesystem* chose which
   results the model saw — a different set on a different machine, and on some
-  filesystems between two runs of the same process. This changes **which files
-  appear**, not merely their order. Steps that lean on a skill's sibling files
-  may behave differently.
+  filesystems between two runs of the same process.
+
+  The precise consequence, which is sharper than "the order changed": **the cap
+  now selects from a sorted set instead of from whatever the walk reached
+  first.** For any skill with more resources than the cap, a step may now see
+  files it has never seen and **lose files it relied on**. Check `bug-fix` and
+  `test-backfill` against this when we bump — both lean on skills with sibling
+  files.
 - **Provider errors are typed** (`ProviderError` with status / body / retryAfter,
   account identifiers redacted). Our issue #92 is why. Our `scrub()` stays as
   defence in depth, but error matching moves.
 - **The duplicate-skill winner flipped**: a top-level skill now always beats a
   nested copy of the same name — so a name may resolve to a different **body**.
+
+## Open upstream, worth watching
+
+`read`'s offset/limit and the `<skill_files>` sample were explicitly ruled out
+of upstream's ordering work, so their behaviour under a future execution seam is
+undecided. If we ever depend on a skill's sibling files being a *stable* set,
+that is the thing to pin first.
 
 ## Also parked
 
