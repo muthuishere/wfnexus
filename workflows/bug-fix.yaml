@@ -1,0 +1,181 @@
+name: bug-fix
+description: Validate a bug report, reproduce it, draft a fix as a PR, validate the PR, then publish it.
+
+input_schema:
+  type: object
+  required: [title, description]
+  properties:
+    title:        { type: string, title: "Bug title" }
+    description:  { type: string, title: "Bug description", format: textarea }
+    repo_url:     { type: string, title: "Repo URL (cloned per run)" }
+    repo_path:    { type: string, title: "…or local repo path" }
+    base_branch:  { type: string, title: "Base branch", default: main }
+    extra_context: { type: string, title: "Extra context (logs, versions, answers)", format: textarea }
+
+steps:
+  - id: validate-bug
+    name: Validate bug
+    description: Decide whether the report is actionable and what is missing.
+    skills: [validate-bug]
+    tools: [read, grep, glob, bash]
+    max_turns: 15
+    prompt: |
+      Bug report to validate:
+
+      Title: {{ .Input.title }}
+
+      {{ .Input.description }}
+
+      {{ if .Input.extra_context }}Extra context from the reporter:
+      {{ .Input.extra_context }}{{ end }}
+
+      Load the `validate-bug` skill and follow it. Inspect the repository to check the
+      bug is plausible against the actual code. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [valid, severity, summary, component, missing_info, reasoning]
+      properties:
+        valid:        { type: boolean, description: "true if the report is actionable as-is" }
+        severity:     { type: string, enum: [critical, high, medium, low] }
+        summary:      { type: string, description: "one-paragraph restatement of the bug" }
+        component:    { type: string, description: "module/package/file area most likely involved" }
+        missing_info: { type: array, items: { type: string }, description: "questions the reporter must answer if valid=false" }
+        reasoning:    { type: string }
+    gates:
+      - field: valid
+        equals: false
+        action: needs_input
+        message: "Need more information: {{ join .Output.missing_info \" | \" }}"
+
+  - id: reproduce-bug
+    name: Reproduce bug
+    description: Reproduce the bug with a failing test or script.
+    skills: [reproduce-bug, repo-navigator]
+    tools: [bash, read, write, edit, grep, glob, todowrite]
+    max_turns: 40
+    timeout_sec: 900
+    prompt: |
+      Validated bug summary: {{ .Steps.validate-bug.summary }}
+      Suspected component: {{ .Steps.validate-bug.component }}
+      Severity: {{ .Steps.validate-bug.severity }}
+
+      Original report:
+      {{ .Input.description }}
+
+      Load the `reproduce-bug` skill and follow it. Produce a deterministic reproduction
+      (preferably a failing automated test committed in the repo) and call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [reproduced, method, steps, evidence, root_cause_hypothesis]
+      properties:
+        reproduced:   { type: boolean }
+        method:       { type: string, enum: [failing_test, script, manual, not_reproduced] }
+        test_command: { type: string, description: "command that demonstrates the failure (exit != 0)" }
+        test_file:    { type: string }
+        steps:        { type: array, items: { type: string } }
+        evidence:     { type: string, description: "trimmed output proving the failure" }
+        root_cause_hypothesis: { type: string }
+    gates:
+      - field: reproduced
+        equals: false
+        action: needs_input
+        message: "Could not reproduce. Hypothesis: {{ .Output.root_cause_hypothesis }}. Provide steps/logs in extra_context."
+
+  - id: draft-pr
+    name: Draft PR
+    description: Implement the fix on a branch with tests.
+    skills: [fix-author, repo-navigator]
+    tools: [bash, read, write, edit, apply_patch, grep, glob, todowrite]
+    max_turns: 60
+    timeout_sec: 1800
+    prompt: |
+      Fix the bug. Reproduction:
+      {{ json .Steps.reproduce-bug }}
+
+      Bug summary: {{ .Steps.validate-bug.summary }}
+
+      Load the `fix-author` skill and follow it: create a branch, implement the minimal
+      correct fix, make the reproduction pass, keep the whole test suite green, commit.
+      Do NOT push and do NOT open a PR. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [branch, commits, files_changed, summary, test_command, tests_pass]
+      properties:
+        branch:        { type: string }
+        commits:       { type: array, items: { type: string } }
+        files_changed: { type: array, items: { type: string } }
+        summary:       { type: string, description: "PR description in markdown" }
+        test_command:  { type: string }
+        tests_pass:    { type: boolean }
+        risks:         { type: array, items: { type: string } }
+
+  - id: validate-pr
+    name: Validate PR
+    description: Independent review of the diff — runs tests, hunts regressions.
+    skills: [pr-reviewer]
+    tools: [bash, read, grep, glob]
+    max_turns: 30
+    timeout_sec: 900
+    prompt: |
+      Review the fix on branch `{{ .Steps.draft-pr.branch }}` against `{{ .Input.base_branch }}`.
+      Claimed summary:
+      {{ .Steps.draft-pr.summary }}
+
+      Files changed: {{ join .Steps.draft-pr.files_changed ", " }}
+      Test command: {{ .Steps.draft-pr.test_command }}
+
+      Load the `pr-reviewer` skill. You did not write this code — be adversarial.
+      Re-run the reproduction and the suite yourself. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, findings, test_output_summary, reasoning]
+      properties:
+        approved: { type: boolean }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, file, message]
+            properties:
+              severity: { type: string, enum: [blocker, major, minor, nit] }
+              file:     { type: string }
+              line:     { type: integer }
+              message:  { type: string }
+        test_output_summary: { type: string }
+        reasoning: { type: string }
+    gates:
+      - field: approved
+        equals: false
+        action: fail
+        message: "Review rejected the fix — see findings on validate-pr. Retry from draft-pr after adjusting."
+
+  - id: finalize-pr
+    name: Publish PR
+    description: Push the branch and open the real pull request.
+    requires_approval: true
+    skills: [pr-publisher]
+    tools: [bash, read]
+    max_turns: 15
+    prompt: |
+      The fix on branch `{{ .Steps.draft-pr.branch }}` was reviewed and approved by a human.
+      PR title: {{ .Input.title }}
+      PR body (markdown):
+      {{ .Steps.draft-pr.summary }}
+
+      Review notes: {{ .Steps.validate-pr.reasoning }}
+
+      Load the `pr-publisher` skill: push the branch and open the PR with `gh` against
+      `{{ .Input.base_branch }}`. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [pr_url, branch, pushed]
+      properties:
+        pr_url: { type: string }
+        pr_number: { type: integer }
+        branch: { type: string }
+        pushed: { type: boolean }

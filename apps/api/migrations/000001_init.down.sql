@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS run_events;
+DROP TABLE IF EXISTS step_runs;
+DROP TABLE IF EXISTS workflow_runs;

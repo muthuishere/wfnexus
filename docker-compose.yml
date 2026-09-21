@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bfp-postgres
+    environment:
+      POSTGRES_USER: bfp
+      POSTGRES_PASSWORD: bfp
+      POSTGRES_DB: bfp
+    ports: ["127.0.0.1:5460:5432"]
+    volumes: [bfp-pg:/var/lib/postgresql/data]
+  minio:
+    image: minio/minio:latest
+    container_name: bfp-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: bfp
+      MINIO_ROOT_PASSWORD: bfpbfpbfp
+    ports: ["127.0.0.1:9030:9000", "127.0.0.1:9031:9001"]
+    volumes: [bfp-minio:/data]
+volumes:
+  bfp-pg:
+  bfp-minio:

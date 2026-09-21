@@ -1,0 +1,5 @@
+bin/
+node_modules/
+apps/ui/dist/
+.env
+*.env

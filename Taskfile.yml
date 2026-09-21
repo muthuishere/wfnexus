@@ -1,0 +1,33 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  infra:up:
+    desc: Start Postgres (5460) + MinIO (9030 api / 9031 console)
+    cmds: [docker compose up -d]
+  infra:down:
+    cmds: [docker compose down]
+  api:
+    desc: Run the Go API (migrates on boot)
+    dir: apps/api
+    env: { BFP_ROOT: "{{.ROOT_DIR}}" }
+    cmds: [go run .]
+  api:build:
+    dir: apps/api
+    cmds: [go build -o ../../bin/bfp-api .]
+  ui:
+    desc: Vite dev server on :5173 proxying /api → :8090
+    dir: apps/ui
+    cmds: [npm run dev]
+  ui:build:
+    dir: apps/ui
+    cmds: [npm run build]
+  dev:
+    desc: infra + api + ui
+    deps: [infra:up]
+    cmds:
+      - task: api
+  test:
+    dir: apps/api
+    cmds: [go test ./...]
