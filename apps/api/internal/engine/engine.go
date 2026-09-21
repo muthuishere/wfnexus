@@ -214,6 +214,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
+	baseRef := gitRev(ctx, workdir)
 
 	steps, err := e.store.ListSteps(ctx, runID)
 	if err != nil {
@@ -246,7 +247,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 			return nil
 		}
 		e.setRun(ctx, runID, "running", step.ID, "")
-		data := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, Input: input, Steps: outputs}
+		data := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
 		out, err := e.executeStep(ctx, runID, def, step, data)
 		if err != nil {
 			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(err.Error()), FinishedAt: now()})
@@ -362,4 +363,17 @@ func (e *Engine) worktree(ctx context.Context, runID uuid.UUID, repo string, inp
 	}
 	e.emit(ctx, runID, "", "log", map[string]any{"text": "worktree " + dir + " from " + base})
 	return dir, nil
+}
+
+// gitRev resolves HEAD in dir; "" when it is not a git repo. Recorded once per
+// resume so every step's diff artifact is measured from the same point.
+func gitRev(ctx context.Context, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

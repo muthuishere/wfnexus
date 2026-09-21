@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -160,6 +161,7 @@ func Sorted(m map[string]*Definition) []*Definition {
 type TemplateData struct {
 	RunID   string
 	WorkDir string         // repo checkout dir for this run
+	BaseRef string         // commit the run started from, for diffs
 	Input   map[string]any // run input
 	Steps   map[string]any // previous step outputs, keyed by step id
 	Output  map[string]any // current step output (gate messages only)
@@ -170,7 +172,46 @@ var funcs = template.FuncMap{
 		b, _ := json.MarshalIndent(v, "", "  ")
 		return string(b)
 	},
-	"join": strings.Join,
+	// join accepts whatever a JSON decode produced ([]any of strings, numbers,
+	// objects) as well as []string — a step output always arrives as []any.
+	"join": func(v any, sep string) string { return strings.Join(toStrings(v), sep) },
+	// list renders a markdown bullet list, the usual way a prompt wants an array.
+	"list": func(v any) string {
+		items := toStrings(v)
+		if len(items) == 0 {
+			return "(none)"
+		}
+		return "- " + strings.Join(items, "\n- ")
+	},
+	"default": func(fallback, v any) any {
+		if v == nil || v == "" {
+			return fallback
+		}
+		return v
+	},
+}
+
+// toStrings flattens any slice into display strings; non-slices become one item.
+func toStrings(v any) []string {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return nil
+	}
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return []string{fmt.Sprint(v)}
+	}
+	out := make([]string, 0, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		item := rv.Index(i).Interface()
+		switch item.(type) {
+		case map[string]any, []any:
+			b, _ := json.Marshal(item)
+			out = append(out, string(b))
+		default:
+			out = append(out, fmt.Sprint(item))
+		}
+	}
+	return out
 }
 
 // hyphenPath rewrites dotted paths whose segments contain hyphens — step ids like

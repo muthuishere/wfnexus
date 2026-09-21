@@ -29,3 +29,30 @@ func TestRenderJSONAndJoin(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestJoinAndListAcceptJSONDecodedSlices(t *testing.T) {
+	// step outputs come back from jsonb as []any, never []string
+	data := TemplateData{Steps: map[string]any{
+		"draft-pr": map[string]any{
+			"files_changed": []any{"cart.py", "test_cart.py"},
+			"findings":      []any{map[string]any{"file": "cart.py", "severity": "minor"}},
+			"empty":         []any{},
+		},
+	}}
+	got, err := Render(`{{ join .Steps.draft-pr.files_changed ", " }}`, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "cart.py, test_cart.py" {
+		t.Fatalf("join got %q", got)
+	}
+	if got, err = Render(`{{ list .Steps.draft-pr.files_changed }}`, data); err != nil || got != "- cart.py\n- test_cart.py" {
+		t.Fatalf("list got %q err %v", got, err)
+	}
+	if got, err = Render(`{{ list .Steps.draft-pr.empty }}`, data); err != nil || got != "(none)" {
+		t.Fatalf("empty list got %q err %v", got, err)
+	}
+	if got, err = Render(`{{ join .Steps.draft-pr.findings "; " }}`, data); err != nil || got != `{"file":"cart.py","severity":"minor"}` {
+		t.Fatalf("object join got %q err %v", got, err)
+	}
+}

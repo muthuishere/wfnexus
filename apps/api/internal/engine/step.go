@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -99,7 +98,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	outcome, err := ag.Loop(opts, tk).Run(ctx, prompt, agents.RunOpts{})
 	patch := store.StepPatch{Attempts: intp(outcome.Attempts), Turns: intp(outcome.Turns), RawText: str(outcome.Text), Usage: mustJSON(outcome.Result.Usage)}
 	e.setStep(ctx, runID, step.ID, patch)
-	e.saveArtifacts(ctx, runID, step.ID, data.WorkDir, outcome)
+	e.saveArtifacts(ctx, runID, step.ID, data.WorkDir, data.BaseRef, outcome)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +221,7 @@ func assistantText(resp map[string]any) string {
 }
 
 // saveArtifacts stores the transcript and the workspace diff for this step in S3.
-func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, workdir string, out agents.Outcome) {
+func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, workdir, baseRef string, out agents.Outcome) {
 	ctx = context.WithoutCancel(ctx)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
@@ -242,11 +241,15 @@ func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, wor
 		put("transcript.json", "application/json", b)
 	}
 	if workdir != "" {
-		c := exec.CommandContext(ctx, "git", "-C", workdir, "diff", "HEAD")
+		// diff from where the run started, so committed work is captured too
+		from := baseRef
+		if from == "" {
+			from = "HEAD"
+		}
+		c := exec.CommandContext(ctx, "git", "-C", workdir, "diff", from)
 		c.Env = append(os.Environ(), "GIT_PAGER=cat")
 		if diff, err := c.Output(); err == nil && len(bytes.TrimSpace(diff)) > 0 {
 			put("workspace.diff", "text/x-diff", diff)
 		}
 	}
-	_ = time.Now
 }
