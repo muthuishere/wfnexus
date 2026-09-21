@@ -15,7 +15,7 @@ import (
 func TestContainmentBlocksTheRealEscape(t *testing.T) {
 	ws := t.TempDir()
 	rail := containmentGuardrail(ws)
-	cmd := `cd /Users/muthuishere/muthu/gitworkspace/wfnexus && pwd && find . -name "*.py" | head -20`
+	cmd := `cd /srv/wfnexus && pwd && find . -name "*.py" | head -20`
 	reason := rail(tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": cmd}})
 	if reason == "" {
 		t.Fatal("the observed escape was allowed")

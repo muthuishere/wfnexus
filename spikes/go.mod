@@ -13,4 +13,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/muthuishere/toolnexus/golang => /Users/muthuishere/muthu/gitworkspace/nexus-workspace/toolnexus/golang
