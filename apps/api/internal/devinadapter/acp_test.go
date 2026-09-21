@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	devinadapter "github.com/muthuishere/bug-fixer-platform/apps/api/internal/devinadapter"
 	toolnexus "github.com/muthuishere/toolnexus/golang"
@@ -200,4 +201,112 @@ func TestACPCloseIsSafe(t *testing.T) {
 	if err := acp.Close(); err != nil {
 		t.Errorf("second close: %v", err)
 	}
+}
+
+// --- toolnexus ADR 0025 gate evidence ------------------------------------
+
+// fakeACPPermission writes an agent that asks permission before answering.
+func fakeACPPermission(t *testing.T, reply string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-devin-perm")
+	script := `#!/usr/bin/env python3
+import json,sys
+def send(o):
+    sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
+reply=open(sys.argv[0]+".reply").read()
+pending=None
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    m=json.loads(line)
+    method=m.get("method"); mid=m.get("id")
+    if method=="initialize":
+        send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1}})
+    elif method=="session/new":
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"s"}})
+    elif method=="session/set_mode":
+        send({"jsonrpc":"2.0","id":mid,"result":{}})
+    elif method=="session/prompt":
+        # Ask permission FIRST; the turn only finishes once it is answered.
+        pending=mid
+        send({"jsonrpc":"2.0","id":9001,"method":"session/request_permission",
+              "params":{"sessionId":"s","options":[
+                  {"optionId":"yes","kind":"allow_once","name":"Allow"},
+                  {"optionId":"no","kind":"reject_once","name":"Reject"}]}})
+    elif mid==9001 and pending is not None:
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s",
+              "update":{"sessionUpdate":"agent_message_chunk","content":{"text":reply}}}})
+        send({"jsonrpc":"2.0","id":pending,"result":{"stopReason":"end_turn"}})
+        pending=None
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin+".reply", []byte(reply), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// GATE 2: an unanswered session/request_permission hangs the turn; answering it
+// with the first allow-kind option completes it. This is the trap that costs
+// the next implementer a day, and it bites even in bypass mode.
+func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
+	bin := fakeACPPermission(t, answer("permitted"))
+
+	t.Run("answered completes", func(t *testing.T) {
+		acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+		defer acp.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		out, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("answering permission should complete the turn: %v", err)
+		}
+		res, err := devinadapter.ParseReply(out)
+		if err != nil || res.Content != "permitted" {
+			t.Fatalf("reply = %q (%v)", out, err)
+		}
+	})
+
+	t.Run("unanswered hangs", func(t *testing.T) {
+		acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, NoAnswerPermission: true})
+		defer acp.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		start := time.Now()
+		_, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+		if err == nil {
+			t.Fatal("GATE 2 NOT REPRODUCED: the turn completed without the permission being answered")
+		}
+		if time.Since(start) < 2*time.Second {
+			t.Fatalf("failed too early to be the hang: %v after %v", err, time.Since(start))
+		}
+		t.Logf("GATE 2 REPRODUCED: unanswered permission hung the turn until the deadline (%v)", err)
+	})
+}
+
+// GATE 4: is the warm-session win real in general, or only against a CLI with
+// a 15s startup? Measured against the FAKE agent, where startup is ~nothing.
+func TestACPGate4WarmWinIsStartupOnly(t *testing.T) {
+	bin, _ := fakeACP(t, []string{answer("one"), answer("two"), answer("three")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+
+	var times []time.Duration
+	for i := 0; i < 3; i++ {
+		start := time.Now()
+		if _, err := acp.Execute(context.Background(), devinadapter.Turn{
+			Index: i + 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		times = append(times, time.Since(start))
+	}
+	t.Logf("GATE 4 (fake agent): prompts took %v, %v, %v", times[0], times[1], times[2])
+	t.Logf("GATE 4: against a fake agent the per-prompt cost is already ~0, so the warm-session win " +
+		"is process startup being amortised — NOT a general speedup. Claim it as such.")
 }

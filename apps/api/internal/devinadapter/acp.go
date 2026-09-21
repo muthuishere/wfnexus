@@ -77,6 +77,11 @@ type ACP struct {
 	// a precaution is an open question (toolnexus ADR 0025 gate 1) — this flag
 	// is how it gets measured rather than assumed.
 	NoSupersede bool
+	// NoAnswerPermission stops the client answering session/request_permission.
+	// An unanswered request means the agent waits forever and the turn dies at
+	// the timeout — the trap ADR 0025 gate 2 asks to demonstrate. Never set
+	// this outside an experiment.
+	NoAnswerPermission bool
 }
 
 // ACPAgent drives one persistent devin process. It is an Agent, so it drops
@@ -351,6 +356,9 @@ func (a *ACPAgent) read(stdout io.Reader) {
 
 		case msg.Method == "session/update":
 			a.onUpdate(msg.Params)
+
+		case msg.ID != nil && strings.Contains(msg.Method, "permission") && a.cfg.NoAnswerPermission:
+			// Deliberately ignored: the turn will now hang (gate 2).
 
 		case msg.ID != nil && strings.Contains(msg.Method, "permission"):
 			// Bypass mode should mean this never fires; answering anyway costs

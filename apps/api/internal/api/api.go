@@ -43,6 +43,8 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/workflows", s.listWorkflows)
 		r.Post("/workflows/reload", s.reloadWorkflows)
 		r.Get("/workflows/{name}", s.getWorkflow)
+		r.Put("/workflows/{name}", s.saveWorkflow)
+		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		r.Get("/runs", s.listRuns)
 		r.Get("/runs/{id}", s.getRun)
@@ -99,6 +101,44 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, d)
+}
+
+// saveWorkflow validates an authored definition and writes it only if it
+// survives a round trip through the real loader.
+func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var body struct {
+		Definition *workflow.Definition `json:"definition"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Definition == nil {
+		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
+		return
+	}
+	if body.Definition.Name == "" {
+		body.Definition.Name = name
+	}
+	if body.Definition.Name != name {
+		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", body.Definition.Name, name))
+		return
+	}
+	path, err := s.eng.SaveWorkflow(body.Definition)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "path": path, "definition": s.eng.Definitions()[name]})
+}
+
+func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DeleteWorkflow(chi.URLParam(r, "name")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {

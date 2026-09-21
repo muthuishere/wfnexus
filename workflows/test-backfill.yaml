@@ -1,0 +1,117 @@
+name: test-backfill
+description: >-
+  Find load-bearing code with no tests, write tests that would catch a real
+  regression, and prove each one fails before it passes.
+
+input_schema:
+  type: object
+  required: [repo_path]
+  properties:
+    repo_path: { type: string, title: "Local repo path" }
+    target:    { type: string, title: "Package, directory or file to focus on" }
+    isolate:   { type: boolean, title: "Isolate in a git worktree", default: true }
+
+steps:
+  - id: find-gaps
+    name: Find the gaps worth filling
+    description: Identify untested code where a regression would actually hurt.
+    soul: >-
+      You look for tests that are missing and would matter. Coverage percentage
+      does not interest you; a branch nobody checks does.
+    skills: [repo-navigator]
+    tools: [bash, read, grep, glob]
+    budget: { max_turns: 25, max_tool_calls: 80, max_wall_sec: 600 }
+    guardrails:
+      - deny: "*"
+        args_contain: ["git push", "gh pr"]
+        reason: this step only reads the repository
+      - deny: write
+        reason: this step identifies gaps; the next one writes the tests
+      - deny: edit
+        reason: this step identifies gaps; the next one writes the tests
+    prompt: |
+      Repository: {{ .WorkDir }}
+      {{ if .Input.target }}Focus on: {{ .Input.target }}{{ end }}
+
+      Find the code that is untested AND load-bearing — error paths, boundaries,
+      money or time arithmetic, anything with a branch. Ignore code where a test
+      could not fail.
+
+      Establish the project's test command and whether the suite is green right
+      now; a suite that is already red is not something you caused, and the next
+      step needs to know. Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [test_command, suite_green, gaps]
+      properties:
+        test_command: { type: string }
+        suite_green:  { type: boolean, description: "is the suite green BEFORE any change" }
+        gaps:
+          type: array
+          items:
+            type: object
+            required: [file, what, why_it_matters]
+            properties:
+              file:           { type: string }
+              symbol:         { type: string }
+              what:           { type: string, description: "the untested behaviour" }
+              why_it_matters: { type: string, description: "what breaks in production if it regresses" }
+    gates:
+      - field: suite_green
+        equals: false
+        action: fail
+        message: >-
+          The suite is already failing before any change, so a new test proves
+          nothing. Fix the suite first, then run this workflow.
+
+  - id: write-tests
+    name: Write the tests
+    description: Write tests for the identified gaps, each proven to fail first.
+    soul: >-
+      You write tests you have watched fail. You mutate the source, see red,
+      revert, and only then believe the test. You never weaken an existing
+      assertion to make a suite green.
+    skills: [test-author, repo-navigator]
+    tools: [bash, read, write, edit, grep, glob, todowrite]
+    budget: { max_turns: 60, max_tokens: 500000, max_tool_calls: 250, max_wall_sec: 1800 }
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "gh pr", "git reset --hard", "git clean -fd"]
+        reason: >-
+          this step writes tests locally; publishing and destructive git are not
+          part of that
+    prompt: |
+      Write tests for these gaps:
+      {{ json .Steps.find-gaps.gaps }}
+
+      Test command: {{ .Steps.find-gaps.test_command }}
+
+      Load the `test-author` skill and follow it. For each test, prove it fails
+      against broken behaviour before you keep it. Commit the tests locally.
+      Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [tests_added, files_changed, all_pass, proven_failing]
+      properties:
+        tests_added:
+          type: array
+          items:
+            type: object
+            required: [name, file, catches]
+            properties:
+              name:    { type: string }
+              file:    { type: string }
+              catches: { type: string, description: "the regression this would catch" }
+        files_changed:  { type: array, items: { type: string } }
+        all_pass:       { type: boolean }
+        proven_failing: { type: boolean, description: "did you watch each new test fail before it passed" }
+        branch:         { type: string }
+    gates:
+      - field: proven_failing
+        equals: false
+        action: fail
+        message: >-
+          Tests were added without being proven to fail first, so none of them is
+          known to catch anything. Re-run this step.

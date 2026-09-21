@@ -86,6 +86,29 @@ func (e *Engine) ReloadDefinitions() error {
 	return nil
 }
 
+// SaveWorkflow validates and persists an authored definition, then reloads so
+// the new version is live without a restart. Validation happens on a temporary
+// copy, so a rejected definition never lands on disk.
+func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
+	e.mu.Lock()
+	reg := e.skills
+	e.mu.Unlock()
+	path, err := workflow.Save(e.cfg.WorkflowsDir, d, reg)
+	if err != nil {
+		return "", err
+	}
+	return path, e.ReloadDefinitions()
+}
+
+// DeleteWorkflow removes a workflow and reloads. Runs already recorded against
+// it keep their history; only new runs are refused.
+func (e *Engine) DeleteWorkflow(name string) error {
+	if err := workflow.Delete(e.cfg.WorkflowsDir, name); err != nil {
+		return err
+	}
+	return e.ReloadDefinitions()
+}
+
 func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
 	return e.broker.Subscribe(runID)
 }

@@ -16,7 +16,10 @@ export default function WorkflowsPage() {
           <h1>Workflows</h1>
           <div className="muted">Each step is a whole agent — its own soul, skills, tools, team, budget and output contract.</div>
         </div>
-        <button className="ghost" style={{ marginLeft: 'auto' }} onClick={reload}>Reload YAML</button>
+        <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
+          <button className="ghost" onClick={reload}>Reload YAML</button>
+          <a href="#/workflows/new"><button>New workflow</button></a>
+        </div>
       </div>
       {err && <div className="banner err">{err}</div>}
       {!wfs && !err && <div className="muted">loading…</div>}
@@ -33,6 +36,7 @@ export default function WorkflowsPage() {
               </div>
               <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
                 <button className="ghost" onClick={() => setOpen({ ...open, [w.name]: !shown })}>{shown ? 'Collapse' : 'Expand'} steps</button>
+                <a href={`#/workflows/${w.name}/edit`}><button className="ghost">Edit</button></a>
                 <a href={`#/workflows/${w.name}/new`}><button>New run</button></a>
               </div>
             </div>

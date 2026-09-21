@@ -1,6 +1,8 @@
 package workflow
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -144,4 +146,106 @@ func TestBudgetAndSoulLoad(t *testing.T) {
 	if st.Budget == nil || st.Budget.MaxTokens != 200000 || st.Budget.MaxWallSec != 900 {
 		t.Fatalf("budget not parsed: %+v", st.Budget)
 	}
+}
+
+// --- authoring: save round-trips through the real loader ---
+
+func minimalDef(name string) *Definition {
+	return &Definition{
+		Name: name, Description: "d",
+		Steps: []Step{{
+			ID: "only", Prompt: "p", Skills: []string{"fix-author"}, Tools: []string{"bash"},
+			OutputSchema: map[string]any{
+				"type": "object", "required": []any{"ok"},
+				"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
+			},
+		}},
+	}
+}
+
+func TestSaveWritesSomethingThatLoadsBack(t *testing.T) {
+	dir := t.TempDir()
+	path, err := Save(dir, minimalDef("demo-flow"), catalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Fatalf("wrote outside the workflows dir: %s", path)
+	}
+	defs, err := LoadDir(dir, catalog())
+	if err != nil {
+		t.Fatalf("saved file does not load: %v", err)
+	}
+	d := defs["demo-flow"]
+	if d == nil || len(d.Steps) != 1 || d.Steps[0].ID != "only" {
+		t.Fatalf("round trip lost the definition: %+v", defs)
+	}
+	if d.Steps[0].MaxTurns == 0 {
+		t.Fatal("defaults were not applied on load")
+	}
+}
+
+// A rejected definition must never reach the disk — otherwise a bad save
+// breaks the next boot.
+func TestSaveRejectsWithoutWriting(t *testing.T) {
+	dir := t.TempDir()
+	bad := minimalDef("bad-flow")
+	bad.Steps[0].Skills = []string{"no-such-skill"}
+	if _, err := Save(dir, bad, catalog()); err == nil {
+		t.Fatal("an unknown skill was accepted")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("a rejected definition was written: %v", entries)
+	}
+}
+
+func TestSaveRejectsUnsafeNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"../escape", "Upper", "has space", "a", "", "with/slash", "dot.name"} {
+		d := minimalDef("placeholder")
+		d.Name = name
+		if _, err := Save(dir, d, catalog()); err == nil {
+			t.Fatalf("unsafe name %q was accepted", name)
+		}
+	}
+	if len(mustReadDir(t, dir)) != 0 {
+		t.Fatal("an unsafe name produced a file")
+	}
+}
+
+func TestDeleteRemovesOnlyItsOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Save(dir, minimalDef("keeper"), catalog()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Save(dir, minimalDef("goner"), catalog()); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(dir, "goner"); err != nil {
+		t.Fatal(err)
+	}
+	if len(mustReadDir(t, dir)) != 1 {
+		t.Fatal("delete removed the wrong number of files")
+	}
+	if err := Delete(dir, "goner"); err == nil {
+		t.Fatal("deleting a missing workflow should fail")
+	}
+	for _, bad := range []string{"../../etc/passwd", "..", "keeper/../keeper"} {
+		if err := Delete(dir, bad); err == nil {
+			t.Fatalf("path escape accepted: %q", bad)
+		}
+	}
+	if len(mustReadDir(t, dir)) != 1 {
+		t.Fatal("a path escape removed a file")
+	}
+}
+
+func mustReadDir(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	e, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }

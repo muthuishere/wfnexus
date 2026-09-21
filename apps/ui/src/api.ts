@@ -40,6 +40,8 @@ export type Step = {
   decide?: Decide; askHuman?: boolean
 }
 export type Workflow = { name: string; description: string; inputSchema: JSONSchema; steps: Step[]; path: string }
+/** What the builder edits and PUTs — `path` is assigned by the API, not authored. */
+export type WorkflowDraft = Omit<Workflow, 'path'> & { path?: string }
 
 // ── the judge tier ──────────────────────────────────────────────────────────
 // tn.Classifier output, attached to a step record once the API persists it.
@@ -86,6 +88,12 @@ export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),
+  /** Create or replace a workflow. The API validates and 400s with {error} on rejection. */
+  saveWorkflow: (name: string, definition: WorkflowDraft) =>
+    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ definition }),
+    })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
   tools: () => j<BuiltinTool[]>(fetch('/api/tools')),
   runs: () => j<Run[]>(fetch('/api/runs')),
