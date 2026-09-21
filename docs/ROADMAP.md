@@ -33,12 +33,45 @@ period. Ship it as a subcommand of the same binary, so we stay a single binary.
 *Everything below becomes easy once this exists, and stays impossible while it
 does not.*
 
-**0016 — a real sandbox, and retiring ADR 0006.** With 0014 in place: stop
-exec'ing `bash` on the host and exec a container instead — `--network=none
---read-only --cap-drop=ALL --pid=private`, the run's worktree as the only
-writable mount. The `cd` escape that ADR 0006 records dies by construction,
-because the platform's own repo is not in the mount namespace. Cost: a container
-runtime on the worker host (rootless podman is cheapest); a VM for Mac dev.
+**0016 — a real sandbox, and retiring ADR 0006.** With 0015 in place: stop
+exec'ing `bash` on the host. Every escape in ADR 0006 dies by construction,
+because the platform's own repo is not in the mount namespace.
+
+Three things measured by a peer that change the obvious design — take them as
+given rather than re-deriving:
+
+- **One sandbox per RUN, exec per tool call — not a container per step.**
+  `docker run --rm` is 307 ms against 50.8 ms for a warm `docker exec` and
+  5.3 ms for fork+exec, so a per-call container is ~60× a fork and 30 tool calls
+  is 9–30 s of pure overhead. Every fast published number in the field
+  (E2B ~150 ms, Daytona ~90 ms) is a warm pool or a snapshot resume, never a
+  cold start. This composes with what we already have: **a run owns a git
+  worktree, so it may as well own the sandbox holding that worktree** — the
+  lifetime is defined by something real instead of a new concept.
+- **The hardening flags are nearly free.** Namespace setup is 7.94 ms and
+  `--network=none` is 0.04 ms, so `--read-only --cap-drop=ALL --network=none
+  --pid=private` costs almost nothing. The expense is the container lifecycle,
+  not the isolation.
+- **macOS Seatbelt is a real boundary available today** — unprivileged, ~12.4 ms,
+  and it enumerates inclusions rather than escapes, which is why it closes the
+  exact escapes ADR 0006 records. It is worth having on the dev Macs long before
+  the container path lands. **But it cannot nest inside an already-sandboxed
+  host.** If wfnexus itself ever runs inside a sandbox, that path becomes
+  silently unavailable — so it must FAIL CLOSED: if the profile cannot be
+  applied, refuse to run the step rather than running it unsandboxed. A
+  containment mechanism that degrades quietly to "no containment" is worse than
+  none, because the ADR will still say it is protected.
+
+**0016a — the three failure kinds are SET, never derived.** A sandbox must tell
+us which of "could not run at all", "ran and failed" and "the model's command
+was wrong" happened, because the exit code cannot: a container running
+`exit 125` is byte-identical to "no such image", and a macOS Seatbelt denial
+surfaces as EPERM with the wrapper exiting 0. containerd is the shape to copy —
+a create-failure is an error, an exit is an event that is never an error.
+Cloudflare's `ContainerUnavailableError{reason, retryAfterMs}` is close to what
+ADR 0012's retry policy needs; E2B gets it backwards, raising on a non-zero exit
+and collapsing the first two kinds. Without this, retry cannot tell a flaky
+worker from a bad command and will retry what can never succeed.
 
 **0017 — egress is deny-by-default.** A per-step allowlist through a CONNECT
 proxy (the model endpoint, the git host, nothing else). No allowlist ⇒ no
