@@ -9,6 +9,7 @@ import (
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/api"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/engine"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
@@ -40,7 +41,14 @@ func main() {
 		log.Printf("  skipped %s (%s)", sk.Location, sk.Reason)
 	}
 
-	defs, err := workflow.LoadDir(cfg.WorkflowsDir, reg)
+	cat, err := catalog.Load(cfg.RegistriesPath, cfg.McpConfig)
+	if err != nil {
+		log.Fatalf("registries: %v", err)
+	}
+	log.Printf("registries: %d providers, %d classifiers, %d mcp servers",
+		cat.Providers.Len(), cat.Classifiers.Len(), cat.Mcp.Len())
+
+	defs, err := workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat))
 	if err != nil {
 		log.Fatalf("workflows: %v", err)
 	}
@@ -48,7 +56,7 @@ func main() {
 		log.Printf("workflow %-16s %d steps  (%s)", d.Name, len(d.Steps), d.Path)
 	}
 
-	eng := engine.New(cfg, st, bl, defs, reg)
+	eng := engine.New(cfg, st, bl, defs, reg, cat)
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.UIDir), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("bug-fixer-platform api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())

@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "Everything a workflow step can NAME. A step references an entry by name;",
+    "the entry is defined once, here. That is what makes a workflow portable:",
+    "the names travel between machines, the endpoints and credentials do not.",
+    "apiKeyEnv is the NAME of an environment variable, never a key."
+  ],
+
+  "providers": {
+    "sonnet": {
+      "kind": "http",
+      "description": "Claude Sonnet 4.5 via OpenRouter — the default worker.",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "style": "openai",
+      "model": "anthropic/claude-sonnet-4.5",
+      "apiKeyEnv": "OPENROUTER_API_KEY"
+    },
+    "haiku": {
+      "kind": "http",
+      "description": "Cheaper and faster; good for survey and triage steps.",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "style": "openai",
+      "model": "anthropic/claude-haiku-4.5",
+      "apiKeyEnv": "OPENROUTER_API_KEY"
+    },
+    "gpt": {
+      "kind": "http",
+      "description": "A second opinion from a different family, for review steps.",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "style": "openai",
+      "model": "openai/gpt-4o",
+      "apiKeyEnv": "OPENROUTER_API_KEY"
+    },
+
+    "devin": {
+      "kind": "acp",
+      "description": "Devin as the model, over the Agent Client Protocol.",
+      "preset": "devin",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "opencode": {
+      "kind": "acp",
+      "description": "opencode as the model. Cold start is slow (~5s), so prefer it on long steps where startup amortises.",
+      "preset": "opencode",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "claude-cli": {
+      "kind": "cli",
+      "description": "The local `claude` CLI as the model — uses your own subscription rather than an API key.",
+      "preset": "claude",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "copilot-cli": {
+      "kind": "cli",
+      "description": "GitHub Copilot's CLI as the model.",
+      "preset": "copilot",
+      "repairs": 2,
+      "timeoutSec": 900
+    }
+  },
+
+  "classifiers": {
+    "jev": {
+      "description": "System One judge over OpenRouter. Calibrated, ~700ms, fractions of a cent.",
+      "backend": "openrouter",
+      "model": "typesafe/jev-1.13"
+    },
+    "jev-direct": {
+      "description": "The same judge against TypeSafe's own API.",
+      "backend": "typesafe"
+    },
+    "chat-judge": {
+      "description": "A chat model answering the same typed questions. Slower, dearer, NOT calibrated — a compatibility exit, not an equivalent.",
+      "backend": "llm"
+    },
+    "recorded": {
+      "description": "Replays a recorded corpus. No network, no credential — what tests use.",
+      "backend": "static"
+    }
+  },
+
+  "mcpServers": {}
+}

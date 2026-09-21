@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
@@ -64,7 +65,8 @@ func newHarness(t *testing.T, def *workflow.Definition, llm *fakeLLM, skillRoot 
 		skillRoot = t.TempDir()
 	}
 	reg := skills.Load(skillRoot)
-	eng := New(cfg, st, bl, map[string]*workflow.Definition{def.Name: def}, reg)
+	cat, _ := catalog.Load("", "")
+	eng := New(cfg, st, bl, map[string]*workflow.Definition{def.Name: def}, reg, cat)
 	h := &harness{eng: eng, store: st, llm: llm, t: t}
 	// stop anything still running before the connection pool closes
 	t.Cleanup(func() {

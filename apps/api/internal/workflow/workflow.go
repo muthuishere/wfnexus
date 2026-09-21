@@ -95,6 +95,15 @@ type DecideGate struct {
 	Message string   `yaml:"message,omitempty" json:"message,omitempty"`
 }
 
+// Retry re-runs a whole step that failed. It is distinct from the completion
+// gate's max_attempts, which retries the MODEL inside one step: this retries
+// the step itself, including its tools and its workspace side effects — so a
+// step with a retry policy must be idempotent in effect.
+type Retry struct {
+	MaxAttempts int `yaml:"max_attempts" json:"maxAttempts"`
+	BackoffSec  int `yaml:"backoff_sec,omitempty" json:"backoffSec,omitempty"`
+}
+
 // Decide is the step's classifier pass: typed questions answered by a small
 // model before the agent starts, with gates that can route or halt cheaply.
 type Decide struct {
@@ -135,6 +144,17 @@ type Step struct {
 	Team []TeamMember `yaml:"team,omitempty" json:"team,omitempty"`
 	// Decide is the classifier pass that runs before the agent.
 	Decide *Decide `yaml:"decide,omitempty" json:"decide,omitempty"`
+	// Needs lists the steps that must finish before this one may start. Declaring
+	// it anywhere turns the workflow into a DAG: every step whose dependencies
+	// are satisfied runs CONCURRENTLY. Empty everywhere ⇒ strictly sequential,
+	// exactly as before.
+	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
+	// Provider names an entry in the provider registry; empty ⇒ the default.
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// Classifier names an entry in the classifier registry, for `decide`.
+	Classifier string `yaml:"classifier,omitempty" json:"classifier,omitempty"`
+	// Retry re-runs the whole step on failure.
+	Retry *Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
 	// AskHuman grants the `question` built-in and makes a suspension durable:
 	// the run parks in needs_input until a human answers.
 	AskHuman bool `yaml:"ask_human,omitempty" json:"askHuman,omitempty"`
@@ -145,7 +165,10 @@ type Definition struct {
 	Description string         `yaml:"description" json:"description"`
 	InputSchema map[string]any `yaml:"input_schema" json:"inputSchema"`
 	Steps       []Step         `yaml:"steps" json:"steps"`
-	Path        string         `yaml:"-" json:"path"`
+	// MaxParallel caps how many of this workflow's steps run at once when it is
+	// a DAG. 0 ⇒ 4.
+	MaxParallel int    `yaml:"max_parallel,omitempty" json:"maxParallel,omitempty"`
+	Path        string `yaml:"-" json:"path"`
 }
 
 func (d *Definition) Step(id string) (int, *Step) {
@@ -162,6 +185,9 @@ func (d *Definition) Step(id string) (int, *Step) {
 type Catalog interface {
 	Missing(names []string) []string         // skills not in the registry
 	MissingBuiltins(names []string) []string // tool names that are not built-ins
+	MissingProviders(names []string) []string
+	MissingClassifiers(names []string) []string
+	MissingMcp(names []string) []string
 }
 
 func (d *Definition) validate(cat Catalog) error {
@@ -187,6 +213,19 @@ func (d *Definition) validate(cat Catalog) error {
 			if miss := cat.MissingBuiltins(s.Tools); len(miss) > 0 {
 				return fmt.Errorf("%s/%s: not built-in tools: %s", d.Name, s.ID, strings.Join(miss, ", "))
 			}
+			if s.Provider != "" {
+				if miss := cat.MissingProviders([]string{s.Provider}); len(miss) > 0 {
+					return fmt.Errorf("%s/%s: unknown provider %q", d.Name, s.ID, s.Provider)
+				}
+			}
+			if s.Classifier != "" {
+				if miss := cat.MissingClassifiers([]string{s.Classifier}); len(miss) > 0 {
+					return fmt.Errorf("%s/%s: unknown classifier %q", d.Name, s.ID, s.Classifier)
+				}
+			}
+			if miss := cat.MissingMcp(s.MCP); len(miss) > 0 {
+				return fmt.Errorf("%s/%s: mcp servers not in the registry: %s", d.Name, s.ID, strings.Join(miss, ", "))
+			}
 		}
 		if err := s.validateTeam(d.Name, cat); err != nil {
 			return err
@@ -196,6 +235,9 @@ func (d *Definition) validate(cat Catalog) error {
 		}
 		if err := s.validateDecide(d.Name); err != nil {
 			return err
+		}
+		if s.Retry != nil && s.Retry.MaxAttempts < 1 {
+			return fmt.Errorf("%s/%s: retry.max_attempts must be >= 1 — an unbounded retry is a runaway", d.Name, s.ID)
 		}
 		for _, g := range s.Gates {
 			switch g.Action {
@@ -220,7 +262,116 @@ func (d *Definition) validate(cat Catalog) error {
 			}
 		}
 	}
+	return d.validateGraph(seen)
+}
+
+// IsDAG reports whether any step declares dependencies. A workflow that
+// declares none runs strictly sequentially, byte-identically to before.
+func (d *Definition) IsDAG() bool {
+	for _, s := range d.Steps {
+		if len(s.Needs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// validateGraph checks the dependency graph: known ids, no self-edge, no cycle,
+// and no skip_to — a forward jump is a sequential idea with no meaning once
+// steps run concurrently.
+func (d *Definition) validateGraph(known map[string]bool) error {
+	if !d.IsDAG() {
+		return nil
+	}
+	for _, s := range d.Steps {
+		for _, dep := range s.Needs {
+			if dep == s.ID {
+				return fmt.Errorf("%s/%s: a step cannot need itself", d.Name, s.ID)
+			}
+			if !known[dep] {
+				return fmt.Errorf("%s/%s: needs unknown step %q", d.Name, s.ID, dep)
+			}
+		}
+		for _, g := range s.Gates {
+			if g.Action == "skip_to" {
+				return fmt.Errorf("%s/%s: skip_to cannot be used in a parallel workflow — "+
+					"a forward jump has no meaning once steps run concurrently; express the "+
+					"condition with `needs` and a fail/needs_input gate instead", d.Name, s.ID)
+			}
+		}
+		if s.Decide != nil {
+			for _, g := range s.Decide.Gates {
+				if g.Action == "skip_to" {
+					return fmt.Errorf("%s/%s: decide skip_to cannot be used in a parallel workflow", d.Name, s.ID)
+				}
+			}
+		}
+	}
+	return d.detectCycle()
+}
+
+// detectCycle reports the first cycle it finds, naming the path, because "there
+// is a cycle" is not actionable and "a → b → a" is.
+func (d *Definition) detectCycle() error {
+	const (
+		white = 0
+		grey  = 1
+		black = 2
+	)
+	colour := map[string]int{}
+	deps := map[string][]string{}
+	for _, s := range d.Steps {
+		deps[s.ID] = s.Needs
+	}
+	var path []string
+	var visit func(id string) error
+	visit = func(id string) error {
+		switch colour[id] {
+		case grey:
+			return fmt.Errorf("%s: dependency cycle: %s", d.Name, strings.Join(append(path, id), " → "))
+		case black:
+			return nil
+		}
+		colour[id] = grey
+		path = append(path, id)
+		for _, dep := range deps[id] {
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		colour[id] = black
+		return nil
+	}
+	for _, s := range d.Steps {
+		if err := visit(s.ID); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// Ready returns the steps whose dependencies are all satisfied and which have
+// not run yet — the next wave to execute concurrently.
+func (d *Definition) Ready(done map[string]bool, started map[string]bool) []*Step {
+	var out []*Step
+	for i := range d.Steps {
+		s := &d.Steps[i]
+		if done[s.ID] || started[s.ID] {
+			continue
+		}
+		ok := true
+		for _, dep := range s.Needs {
+			if !done[dep] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // LoadDir reads every *.yaml / *.yml in dir.
@@ -260,6 +411,9 @@ func normalize(d *Definition) {
 	if d.InputSchema == nil {
 		d.InputSchema = map[string]any{"type": "object"}
 	}
+	if d.MaxParallel <= 0 {
+		d.MaxParallel = 4
+	}
 	for i := range d.Steps {
 		s := &d.Steps[i]
 		if s.Name == "" {
@@ -270,6 +424,9 @@ func normalize(d *Definition) {
 		}
 		if s.MaxAttempts == 0 {
 			s.MaxAttempts = 3
+		}
+		if s.Retry != nil && s.Retry.MaxAttempts == 0 {
+			s.Retry.MaxAttempts = 1
 		}
 	}
 }

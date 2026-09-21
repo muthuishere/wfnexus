@@ -65,12 +65,18 @@ func TestJoinAndListAcceptJSONDecodedSlices(t *testing.T) {
 // --- loading and validation against the registry ---
 
 type fakeCatalog struct {
-	skills   map[string]bool
-	builtins map[string]bool
+	skills      map[string]bool
+	builtins    map[string]bool
+	providers   map[string]bool
+	classifiers map[string]bool
+	mcp         map[string]bool
 }
 
-func (c fakeCatalog) Missing(names []string) []string     { return missingIn(names, c.skills) }
-func (c fakeCatalog) MissingBuiltins(n []string) []string { return missingIn(n, c.builtins) }
+func (c fakeCatalog) Missing(names []string) []string        { return missingIn(names, c.skills) }
+func (c fakeCatalog) MissingBuiltins(n []string) []string    { return missingIn(n, c.builtins) }
+func (c fakeCatalog) MissingProviders(n []string) []string   { return missingIn(n, c.providers) }
+func (c fakeCatalog) MissingClassifiers(n []string) []string { return missingIn(n, c.classifiers) }
+func (c fakeCatalog) MissingMcp(n []string) []string         { return missingIn(n, c.mcp) }
 
 func missingIn(names []string, have map[string]bool) []string {
 	var out []string
@@ -84,8 +90,11 @@ func missingIn(names []string, have map[string]bool) []string {
 
 func catalog() fakeCatalog {
 	return fakeCatalog{
-		skills:   map[string]bool{"fix-author": true, "pr-reviewer": true},
-		builtins: map[string]bool{"bash": true, "read": true, "edit": true},
+		skills:      map[string]bool{"fix-author": true, "pr-reviewer": true},
+		builtins:    map[string]bool{"bash": true, "read": true, "edit": true},
+		providers:   map[string]bool{"sonnet": true, "devin": true},
+		classifiers: map[string]bool{"jev": true},
+		mcp:         map[string]bool{"github": true},
 	}
 }
 

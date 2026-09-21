@@ -22,6 +22,7 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/catalog"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
@@ -29,12 +30,13 @@ import (
 )
 
 type Engine struct {
-	cfg    config.Config
-	store  *store.Store
-	blob   *blob.Blob
-	defs   map[string]*workflow.Definition
-	skills *skills.Registry
-	broker *broker
+	cfg     config.Config
+	store   *store.Store
+	blob    *blob.Blob
+	defs    map[string]*workflow.Definition
+	skills  *skills.Registry
+	catalog *catalog.Catalog
+	broker  *broker
 	// classifierOpts overrides the judge backend; tests set the static one.
 	classifierOpts *tn.ClassifierOptions
 	// transport overrides the LLM HTTP transport (tests script it).
@@ -48,13 +50,16 @@ type Engine struct {
 	slots chan struct{}
 }
 
-func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry) *Engine {
+func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
+	if cat == nil {
+		cat, _ = catalog.Load("", "")
+	}
 	limit := cfg.MaxConcurrentRuns
 	if limit < 1 {
 		limit = 1
 	}
 	return &Engine{
-		cfg: cfg, store: st, blob: bl, defs: defs, skills: reg,
+		cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, catalog: cat,
 		broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{},
 		slots: make(chan struct{}, limit),
 	}
@@ -70,6 +75,16 @@ func (e *Engine) UseClassifier(opts tn.ClassifierOptions) { e.classifierOpts = &
 // Skills is the registry backing every step's skill allowlist.
 func (e *Engine) Skills() *skills.Registry { return e.skills }
 
+// Catalog is the provider / classifier / MCP registry set.
+func (e *Engine) Catalog() *catalog.Catalog { return e.catalog }
+
+// validator is every registry a workflow can name, as one value.
+func (e *Engine) validator() workflow.Catalog {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return catalog.NewValidator(e.skills, e.catalog)
+}
+
 func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 
 // ReloadDefinitions re-reads the skill registry and the workflows dir, so a new
@@ -77,22 +92,23 @@ func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 // validated against the fresh registry; a bad reload changes nothing.
 func (e *Engine) ReloadDefinitions() error {
 	reg := skills.Load(skills.DefaultRoots(e.cfg.SkillsDir)...)
-	defs, err := workflow.LoadDir(e.cfg.WorkflowsDir, reg)
+	cat, err := catalog.Load(e.cfg.RegistriesPath, e.cfg.McpConfig)
+	if err != nil {
+		return err
+	}
+	defs, err := workflow.LoadDir(e.cfg.WorkflowsDir, catalog.NewValidator(reg, cat))
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
-	e.defs, e.skills = defs, reg
+	e.defs, e.skills, e.catalog = defs, reg, cat
 	e.mu.Unlock()
 	return nil
 }
 
 // CheckWorkflow is SaveWorkflow without the write.
 func (e *Engine) CheckWorkflow(d *workflow.Definition) error {
-	e.mu.Lock()
-	reg := e.skills
-	e.mu.Unlock()
-	return workflow.Check(d, reg)
+	return workflow.Check(d, e.validator())
 }
 
 // McpServers lists the server names a step may be granted, so an authoring UI
@@ -131,10 +147,7 @@ func (e *Engine) Models() []string {
 // the new version is live without a restart. Validation happens on a temporary
 // copy, so a rejected definition never lands on disk.
 func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
-	e.mu.Lock()
-	reg := e.skills
-	e.mu.Unlock()
-	path, err := workflow.Save(e.cfg.WorkflowsDir, d, reg)
+	path, err := workflow.Save(e.cfg.WorkflowsDir, d, e.validator())
 	if err != nil {
 		return "", err
 	}
@@ -370,6 +383,12 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		}
 	}
 
+	// A workflow that declares dependencies runs as a DAG, concurrently; one
+	// that does not runs exactly as it always has.
+	if def.IsDAG() {
+		return e.runDAG(ctx, runID, def, input, workdir, baseRef)
+	}
+
 	steps, err := e.store.ListSteps(ctx, runID)
 	if err != nil {
 		return err
@@ -400,74 +419,30 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 			return nil
 		}
-		e.setRun(ctx, runID, "running", step.ID, "")
 		data := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
-
-		// The judge runs BEFORE the agent: typed questions on a small model can
-		// route or halt for a fraction of a cent instead of a full agent run.
-		rec, vals, err := e.decide(ctx, runID, step, data)
-		if err != nil {
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(err.Error()), FinishedAt: now()})
-			e.setRun(ctx, runID, "failed", step.ID, err.Error())
+		out, outcome := e.runOneStep(ctx, runID, def, step, data)
+		if outcome == stepHalted {
 			return nil
 		}
-		if rec != nil {
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Decision: mustJSON(rec)})
-			data.Decide = vals
-			if jump, stop := e.applyDecideGates(ctx, runID, def, step, vals, data); stop {
-				return nil
-			} else if jump >= 0 {
-				e.skipRange(ctx, runID, def, i+1, jump)
-				i = jump - 1
-				continue
-			}
+		if outcome == stepDone {
+			outputs[step.ID] = out
 		}
 
-		res, err := e.executeStep(ctx, runID, def, step, data)
-		if err != nil {
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(err.Error()), FinishedAt: now()})
-			e.setRun(ctx, runID, "failed", step.ID, err.Error())
-			return nil
-		}
-		if res.Pending != nil {
-			// The agent asked a question. The Request is plain data, so the run
-			// parks here and the answer may arrive in another process, later.
-			e.setStep(ctx, runID, step.ID, store.StepPatch{
-				Status: str("needs_input"), Pending: mustJSON(res.Pending), Error: str(res.Pending.Prompt),
-			})
-			e.setRun(ctx, runID, "needs_input", step.ID, res.Pending.Prompt)
-			return nil
-		}
-		out := res.Output
-		outputs[step.ID] = out
-		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("done"), Output: mustJSON(out), FinishedAt: now()})
-
-		// gates
+		// needs_input and fail gates were already applied by runOneStep; only
+		// skip_to remains, and it exists only on the sequential path — a forward
+		// jump has no meaning once steps run concurrently, so a DAG refuses it
+		// at load time.
 		next := i + 1
 		for _, g := range step.Gates {
-			if !gateHit(g, out) {
+			if g.Action != "skip_to" || !gateHit(g, out) {
 				continue
 			}
-			data.Output = out
-			msg, _ := workflow.Render(g.Message, data)
-			switch g.Action {
-			case "needs_input":
-				e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
-				e.setRun(ctx, runID, "needs_input", step.ID, msg)
-				return nil
-			case "fail":
-				e.setRun(ctx, runID, "failed", step.ID, msg)
-				return nil
-			case "skip_to":
-				pos, _ := def.Step(g.SkipTo)
-				if pos < 0 {
-					return fmt.Errorf("gate skip_to unknown step %q", g.SkipTo)
-				}
-				for j := i + 1; j < pos; j++ {
-					e.setStep(ctx, runID, def.Steps[j].ID, store.StepPatch{Status: str("skipped")})
-				}
-				next = pos
+			pos, _ := def.Step(g.SkipTo)
+			if pos < 0 {
+				return fmt.Errorf("gate skip_to unknown step %q", g.SkipTo)
 			}
+			e.skipRange(ctx, runID, def, i+1, pos)
+			next = pos
 			break
 		}
 		i = next - 1

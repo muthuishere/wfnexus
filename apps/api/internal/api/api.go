@@ -45,6 +45,9 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/workflows/{name}", s.getWorkflow)
 		r.Post("/workflows/validate", s.validateWorkflow)
 		r.Get("/mcp", s.listMcp)
+		r.Get("/providers", s.listProviders)
+		r.Get("/classifiers", s.listClassifiers)
+		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
@@ -124,7 +127,32 @@ func (s *Server) validateWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listMcp(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, s.eng.McpServers())
+	c := s.eng.Catalog()
+	writeJSON(w, 200, map[string]any{"entries": c.Mcp.List(), "skipped": c.Mcp.Skips()})
+}
+
+func (s *Server) listProviders(w http.ResponseWriter, _ *http.Request) {
+	c := s.eng.Catalog()
+	writeJSON(w, 200, map[string]any{"entries": c.Providers.List(), "skipped": c.Providers.Skips()})
+}
+
+func (s *Server) listClassifiers(w http.ResponseWriter, _ *http.Request) {
+	c := s.eng.Catalog()
+	writeJSON(w, 200, map[string]any{"entries": c.Classifiers.List(), "skipped": c.Classifiers.Skips()})
+}
+
+// listRegistries is every registry in one call — what an authoring UI needs to
+// populate every picker on a step.
+func (s *Server) listRegistries(w http.ResponseWriter, _ *http.Request) {
+	c := s.eng.Catalog()
+	reg := s.eng.Skills()
+	writeJSON(w, 200, map[string]any{
+		"skills":      map[string]any{"entries": reg.List(), "skipped": reg.Skipped(), "roots": reg.Roots()},
+		"tools":       map[string]any{"entries": skills.Builtins()},
+		"providers":   map[string]any{"entries": c.Providers.List(), "skipped": c.Providers.Skips()},
+		"classifiers": map[string]any{"entries": c.Classifiers.List(), "skipped": c.Classifiers.Skips()},
+		"mcp":         map[string]any{"entries": c.Mcp.List(), "skipped": c.Mcp.Skips()},
+	})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
