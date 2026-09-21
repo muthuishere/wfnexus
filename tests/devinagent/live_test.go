@@ -29,6 +29,18 @@ order.Discounts without checking whether the coupon code is already present,
 and total() folds every entry in the slice.
 `
 
+// liveModel is the model this devin account actually serves. Override with
+// DEVINADAPTER_MODEL. exec passes it as one argv element, so the space in the
+// name needs no quoting.
+const liveModel = "SWE-1.6 Slow"
+
+func liveModelName() string {
+	if m := os.Getenv("DEVINADAPTER_MODEL"); m != "" {
+		return m
+	}
+	return liveModel
+}
+
 func liveAgent(t *testing.T) *devinadapter.Adapter {
 	t.Helper()
 	if os.Getenv("DEVINADAPTER_LIVE") != "1" {
@@ -38,7 +50,7 @@ func liveAgent(t *testing.T) *devinadapter.Adapter {
 		t.Skipf("devin not on PATH: %v", err)
 	}
 	return devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.Devin(devinadapter.CLI{Model: os.Getenv("DEVINADAPTER_MODEL")}),
+		Agent:   devinadapter.Devin(devinadapter.CLI{Model: liveModelName()}),
 		Workdir: t.TempDir(),
 		Timeout: 8 * time.Minute,
 		Trace: func(ex devinadapter.Exchange) {
@@ -60,11 +72,11 @@ func TestLiveStructuredAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := a.ClientOptions()
+	opts := a.InProcessOptions()
 	opts.MaxTurns = 4
 	opts.SystemPrompt = "You triage software bugs. Read the report, reason about the root cause, then call submit_answer with the structured result. Severity is one of: low, medium, high, critical. Confidence is 0.0-1.0."
 
-	res, err := toolnexus.CreateClient(opts).Run(context.Background(), liveBugReport, tk)
+	res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), liveBugReport, tk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +128,7 @@ func TestLiveSkillsChangeTheAnswer(t *testing.T) {
 	}
 
 	a := devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.Devin(devinadapter.CLI{Model: os.Getenv("DEVINADAPTER_MODEL")}),
+		Agent:   devinadapter.Devin(devinadapter.CLI{Model: liveModelName()}),
 		Workdir: t.TempDir(),
 		Timeout: 8 * time.Minute,
 		Trace: func(ex devinadapter.Exchange) {
@@ -126,11 +138,11 @@ func TestLiveSkillsChangeTheAnswer(t *testing.T) {
 			t.Logf("turn %d reply:\n%s", ex.Turn, ex.Reply)
 		},
 	})
-	opts := a.ClientOptions()
+	opts := a.InProcessOptions()
 	opts.MaxTurns = 6
 	opts.SystemPrompt = "You triage software bugs. Load the bug-triage skill, follow it exactly, then call submit_answer."
 
-	res, err := toolnexus.CreateClient(opts).Run(context.Background(), liveBugReport, tk)
+	res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), liveBugReport, tk)
 	if err != nil {
 		t.Fatal(err)
 	}

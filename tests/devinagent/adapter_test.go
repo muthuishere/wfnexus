@@ -8,9 +8,11 @@ package devinadapter_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -77,15 +79,21 @@ func fence(v any) string {
 	return "Here you go:\n\n```json\n" + string(b) + "\n```\n"
 }
 
+// toolCall / answer emit what the contract now asks for: an OpenAI assistant
+// message in a fence.
 func toolCall(name string, args any) string {
 	return fence(map[string]any{
-		"kind":       "tool_calls",
-		"tool_calls": []any{map[string]any{"name": name, "arguments": args}},
+		"role":    "assistant",
+		"content": nil,
+		"tool_calls": []any{map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": name, "arguments": args},
+		}},
 	})
 }
 
 func answer(text string) string {
-	return fence(map[string]any{"kind": "answer", "answer": text})
+	return fence(map[string]any{"role": "assistant", "content": text, "tool_calls": []any{}})
 }
 
 // submitTool is the structured-output tool: the run cannot finish without the
@@ -102,18 +110,18 @@ func submitTool(into **Triage) toolnexus.Tool {
 	)
 }
 
-func newAgent(t *testing.T, back devinadapter.Agent, tweak func(*toolnexus.ClientOptions)) *toolnexus.Client {
+func newAgent(t *testing.T, back devinadapter.Agent, tweak func(*toolnexus.InProcessOptions)) *toolnexus.Client {
 	t.Helper()
 	a := devinadapter.New(devinadapter.Options{
 		Agent:   back,
 		Model:   "test-model",
 		Workdir: t.TempDir(),
 	})
-	opts := a.ClientOptions()
+	opts := a.InProcessOptions()
 	if tweak != nil {
 		tweak(&opts)
 	}
-	return toolnexus.CreateClient(opts)
+	return toolnexus.CreateInProcessClient(opts)
 }
 
 // --- the structural round trip ------------------------------------------
@@ -162,9 +170,9 @@ func TestStructuredAnswerThroughToolLoop(t *testing.T) {
 	}
 }
 
-// The second prompt must carry turn 1's tool result, or a stateless CLI would
-// have no idea what it already did.
-func TestTranscriptCarriesToolResult(t *testing.T) {
+// Every request reaching the CLI is the verbatim OpenAI body in an envelope,
+// so turn 2 carries turn 1's call and its result with nothing re-rendered.
+func TestRequestReachesTheCLIVerbatim(t *testing.T) {
 	back := &scripted{replies: []string{
 		toolCall("lookup", map[string]any{"id": 7}),
 		answer("done"),
@@ -182,12 +190,73 @@ func TestTranscriptCarriesToolResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	first := back.promptAt(0)
+	if !strings.Contains(first, `<openai_request endpoint="/v1/chat/completions">`) {
+		t.Errorf("request envelope missing:\n%s", first)
+	}
+	if !strings.Contains(first, "<openai_response>") {
+		t.Errorf("response contract missing:\n%s", first)
+	}
+	// The tools array must arrive as the real OpenAI schema, not a summary.
+	if !strings.Contains(first, `"name": "lookup"`) || !strings.Contains(first, `"parameters"`) {
+		t.Errorf("tool schema not passed through:\n%s", first)
+	}
+
+	// Turn 2: the assistant's call and the tool result, in OpenAI shape.
 	second := back.promptAt(1)
-	for _, want := range []string{"ASSISTANT CALLED: lookup(", "TOOL RESULT (lookup)", "ANSWER-42"} {
-		if !strings.Contains(second, want) {
-			t.Errorf("turn 2 prompt missing %q:\n%s", want, second)
+	body := extractRequest(t, second)
+	var req struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			Content    any    `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("envelope does not hold valid json: %v", err)
+	}
+
+	var callID, resultFor string
+	var result any
+	for _, m := range req.Messages {
+		if m.Role == "assistant" && len(m.ToolCalls) == 1 {
+			callID = m.ToolCalls[0].ID
+			if m.ToolCalls[0].Function.Name != "lookup" {
+				t.Errorf("call name = %q", m.ToolCalls[0].Function.Name)
+			}
+			if m.ToolCalls[0].Function.Arguments != `{"id":7}` {
+				t.Errorf("arguments = %q", m.ToolCalls[0].Function.Arguments)
+			}
+		}
+		if m.Role == "tool" {
+			resultFor, result = m.ToolCallID, m.Content
 		}
 	}
+	if callID == "" || resultFor != callID {
+		t.Errorf("tool result not linked to the call: call=%q result_for=%q", callID, resultFor)
+	}
+	if result != "ANSWER-42" {
+		t.Errorf("tool output = %v, want ANSWER-42", result)
+	}
+}
+
+// extractRequest pulls the JSON body back out of the envelope.
+func extractRequest(t *testing.T, prompt string) []byte {
+	t.Helper()
+	const open = `<openai_request endpoint="/v1/chat/completions">`
+	i := strings.Index(prompt, open)
+	j := strings.Index(prompt, "</openai_request>")
+	if i < 0 || j < 0 {
+		t.Fatalf("no request envelope in:\n%s", prompt)
+	}
+	return []byte(strings.TrimSpace(prompt[i+len(open) : j]))
 }
 
 // --- skills --------------------------------------------------------------
@@ -212,19 +281,19 @@ func TestSkillsReachTheCLIAndCanBeInvoked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := newAgent(t, back, func(o *toolnexus.ClientOptions) { o.MaxTurns = 6 }).
+	res, err := newAgent(t, back, func(o *toolnexus.InProcessOptions) { o.MaxTurns = 6 }).
 		Run(context.Background(), "Triage this bug.", tk)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// 1. The catalog toolnexus injected into the system prompt reached the CLI.
+	// 1. The catalog toolnexus injected into the system message reached the CLI.
 	first := back.promptAt(0)
 	if !strings.Contains(first, "bug-triage") {
-		t.Errorf("skills catalog missing from the prompt file:\n%s", first)
+		t.Errorf("skills catalog missing from the request:\n%s", first)
 	}
-	// 2. The `skill` tool was advertised in the tool manifest.
-	if !strings.Contains(first, `"name":"skill"`) && !strings.Contains(first, `"name": "skill"`) {
+	// 2. The `skill` tool was advertised in the request's tools array.
+	if !strings.Contains(first, `"name": "skill"`) {
 		t.Errorf("skill tool not advertised:\n%s", first)
 	}
 	// 3. Invoking it fed the skill BODY back on the next turn.
@@ -242,43 +311,84 @@ func TestSkillsReachTheCLIAndCanBeInvoked(t *testing.T) {
 
 // --- reply parsing -------------------------------------------------------
 
-func TestParseToolReply(t *testing.T) {
+func TestParseReply(t *testing.T) {
 	cases := []struct {
 		name, in, wantFinish, wantContent string
 		wantCalls                         int
+		wantErr                           bool
 	}{
-		{name: "fenced answer", in: answer("hello"), wantFinish: "stop", wantContent: "hello"},
-		{name: "bare json answer", in: `{"kind":"answer","answer":"hi"}`, wantFinish: "stop", wantContent: "hi"},
-		{name: "prose passthrough", in: "  just prose  ", wantFinish: "stop", wantContent: "just prose"},
+		{name: "assistant message", in: answer("hello"), wantFinish: "stop", wantContent: "hello"},
 		{name: "tool call", in: toolCall("t", map[string]any{"a": 1}), wantFinish: "tool_calls", wantCalls: 1},
 		{name: "nested braces survive", in: toolCall("t", map[string]any{"o": map[string]any{"k": "v"}}), wantFinish: "tool_calls", wantCalls: 1},
-		// A live devin run produced exactly this: prose answer AND a call.
-		{name: "answer with tool_calls still calls", in: fence(map[string]any{
-			"kind": "answer", "answer": "all done",
-			"tool_calls": []any{map[string]any{"name": "submit_answer", "arguments": map[string]any{"a": 1}}},
+		{name: "unfenced object", in: `{"role":"assistant","content":"hi"}`, wantFinish: "stop", wantContent: "hi"},
+		{name: "whole chat.completion unwraps", in: fence(map[string]any{
+			"object":  "chat.completion",
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "unwrapped"}}},
+		}), wantFinish: "stop", wantContent: "unwrapped"},
+		{name: "flat call shape", in: fence(map[string]any{
+			"role": "assistant", "tool_calls": []any{map[string]any{"name": "t", "args": map[string]any{"x": 1}}},
 		}), wantFinish: "tool_calls", wantCalls: 1},
-		// Another live drift: the payload placed in `answer` as an object.
-		{name: "object answer survives", in: fence(map[string]any{
-			"kind": "answer", "answer": map[string]any{"severity": "high"},
-		}), wantFinish: "stop", wantContent: `{"severity":"high"}`},
-		{name: "malformed json degrades", in: "```json\n{oops}\n```", wantFinish: "stop"},
-		{name: "empty tool_calls degrades", in: fence(map[string]any{"kind": "tool_calls", "tool_calls": []any{}}), wantFinish: "stop"},
+		// Compatibility with routsi's envelope.
+		{name: "legacy answer envelope", in: fence(map[string]any{"kind": "answer", "answer": "hi"}), wantFinish: "stop", wantContent: "hi"},
+		{name: "legacy tool envelope", in: fence(map[string]any{
+			"kind": "tool_calls", "tool_calls": []any{map[string]any{"name": "t", "arguments": map[string]any{}}},
+		}), wantFinish: "tool_calls", wantCalls: 1},
+		// A live devin run produced this: prose answer AND a call in one object.
+		{name: "content plus tool_calls calls", in: fence(map[string]any{
+			"role": "assistant", "content": "all done",
+			"tool_calls": []any{map[string]any{"function": map[string]any{"name": "submit_answer", "arguments": map[string]any{"a": 1}}}},
+		}), wantFinish: "tool_calls", wantCalls: 1},
+
+		// Everything below must ERROR so the turn is retried, never guessed at.
+		{name: "prose is not a reply", in: "just prose", wantErr: true},
+		{name: "malformed json", in: "```json\n{oops}\n```", wantErr: true},
+		{name: "empty object", in: fence(map[string]any{}), wantErr: true},
+		{name: "content null with no calls", in: fence(map[string]any{"role": "assistant", "content": nil}), wantErr: true},
+		{name: "empty content", in: fence(map[string]any{"role": "assistant", "content": "  "}), wantErr: true},
+		// Another live drift: the payload placed in content as an object.
+		{name: "structured content rejected", in: fence(map[string]any{
+			"role": "assistant", "content": map[string]any{"severity": "high"},
+		}), wantErr: true},
+		{name: "call without a name", in: fence(map[string]any{
+			"role": "assistant", "tool_calls": []any{map[string]any{"arguments": map[string]any{}}},
+		}), wantErr: true},
+		{name: "tool_calls not an array", in: fence(map[string]any{
+			"role": "assistant", "tool_calls": "submit_answer",
+		}), wantErr: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			msg, finish := devinadapter.ParseToolReply(c.in)
-			if finish != c.wantFinish {
-				t.Fatalf("finish = %q, want %q", finish, c.wantFinish)
-			}
-			if c.wantCalls > 0 {
-				calls, _ := msg["tool_calls"].([]any)
-				if len(calls) != c.wantCalls {
-					t.Fatalf("calls = %d, want %d", len(calls), c.wantCalls)
+			res, err := devinadapter.ParseReply(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %+v", res)
+				}
+				if !errors.Is(err, devinadapter.ErrUnparseable) {
+					t.Fatalf("error should wrap ErrUnparseable: %v", err)
 				}
 				return
 			}
-			if c.wantContent != "" && msg["content"] != c.wantContent {
-				t.Fatalf("content = %v, want %q", msg["content"], c.wantContent)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			gotFinish := "stop"
+			if len(res.ToolCalls) > 0 {
+				gotFinish = "tool_calls"
+			}
+			if gotFinish != c.wantFinish {
+				t.Fatalf("finish = %q, want %q", gotFinish, c.wantFinish)
+			}
+			if c.wantCalls > 0 {
+				if len(res.ToolCalls) != c.wantCalls {
+					t.Fatalf("calls = %d, want %d", len(res.ToolCalls), c.wantCalls)
+				}
+				if res.ToolCalls[0].Name == "" {
+					t.Fatal("call has no name")
+				}
+				return
+			}
+			if res.Content != c.wantContent {
+				t.Fatalf("content = %q, want %q", res.Content, c.wantContent)
 			}
 		})
 	}
@@ -395,15 +505,15 @@ func TestPresetsBuildTheRightArgv(t *testing.T) {
 
 // --- multiple clients ----------------------------------------------------
 
+var pingMarker = regexp.MustCompile(`ping-\d+`)
+
 // One adapter, several toolnexus clients, concurrent runs. Run with -race.
 func TestOneAdapterManyClientsConcurrently(t *testing.T) {
 	back := devinadapter.AgentFunc{Label: "echo", Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
-		// Answer with whatever the user asked, so each client can prove it got
-		// its OWN reply and not another's.
-		for _, line := range strings.Split(turn.Prompt, "\n") {
-			if strings.HasPrefix(line, "ping-") {
-				return answer(line), nil
-			}
+		// Echo the marker from the request body, so each client can prove it
+		// got its OWN reply and not another's.
+		if m := pingMarker.FindString(turn.Prompt); m != "" {
+			return answer(m), nil
 		}
 		return answer("no marker"), nil
 	}}
@@ -430,9 +540,9 @@ func TestOneAdapterManyClientsConcurrently(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// A separate client per goroutine, all sharing one Adapter.
-			opts := a.ClientOptions()
+			opts := a.InProcessOptions()
 			opts.SystemPrompt = fmt.Sprintf("client %d", i)
-			res, err := toolnexus.CreateClient(opts).
+			res, err := toolnexus.CreateInProcessClient(opts).
 				Run(context.Background(), fmt.Sprintf("ping-%d", i), tk)
 			errs[i], texts[i] = err, res.Text
 		}()
@@ -452,45 +562,28 @@ func TestOneAdapterManyClientsConcurrently(t *testing.T) {
 	}
 }
 
-// --- the HTTP seam on its own --------------------------------------------
+// --- Generate on its own -------------------------------------------------
 
-// The adapter is a plain RoundTripper, so it works with any OpenAI-style
-// client, not just toolnexus.
-func TestAdapterIsAUsableRoundTripperAlone(t *testing.T) {
+// Generate is usable without a client: one assembled request in, one assistant
+// message out.
+func TestGenerateStandsAlone(t *testing.T) {
 	a := devinadapter.New(devinadapter.Options{
 		Agent:   devinadapter.AgentFunc{Fn: func(context.Context, devinadapter.Turn) (string, error) { return answer("pong"), nil }},
-		Model:   "my-model",
 		Workdir: t.TempDir(),
 	})
 
-	body := `{"model":"ignored","messages":[{"role":"user","content":"ping"}]}`
-	resp, err := a.HTTPClient().Post(devinadapter.DefaultBaseURL+"/chat/completions",
-		"application/json", strings.NewReader(body))
+	res, err := a.Generate(toolnexus.InProcessRequest{
+		Model: "my-model",
+		Body: map[string]any{
+			"model":    "my-model",
+			"messages": []any{map[string]any{"role": "user", "content": "ping"}},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("status = %d", resp.StatusCode)
-	}
-
-	var out struct {
-		Model   string `json:"model"`
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-			Message      struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatal(err)
-	}
-	if out.Model != "my-model" {
-		t.Errorf("model = %q", out.Model)
-	}
-	if len(out.Choices) != 1 || out.Choices[0].Message.Content != "pong" || out.Choices[0].FinishReason != "stop" {
-		t.Errorf("unexpected completion: %+v", out.Choices)
+	if res.Content != "pong" || len(res.ToolCalls) != 0 {
+		t.Errorf("unexpected response: %+v", res)
 	}
 }
 
@@ -509,7 +602,7 @@ func TestPromptFileLifecycle(t *testing.T) {
 				KeepPromptFiles: keep,
 			})
 			tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
-			if _, err := toolnexus.CreateClient(a.ClientOptions()).Run(context.Background(), "hi", tk); err != nil {
+			if _, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk); err != nil {
 				t.Fatal(err)
 			}
 			_, err := os.Stat(seen)
@@ -532,11 +625,176 @@ func TestBackendErrorSurfaces(t *testing.T) {
 		Workdir: t.TempDir(),
 	})
 	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
-	_, err := toolnexus.CreateClient(a.ClientOptions()).Run(context.Background(), "hi", tk)
+	_, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
 	if err == nil {
 		t.Fatal("expected the backend error to surface")
 	}
 	if !strings.Contains(err.Error(), "not authenticated") {
 		t.Errorf("error lost its cause: %v", err)
+	}
+}
+
+// --- validation, repair and failure --------------------------------------
+
+// A bad reply is handed back with the complaint, and the corrected reply is
+// used. The run must not see the failure at all.
+func TestBadReplyIsRepairedAndRetried(t *testing.T) {
+	var prompts []string
+	back := devinadapter.AgentFunc{Label: "flaky", Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+		prompts = append(prompts, turn.Prompt)
+		if turn.Attempt == 1 {
+			// The exact live drift: the payload placed in content as an object.
+			return fence(map[string]any{
+				"role": "assistant", "content": map[string]any{"severity": "high"},
+			}), nil
+		}
+		return answer("repaired"), nil
+	}}
+
+	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "repaired" {
+		t.Errorf("text = %q, want the repaired reply", res.Text)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(prompts))
+	}
+	// The repair prompt must carry both the offending output and the reason.
+	if !strings.Contains(prompts[1], "could not be parsed") {
+		t.Errorf("repair prompt lacks the complaint:\n%s", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "structured data belongs in a tool call") {
+		t.Errorf("repair prompt lacks the specific cause:\n%s", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "severity") {
+		t.Errorf("repair prompt lacks the bad output:\n%s", prompts[1])
+	}
+}
+
+// When the backend never produces a valid reply, the run FAILS. It must never
+// fall back to passing prose off as an answer.
+func TestExhaustedRepairsFailsTheRun(t *testing.T) {
+	var attempts int
+	back := devinadapter.AgentFunc{Label: "stubborn", Fn: func(context.Context, devinadapter.Turn) (string, error) {
+		attempts++
+		return "I refuse to emit json.", nil
+	}}
+
+	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: 2})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	_, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
+	if err == nil {
+		t.Fatal("expected the run to fail rather than accept prose")
+	}
+	if attempts != 3 { // the turn plus 2 repairs
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+	if !strings.Contains(err.Error(), "stubborn") || !strings.Contains(err.Error(), "3 attempts") {
+		t.Errorf("error should name the backend and the budget: %v", err)
+	}
+}
+
+// Repairs can be switched off entirely, for a caller who would rather fail fast.
+func TestRepairsCanBeDisabled(t *testing.T) {
+	var attempts int
+	back := devinadapter.AgentFunc{Fn: func(context.Context, devinadapter.Turn) (string, error) {
+		attempts++
+		return "nope", nil
+	}}
+	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: -1})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	if _, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk); err == nil {
+		t.Fatal("expected failure")
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+}
+
+// --- model routing -------------------------------------------------------
+
+// toolnexus passes the model name down; the adapter decides what the CLI gets.
+func TestModelNameRouting(t *testing.T) {
+	cases := []struct {
+		name        string
+		optsModel   string
+		clientModel string // "" ⇒ leave ClientOptions as built
+		wantTurn    string // what the Agent should see
+		wantReport  string // what RunResult.Model shows (toolnexus's own view)
+	}{
+		{name: "nothing chosen", wantTurn: "", wantReport: devinadapter.DefaultModelLabel},
+		{name: "client chooses", clientModel: "claude-opus-4.6", wantTurn: "claude-opus-4.6", wantReport: "claude-opus-4.6"},
+		// A pinned adapter overrides what the client asked for, downstream.
+		// RunResult.Model still reports the client's own setting — that field
+		// is toolnexus echoing its config, not the completion.
+		{name: "adapter pins", optsModel: "codex", clientModel: "ignored", wantTurn: "codex", wantReport: "ignored"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var seen string
+			a := devinadapter.New(devinadapter.Options{
+				Model:   c.optsModel,
+				Workdir: t.TempDir(),
+				Agent: devinadapter.AgentFunc{Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+					seen = turn.Model
+					return answer("ok"), nil
+				}},
+			})
+			opts := a.InProcessOptions()
+			if c.clientModel != "" {
+				opts.Model = c.clientModel
+			}
+			tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+			res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), "hi", tk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if seen != c.wantTurn {
+				t.Errorf("Agent saw model %q, want %q", seen, c.wantTurn)
+			}
+			if res.Model != c.wantReport {
+				t.Errorf("completion reported %q, want %q", res.Model, c.wantReport)
+			}
+		})
+	}
+}
+
+// The model reaches the CLI's argv only when nothing pinned it.
+func TestCommandAgentModelFlag(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "show-args")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "p.md")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(agent *devinadapter.CommandAgent, model string) string {
+		agent.Bin = script
+		out, err := agent.Execute(context.Background(), devinadapter.Turn{
+			Index: 1, PromptFile: f, Prompt: "x", Model: model, Workdir: dir,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	if got := run(devinadapter.Devin(devinadapter.CLI{}), "opus"); !strings.Contains(got, "--model opus") {
+		t.Errorf("per-turn model not passed: %q", got)
+	}
+	if got := run(devinadapter.Devin(devinadapter.CLI{}), ""); strings.Contains(got, "--model") {
+		t.Errorf("empty model should not produce a flag: %q", got)
+	}
+	// A pinned preset ignores the per-turn model instead of passing both.
+	got := run(devinadapter.Devin(devinadapter.CLI{Model: "pinned"}), "opus")
+	if !strings.Contains(got, "--model pinned") || strings.Contains(got, "opus") {
+		t.Errorf("pinned model should win alone: %q", got)
 	}
 }

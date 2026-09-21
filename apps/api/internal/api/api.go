@@ -18,6 +18,7 @@ import (
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/engine"
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
 )
@@ -37,6 +38,8 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
+		r.Get("/skills", s.listSkills)
+		r.Get("/tools", s.listTools)
 		r.Get("/workflows", s.listWorkflows)
 		r.Post("/workflows/reload", s.reloadWorkflows)
 		r.Get("/workflows/{name}", s.getWorkflow)
@@ -63,6 +66,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]any{"error": err.Error()})
+}
+
+// listSkills is the skill registry the workflow author picks from.
+func (s *Server) listSkills(w http.ResponseWriter, _ *http.Request) {
+	reg := s.eng.Skills()
+	writeJSON(w, 200, map[string]any{"roots": reg.Roots(), "skills": reg.List(), "skipped": reg.Skipped()})
+}
+
+// listTools is the built-in (Claude-style shell/file/search) tool catalog.
+func (s *Server) listTools(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, skills.Builtins())
 }
 
 func (s *Server) listWorkflows(w http.ResponseWriter, _ *http.Request) {

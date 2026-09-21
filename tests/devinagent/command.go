@@ -33,6 +33,11 @@ type CommandAgent struct {
 	Args []string
 	// Env is extra environment, "K=V", appended to the parent environment.
 	Env []string
+	// ModelFlag is the CLI's model flag, e.g. "--model". When set and a model
+	// is known for the turn, the flag and its value are appended. An explicit
+	// CLI.Model is baked into Args instead and wins, so a preset pinned to a
+	// model ignores what the caller asked for.
+	ModelFlag string
 	// OutputFile, when non-empty, is read instead of stdout after a successful
 	// run — for a CLI that writes its final answer to a file (codex's
 	// --output-last-message). PlaceholderFile-style substitution does not
@@ -49,10 +54,11 @@ func Devin(c CLI) *CommandAgent {
 		args = append(args, "--model", c.Model)
 	}
 	return &CommandAgent{
-		Label: "devin",
-		Bin:   c.bin("devin"),
-		Args:  append(args, c.ExtraArgs...),
-		Env:   c.Env,
+		Label:     "devin",
+		Bin:       c.bin("devin"),
+		Args:      append(args, c.ExtraArgs...),
+		Env:       c.Env,
+		ModelFlag: c.modelFlag("--model"),
 	}
 }
 
@@ -63,10 +69,11 @@ func Claude(c CLI) *CommandAgent {
 		args = append(args, "--model", c.Model)
 	}
 	return &CommandAgent{
-		Label: "claude",
-		Bin:   c.bin("claude"),
-		Args:  append(args, c.ExtraArgs...),
-		Env:   c.Env,
+		Label:     "claude",
+		Bin:       c.bin("claude"),
+		Args:      append(args, c.ExtraArgs...),
+		Env:       c.Env,
+		ModelFlag: c.modelFlag("--model"),
 	}
 }
 
@@ -77,10 +84,11 @@ func Copilot(c CLI) *CommandAgent {
 		args = append(args, "--model", c.Model)
 	}
 	return &CommandAgent{
-		Label: "copilot",
-		Bin:   c.bin("copilot"),
-		Args:  append(args, c.ExtraArgs...),
-		Env:   c.Env,
+		Label:     "copilot",
+		Bin:       c.bin("copilot"),
+		Args:      append(args, c.ExtraArgs...),
+		Env:       c.Env,
+		ModelFlag: c.modelFlag("--model"),
 	}
 }
 
@@ -105,6 +113,15 @@ func (c CLI) bin(def string) string {
 	return def
 }
 
+// modelFlag returns the flag only when the preset did NOT pin a model — a
+// pinned model is already in Args and must not be overridden per turn.
+func (c CLI) modelFlag(flag string) string {
+	if c.Model != "" {
+		return ""
+	}
+	return flag
+}
+
 func (c CLI) permissionMode() string {
 	if c.PermissionMode != "" {
 		return c.PermissionMode
@@ -127,6 +144,11 @@ func (c *CommandAgent) Execute(ctx context.Context, t Turn) (string, error) {
 		a = strings.ReplaceAll(a, PlaceholderFile, t.PromptFile)
 		a = strings.ReplaceAll(a, PlaceholderPrompt, t.Prompt)
 		args = append(args, a)
+	}
+
+	// The model toolnexus asked for, when the preset left the choice open.
+	if c.ModelFlag != "" && t.Model != "" {
+		args = append(args, c.ModelFlag, t.Model)
 	}
 
 	cmd := exec.CommandContext(ctx, c.Bin, args...)

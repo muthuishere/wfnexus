@@ -1,43 +1,40 @@
 // Package devinadapter makes a local agent CLI usable as a toolnexus model.
 //
-// There are two independent seams, and you can take either one:
+// It is one function in toolnexus terms — a Generate for
+// toolnexus.CreateInProcessClient:
 //
-//   - the HTTP seam — Adapter is an http.RoundTripper, so it drops into
-//     toolnexus.ClientOptions.HTTPClient (or any other OpenAI-style client).
-//     Nothing is dialed; the request is answered in process.
+//	a := devinadapter.New(devinadapter.Options{
+//	    Agent: devinadapter.Devin(devinadapter.CLI{Model: "SWE-1.6 Slow"}),
+//	})
+//	client := toolnexus.CreateInProcessClient(a.InProcessOptions())
+//	res, err := client.Run(ctx, prompt, toolkit)
+//
+// InProcessOptions() is a plain value — set SystemPrompt, MaxTurns, Hooks or
+// anything else on it before handing it over. The agent loop, MCP servers,
+// skills, sub-agents, hooks and metrics are toolnexus's and are untouched: no
+// transport, no chat.completion assembly and no usage bookkeeping is
+// reimplemented here.
+//
+// What is left is the part that is genuinely this package's problem:
+//
 //   - the command seam — the Agent interface turns a rendered prompt file into
 //     reply text. CommandAgent drives any CLI from an argv template, so devin,
 //     claude and copilot are all just presets; anything else is an Agent you
 //     write yourself (an SSH hop, a queue, a canned fixture).
+//   - the contract — a one-shot CLI has no tool-call channel, so it is handed
+//     the VERBATIM OpenAI request in an <openai_request> envelope and asked for
+//     the OpenAI response back. The reply is validated, and a bad one goes back
+//     with the complaint until the repair budget runs out.
 //
-// The adapter between them is pure translation: take what toolnexus assembled
-// (system prompt, skills catalog, transcript, tool schemas), render it into a
-// prompt FILE, hand that to the Agent, and translate the reply back into an
-// OpenAI chat.completion — content or tool_calls.
-//
-//	a := devinadapter.New(devinadapter.Options{
-//	    Agent: devinadapter.Devin(devinadapter.CLI{Model: "claude-sonnet-4"}),
-//	})
-//	agent := toolnexus.CreateClient(a.ClientOptions())
-//	res, err := agent.Run(ctx, prompt, toolkit)
-//
-// ClientOptions() is a plain value — set SystemPrompt, MaxTurns, Hooks or
-// anything else on it before handing it to CreateClient.
-//
-// Tool calls are emulated with the same fenced-JSON contract routsi uses
-// (llm-forward-proxy/internal/backend/toolemu.go), because a one-shot CLI
-// prints prose and has no native tool-call channel. Skills need nothing extra:
-// toolnexus injects the catalog into the system prompt and exposes `skill` as
-// an ordinary tool, so both ride the same path.
+// Skills need nothing extra: toolnexus injects the catalog into the system
+// message and exposes `skill` as an ordinary tool, so both are already in the
+// request the CLI receives.
 package devinadapter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
@@ -45,9 +42,11 @@ import (
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 )
 
-// DefaultBaseURL is never dialed — the RoundTripper answers every request in
-// process. It exists because toolnexus builds an endpoint URL from it.
-const DefaultBaseURL = "http://devin.local/v1"
+// DefaultModelLabel is the model id reported when none was chosen. toolnexus
+// requires a model name, but the CLI should fall back to its account default —
+// so this exact label means "nobody chose", and is never passed down as a
+// --model value. Any other name IS passed down.
+const DefaultModelLabel = "cli-default"
 
 // Options configures an Adapter.
 type Options struct {
@@ -55,8 +54,8 @@ type Options struct {
 	// `devin` from PATH. Swap it for any other CLI preset, a CommandAgent of
 	// your own, or anything else implementing Agent.
 	Agent Agent
-	// Model is reported back in the completion. Purely cosmetic here — what the
-	// CLI actually runs is the Agent's business. "" ⇒ echo what was requested.
+	// Model pins the model, overriding what the caller asked for. "" ⇒ pass
+	// through whatever toolnexus was configured with.
 	Model string
 	// Workdir is where prompt files are written. "" ⇒ the current directory.
 	// A CommandAgent also runs its process here.
@@ -90,13 +89,12 @@ type Exchange struct {
 	Err      error
 }
 
-// Adapter is the http.RoundTripper that stands in for an OpenAI-style model.
+// Adapter turns an Agent into a toolnexus in-process model.
 //
-// One Adapter is safe to share across any number of toolnexus clients and
-// concurrent runs: it holds no per-run state, and the only mutable field is an
-// atomic turn counter. Whether the backend itself tolerates concurrent calls
-// is the Agent's business — a CommandAgent spawns an independent process per
-// turn, so it does.
+// One Adapter is safe to share across any number of clients and concurrent
+// runs: it holds no per-run state, and the only mutable field is an atomic turn
+// counter. Whether the backend tolerates concurrent calls is the Agent's
+// business — a CommandAgent spawns an independent process per turn, so it does.
 type Adapter struct {
 	opts Options
 	// turn counts invocations across the adapter's life, for traces.
@@ -123,117 +121,66 @@ func New(opts Options) *Adapter {
 	return &Adapter{opts: opts}
 }
 
-// HTTPClient returns an *http.Client whose transport is this adapter — the
-// value to put in toolnexus.ClientOptions.HTTPClient, or in any other
-// OpenAI-style SDK that takes an http client.
-func (a *Adapter) HTTPClient() *http.Client {
-	return &http.Client{Transport: a}
-}
-
-// ClientOptions returns toolnexus client options wired to this adapter, ready
-// for toolnexus.CreateClient. Fields not set here (SystemPrompt, MaxTurns,
+// InProcessOptions returns options wired to this adapter, ready for
+// toolnexus.CreateInProcessClient. Fields not set here (SystemPrompt, MaxTurns,
 // Hooks, OnMetric, …) are the caller's to fill in.
-//
-// Retries default to 0: a failing local process is not a transient network
-// blip, and re-running an agent CLI costs real time.
-func (a *Adapter) ClientOptions() toolnexus.ClientOptions {
+func (a *Adapter) InProcessOptions() toolnexus.InProcessOptions {
 	model := a.opts.Model
 	if model == "" {
-		model = "devin"
+		model = DefaultModelLabel
 	}
-	return toolnexus.ClientOptions{
-		BaseURL:    DefaultBaseURL,
-		Style:      toolnexus.StyleOpenAI,
-		Model:      model,
-		APIKey:     "cli", // nothing leaves the machine; the transport is a process
-		Retries:    0,
-		HTTPClient: a.HTTPClient(),
+	return toolnexus.InProcessOptions{
+		Model:    model,
+		Generate: a.Generate,
 	}
 }
 
-// RoundTrip implements http.RoundTripper.
-func (a *Adapter) RoundTrip(req *http.Request) (*http.Response, error) {
-	body, err := io.ReadAll(req.Body)
+// Generate is the model: one assembled request in, one assistant message out.
+// It satisfies toolnexus.InProcessOptions.Generate and is usable on its own.
+func (a *Adapter) Generate(req toolnexus.InProcessRequest) (toolnexus.InProcessResponse, error) {
+	// The body is re-marshalled whole rather than picked apart, so everything
+	// toolnexus assembled — messages, tools, tool_choice, response_format and
+	// anything it starts sending later — reaches the CLI without this package
+	// having to learn about it first.
+	body, err := json.MarshalIndent(req.Body, "", "  ")
 	if err != nil {
-		return nil, err
-	}
-	defer req.Body.Close()
-
-	var in struct {
-		Model    string            `json:"model"`
-		Messages []json.RawMessage `json:"messages"`
-		Tools    json.RawMessage   `json:"tools"`
-	}
-	if err := json.Unmarshal(body, &in); err != nil {
-		return nil, fmt.Errorf("devinadapter: decode request: %w", err)
+		return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: encode request: %w", err)
 	}
 
-	prompt := BuildPrompt(RenderTranscript(in.Messages), in.Tools)
-
-	// The model toolnexus asked for wins over the adapter's default, so one
-	// Adapter can serve several clients on different models.
+	// A pinned adapter wins; otherwise the caller's model goes down to the CLI,
+	// unless it is the sentinel meaning nobody chose.
 	model := a.opts.Model
-	if model == "" {
-		model = in.Model
+	if model == "" && req.Model != DefaultModelLabel {
+		model = req.Model
 	}
 
-	msg, finish, err := a.call(req.Context(), prompt, model)
-	if err != nil {
-		return nil, err
-	}
-	out, err := json.Marshal(map[string]any{
-		"id":      "chatcmpl_" + randHex(),
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   model,
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       msg,
-			"finish_reason": finish,
-		}},
-		// The CLI reports no token usage. Keep the field present and honest
-		// rather than inventing numbers.
-		"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Status:     "200 OK",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(bytes.NewReader(out)),
-		Request:    req,
-	}, nil
+	return a.call(context.Background(), body, model)
 }
 
-// call runs one turn: render to a file, invoke the backend, validate the
-// reply. A reply that fails validation is sent back with the complaint, up to
-// Repairs times; after that the turn errors out. Nothing is guessed.
-func (a *Adapter) call(ctx context.Context, prompt, model string) (map[string]any, string, error) {
+// call runs one turn: render to a file, invoke the backend, validate the reply.
+// A reply that fails validation is sent back with the complaint, up to Repairs
+// times; after that the turn errors out. Nothing is guessed.
+func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (toolnexus.InProcessResponse, error) {
 	turn := int(a.turn.Add(1))
 
 	ctx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
 
 	var lastErr error
+	prompt := BuildPrompt(requestBody)
 	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
 		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
 		if err != nil {
-			return nil, "", err
+			return toolnexus.InProcessResponse{}, err
 		}
-		msg, finish, perr := ParseReply(text)
+		res, perr := ParseReply(text)
 		if perr == nil {
-			return msg, finish, nil
+			return res, nil
 		}
 		lastErr = perr
-		prompt = BuildRepairPrompt(text, perr)
+		prompt = BuildRepairPrompt(requestBody, text, perr)
 	}
-	return nil, "", fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w",
+	return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w",
 		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr)
 }
 

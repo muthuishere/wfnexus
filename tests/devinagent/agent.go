@@ -24,6 +24,13 @@ type Turn struct {
 	// Index is the 1-based turn number within this adapter's life. Turn 2+ is
 	// the loop coming back with tool results folded into the transcript.
 	Index int
+	// Attempt is 1 for the turn itself and 2+ for a repair attempt, where the
+	// prompt is the correction request rather than the task.
+	Attempt int
+	// Model is the model toolnexus asked for, after Options.Model has had its
+	// say. A CommandAgent passes it to the CLI's model flag; "" ⇒ let the CLI
+	// use the account default.
+	Model string
 	// PromptFile is the rendered prompt on disk. It is removed after the turn
 	// unless Options.KeepPromptFiles is set.
 	PromptFile string

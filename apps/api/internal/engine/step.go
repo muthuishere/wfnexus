@@ -13,6 +13,7 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
 
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
 )
@@ -122,25 +123,23 @@ func (e *Engine) systemPrompt(stepSystem string, data workflow.TemplateData) str
 	return b.String()
 }
 
-// buildToolkit assembles the per-step toolkit: skills allowlist, builtin allowlist, MCP server allowlist.
+// buildToolkit assembles the per-step toolkit: skills allowlist, builtin
+// allowlist, MCP server allowlist. Scoping is the security model — a step sees
+// exactly what its YAML lists and nothing else.
 func (e *Engine) buildToolkit(ctx context.Context, step *workflow.Step) (*tn.Toolkit, error) {
 	opts := tn.Options{}
 	if len(step.Skills) > 0 {
-		opts.SkillsDir = []string{e.cfg.SkillsDir}
+		// only the roots that actually hold this step's skills are walked
+		opts.SkillsDir = e.skills.RootsFor(step.Skills)
+		if len(opts.SkillsDir) == 0 {
+			return nil, fmt.Errorf("step %s: none of the skills %v are in the registry", step.ID, step.Skills)
+		}
 		opts.SkillsFilter = map[string]bool{}
 		for _, s := range step.Skills {
 			opts.SkillsFilter[s] = true
 		}
 	}
-	bt := tn.BuiltinsConfig{Tools: map[string]bool{}}
-	if len(step.Tools) == 0 {
-		f := false
-		bt.Enabled = &f
-	}
-	for _, t := range step.Tools {
-		bt.Tools[t] = true
-	}
-	opts.Builtins = bt
+	opts.Builtins = skills.BuiltinAllowlist(step.Tools)
 	if len(step.MCP) > 0 {
 		raw, err := os.ReadFile(e.cfg.McpConfig)
 		if err != nil {

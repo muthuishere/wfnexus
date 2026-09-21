@@ -20,6 +20,7 @@ import (
 
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/blob"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/config"
+	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/skills"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/store"
 	"github.com/muthuishere/bug-fixer-platform/apps/api/internal/workflow"
 )
@@ -29,26 +30,33 @@ type Engine struct {
 	store  *store.Store
 	blob   *blob.Blob
 	defs   map[string]*workflow.Definition
+	skills *skills.Registry
 	broker *broker
 
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
 }
 
-func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition) *Engine {
-	return &Engine{cfg: cfg, store: st, blob: bl, defs: defs, broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{}}
+func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry) *Engine {
+	return &Engine{cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{}}
 }
+
+// Skills is the registry backing every step's skill allowlist.
+func (e *Engine) Skills() *skills.Registry { return e.skills }
 
 func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 
-// ReloadDefinitions re-reads the workflows dir (hot reload while authoring YAML).
+// ReloadDefinitions re-reads the skill registry and the workflows dir, so a new
+// skill and the step that uses it land in one hot reload. Workflows are
+// validated against the fresh registry; a bad reload changes nothing.
 func (e *Engine) ReloadDefinitions() error {
-	defs, err := workflow.LoadDir(e.cfg.WorkflowsDir)
+	reg := skills.Load(skills.DefaultRoots(e.cfg.SkillsDir)...)
+	defs, err := workflow.LoadDir(e.cfg.WorkflowsDir, reg)
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
-	e.defs = defs
+	e.defs, e.skills = defs, reg
 	e.mu.Unlock()
 	return nil
 }
@@ -136,6 +144,9 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) er
 		return fmt.Errorf("step %s is %s, not awaiting_approval", stepID, st.Status)
 	}
 	e.setStep(ctx, runID, stepID, store.StepPatch{Status: str("approved")})
+	// move the run off awaiting_approval synchronously, so a caller that reads
+	// it straight back (the UI does) never sees the state it just cleared
+	e.setRun(ctx, runID, "queued", stepID, "")
 	e.Start(runID)
 	return nil
 }
