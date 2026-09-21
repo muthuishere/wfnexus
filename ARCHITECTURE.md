@@ -97,6 +97,63 @@ A limit stop is never silent: `incomplete` always carries `stoppedBy` in words
 and `limit` as a value to branch on. The engine copies that verbatim into the
 step's `error`; it never invents a status.
 
+### 3a. Measured: a team is advisory, not structural
+
+Declaring a `team` gives the step's agent a `task` tool. It does **not** make it
+delegate. Measured on a live run of `reproduce-bug` (Sonnet 4.5), with an
+`explorer` sub-agent declared, the `task` tool offered, and the prompt saying
+*"delegate code lookups to your explorer rather than reading widely yourself"*:
+
+```
+task calls : 0
+bash calls : 19      read: 2   edit: 1
+```
+
+The step still succeeded — it committed a failing test — but it ignored the
+explorer entirely. The reason is not disobedience: a parent holding `bash` can
+already `grep` and `cat`, so delegation is strictly more expensive for it than
+doing the work itself, and no prompt reliably beats that gradient.
+
+The consequence is worth stating plainly, because it constrains every workflow
+we write: **delegation is only structurally enforced when the parent lacks the
+capability.** A parent with a shell will always be able to route around its own
+team. In the unit tests, a parent granted *no* tools delegates on the first turn,
+every time — that is the configuration where a team means something.
+
+So teams are kept where the sub-agent holds a capability the parent does not,
+and treated as advisory otherwise. They cost nothing when unused, but a workflow
+must not be described as "using sub-agents" on the strength of declaring one.
+
+### 3b. Measured: a pinned workdir is not containment
+
+The engine pins every `bash` call to the run's workspace. That is advisory, and
+a live run proved it. A `draft-pr` agent ran:
+
+```
+cd /Users/…/bug-fixer-platform && git log --all --grep=reorder
+```
+
+then `git checkout -b`, `git stash` and `git reset` — **in the platform's own
+repository**, not the run's worktree. `workdir` was set correctly; it sets only
+the *initial* directory, and a `cd` in the command string leaves it. Nothing
+errored, and the tool reported success.
+
+It knew that path because the skills it loads live under the platform repo, so
+their absolute paths were already in its context. An agent does not need to
+guess its way out; we hand it the map.
+
+So containment is now a guardrail applied to **every step and every sub-agent**,
+ahead of the rules the YAML declares and regardless of what that YAML says: a
+shell command whose `cd`/`pushd`/`git -C`/`--git-dir`/`--work-tree` target
+resolves outside the workspace is denied, and `cd -`, `cd ~` and unexpanded
+`$VARS` are refused because none can be shown to stay inside.
+
+It is a guardrail, not a sandbox. A determined agent with a shell has other
+exits (`env`, a symlink it creates, an interpreter one-liner), and the honest
+ceiling here is *"blocks the accident and the obvious"*. Real isolation needs a
+container or a chroot, and that is the next thing this file will be edited to
+describe.
+
 ### 4. Human-in-the-loop is suspension, not a side channel
 
 Two different pauses, deliberately kept distinct:

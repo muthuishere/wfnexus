@@ -31,8 +31,18 @@ type fakeLLM struct {
 	// script is consumed per step: keyed by the tool the step must submit to,
 	// so a retried step replays from its own queue.
 	turns    []turn
+	next     func() turn
 	n        int
 	requests []map[string]any
+}
+
+// newFakeLLMFunc replies from a function, so a test can hold a turn open.
+func newFakeLLMFunc(t *testing.T, fn func() turn) *fakeLLM {
+	t.Helper()
+	f := &fakeLLM{next: fn}
+	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
+	t.Cleanup(f.Close)
+	return f
 }
 
 func newFakeLLM(t *testing.T, turns ...turn) *fakeLLM {
@@ -50,6 +60,13 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
+	if f.next != nil {
+		f.n++
+		f.mu.Unlock()
+		tn := f.next()
+		f.writeTurn(w, tn)
+		return
+	}
 	var tn turn
 	if f.n < len(f.turns) {
 		tn = f.turns[f.n]
@@ -58,7 +75,10 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 		tn = turn{text: "(script exhausted)"}
 	}
 	f.mu.Unlock()
+	f.writeTurn(w, tn)
+}
 
+func (f *fakeLLM) writeTurn(w http.ResponseWriter, tn turn) {
 	msg := map[string]any{"role": "assistant"}
 	if len(tn.calls) > 0 {
 		var tcs []any

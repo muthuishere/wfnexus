@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 type Config struct {
@@ -24,6 +25,10 @@ type Config struct {
 	LLMBaseURL   string
 	LLMStyle     string
 	Model        string
+	// MaxConcurrentRuns bounds how many runs execute at once; the rest wait in
+	// queued. Each run drives several agents and a repo worktree, so this is the
+	// knob that keeps a burst of reports from thrashing the machine.
+	MaxConcurrentRuns int
 	// LLMAPIKeyEnv names the env var holding the provider key — the NAME, never
 	// the value, so a key cannot end up in config, logs or an event.
 	LLMAPIKeyEnv string
@@ -37,6 +42,15 @@ type Config struct {
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return def
 }
@@ -61,7 +75,8 @@ func Load() Config {
 		LLMStyle:     env("LLM_STYLE", "openai"),
 		Model:        env("BFP_MODEL", "anthropic/claude-sonnet-4.5"),
 
-		LLMAPIKeyEnv: env("BFP_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
+		MaxConcurrentRuns: envInt("BFP_MAX_CONCURRENT_RUNS", 4),
+		LLMAPIKeyEnv:      env("BFP_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
 
 		ClassifierBaseURL:   env("BFP_CLASSIFIER_BASE_URL", "https://openrouter.ai/api/v1"),
 		ClassifierModel:     env("BFP_CLASSIFIER_MODEL", "typesafe/jev-1.13"),

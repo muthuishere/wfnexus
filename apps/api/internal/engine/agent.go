@@ -17,7 +17,7 @@ import (
 //
 // The returned closer releases every toolkit built here (the step's and each
 // team member's).
-func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, extra []tn.Tool, hooks *tn.Hooks, onMetric func(tn.MetricEvent)) (*agents.Agent, func(), error) {
+func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, workdir string, extra []tn.Tool, hooks *tn.Hooks, onMetric func(tn.MetricEvent)) (*agents.Agent, func(), error) {
 	var toolkits []*tn.Toolkit
 	closer := func() {
 		for _, tk := range toolkits {
@@ -25,7 +25,7 @@ func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, extra []tn
 		}
 	}
 
-	team, teamTks, err := e.buildTeam(ctx, step, hooks, onMetric)
+	team, teamTks, err := e.buildTeam(ctx, step, workdir, hooks, onMetric)
 	if err != nil {
 		closer()
 		return nil, nil, err
@@ -49,14 +49,14 @@ func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, extra []tn
 		Team:       team,
 		Model:      step.Model,
 		Budget:     toBudget(step.Budget, step.MaxTurns),
-		Guardrails: compileGuardrails(step.Guardrails),
+		Guardrails: withContainment(workdir, step.Guardrails),
 		Hooks:      hooks,
 		OnMetric:   onMetric,
 	})
 	return ag, closer, nil
 }
 
-func (e *Engine) buildTeam(ctx context.Context, step *workflow.Step, hooks *tn.Hooks, onMetric func(tn.MetricEvent)) ([]*agents.Agent, []*tn.Toolkit, error) {
+func (e *Engine) buildTeam(ctx context.Context, step *workflow.Step, workdir string, hooks *tn.Hooks, onMetric func(tn.MetricEvent)) ([]*agents.Agent, []*tn.Toolkit, error) {
 	var team []*agents.Agent
 	var tks []*tn.Toolkit
 	for _, m := range step.Team {
@@ -66,13 +66,15 @@ func (e *Engine) buildTeam(ctx context.Context, step *workflow.Step, hooks *tn.H
 		}
 		tks = append(tks, tk)
 		team = append(team, agents.New(m.ID, agents.Spec{
-			Does:     m.Does,
-			Soul:     withSkills(m.Soul, tk),
-			Tools:    tk.Tools(),
-			Model:    m.Model,
-			Budget:   toBudget(m.Budget, 0),
-			Hooks:    hooks,
-			OnMetric: onMetric,
+			Does:  m.Does,
+			Soul:  withSkills(m.Soul, tk),
+			Tools: tk.Tools(),
+			Model: m.Model,
+			// a sub-agent is contained exactly like its parent
+			Guardrails: withContainment(workdir, nil),
+			Budget:     toBudget(m.Budget, 0),
+			Hooks:      hooks,
+			OnMetric:   onMetric,
 		}))
 	}
 	return team, tks, nil
@@ -112,6 +114,13 @@ func toBudget(b *workflow.Budget, maxTurns int) *agents.Budget {
 		out.MaxWall = secs(b.MaxWallSec)
 	}
 	return out
+}
+
+// withContainment puts the workspace guardrail AHEAD of the step's own rules.
+// First deny wins, so a YAML rule can never widen it.
+func withContainment(workdir string, rules []workflow.Guardrail) []agents.Guardrail {
+	out := []agents.Guardrail{containmentGuardrail(workdir)}
+	return append(out, compileGuardrails(rules)...)
 }
 
 // compileGuardrails turns the YAML policy rules into toolnexus guardrails.

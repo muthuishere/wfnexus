@@ -77,7 +77,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	hooks := e.hooks(ctx, runID, step.ID, data.WorkDir)
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
-	ag, closeAgent, err := e.buildAgent(ctx, step, extra, hooks, onMetric)
+	ag, closeAgent, err := e.buildAgent(ctx, step, data.WorkDir, extra, hooks, onMetric)
 	if err != nil {
 		return stepResult{}, err
 	}

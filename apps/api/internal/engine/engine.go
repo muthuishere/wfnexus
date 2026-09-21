@@ -41,10 +41,22 @@ type Engine struct {
 
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
+	// slots bounds concurrently EXECUTING runs. A run beyond the limit holds its
+	// goroutine and stays queued, so the cap is on machine load, not on
+	// accepting work.
+	slots chan struct{}
 }
 
 func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry) *Engine {
-	return &Engine{cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{}}
+	limit := cfg.MaxConcurrentRuns
+	if limit < 1 {
+		limit = 1
+	}
+	return &Engine{
+		cfg: cfg, store: st, blob: bl, defs: defs, skills: reg,
+		broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{},
+		slots: make(chan struct{}, limit),
+	}
 }
 
 // UseTransport overrides the LLM HTTP transport (tests script the wire).
@@ -130,6 +142,14 @@ func (e *Engine) Start(runID uuid.UUID) {
 			delete(e.running, runID)
 			e.mu.Unlock()
 		}()
+		// Wait for a slot. The run is already marked queued, so the UI shows it
+		// waiting rather than silently doing nothing.
+		select {
+		case e.slots <- struct{}{}:
+			defer func() { <-e.slots }()
+		case <-ctx.Done():
+			return
+		}
 		if err := e.resume(ctx, runID); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("engine: run %s: %v", runID, err)
 			e.setRun(ctx, runID, "failed", "", err.Error())

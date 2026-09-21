@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -305,3 +306,59 @@ func normalizeForTest(d *workflow.Definition) {
 }
 
 var _ = filepath.Join
+
+// The concurrency cap bounds machine load, not accepted work: a run beyond the
+// limit waits in queued rather than being refused.
+func TestConcurrentRunsAreBoundedByTheSlotLimit(t *testing.T) {
+	def := &workflow.Definition{Name: "concurrency", Steps: []workflow.Step{{
+		ID: "only", Prompt: "p", Tools: []string{"bash"},
+		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
+	}}}
+	normalizeForTest(def)
+
+	// one slot, so the second run cannot start until the first finishes
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	inFlight, maxSeen := 0, 0
+	llm := newFakeLLMFunc(t, func() turn {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxSeen {
+			maxSeen = inFlight
+		}
+		mu.Unlock()
+		<-gate // hold the step open so overlap would be visible
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return submit(map[string]any{"ok": true})
+	})
+
+	h := newHarness(t, def, llm, "")
+	h.eng.slots = make(chan struct{}, 1)
+
+	ids := make([]uuid.UUID, 0, 3)
+	for i := 0; i < 3; i++ {
+		run, err := h.store.CreateRun(context.Background(), "concurrency", []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.runs = append(h.runs, run.ID)
+		ids = append(ids, run.ID)
+		h.eng.Start(run.ID)
+	}
+
+	// let everything through
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+	for _, id := range ids {
+		if run := h.wait(id); run.Status != "done" {
+			t.Fatalf("run %s = %s (%s)", id, run.Status, run.Error)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxSeen > 1 {
+		t.Fatalf("slot limit is 1 but %d runs executed at once", maxSeen)
+	}
+}
