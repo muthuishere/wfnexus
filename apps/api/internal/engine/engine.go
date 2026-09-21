@@ -385,6 +385,11 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 
 	// A workflow that declares dependencies runs as a DAG, concurrently; one
 	// that does not runs exactly as it always has.
+	// Three ways to order a workflow, in increasing autonomy: a derived plan,
+	// a hand-written DAG, or plain sequence.
+	if def.IsPlanned() {
+		return e.runPlanned(ctx, runID, def, input, workdir, baseRef)
+	}
 	if def.IsDAG() {
 		return e.runDAG(ctx, runID, def, input, workdir, baseRef)
 	}

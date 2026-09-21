@@ -95,6 +95,14 @@ type DecideGate struct {
 	Message string   `yaml:"message,omitempty" json:"message,omitempty"`
 }
 
+// Guard is a condition over the facts produced so far. Path is dotted
+// (`triage.valid`); exactly one of Equals / Exists applies.
+type Guard struct {
+	Path   string `yaml:"path" json:"path"`
+	Equals any    `yaml:"equals,omitempty" json:"equals,omitempty"`
+	Exists *bool  `yaml:"exists,omitempty" json:"exists,omitempty"`
+}
+
 // Retry re-runs a whole step that failed. It is distinct from the completion
 // gate's max_attempts, which retries the MODEL inside one step: this retries
 // the step itself, including its tools and its workspace side effects — so a
@@ -144,6 +152,15 @@ type Step struct {
 	Team []TeamMember `yaml:"team,omitempty" json:"team,omitempty"`
 	// Decide is the classifier pass that runs before the agent.
 	Decide *Decide `yaml:"decide,omitempty" json:"decide,omitempty"`
+	// Consumes are the FACTS this step needs before it can run; Produces are
+	// the facts it establishes. Declaring these instead of `needs` lets the
+	// planner derive the order and re-derive it after every step, so the plan
+	// responds to what the agents actually found (see internal/planner).
+	Consumes []string `yaml:"consumes,omitempty" json:"consumes,omitempty"`
+	Produces []string `yaml:"produces,omitempty" json:"produces,omitempty"`
+	// When is an extra guard on applicability, evaluated against the values
+	// produced so far — the same field/equals shape as a gate.
+	When []Guard `yaml:"when,omitempty" json:"when,omitempty"`
 	// Needs lists the steps that must finish before this one may start. Declaring
 	// it anywhere turns the workflow into a DAG: every step whose dependencies
 	// are satisfied runs CONCURRENTLY. Empty everywhere ⇒ strictly sequential,
@@ -165,8 +182,12 @@ type Definition struct {
 	Description string         `yaml:"description" json:"description"`
 	InputSchema map[string]any `yaml:"input_schema" json:"inputSchema"`
 	Steps       []Step         `yaml:"steps" json:"steps"`
+	// Goal is the fact the workflow must establish. Declaring it turns execution
+	// over to the planner: the order is derived from what each step consumes and
+	// produces, and re-derived after every step.
+	Goal string `yaml:"goal,omitempty" json:"goal,omitempty"`
 	// MaxParallel caps how many of this workflow's steps run at once when it is
-	// a DAG. 0 ⇒ 4.
+	// a DAG or a plan. 0 ⇒ 4.
 	MaxParallel int    `yaml:"max_parallel,omitempty" json:"maxParallel,omitempty"`
 	Path        string `yaml:"-" json:"path"`
 }
@@ -262,7 +283,47 @@ func (d *Definition) validate(cat Catalog) error {
 			}
 		}
 	}
-	return d.validateGraph(seen)
+	if err := d.validateGraph(seen); err != nil {
+		return err
+	}
+	return d.validatePlan()
+}
+
+// validatePlan refuses a plan that cannot work before anything runs: a fact
+// nothing produces, a goal nothing establishes, a guard with no condition, and
+// mixing derived order with hand-written edges.
+func (d *Definition) validatePlan() error {
+	if !d.IsPlanned() {
+		return nil
+	}
+	if d.IsDAG() {
+		return fmt.Errorf("%s: a workflow declares its order EITHER with `needs` OR with consumes/produces and a goal — not both, because the two would disagree the moment a guard fails", d.Name)
+	}
+	for _, s := range d.Steps {
+		for _, g := range s.When {
+			if g.Path == "" {
+				return fmt.Errorf("%s/%s: a `when` guard needs a path", d.Name, s.ID)
+			}
+			if g.Equals == nil && g.Exists == nil {
+				return fmt.Errorf("%s/%s: `when` guard on %q needs equals or exists", d.Name, s.ID, g.Path)
+			}
+		}
+	}
+	return nil
+}
+
+// IsPlanned reports whether this workflow's order is DERIVED rather than
+// written down: a goal, or any step declaring facts.
+func (d *Definition) IsPlanned() bool {
+	if d.Goal != "" {
+		return true
+	}
+	for _, s := range d.Steps {
+		if len(s.Consumes) > 0 || len(s.Produces) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDAG reports whether any step declares dependencies. A workflow that

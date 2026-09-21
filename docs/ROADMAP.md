@@ -19,12 +19,13 @@ Updated 2026-09-22. Kept current so "what's left" is read, not re-derived.
 | 0011 | one registry type for everything a step names |
 | 0012 | steps run as a DAG; retry is a step-level policy |
 | 0013 | one API, two front ends |
+| 0014 | the plan is derived, not written down (goal + consumes/produces, replanned each step) |
 
 ## Decisions still to take (pending ADRs)
 
 Ranked. The first one is the only item that is hard to retrofit.
 
-**0014 — the execution boundary (runner as PID 1).** Today the engine *is* the
+**0015 — the execution boundary (runner as PID 1).** Today the engine *is* the
 executor, so isolation has nowhere to live. Define a runner that is PID 1 of the
 step's execution unit, takes the step spec on env/stdin, prepares the worktree
 once, runs the agent, and forwards SIGTERM to the process group with a grace
@@ -32,31 +33,31 @@ period. Ship it as a subcommand of the same binary, so we stay a single binary.
 *Everything below becomes easy once this exists, and stays impossible while it
 does not.*
 
-**0015 — a real sandbox, and retiring ADR 0006.** With 0014 in place: stop
+**0016 — a real sandbox, and retiring ADR 0006.** With 0014 in place: stop
 exec'ing `bash` on the host and exec a container instead — `--network=none
 --read-only --cap-drop=ALL --pid=private`, the run's worktree as the only
 writable mount. The `cd` escape that ADR 0006 records dies by construction,
 because the platform's own repo is not in the mount namespace. Cost: a container
 runtime on the worker host (rootless podman is cheapest); a VM for Mac dev.
 
-**0016 — egress is deny-by-default.** A per-step allowlist through a CONNECT
+**0017 — egress is deny-by-default.** A per-step allowlist through a CONNECT
 proxy (the model endpoint, the git host, nothing else). No allowlist ⇒ no
 network. A policy that fails to apply **fails the step**. This is the only real
 defence against exfiltration; no guardrail can provide it.
 
-**0017 — resume by snapshot instead of replay.** ADR 0005 accepts that an
+**0018 — resume by snapshot instead of replay.** ADR 0005 accepts that an
 answered `needs_input` re-runs the whole step from its prompt, which is what
 forces every step to be idempotent. Snapshotting the worktree diff (we already
 store it) plus the transcript would remove our sharpest correctness constraint.
 
-**0018 — horizontal scale without a broker.** Postgres as the queue
+**0019 — horizontal scale without a broker.** Postgres as the queue
 (`SELECT … FOR UPDATE SKIP LOCKED` + a lease/heartbeat), N engine processes
 claiming runs. No Redis, no broker, still one binary in two modes.
 
-**0019 — authentication and tenancy.** There is none. Every endpoint is open and
+**0020 — authentication and tenancy.** There is none. Every endpoint is open and
 every run is global. Nothing else on this list should ship publicly before it.
 
-**0020 — the secret model.** `apiKeyEnv` keeps values out of workflow files,
+**0021 — the secret model.** `apiKeyEnv` keeps values out of workflow files,
 which is right, but a provider is still machine-local. Moving providers into
 Postgres with a secret-*name* indirection keeps the property and makes rotation
 an API call rather than a redeploy.
