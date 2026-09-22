@@ -3,9 +3,12 @@ package engine
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 )
 
 // Doctor is what is actually wired up, as opposed to what is declared.
@@ -26,7 +29,21 @@ type Doctor struct {
 	Mcp         DoctorCount      `json:"mcp"`
 	Workflows   DoctorCount      `json:"workflows"`
 	Models      []string         `json:"models"`
+	Shell       DoctorShell      `json:"shell"`
 	Problems    []string         `json:"problems"`
+}
+
+// DoctorShell is what a `run:` step will actually execute through on this
+// machine, and what else was available. It is here because the shell is the one
+// name a workflow relies on that resolves against the PLATFORM rather than
+// against a registry — and on Windows it is the name most likely to be missing.
+type DoctorShell struct {
+	OS        string   `json:"os"`
+	Arch      string   `json:"arch"`
+	Using     string   `json:"using"`
+	Path      string   `json:"path"`
+	Problem   string   `json:"problem,omitempty"`
+	Available []string `json:"available,omitempty"`
 }
 
 // DoctorModel is the process-wide default every step gets when it names no
@@ -68,6 +85,19 @@ func (e *Engine) Doctor() Doctor {
 	if !d.Default.KeySet {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
+	}
+
+	d.Shell = DoctorShell{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	if sh, err := shell.Default(); err != nil {
+		d.Shell.Problem = err.Error()
+		d.Problems = append(d.Problems, "no shell: "+err.Error()+" — every `run:` step fails without one")
+	} else {
+		d.Shell.Using, d.Shell.Path = sh.Name+" "+strings.Join(sh.Flags, " "), sh.Path
+	}
+	for _, sh := range shell.Report() {
+		if sh.Available() {
+			d.Shell.Available = append(d.Shell.Available, sh.Name)
+		}
 	}
 
 	for _, p := range e.catalog.Providers.List() {

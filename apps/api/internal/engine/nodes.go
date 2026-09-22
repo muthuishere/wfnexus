@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -24,6 +25,15 @@ import (
 // `tests.ok`, `route.desk` and `triage.valid` the same way and does not care
 // which kind produced them. That uniformity is the point: the cheap nodes are
 // not a lesser thing bolted on, they are the same contract at a lower price.
+
+// shellFor resolves the interpreter for a `run` step: what it names, else the
+// best one this machine has.
+func shellFor(step *workflow.Step) (shell.Shell, error) {
+	if step.Shell != "" {
+		return shell.Lookup(step.Shell)
+	}
+	return shell.Default()
+}
 
 // runCommand executes a `run` node in the run's workspace.
 func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
@@ -41,7 +51,17 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(step.TimeoutSec)*time.Second)
 		defer cancel()
 	}
-	c := exec.CommandContext(ctx, "bash", "-lc", cmd)
+	// The interpreter is resolved, never assumed. `bash -lc` was hardcoded
+	// here, which meant a `run:` step could not execute on a machine without
+	// bash — and `-l` sourced the operator's profile, so the command saw a PATH
+	// and an environment that varied per developer. A workflow written down
+	// must not depend on somebody's dotfiles.
+	sh, err := shellFor(step)
+	if err != nil {
+		return nil, err
+	}
+	argv := sh.Command(cmd)
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
 	}

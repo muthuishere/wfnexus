@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -194,5 +195,78 @@ func TestSubAgentsAreContainedToo(t *testing.T) {
 	}
 	if rails[0](tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": "cd /etc && ls"}}) == "" {
 		t.Fatal("a sub-agent can leave the workspace")
+	}
+}
+
+// The platform matrix is Linux, WSL, macOS and Windows. "Absolute" is not one
+// thing across them, and a spelling the scanner does not recognise is a
+// spelling it silently permits.
+func TestAbsolutePathsAcrossPlatforms(t *testing.T) {
+	cases := map[string]bool{
+		"/etc/passwd":                    true,
+		`C:\Windows\win.ini`:             true, // drive letter, backslashes
+		"C:/Windows/win.ini":             true, // drive letter, forward slashes
+		`D:\other\repo`:                  true,
+		`\\fileserver\share\secrets.txt`: true, // UNC
+		"/c/Users/me/.ssh/id_rsa":        true, // Git Bash's POSIX view of C:
+		"/mnt/c/Users/me/.ssh/id_rsa":    true, // WSL's view of C:
+		"relative/path.go":               false,
+		"./x":                            false,
+		"../up":                          false,
+		"-":                              false,
+		"C:":                             false, // a bare drive, not a path
+		"http://example.com/x":           false,
+	}
+	for tok, want := range cases {
+		got := len(absolutePaths("cat "+tok)) == 1
+		if got != want {
+			t.Errorf("absolutePaths(%q) detected=%v, want %v", tok, got, want)
+		}
+	}
+}
+
+// A Windows workspace and a differently-cased path argument must compare as the
+// same place. This is the Windows form of the macOS /var symlink bug: root and
+// target resolved by different rules, so an ordinary write read as an escape.
+func TestWindowsPathsAreComparedCaseInsensitively(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		// caseFold is a no-op elsewhere by design, so assert THAT rather than
+		// skipping — a change making it fold everywhere would hide two
+		// genuinely distinct paths on a case-sensitive volume.
+		if caseFold("/Work/Main.go") != "/Work/Main.go" {
+			t.Fatal("caseFold must not fold paths off Windows")
+		}
+		return
+	}
+	ws := t.TempDir()
+	rail := containmentGuardrail(ws)
+	mixed := filepath.Join(strings.ToUpper(ws), "main.go")
+	if r := rail(tn.BeforeToolEvent{Name: "read", Args: map[string]any{"path": mixed}}); r != "" {
+		t.Fatalf("same directory, different case, denied: %s", r)
+	}
+}
+
+// An interpreter and the system libraries have to stay reachable on every
+// platform, or nothing runs; a token that is neither is still an escape.
+func TestSystemReadableCoversEveryPlatform(t *testing.T) {
+	readable := []string{
+		"/usr/bin/python3", "/bin/sh", "/lib64/ld-linux-x86-64.so.2", "/opt/homebrew/bin/go",
+		"/dev/null", "/proc/cpuinfo", "/nix/store/abc-bash/bin/bash",
+		`C:\Windows\System32\cmd.exe`, "C:/Program Files/Git/bin/bash.exe",
+		"/c/Program Files/Git/usr/bin/sh", "/mingw64/bin/gcc.exe",
+	}
+	for _, p := range readable {
+		if !systemReadable(p) {
+			t.Errorf("%q should be readable — denying it breaks ordinary work", p)
+		}
+	}
+	notReadable := []string{
+		"/etc/passwd", "/home/me/.ssh/id_rsa", "/Users/me/secrets.env",
+		`C:\Users\me\.ssh\id_rsa`, "/c/Users/me/.aws/credentials", "/var/lib/secret",
+	}
+	for _, p := range notReadable {
+		if systemReadable(p) {
+			t.Errorf("%q must NOT be waved through as a system path", p)
+		}
 	}
 }

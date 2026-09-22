@@ -532,7 +532,11 @@ func doctor() error {
 		Mcp         doctorCount   `json:"mcp"`
 		Workflows   doctorCount   `json:"workflows"`
 		Models      []string      `json:"models"`
-		Problems    []string      `json:"problems"`
+		Shell       struct {
+			OS, Arch, Using, Path, Problem string
+			Available                      []string
+		} `json:"shell"`
+		Problems []string `json:"problems"`
 	}
 	if err := call("GET", "/api/doctor", nil, &d); err != nil {
 		return err
@@ -543,6 +547,17 @@ func doctor() error {
 	fmt.Printf("                 %s %s\n", d.Default.APIKeyEnv, tick(d.Default.KeySet, "set", "NOT SET"))
 	if len(d.Models) > 1 {
 		fmt.Printf("offered models   %s\n", strings.Join(d.Models, ", "))
+	}
+
+	fmt.Printf("\nplatform         %s/%s\n", d.Shell.OS, d.Shell.Arch)
+	if d.Shell.Problem != "" {
+		fmt.Printf("shell            ✗ %s\n", d.Shell.Problem)
+	} else {
+		fmt.Printf("shell            %s  (%s)\n", d.Shell.Using, d.Shell.Path)
+		if len(d.Shell.Available) > 1 {
+			fmt.Printf("                 also available: %s — a step may name one with `shell:`\n",
+				strings.Join(d.Shell.Available[1:], ", "))
+		}
 	}
 
 	fmt.Printf("\nproviders (%d)\n", len(d.Providers))

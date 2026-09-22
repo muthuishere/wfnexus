@@ -18,6 +18,8 @@ import (
 	"text/template"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 )
 
 type Gate struct {
@@ -166,6 +168,11 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// Shell names the interpreter a `run:` step executes through — bash, sh,
+	// pwsh, powershell or cmd — exactly as GitHub Actions spells it. Empty
+	// means the best one this machine has, which keeps a workflow portable
+	// across Linux, WSL, macOS and Windows without naming any of them.
+	Shell string `yaml:"shell,omitempty" json:"shell,omitempty"`
 	// Soul is the agent's identity for this step (its system prompt).
 	Soul string `yaml:"soul,omitempty" json:"soul,omitempty"`
 	// Budget caps this step's agent subtree.
@@ -281,6 +288,17 @@ func (d *Definition) validate(cat Catalog) error {
 			if len(s.Skills) > 0 || len(s.Team) > 0 || s.Decide != nil {
 				return fmt.Errorf("%s/%s: a `run` step calls no model, so skills, team and decide have no meaning on it", d.Name, s.ID)
 			}
+			// The NAME is checked at load time; whether that shell is installed
+			// is deliberately not, because a workflow is authored on one
+			// platform and run on another. Availability is reported by
+			// `wfx doctor` and enforced when the step runs.
+			if s.Shell != "" && !isKnownShell(s.Shell) {
+				return fmt.Errorf("%s/%s: unknown shell %q — one of %s", d.Name, s.ID, s.Shell,
+					strings.Join(shell.Known(), ", "))
+			}
+		}
+		if s.Shell != "" && s.Run == "" {
+			return fmt.Errorf("%s/%s: `shell` only applies to a `run` step", d.Name, s.ID)
 		}
 		if seen[s.ID] {
 			return fmt.Errorf("%s: duplicate step id %q", d.Name, s.ID)
@@ -650,6 +668,17 @@ func (s *Step) validateDecide(wf string) error {
 
 // validateQuestions enforces the classifier's client-side limits and the
 // encoding obligation, for both a step's `decide` block and a `judge` node.
+// isKnownShell keeps the check to a name lookup, so validating a workflow gives
+// the same answer on every platform.
+func isKnownShell(name string) bool {
+	for _, k := range shell.Known() {
+		if k == name {
+			return true
+		}
+	}
+	return false
+}
+
 func validateQuestions(wf, stepID string, dec *Decide) error {
 	s := struct{ ID string }{stepID}
 	if len(dec.Questions) == 0 {

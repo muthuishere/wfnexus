@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -129,18 +130,49 @@ func escapeTargets(cmd string) []string {
 	return out
 }
 
-// absolutePaths returns every absolute-looking path token in a command. It is
-// deliberately blunt: a token starting with `/` that is not an option.
+// absolutePaths returns every absolute-looking path token in a command.
+//
+// "Absolute" is not one thing across the platforms this has to run on, and
+// missing a form means the guardrail silently passes it:
+//
+//	/etc/passwd          POSIX — Linux, WSL, macOS
+//	C:\Windows\win.ini   Windows, drive-letter
+//	C:/Windows/win.ini   Windows, forward slashes (accepted by every API)
+//	\\server\share       Windows, UNC
+//	/c/Users/me          Git Bash on Windows, POSIX-looking and NOT the same
+//	                     root Go would compute — see the note below
+//
+// The Git Bash form is why isWindowsAbs is checked everywhere rather than only
+// under `runtime.GOOS == "windows"`: the shell's idea of a path and Go's differ
+// on that platform, so both spellings are treated as absolute and are compared
+// against the workspace with the platform's own rules.
 func absolutePaths(cmd string) []string {
 	var out []string
 	for _, tok := range shellTokens(cmd) {
 		t := strings.TrimLeft(tok, "<>|&")
-		if len(t) < 1 || t[0] != '/' {
+		if t == "" {
 			continue
 		}
-		out = append(out, t)
+		if t[0] == '/' || isWindowsAbs(t) {
+			out = append(out, t)
+		}
 	}
 	return out
+}
+
+// isWindowsAbs reports a Windows-absolute path in any spelling: a drive letter
+// with either slash, or a UNC share. filepath.IsAbs cannot be used because it
+// answers for the RUNNING platform, and a token here may have been written for
+// a different one.
+func isWindowsAbs(p string) bool {
+	if strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, "//") && len(p) > 2 && p[2] != '/' {
+		return true // UNC
+	}
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		c := p[0] | 0x20
+		return c >= 'a' && c <= 'z'
+	}
+	return false
 }
 
 // systemReadable allows the read-only system locations a normal command needs —
@@ -152,8 +184,33 @@ func absolutePaths(cmd string) []string {
 // ALLOWED OUT, which is the same escape-enumeration mistake one level down. Real
 // containment enumerates what is reachable IN, which is ADR 0015's job.
 func systemReadable(path string) bool {
-	for _, prefix := range []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/opt/homebrew/", "/System/", "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"} {
+	// POSIX locations are checked on every platform, not only on Unix: under
+	// WSL and Git Bash a command written for a POSIX shell runs on Windows and
+	// still says /usr/bin.
+	for _, prefix := range []string{
+		"/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/opt/homebrew/", "/opt/", "/System/", "/Library/",
+		"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/zero", "/dev/urandom",
+		"/proc/", "/etc/ssl/", "/etc/alternatives/", "/nix/store/",
+	} {
 		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	// Windows equivalents: the interpreter, the runtime and the shared
+	// libraries a normal command reaches for. Compared case-insensitively
+	// because the filesystem is.
+	// Backslashes are replaced explicitly: filepath.ToSlash is a no-op off
+	// Windows, so a Windows-spelled path arriving on a Linux host (a workflow
+	// authored elsewhere, a WSL boundary) would keep its separators and miss
+	// every prefix below.
+	lower := strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+	for _, prefix := range []string{
+		"c:/windows/", "c:/program files/", "c:/program files (x86)/", "c:/programdata/chocolatey/",
+		// Git Bash lays a POSIX tree over the drive, so its interpreters show
+		// up as /c/program files/... or /mingw64/...
+		"/c/windows/", "/c/program files/", "/mingw64/", "/mingw32/", "/usr/bin/",
+	} {
+		if strings.HasPrefix(lower, prefix) {
 			return true
 		}
 	}
@@ -190,8 +247,11 @@ func outside(root, target string) bool {
 		abs = filepath.Join(root, target)
 	}
 	abs = resolveExisting(filepath.Clean(abs))
-	rel, err := filepath.Rel(root, abs)
+	rel, err := filepath.Rel(caseFold(root), caseFold(abs))
 	if err != nil {
+		// Different drives on Windows, or anything else Rel cannot relate. A
+		// path we cannot place is treated as outside: this fails CLOSED, which
+		// is the rule ADR 0006 keeps having to relearn.
 		return true
 	}
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
@@ -230,4 +290,19 @@ func resolveExisting(abs string) string {
 		rest = filepath.Join(filepath.Base(cur), rest)
 		cur = parent
 	}
+}
+
+// caseFold normalises a path for comparison on platforms whose filesystem is
+// case-insensitive. Without it, a workspace at C:\\Work and a tool argument
+// spelled c:\\work\\main.go compare as unrelated and the write reads as an
+// escape — the Windows version of the macOS /var symlink bug.
+//
+// macOS is also case-insensitive by default, but its paths round-trip through
+// EvalSymlinks with their real case, so folding there would hide nothing and
+// risks conflating two genuinely distinct paths on a case-sensitive volume.
+func caseFold(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
 }

@@ -57,7 +57,7 @@ tasks:
   # ---- check ----------------------------------------------------------------
   check:
     desc: Everything CI would run
-    cmds: [task: test, task: vet, task: ui:check, task: workflows:validate]
+    cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate]
   test:
     dir: apps/api
     cmds: [go test ./internal/... ./cmd/...]
@@ -95,3 +95,14 @@ tasks:
     desc: Verify unreleased toolnexus behaviour (needs the replace in go.work)
     dir: spikes
     cmds: [go test ./...]
+
+  # ---- portability ----------------------------------------------------------
+  build:all:
+    desc: Cross-compile for every target we claim to support
+    dir: apps/api
+    cmds:
+      - for t in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; do
+          GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null . || exit 1;
+          GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/wfx || exit 1;
+          echo "  ok $t";
+        done

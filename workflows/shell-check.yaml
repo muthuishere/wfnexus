@@ -1,0 +1,30 @@
+name: shell-check
+description: >-
+  A deterministic `run` step on each shell this machine has, to prove the
+  interpreter is resolved rather than assumed. No model is called.
+input_schema: { type: object }
+steps:
+  - id: default-shell
+    name: The machine's default shell
+    run: |
+      echo "shell=$0"
+      echo "posix=yes"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+  - id: named-sh
+    name: Explicitly sh
+    shell: sh
+    needs: [default-shell]
+    run: echo "named sh ran"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
