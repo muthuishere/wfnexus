@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -271,6 +272,68 @@ func TestScrubRemovesProviderIdentifiers(t *testing.T) {
 	} {
 		if out := scrub("prefix " + secret + " suffix"); strings.Contains(out, secret) {
 			t.Fatalf("%q survived scrubbing: %s", secret, out)
+		}
+	}
+}
+
+// An agent cannot count its own turns. `triage/classify` was told in its soul
+// that it had 15, spent all 15 investigating usefully, never submitted, and the
+// run failed with nothing recorded. The remaining count must therefore arrive
+// IN the conversation near the ceiling — and it must be enough to get a result
+// out of a step that would otherwise have produced none.
+func TestTheAgentIsWarnedBeforeItRunsOutOfTurns(t *testing.T) {
+	def := &workflow.Definition{
+		Name: "budget",
+		Steps: []workflow.Step{{
+			ID: "dawdle", Prompt: "look around", Tools: []string{"bash"},
+			MaxTurns: 4, MaxAttempts: 1,
+			OutputSchema: objSchema([]any{"done"}, map[string]any{"done": boolProp()}),
+		}},
+	}
+	normalizeForTest(def)
+
+	// The model keeps poking at the shell until it is told to stop, then submits
+	// — which is exactly the behaviour the warning is supposed to produce.
+	var warned bool
+	llm := newFakeLLMFunc(t, func() turn {
+		if warned {
+			return turn{calls: []call{{name: "submit_output", args: map[string]any{"done": true}}}}
+		}
+		return turn{calls: []call{{name: "bash", args: map[string]any{"command": "true"}}}}
+	})
+	h := newHarness(t, def, llm, "")
+
+	// The harness has no seam to observe the request mid-flight, so the flag is
+	// flipped from the fake endpoint's own record of what it was sent.
+	llm.onRequest = func(req map[string]any) {
+		if strings.Contains(fmt.Sprint(req["messages"]), "BUDGET:") {
+			warned = true
+		}
+	}
+
+	run := h.run(nil)
+	if run.Status != "done" {
+		t.Fatalf("run = %s (%s), want done — the warning did not rescue the step", run.Status, run.Error)
+	}
+	if !warned {
+		t.Fatal("no BUDGET: message was ever sent to the model")
+	}
+
+	// MaxTurns is 4 and the warning window is 2, so the first two calls must be
+	// clean: warning every turn would waste a short step's budget on nagging.
+	for i, req := range llm.requests[:2] {
+		if strings.Contains(fmt.Sprint(req["messages"]), "BUDGET:") {
+			t.Fatalf("request %d was warned too early", i)
+		}
+	}
+}
+
+func TestLastTurnsWarningWindow(t *testing.T) {
+	for _, tc := range []struct{ turns, want int }{
+		{0, 2}, {1, 2}, {8, 2}, {15, 3}, {25, 5}, {60, 5},
+	} {
+		if got := lastTurnsWarning(tc.turns); got != tc.want {
+			t.Errorf("lastTurnsWarning(%d) = %d, want %d", tc.turns, got, tc.want)
 		}
 	}
 }

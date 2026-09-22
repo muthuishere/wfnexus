@@ -34,6 +34,9 @@ type fakeLLM struct {
 	next     func() turn
 	n        int
 	requests []map[string]any
+	// onRequest observes each request as it arrives, for tests that need to
+	// react to what the model was actually sent.
+	onRequest func(map[string]any)
 }
 
 // newFakeLLMFunc replies from a function, so a test can hold a turn open.
@@ -60,6 +63,9 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
+	if f.onRequest != nil {
+		f.onRequest(req)
+	}
 	if f.next != nil {
 		f.n++
 		f.mu.Unlock()

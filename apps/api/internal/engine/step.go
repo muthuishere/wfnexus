@@ -74,7 +74,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 		extra = append(extra, e.askHumanTool(step))
 	}
 
-	hooks := e.hooks(ctx, runID, step.ID, data.WorkDir)
+	hooks := e.hooks(ctx, runID, step.ID, data.WorkDir, effectiveTurns(step))
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
 	ag, closeAgent, err := e.buildAgent(ctx, step, data.WorkDir, extra, hooks, onMetric)
@@ -95,9 +95,9 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 		},
 	}
 
-	model := step.Model
-	if model == "" {
-		model = e.cfg.Model
+	llm, model, err := e.resolveLLM(step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
 	e.emit(ctx, runID, step.ID, "log", map[string]any{
 		"text": fmt.Sprintf("agent %s → %s (skills=%v tools=%v team=%d guardrails=%d)",
@@ -105,12 +105,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	})
 
 	res, rt := ag.Run(agents.Options{
-		LLM: &agents.LLMOptions{
-			BaseURL: e.cfg.LLMBaseURL,
-			Style:   tn.ClientStyle(e.cfg.LLMStyle),
-			Model:   model,
-			APIKey:  os.Getenv(e.cfg.LLMAPIKeyEnv),
-		},
+		LLM:       llm,
 		Transport: e.transport,
 	}, prompt)
 
@@ -223,10 +218,36 @@ func (e *Engine) buildToolkit(ctx context.Context, label string, skillNames, too
 	return tn.CreateToolkit(ctx, opts)
 }
 
-// hooks stream the agent's activity into the run event log and pin bash to the
-// run's workspace.
-func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string) *tn.Hooks {
+// hooks stream the agent's activity into the run event log, pin bash to the
+// run's workspace, and warn the agent when it is running out of turns.
+//
+// turns is the step's turn ceiling (0 ⇒ none), needed for that last part.
+func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string, turns int) *tn.Hooks {
 	return &tn.Hooks{
+		// The soul states the budget once, at turn 0. That is necessary and it is
+		// not sufficient: `triage/classify` was told it had 15 turns, spent all 15
+		// on a genuinely useful investigation, never called submit_output, and the
+		// run failed with nothing recorded — the same shape as the earlier
+		// `code-review` failure. An agent cannot count its own turns, so the
+		// remaining count is put in front of it near the ceiling, every turn,
+		// until it submits.
+		BeforeLLM: func(_ context.Context, ev tn.BeforeLLMEvent) (*tn.LLMOverride, error) {
+			left := turns - ev.Turn
+			if turns <= 0 || left > lastTurnsWarning(turns) || left < 0 {
+				return nil, nil
+			}
+			e.emit(ctx, runID, stepID, "log", map[string]any{
+				"text": fmt.Sprintf("turn %d/%d — warning the agent it has %d left", ev.Turn, turns, left),
+			})
+			msgs := append(append([]any{}, ev.Messages...), map[string]any{
+				"role": "user",
+				"content": fmt.Sprintf("BUDGET: %d of your %d turns remain. Stop gathering and call "+
+					"submit_output now with what you have. State plainly in the output what is "+
+					"uncertain or unfinished — a submitted partial result is recorded, and an "+
+					"unsubmitted complete one is lost entirely.", left, turns),
+			})
+			return &tn.LLMOverride{Messages: msgs}, nil
+		},
 		BeforeTool: func(_ context.Context, ev tn.BeforeToolEvent) (*tn.ToolOverride, error) {
 			var ov *tn.ToolOverride
 			if ev.Name == "bash" && workdir != "" {
@@ -239,6 +260,12 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 					ov = &tn.ToolOverride{Args: args}
 					ev.Args = args
 				}
+			} else if args := pinPaths(ev.Name, ev.Args, workdir); args != nil {
+				// A relative path belongs to the WORKSPACE, not to this process's
+				// working directory, which is where the builtins would otherwise
+				// resolve it (paths.go).
+				ov = &tn.ToolOverride{Args: args}
+				ev.Args = args
 			}
 			payload := map[string]any{"name": ev.Name, "id": ev.ID, "turn": ev.Turn, "args": ev.Args}
 			if ev.Name == "task" {
@@ -263,6 +290,21 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 			return nil
 		},
 	}
+}
+
+// lastTurnsWarning is how many turns before the ceiling the warning starts:
+// a fifth of the budget, at least 2 and at most 5. Proportional because a
+// 60-turn step needs more notice than an 8-turn one; capped because a long
+// step should not spend a quarter of itself being nagged.
+func lastTurnsWarning(turns int) int {
+	n := turns / 5
+	if n < 2 {
+		n = 2
+	}
+	if n > 5 {
+		n = 5
+	}
+	return n
 }
 
 func trim(s string, n int) string {

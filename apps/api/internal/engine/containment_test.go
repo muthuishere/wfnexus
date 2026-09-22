@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -74,13 +75,83 @@ func TestContainmentAllowsHonestWork(t *testing.T) {
 	}
 }
 
-func TestContainmentOnlyGovernsBash(t *testing.T) {
-	rail := containmentGuardrail(t.TempDir())
-	if r := rail(tn.BeforeToolEvent{Name: "read", Args: map[string]any{"path": "/etc/passwd"}}); r != "" {
-		t.Fatalf("containment should govern bash only, got %q", r)
+// This test used to assert the opposite — that containment governed bash and
+// nothing else — and that assertion is what let a live `test-backfill` run
+// write an 18 KB file into the platform's own checkout through `write` with a
+// relative path. The tool call was honest, the guardrail never looked, and the
+// builtin resolved the path against the server process's cwd. The test encoded
+// the hole, so it is inverted here rather than deleted.
+func TestContainmentGovernsEveryTool(t *testing.T) {
+	ws := t.TempDir()
+	rail := containmentGuardrail(ws)
+
+	outside := []struct {
+		name string
+		args map[string]any
+	}{
+		{"read", map[string]any{"path": "/etc/passwd"}},
+		{"write", map[string]any{"path": "/tmp/pwned", "content": "x"}},
+		{"edit", map[string]any{"path": "../../elsewhere/main.go"}},
+		{"glob", map[string]any{"path": "/"}},
+		{"apply_patch", map[string]any{"patchText": "*** Begin Patch\n*** Add File: /tmp/pwned\n+x\n*** End Patch"}},
+		{"apply_patch", map[string]any{"patchText": "*** Begin Patch\n*** Update File: ../../other/repo/go.mod\n+x\n*** End Patch"}},
 	}
+	for _, tc := range outside {
+		if r := rail(tn.BeforeToolEvent{Name: tc.name, Args: tc.args}); r == "" {
+			t.Errorf("%s %v was allowed out of the workspace", tc.name, tc.args)
+		}
+	}
+
+	// Relative paths are the normal case and must stay cheap: they resolve
+	// against the WORKSPACE, so they are inside by definition.
+	inside := []struct {
+		name string
+		args map[string]any
+	}{
+		{"read", map[string]any{"path": "apps/api/main.go"}},
+		{"write", map[string]any{"path": "internal/planner/planner_test.go", "content": "x"}},
+		{"read", map[string]any{"path": filepath.Join(ws, "go.mod")}},
+		{"apply_patch", map[string]any{"patchText": "*** Begin Patch\n*** Add File: internal/x_test.go\n+x\n*** End Patch"}},
+		{"todowrite", map[string]any{"todos": "[]"}},
+	}
+	for _, tc := range inside {
+		if r := rail(tn.BeforeToolEvent{Name: tc.name, Args: tc.args}); r != "" {
+			t.Errorf("%s %v denied inside the workspace: %s", tc.name, tc.args, r)
+		}
+	}
+
 	if r := containmentGuardrail("")(tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": "cd /etc"}}); r != "" {
 		t.Fatal("with no workspace there is nothing to contain")
+	}
+}
+
+// The other half of the same fix: the path a tool is HANDED must already point
+// inside the workspace, because the builtin resolves it against this process's
+// working directory and nothing else would.
+func TestRelativePathsArePinnedToTheWorkspace(t *testing.T) {
+	ws := t.TempDir()
+
+	got := pinPaths("write", map[string]any{"path": "internal/planner/planner_test.go", "content": "x"}, ws)
+	if got == nil || got["path"] != filepath.Join(ws, "internal/planner/planner_test.go") {
+		t.Fatalf("relative write path not pinned: %v", got)
+	}
+	if got["content"] != "x" {
+		t.Fatal("pinning dropped an unrelated argument")
+	}
+
+	// An absolute path is left alone — rewriting it would silently redirect a
+	// call the agent meant literally. The guardrail denies it instead.
+	if got := pinPaths("read", map[string]any{"path": "/etc/passwd"}, ws); got != nil {
+		t.Fatalf("absolute path was rewritten: %v", got)
+	}
+	if got := pinPaths("read", map[string]any{"path": "x"}, ""); got != nil {
+		t.Fatal("with no workspace there is nothing to pin")
+	}
+
+	patch := "*** Begin Patch\n*** Add File: internal/x_test.go\n+package x\n*** End Patch"
+	got = pinPaths("apply_patch", map[string]any{"patchText": patch}, ws)
+	if got == nil || !strings.Contains(got["patchText"].(string), "*** Add File: "+filepath.Join(ws, "internal/x_test.go")) {
+		t.Fatalf("patch paths not pinned: %v", got)
 	}
 }
 

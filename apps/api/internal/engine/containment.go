@@ -37,8 +37,37 @@ func containmentGuardrail(workdir string) agents.Guardrail {
 	if resolved, err := filepath.EvalSymlinks(workdir); err == nil {
 		root = resolved
 	}
+	deny := func(name, path string) string {
+		return fmt.Sprintf(
+			"%s was asked to touch %q, which is outside the run's workspace (%s). "+
+				"Work only inside the workspace, with paths relative to it.", name, path, workdir)
+	}
 	return func(ev tn.BeforeToolEvent) string {
-		if workdir == "" || ev.Name != "bash" {
+		if workdir == "" {
+			return ""
+		}
+		if ev.Name != "bash" {
+			// Every OTHER tool is checked too. It used to be bash alone, and a
+			// relative `write` path — resolved by the builtin against the server
+			// process's cwd, not the worktree — put a file straight into the
+			// platform's own repository on a live run. See paths.go.
+			//
+			// A relative path is resolved against the workspace here, which is
+			// what pinPaths makes true before the tool runs; checking it the
+			// same way means this guardrail gives the same answer whether or not
+			// the pinning hook ran first.
+			for _, k := range pathArgs {
+				if p, _ := ev.Args[k].(string); p != "" && outside(root, resolveIn(root, p)) {
+					return deny(ev.Name, p)
+				}
+			}
+			if txt, _ := ev.Args["patchText"].(string); txt != "" {
+				for _, p := range patchPaths(txt) {
+					if outside(root, resolveIn(root, p)) {
+						return deny(ev.Name, p)
+					}
+				}
+			}
 			return ""
 		}
 		cmd, _ := ev.Args["command"].(string)
@@ -160,13 +189,45 @@ func outside(root, target string) bool {
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(root, target)
 	}
-	abs = filepath.Clean(abs)
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
+	abs = resolveExisting(filepath.Clean(abs))
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
 		return true
 	}
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveIn resolves a tool's path argument the way the workspace requires:
+// relative to the workspace root, never to whatever directory this process
+// happens to be running in.
+func resolveIn(root, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(root, p)
+}
+
+// resolveExisting resolves symlinks as far down the path as actually exists,
+// then re-attaches the rest.
+//
+// filepath.EvalSymlinks fails outright on a path that does not exist yet, and
+// a `write` names a file that by definition does not. Leaving such a path
+// unresolved compares an unresolved target against a resolved root, and on
+// macOS — where /var is a symlink to /private/var — every write to a new file
+// under a temp workspace then reads as an escape. That is the same
+// resolved-root-versus-unresolved-path bug that once denied every relative
+// `cd`, met a second time from the other side.
+func resolveExisting(abs string) string {
+	rest := ""
+	for cur := abs; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs // nothing along the path exists; compare it as written
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
