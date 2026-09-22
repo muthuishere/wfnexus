@@ -277,3 +277,39 @@ pre {
 .skill .loc { font-size: 11.5px; margin-top: 3px }
 .actions { display: flex; gap: 8px; margin-top: 12px }
 .agents { margin-top: 14px; display: flex; flex-direction: column; gap: 10px }
+
+/* ── catalogue picker ────────────────────────────────────────────────────── */
+/* An allowlist of 85 skills whose descriptions are each a paragraph. One line
+   per entry, clipped to a first sentence, expandable — the list has to stay
+   scannable or the builder is unusable, which is exactly what it was. */
+.picker { border: 1px solid var(--border); border-radius: 9px; background: var(--surface) }
+.pickhead { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--border) }
+.pickhead b { font-size: 13px }
+.pickhead .muted { font-size: 11.5px; white-space: nowrap }
+.pickhead input { margin-left: auto; max-width: 240px; padding: 5px 9px; font-size: 12.5px }
+
+.chips.picked { display: flex; flex-wrap: wrap; gap: 5px; padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--blue-50) }
+.chips.picked span {
+  display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11.5px;
+  padding: 2px 4px 2px 8px; border-radius: 6px; background: var(--surface);
+  border: 1px solid var(--blue-200); color: var(--blue-700);
+}
+.chips.picked span.unknown { border-color: #f3c4c0; color: var(--err); background: var(--err-bg) }
+.chips.picked button { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 3px; font-size: 13px; line-height: 1 }
+
+.picklist { max-height: 340px; overflow-y: auto; padding: 4px }
+.popt { display: flex; align-items: flex-start; border-radius: 7px }
+.popt:hover { background: var(--blue-50) }
+.popt.on { background: var(--blue-50) }
+.popt label { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 6px 8px; flex: 1; min-width: 0; cursor: pointer; font-weight: 400 }
+.popt input[type=checkbox] { width: auto; margin: 0; flex: none; align-self: center; accent-color: var(--blue-600) }
+.popt .pname { flex: none; font-size: 12.5px; font-weight: 500; color: var(--text) }
+.popt .pgrouptag { flex: none; font-size: 10px; padding: 0 5px; border-radius: 4px; background: #eef0f6; color: var(--muted) }
+.popt .pdesc { color: var(--muted); font-size: 12px; line-height: 1.45; min-width: 0; overflow-wrap: anywhere }
+.popt .pmore { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 6px 9px; font-size: 13px; flex: none }
+.popt .pmore:hover { color: var(--blue-600) }
+.pshowall { width: 100%; margin-top: 4px; background: none; border: 1px dashed var(--border-strong); color: var(--text-2); font-size: 12.5px; padding: 7px }
+.pshowall:hover { background: var(--blue-50); color: var(--blue-600); border-color: var(--blue-200) }
+
+.strlist .row { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 6px }
+.strlist .idx { flex: none; width: 18px; color: var(--muted); padding-top: 9px; font-size: 11px }
