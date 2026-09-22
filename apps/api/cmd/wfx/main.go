@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -79,6 +80,8 @@ func run(args []string) error {
 		return registry(first(rest))
 	case "doctor":
 		return doctor()
+	case "dryrun":
+		return dryRun(rest)
 	case "import":
 		return importRepo(rest)
 	case "sources":
@@ -103,6 +106,7 @@ func usage() {
   wfx approve <run-id>             approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
+  wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
   wfx import <repo> [--as name]    load a repository's .wfx/workflows/
   wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
@@ -329,21 +333,31 @@ type runRow struct {
 	CreatedAt   time.Time      `json:"createdAt"`
 }
 
+// inputsFrom parses repeated `-i key=value`, shared by `run` and `dryrun` so
+// the two cannot drift in how they read a command line.
+func inputsFrom(args []string) (map[string]any, error) {
+	input := map[string]any{}
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-i" || args[i] == "--input") && i+1 < len(args) {
+			k, v, ok := strings.Cut(args[i+1], "=")
+			if !ok {
+				return nil, fmt.Errorf("input must be key=value, got %q", args[i+1])
+			}
+			input[k] = v
+			i++
+		}
+	}
+	return input, nil
+}
+
 func startRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f]")
 	}
 	name := args[0]
-	input := map[string]any{}
-	for i := 1; i < len(args); i++ {
-		if (args[i] == "-i" || args[i] == "--input") && i+1 < len(args) {
-			k, v, ok := strings.Cut(args[i+1], "=")
-			if !ok {
-				return fmt.Errorf("input must be key=value, got %q", args[i+1])
-			}
-			input[k] = v
-			i++
-		}
+	input, err := inputsFrom(args[1:])
+	if err != nil {
+		return err
 	}
 	var r runRow
 	if err := call("POST", "/api/workflows/"+name+"/runs", input, &r); err != nil {
@@ -526,6 +540,89 @@ func act(id, verb string, body map[string]any) error {
 // installed. That used to be discoverable only by starting a run.
 //
 // It prints the NAME of a key variable and whether it is set. Never a value.
+// dryRun answers "would this actually work here?" before anything is spent.
+// Validation asks whether the FILE is well formed; this asks whether THIS
+// MACHINE can run it, which is the question almost every real failure turned
+// out to be.
+func dryRun(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: wfx dryrun <workflow> [-i key=value]")
+	}
+	input, err := inputsFrom(args[1:])
+	if err != nil {
+		return err
+	}
+	var d struct {
+		Workflow string
+		OK       bool
+		Shape    string
+		Waves    [][]string
+		Steps    []struct {
+			ID, Kind, Provider, Model, Shell, Prompt string
+			Skills, Tools                            []string
+			MaxTurns, Wave                           int
+		}
+		Problems []struct {
+			Step, Field, Message string
+			Fatal                bool
+		}
+		Cost struct {
+			MaxTurns, MaxWallSec, AgentSteps, FreeSteps int
+			MaxToolCalls                                int64
+		}
+	}
+	if err := call("POST", "/api/workflows/"+url.PathEscape(args[0])+"/dryrun", input, &d); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s — %s, %d steps\n\n", d.Workflow, d.Shape, len(d.Steps))
+	for i, wave := range d.Waves {
+		lead := fmt.Sprintf("wave %d", i+1)
+		if len(wave) > 1 {
+			lead += fmt.Sprintf(" (%d at once)", len(wave))
+		}
+		fmt.Printf("%-16s %s\n", lead, strings.Join(wave, ", "))
+	}
+
+	fmt.Printf("\n%-16s %-7s %-28s %s\n", "STEP", "KIND", "RUNS ON", "BUDGET")
+	for _, s := range d.Steps {
+		on := s.Model
+		if s.Kind == "run" {
+			on = s.Shell
+		}
+		budget := "—"
+		if s.MaxTurns > 0 {
+			budget = fmt.Sprintf("%d turns", s.MaxTurns)
+		}
+		fmt.Printf("%-16s %-7s %-28s %s\n", s.ID, s.Kind, on, budget)
+	}
+
+	fmt.Printf("\nceiling: %d model turns across %d agent step(s)", d.Cost.MaxTurns, d.Cost.AgentSteps)
+	if d.Cost.FreeSteps > 0 {
+		fmt.Printf("; %d step(s) call no model", d.Cost.FreeSteps)
+	}
+	fmt.Println()
+
+	if len(d.Problems) > 0 {
+		fmt.Printf("\n%d problem(s):\n", len(d.Problems))
+		for _, p := range d.Problems {
+			mark, where := "warning", p.Step
+			if p.Fatal {
+				mark = "FATAL  "
+			}
+			if where != "" && p.Field != "" {
+				where += "." + p.Field
+			}
+			fmt.Printf("  %s %-22s %s\n", mark, where, p.Message)
+		}
+	}
+	if !d.OK {
+		return fmt.Errorf("this workflow would not run here")
+	}
+	fmt.Println("\nwould run.")
+	return nil
+}
+
 // importRepo registers a repository as a workflow source. A workflow lives in
 // the repository it acts on — the same arrangement as .github/workflows — so
 // this is how one arrives from outside.

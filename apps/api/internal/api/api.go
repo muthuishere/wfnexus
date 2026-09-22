@@ -78,6 +78,8 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
+		r.Post("/workflows/{name}/dryrun", s.dryRun)
+		r.Post("/dryrun", s.dryRunDraft)
 		r.Get("/runs", s.listRuns)
 		r.Get("/runs/{id}", s.getRun)
 		r.Get("/runs/{id}/events", s.runEvents)
@@ -237,6 +239,37 @@ func (s *Server) deleteClassifier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// dryRun answers "would this workflow actually work here?" without calling a
+// model, cloning a repository or writing a file.
+func (s *Server) dryRun(w http.ResponseWriter, r *http.Request) {
+	var input map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&input)
+	out, err := s.eng.DryRunWorkflow(urlName(r, "name"), input)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+// dryRunDraft checks a definition that is not saved anywhere — which is how the
+// builder, and the authoring agent, check work before proposing it.
+func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Definition *workflow.Definition `json:"definition"`
+		Input      map[string]any       `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Definition == nil {
+		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
+		return
+	}
+	writeJSON(w, 200, s.eng.DryRunDraft(body.Definition, body.Input))
 }
 
 // listSources returns every place workflows are loaded from, and anything that

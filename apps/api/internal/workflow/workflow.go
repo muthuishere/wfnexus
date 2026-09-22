@@ -953,8 +953,28 @@ func rewriteStepPaths(text string) string {
 	})
 }
 
+// Render is the RUN-TIME render: a missing key becomes empty rather than an
+// error, because a template legitimately references optional fields — a gate
+// message mentioning `.Output.detail` must not abort a run when the model left
+// it out.
+//
+// The cost of that leniency is that a genuine typo is also silent: a prompt
+// referencing a field the schema does not declare simply loses that sentence,
+// and the agent reads a question with a hole in it. Nobody notices. That is
+// what RenderStrict is for.
 func Render(text string, data TemplateData) (string, error) {
-	t, err := template.New("p").Funcs(funcs).Option("missingkey=zero").Parse(rewriteStepPaths(text))
+	return render(text, data, "missingkey=zero")
+}
+
+// RenderStrict is the CHECKING render: a missing key is an error naming the
+// path. It is what the dry run uses, so a typo is found before a run rather
+// than never.
+func RenderStrict(text string, data TemplateData) (string, error) {
+	return render(text, data, "missingkey=error")
+}
+
+func render(text string, data TemplateData, option string) (string, error) {
+	t, err := template.New("p").Funcs(funcs).Option(option).Parse(rewriteStepPaths(text))
 	if err != nil {
 		return "", err
 	}
