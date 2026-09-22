@@ -1,0 +1,67 @@
+name: nightly-audit
+description: >-
+  A scheduled audit: survey the repository for things that will bite later, and
+  say plainly which are worth acting on. Nobody fills a form for this one — the
+  clock starts it, so every input it needs is written into the schedule.
+
+# The clock starts it, and a person can also start it by hand. Both are
+# declared, because a trigger that is not declared is refused.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"          # 02:00 UTC every Monday
+      input:
+        repo_path: "."
+        focus: "error handling, money and time arithmetic, anything with a branch nobody tests"
+
+input_schema:
+  type: object
+  required: [repo_path]
+  properties:
+    repo_path: { type: string, title: "Local repo path" }
+    focus:     { type: string, title: "What to look hardest at", default: "correctness risks" }
+
+steps:
+  - id: survey
+    name: Survey the repository
+    description: Find what will bite later, with evidence.
+    soul: >-
+      You are a maintainer who has been paged at 3am by this codebase before.
+      You report what the source shows, with file:line, and you are silent about
+      what it does not.
+    tools: [read, grep, glob, bash]
+    budget: { max_turns: 25, max_tool_calls: 80, max_wall_sec: 900 }
+    guardrails:
+      - deny: "*"
+        args_contain: ["git push", "gh pr", "git commit"]
+        reason: an audit reads; it never changes the repository
+      - deny: write
+        reason: an audit reads
+      - deny: edit
+        reason: an audit reads
+    prompt: |
+      Repository: {{ .WorkDir }}
+      Look hardest at: {{ .Input.focus }}
+
+      Find the things that will cause an incident, not the things that offend a
+      linter. For each, give file:line and say what actually breaks. If the
+      repository is in good shape, say so and return an empty list — a clean
+      audit is a real result.
+
+      Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [findings, healthy]
+      properties:
+        healthy: { type: boolean, description: "true if nothing found is worth acting on" }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [where, what, consequence, severity]
+            properties:
+              where:       { type: string, description: "file:line" }
+              what:        { type: string }
+              consequence: { type: string, description: "what breaks in production" }
+              severity:    { type: string, enum: [high, medium, low] }

@@ -148,6 +148,11 @@ func localAgent(p catalog.Provider, model, workdir string) (devinadapter.Agent, 
 			Label: p.Name,
 			Bin:   p.Command[0],
 			Args:  append(append([]string{}, p.Command[1:]...), p.Args...),
+			// Without this the model the step asked for never reaches the CLI,
+			// and a CLI whose own default is broken fails for a reason that
+			// looks nothing like the cause: `opencode run` with no -m returns
+			// "Unexpected server error".
+			ModelFlag: p.ModelFlag,
 		}, noClose, nil
 	}
 

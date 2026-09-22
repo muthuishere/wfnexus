@@ -168,6 +168,12 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// RunsOn places THIS step on a particular runner, overriding its job's.
+	// Actions has no step-level `runs-on`; this is the one place we go past it,
+	// because a task-level worker is the whole point of being able to put work
+	// anywhere — and it is the same field name and the same label semantics,
+	// so there is nothing new to learn.
+	RunsOn string `yaml:"runs-on,omitempty" json:"runsOn,omitempty"`
 	// Shell names the interpreter a `run:` step executes through — bash, sh,
 	// pwsh, powershell or cmd — exactly as GitHub Actions spells it. Empty
 	// means the best one this machine has, which keeps a workflow portable
@@ -212,7 +218,15 @@ type Definition struct {
 	Name        string         `yaml:"name" json:"name"`
 	Description string         `yaml:"description" json:"description"`
 	InputSchema map[string]any `yaml:"input_schema" json:"inputSchema"`
-	Steps       []Step         `yaml:"steps" json:"steps"`
+	// On says what may START this workflow — Actions' own `on:` block, with
+	// its own trigger names (see triggers.go). Absent ⇒ workflow_dispatch
+	// only, so nothing begins firing on a timer because a file gained a field.
+	On Triggers `yaml:"on,omitempty" json:"on"`
+	// RunsOn is the default runner label for every job that does not set its
+	// own — Actions' `runs-on`, which is how work is placed on a particular
+	// worker. Empty ⇒ this process.
+	RunsOn string `yaml:"runs-on,omitempty" json:"runsOn,omitempty"`
+	Steps  []Step `yaml:"steps" json:"steps"`
 	// Jobs are the GitHub-Actions-shaped form: jobs run in parallel, `needs`
 	// orders them, and each holds an ordered list of steps. Flattened into
 	// Steps at load time (see jobs.go), so nothing downstream knows about them.
@@ -258,6 +272,15 @@ type Catalog interface {
 func (d *Definition) validate(cat Catalog) error {
 	if d.Name == "" {
 		return fmt.Errorf("workflow name is required")
+	}
+	// A file with no `on:` is dispatch-only. Made explicit here so the loaded
+	// definition the UI and CLI read says so, rather than leaving them to infer
+	// it; Triggers.Allows defaults the same way for a definition built in code.
+	if d.On.none() {
+		d.On.Dispatch = true
+	}
+	if err := validateTriggers(d.Name, &d.On); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	for i, s := range d.Steps {

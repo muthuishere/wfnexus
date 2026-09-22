@@ -90,6 +90,14 @@ func main() {
 	// until a step tried to use it. Key variables are reported by name and by
 	// set/unset, never by value.
 	logDoctor(eng.Doctor())
+
+	// `on: schedule:` only means something if something ticks.
+	eng.StartScheduler(ctx)
+	for _, d := range workflow.Sorted(defs) {
+		for _, sched := range d.On.Schedule {
+			log.Printf("  schedule   %-16s %q", d.Name, sched.Cron)
+		}
+	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.UIDir), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())

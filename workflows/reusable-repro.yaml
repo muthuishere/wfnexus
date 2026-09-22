@@ -1,0 +1,53 @@
+name: reusable-repro
+description: >-
+  A reusable workflow: it does one thing — reproduce a claim against the
+  repository — and other workflows invoke it. It is not meant to be run on its
+  own, which is why the only trigger it declares is workflow_call.
+
+# Actions' fourth trigger. Declaring it is what makes this invocable by another
+# workflow; because workflow_dispatch is NOT declared, a person cannot start it
+# directly and gets told so rather than getting a confusing failure.
+on:
+  workflow_call:
+
+input_schema:
+  type: object
+  required: [claim]
+  properties:
+    claim:     { type: string, title: "The claim to reproduce", format: textarea }
+    repo_path: { type: string, title: "Local repo path" }
+
+steps:
+  - id: reproduce
+    name: Try to reproduce it
+    description: Establish whether the claim is true, by running something.
+    soul: >-
+      You do not believe a claim until a command demonstrates it. A claim you
+      could not reproduce is a real and useful answer; a claim you pretended to
+      reproduce is worse than no answer at all.
+    tools: [read, grep, glob, bash]
+    budget: { max_turns: 30, max_tool_calls: 100, max_wall_sec: 900 }
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "gh pr", "git reset --hard", "git clean -fd"]
+        reason: reproducing does not publish and does not destroy work
+    prompt: |
+      Repository: {{ .WorkDir }}
+
+      Claim:
+      {{ .Input.claim }}
+
+      Find the smallest command that shows whether this is true, and run it.
+      Report exactly what you ran and exactly what came back. If you could not
+      reproduce it, say so and say what you tried.
+
+      Then call submit_output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [reproduced, command, observed]
+      properties:
+        reproduced: { type: boolean }
+        command:    { type: string, description: "the command that demonstrates it" }
+        observed:   { type: string, description: "what actually came back" }
+        notes:      { type: string }

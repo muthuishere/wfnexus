@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
 )
@@ -46,9 +47,17 @@ type Provider struct {
 	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
 
 	// cli / acp
-	Preset  string   `json:"preset,omitempty"` // devin | claude | copilot | codex | opencode
+	Preset string `json:"preset,omitempty"` // devin | claude | copilot
+	// Command is the argv template for any CLI without a preset. It MUST carry
+	// a placeholder for the prompt — `{{prompt}}` (argv) or `{{file}}` (a file,
+	// which has no length limit and no quoting hazard, so prefer it where the
+	// CLI can read one). Without one the command runs with no prompt at all.
 	Command []string `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
+	// ModelFlag is the CLI's model flag, e.g. "--model". When set, it and the
+	// model are appended. Needed because a CLI's own default model may not
+	// work: `opencode run` with no -m returns a server error.
+	ModelFlag string `json:"modelFlag,omitempty"`
 	// Repairs is how many extra attempts a turn gets when the reply fails
 	// validation; the bad output and the parse error go back so it can correct
 	// itself. Never a silent fallback.
@@ -186,6 +195,17 @@ func validateProvider(p Provider) error {
 	case KindCLI, KindACP:
 		if p.Preset == "" && len(p.Command) == 0 {
 			return fmt.Errorf("a %s provider needs a preset or a command", p.Kind)
+		}
+		// An explicit command must say WHERE the prompt goes. Without a
+		// placeholder the CLI is invoked with no prompt at all, gets a server
+		// error or an empty answer, and the failure looks like the model's
+		// rather than the registry's. Caught by running `opencode run` for
+		// real with exactly this mistake in the entry.
+		if len(p.Command) > 0 && p.Kind == KindCLI {
+			joined := strings.Join(append(append([]string{}, p.Command...), p.Args...), " ")
+			if !strings.Contains(joined, "{{prompt}}") && !strings.Contains(joined, "{{file}}") {
+				return fmt.Errorf("the command needs {{prompt}} or {{file}} to say where the prompt goes; got %q", joined)
+			}
 		}
 	case "":
 		return fmt.Errorf("kind is required (http, cli or acp)")

@@ -34,6 +34,12 @@ type Job struct {
 	// Needs are the jobs that must finish first. Same word, same meaning as
 	// Actions.
 	Needs []string `yaml:"needs,omitempty" json:"needs,omitempty"`
+	// RunsOn is the runner label this job's steps execute on — Actions'
+	// `runs-on`. It is a LABEL, matched against the workers that have
+	// registered, exactly as Actions matches a runner pool: the workflow says
+	// what it needs, not which machine. Empty ⇒ the workflow's `runs-on`, then
+	// this process.
+	RunsOn string `yaml:"runs-on,omitempty" json:"runsOn,omitempty"`
 	// If guards the whole job, in the same shape as a step's `when`.
 	If []Guard `yaml:"if,omitempty" json:"if,omitempty"`
 	// Defaults are applied to every step in this job that does not set them —
@@ -105,6 +111,12 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 			}
 			if job.TimeoutSec > 0 && (s.TimeoutSec == 0 || s.TimeoutSec > job.TimeoutSec) {
 				s.TimeoutSec = job.TimeoutSec
+			}
+			// runs-on cascades workflow → job → step, each level only filling
+			// what the level below left empty. Same direction as Actions'
+			// `defaults:`, and the same as TimeoutSec above.
+			if s.RunsOn == "" {
+				s.RunsOn = job.RunsOn
 			}
 			s.When = append(append([]Guard(nil), job.If...), s.When...)
 			if i == 0 {

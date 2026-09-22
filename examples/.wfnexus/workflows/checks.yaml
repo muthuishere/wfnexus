@@ -1,0 +1,70 @@
+name: checks
+description: >-
+  Deterministic checks only — no model is called, so this costs nothing and is
+  the right thing to run first. Three independent jobs, so they run at once.
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [push]
+
+input_schema:
+  type: object
+  properties:
+    repo_path: { type: string, title: "Local repo path" }
+
+# The default runner for every job below. A label, matched against the workers
+# that have registered — the workflow says what it needs, not which machine.
+runs-on: local
+
+jobs:
+  build:
+    name: Build
+    steps:
+      - id: compile
+        run: |
+          if [ -f go.mod ]; then go build ./... && echo "go build ok"
+          elif [ -f package.json ]; then npm run build --if-present && echo "npm build ok"
+          else echo "no build for this repo"; fi
+        output_schema:
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+
+  test:
+    name: Test
+    steps:
+      - id: suite
+        # bash explicitly, so this behaves the same on Linux, WSL and Windows
+        # rather than depending on whatever /bin/sh happens to be.
+        shell: bash
+        run: |
+          if [ -f go.mod ]; then go test ./... 
+          elif [ -f pytest.ini ] || [ -f pyproject.toml ]; then python3 -m pytest -q
+          elif [ -f package.json ]; then npm test --if-present
+          else echo "no suite for this repo"; fi
+        output_schema:
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+
+  size:
+    name: Repository size
+    steps:
+      - id: count
+        run: |
+          echo "tracked files: $(git ls-files | wc -l | tr -d ' ')"
+          echo "largest:"; git ls-files | xargs -I{} du -k {} 2>/dev/null | sort -rn | head -5
+        output_schema:
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }

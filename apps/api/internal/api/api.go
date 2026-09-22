@@ -58,6 +58,7 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
+		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		r.Get("/runs", s.listRuns)
 		r.Get("/runs/{id}", s.getRun)
 		r.Get("/runs/{id}/events", s.runEvents)
@@ -283,6 +284,49 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.eng.Start(run.ID)
 	writeJSON(w, 201, run)
+}
+
+// repositoryDispatch is the inbound trigger: another system POSTs and a run
+// starts. The body is Actions' own shape, so a caller that already knows how to
+// fire a repository_dispatch needs nothing new:
+//
+//	POST /api/workflows/{name}/dispatches
+//	{"event_type": "bug_reported", "client_payload": {...}}
+//
+// The payload becomes the run's input. A workflow that does not declare
+// `on: repository_dispatch` is refused, and one that declares `types:` is
+// refused for an event type it does not list — both by PrepareRun, so the
+// check cannot be skipped by adding another caller.
+//
+// This endpoint is UNAUTHENTICATED, like every other endpoint here. That is a
+// blocking problem for exposing this server anywhere but localhost, and it is
+// the one hard gate in docs/not-now.md — recorded there rather than papered
+// over with a per-workflow secret field Actions does not have.
+func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EventType     string         `json:"event_type"`
+		ClientPayload map[string]any `json:"client_payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	def := s.eng.Definitions()[name]
+	if def == nil {
+		writeErr(w, 404, fmt.Errorf("workflow not found"))
+		return
+	}
+	if def.On.RepositoryDispatch != nil && !def.On.RepositoryDispatch.Accepts(body.EventType) {
+		writeErr(w, 400, fmt.Errorf("%s does not answer event_type %q; it lists %v",
+			name, body.EventType, def.On.RepositoryDispatch.Types))
+		return
+	}
+	if err := s.eng.StartTriggered(r.Context(), name, workflow.TriggerRepositoryDispatch, body.ClientPayload); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 202, map[string]any{"ok": true, "workflow": name, "eventType": body.EventType})
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,9 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // PrepareInput applies a workflow's declared input defaults and then validates
@@ -19,8 +22,30 @@ import (
 // filled first and validation runs on the filled value, so a default can
 // satisfy `required`.
 func (e *Engine) PrepareInput(name string, raw json.RawMessage) (json.RawMessage, error) {
+	return e.PrepareRun(name, workflow.TriggerDispatch, raw)
+}
+
+// PrepareRun checks the TRIGGER and then the input.
+//
+// The trigger check is the point: `on:` declares what may start a workflow, and
+// a declaration nothing enforces is the failure this project keeps meeting — a
+// field that expresses intent is not a control (ADR 0004, ADR 0006, and the
+// `provider:` that was validated then ignored). A workflow that lists only
+// `schedule:` cannot be started by a person, and one that lists only
+// `workflow_dispatch` cannot be started by an inbound POST.
+func (e *Engine) PrepareRun(name string, trigger workflow.TriggerKind, raw json.RawMessage) (json.RawMessage, error) {
 	def := e.Definitions()[name]
-	if def == nil || def.InputSchema == nil {
+	if def == nil {
+		return nil, fmt.Errorf("workflow %q is not loaded", name)
+	}
+	if !def.On.Allows(trigger) {
+		return nil, fmt.Errorf("%s cannot be started by %s — it declares `on: %s`",
+			name, trigger, strings.Join(def.On.Names(), ", "))
+	}
+	if def.Template {
+		return nil, fmt.Errorf("%s is a template: copy it and run the copy", name)
+	}
+	if def.InputSchema == nil {
 		return raw, nil
 	}
 	input := map[string]any{}
