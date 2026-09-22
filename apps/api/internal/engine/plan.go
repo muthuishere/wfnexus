@@ -103,6 +103,9 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 	var halted bool
 
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		mu.Lock()
 		if plan.Done(world, done) {
 			mu.Unlock()
@@ -116,6 +119,10 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 		if len(ready) == 0 {
 			err := plan.Stuck(world, done)
 			mu.Unlock()
+			// A cancelled run is not a stuck plan. Report what happened.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 		snapshot := make(map[string]any, len(outputs))
@@ -123,7 +130,11 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 			snapshot[k] = v
 		}
 		for _, a := range ready {
-			done[a.ID] = true // claimed; the result decides whether it stays done
+			// Pre-claim so a step cannot be started twice if the wave is
+			// re-entered. The outcome decides whether the claim stands: a halt
+			// or a cancellation releases it below, because a step that never ran
+			// must not read as done.
+			done[a.ID] = true
 		}
 		mu.Unlock()
 
@@ -141,6 +152,13 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 				case sem <- struct{}{}:
 					defer func() { <-sem }()
 				case <-ctx.Done():
+					// Release the claim. Leaving it set marked a step done that
+					// had not run, and the next iteration then reported "goal
+					// cannot be reached" for a run that was simply cancelled —
+					// found by code-review on this very change.
+					mu.Lock()
+					delete(done, step.ID)
+					mu.Unlock()
 					return
 				}
 				data := workflow.TemplateData{

@@ -170,3 +170,46 @@ func TestPlanExplainsWhyItIsStuck(t *testing.T) {
 		t.Fatalf("the error must name the blocked step and why: %q", run.Error)
 	}
 }
+
+// A cancelled run must report cancellation, not a stuck plan. Found by running
+// code-review over the planner change itself: a step claimed before the
+// semaphore wait stayed claimed when the context closed, so the next iteration
+// saw an unreachable goal and reported that instead of the cancellation.
+func TestPlanCancellationIsNotReportedAsStuck(t *testing.T) {
+	def := &workflow.Definition{
+		Name: "cancelme", Goal: "finished", MaxParallel: 1,
+		Steps: []workflow.Step{
+			factStep("slow", []string{"go"}, []string{"a"}),
+			factStep("later", []string{"a"}, []string{"finished"}),
+		},
+	}
+	normalizeForTest(def)
+
+	started := make(chan struct{})
+	var once sync.Once
+	llm := newFakeLLMFunc(t, func() turn {
+		once.Do(func() { close(started) })
+		time.Sleep(2 * time.Second) // long enough to be cancelled mid-flight
+		return submit(map[string]any{"ok": true})
+	})
+
+	h := newHarness(t, def, llm, "")
+	raw := []byte(`{"go":"x"}`)
+	run, err := h.store.CreateRun(t.Context(), "cancelme", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.runs = append(h.runs, run.ID)
+	h.eng.Start(run.ID)
+
+	<-started
+	h.eng.Cancel(t.Context(), run.ID)
+
+	final := h.wait(run.ID)
+	if final.Status != "cancelled" {
+		t.Fatalf("status = %s (%s), want cancelled", final.Status, final.Error)
+	}
+	if strings.Contains(final.Error, "cannot be reached") {
+		t.Fatalf("a cancelled run was reported as a stuck plan: %q", final.Error)
+	}
+}

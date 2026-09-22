@@ -31,6 +31,12 @@ import (
 type Fact = string
 
 // World is what is known right now: which facts hold, and their values.
+//
+// NOT SAFE FOR CONCURRENT USE. The engine mutates it from the goroutine that
+// completes a step, and reads it when planning the next wave, so every access
+// is made under the engine's own mutex. If a caller ever plans from more than
+// one goroutine, this needs its own lock — it does not have one on purpose,
+// because a second lock would invite the two to disagree about ordering.
 type World struct {
 	facts  map[Fact]bool
 	values map[Fact]any
