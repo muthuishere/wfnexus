@@ -36,7 +36,11 @@ type Engine struct {
 	defs    map[string]*workflow.Definition
 	skills  *skills.Registry
 	catalog *catalog.Catalog
-	broker  *broker
+	// sourceSkips records workflow sources that did not load — a broken file in
+	// one imported repository must not stop the platform booting, so it is
+	// recorded and reported rather than fatal.
+	sourceSkips []workflow.Skip
+	broker      *broker
 	// classifierOpts overrides the judge backend; tests set the static one.
 	classifierOpts *tn.ClassifierOptions
 	// transport overrides the LLM HTTP transport (tests script it).
@@ -78,6 +82,13 @@ func (e *Engine) Skills() *skills.Registry { return e.skills }
 // Catalog is the provider / classifier / MCP registry set.
 func (e *Engine) Catalog() *catalog.Catalog { return e.catalog }
 
+// SourceSkips lists sources or workflows that failed to load.
+func (e *Engine) SourceSkips() []workflow.Skip {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.sourceSkips
+}
+
 // validator is every registry a workflow can name, as one value.
 func (e *Engine) validator() workflow.Catalog {
 	e.mu.Lock()
@@ -96,12 +107,14 @@ func (e *Engine) ReloadDefinitions() error {
 	if err != nil {
 		return err
 	}
-	defs, err := workflow.LoadDir(e.cfg.WorkflowsDir, catalog.NewValidator(reg, cat))
+	// Every source, not just our own: a repository imported with ImportRepo
+	// contributes the workflows in its `.wfnexus/workflows/`.
+	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat))
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
-	e.defs, e.skills, e.catalog = defs, reg, cat
+	e.defs, e.skills, e.catalog, e.sourceSkips = defs, reg, cat, skips
 	e.mu.Unlock()
 	return nil
 }

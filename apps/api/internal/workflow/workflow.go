@@ -248,6 +248,12 @@ type Definition struct {
 	// a DAG or a plan. 0 ⇒ 4.
 	MaxParallel int    `yaml:"max_parallel,omitempty" json:"maxParallel,omitempty"`
 	Path        string `yaml:"-" json:"path"`
+	// Source names where this workflow was loaded from — "local" for the
+	// platform's own directory, or the name a repository was imported as.
+	Source string `yaml:"-" json:"source,omitempty"`
+	// RepoDir is the working copy this workflow travelled with, and the default
+	// repo a run of it acts on. Empty for the platform's own workflows.
+	RepoDir string `yaml:"-" json:"repoDir,omitempty"`
 }
 
 func (d *Definition) Step(id string) (int, *Step) {
@@ -823,12 +829,32 @@ func RunOutputSchema() map[string]any {
 	}
 }
 
+// Sorted lists each definition ONCE, in name order.
+//
+// The map is a lookup table, not a list: a workflow from an imported source is
+// registered under both its short name and `source/name`, so that both resolve.
+// Iterating the map therefore yields it twice, which is how every listing —
+// the boot banner, the API, `wfx workflows` — showed every workflow doubled.
+// De-duplicating here fixes all of them at once, which is the reason it is done
+// here rather than in each caller.
 func Sorted(m map[string]*Definition) []*Definition {
+	seen := make(map[*Definition]bool, len(m))
 	out := make([]*Definition, 0, len(m))
 	for _, d := range m {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
 		out = append(out, d)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		// Two sources may each define `checks`; order by source so the listing
+		// is stable rather than map-random.
+		return out[i].Source < out[j].Source
+	})
 	return out
 }
 

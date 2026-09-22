@@ -74,6 +74,9 @@ func main() {
 	log.Printf("registries: %d providers, %d classifiers, %d mcp servers",
 		cat.Providers.Len(), cat.Classifiers.Len(), cat.Mcp.Len())
 
+	// Boot loads the platform's own workflows only; the engine re-loads from
+	// every imported source as soon as it exists, because the imported list
+	// lives in the runtime directory the engine owns.
 	defs, err := workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat))
 	if err != nil {
 		log.Fatalf("workflows: %v", err)
@@ -89,6 +92,18 @@ func main() {
 	// (ADR 0011); an unset variable or an uninstalled CLI used to be invisible
 	// until a step tried to use it. Key variables are reported by name and by
 	// set/unset, never by value.
+	if err := eng.ReloadDefinitions(); err != nil {
+		log.Fatalf("workflow sources: %v", err)
+	}
+	for _, src := range workflow.SortedSources(eng.Sources()) {
+		if src.Repo != "" {
+			log.Printf("  source     %-14s %s", src.Name, src.Repo)
+		}
+	}
+	for _, sk := range eng.SourceSkips() {
+		log.Printf("  NOT LOADED %s: %s", sk.Location, sk.Reason)
+	}
+
 	logDoctor(eng.Doctor())
 
 	// `on: schedule:` only means something if something ticks.

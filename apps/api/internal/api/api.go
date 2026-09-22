@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,21 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
+	// Route on the ESCAPED path so an encoded slash survives routing.
+	//
+	// A workflow from an imported source is addressed as `source/name`, and chi
+	// unescapes before matching — so `demo%2Fchecks` became the path segments
+	// `demo` and `checks`, matched nothing, and answered "workflow not found"
+	// for a workflow that was loaded. Handlers take the name through
+	// urlName(), which unescapes it again.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if rctx := chi.RouteContext(req.Context()); rctx != nil {
+				rctx.RoutePath = req.URL.EscapedPath()
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
 	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"}, AllowedHeaders: []string{"*"}}))
 
 	r.Route("/api", func(r chi.Router) {
@@ -51,6 +67,9 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		r.Get("/sources", s.listSources)
+		r.Post("/sources", s.importSource)
+		r.Delete("/sources/{name}", s.forgetSource)
 		r.Put("/providers/{name}", s.saveProvider)
 		r.Delete("/providers/{name}", s.deleteProvider)
 		r.Put("/classifiers/{name}", s.saveClassifier)
@@ -72,6 +91,16 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 	})
 	r.Get("/*", s.ui)
 	return r
+}
+
+// urlName reads a path parameter that may carry an encoded slash, which every
+// qualified workflow name (`source/name`) does.
+func urlName(r *http.Request, key string) string {
+	v := chi.URLParam(r, key)
+	if decoded, err := url.PathUnescape(v); err == nil {
+		return decoded
+	}
+	return v
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -108,7 +137,7 @@ func (s *Server) reloadWorkflows(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
-	d := s.eng.Definitions()[chi.URLParam(r, "name")]
+	d := s.eng.Definitions()[urlName(r, "name")]
 	if d == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
 		return
@@ -172,7 +201,7 @@ func (s *Server) saveProvider(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	p.Name = chi.URLParam(r, "name")
+	p.Name = urlName(r, "name")
 	if err := s.eng.SaveProvider(p); err != nil {
 		writeErr(w, 400, err)
 		return
@@ -181,7 +210,7 @@ func (s *Server) saveProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) {
-	if err := s.eng.DeleteProvider(chi.URLParam(r, "name")); err != nil {
+	if err := s.eng.DeleteProvider(urlName(r, "name")); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -194,7 +223,7 @@ func (s *Server) saveClassifier(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	c.Name = chi.URLParam(r, "name")
+	c.Name = urlName(r, "name")
 	if err := s.eng.SaveClassifier(c); err != nil {
 		writeErr(w, 400, err)
 		return
@@ -203,7 +232,49 @@ func (s *Server) saveClassifier(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteClassifier(w http.ResponseWriter, r *http.Request) {
-	if err := s.eng.DeleteClassifier(chi.URLParam(r, "name")); err != nil {
+	if err := s.eng.DeleteClassifier(urlName(r, "name")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// listSources returns every place workflows are loaded from, and anything that
+// failed to load — a broken file in one imported repository is recorded rather
+// than fatal, so it needs somewhere to be seen.
+func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, map[string]any{
+		"sources": workflow.SortedSources(s.eng.Sources()),
+		"skipped": s.eng.SourceSkips(),
+	})
+}
+
+// importSource clones (or points at) a repository and loads the workflows in
+// its `.wfnexus/workflows/` directory.
+func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name   string `json:"name"`
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Repo == "" {
+		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone or a local path to use in place"))
+		return
+	}
+	src, err := s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 201, src)
+}
+
+func (s *Server) forgetSource(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.ForgetRepo(urlName(r, "name")); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -223,7 +294,7 @@ func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 // saveWorkflow validates an authored definition and writes it only if it
 // survives a round trip through the real loader.
 func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	name := urlName(r, "name")
 	var body struct {
 		Definition *workflow.Definition `json:"definition"`
 	}
@@ -251,7 +322,7 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
-	if err := s.eng.DeleteWorkflow(chi.URLParam(r, "name")); err != nil {
+	if err := s.eng.DeleteWorkflow(urlName(r, "name")); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -259,7 +330,7 @@ func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	name := urlName(r, "name")
 	if s.eng.Definitions()[name] == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
 		return
@@ -311,7 +382,7 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlName(r, "name")
 	def := s.eng.Definitions()[name]
 	if def == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))

@@ -79,6 +79,10 @@ func run(args []string) error {
 		return registry(first(rest))
 	case "doctor":
 		return doctor()
+	case "import":
+		return importRepo(rest)
+	case "sources":
+		return sources(rest)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -99,6 +103,8 @@ func usage() {
   wfx approve <run-id>             approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
+  wfx import <repo> [--as name]    load a repository's .wfnexus/workflows/
+  wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
   wfx retry <run-id> [--step id]   re-run from a step
   wfx cancel <run-id>
@@ -520,6 +526,54 @@ func act(id, verb string, body map[string]any) error {
 // installed. That used to be discoverable only by starting a run.
 //
 // It prints the NAME of a key variable and whether it is set. Never a value.
+// importRepo registers a repository as a workflow source. A workflow lives in
+// the repository it acts on — the same arrangement as .github/workflows — so
+// this is how one arrives from outside.
+func importRepo(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: wfx import <repo-url-or-path> [--as name] [--branch b]")
+	}
+	body := map[string]any{
+		"repo":   args[0],
+		"name":   flagOf(args, "--as", ""),
+		"branch": flagOf(args, "--branch", ""),
+	}
+	var src struct{ Name, Dir, Repo, URL string }
+	if err := call("POST", "/api/sources", body, &src); err != nil {
+		return err
+	}
+	fmt.Printf("imported %s from %s\n", src.Name, src.Dir)
+	return listWorkflows()
+}
+
+func sources(args []string) error {
+	if len(args) >= 2 && args[0] == "forget" {
+		if err := call("DELETE", "/api/sources/"+args[1], nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("forgot %s (the clone is left on disk)\n", args[1])
+		return nil
+	}
+	var d struct {
+		Sources []struct{ Name, Dir, Repo, URL string }
+		Skipped []struct{ Source, Location, Reason string }
+	}
+	if err := call("GET", "/api/sources", nil, &d); err != nil {
+		return err
+	}
+	for _, s := range d.Sources {
+		where := s.Dir
+		if s.URL != "" {
+			where = s.URL + "  → " + s.Dir
+		}
+		fmt.Printf("%-16s %s\n", s.Name, where)
+	}
+	for _, sk := range d.Skipped {
+		fmt.Printf("  ✗ %s: %s\n", sk.Location, sk.Reason)
+	}
+	return nil
+}
+
 func doctor() error {
 	var d struct {
 		Default struct {
