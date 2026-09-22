@@ -1,4 +1,4 @@
-import type { Budget, BuiltinTool, Skill, Step, TeamMember } from '../../api'
+import type { Budget, BuiltinTool, Doctor, Skill, Step, TeamMember } from '../../api'
 import {
   emptyGate, emptyGuardrail, emptyQuestion, emptyTeamMember,
   removeAt, replaceAt,
@@ -29,6 +29,51 @@ function BudgetGrid({ budget, onChange }: { budget?: Budget; onChange: (b: Budge
             onChange={e => onChange({ ...b, [k]: e.target.value === '' ? undefined : Number(e.target.value) })} />
           <i className="muted">{what}</i>
         </label>))}
+    </div>
+  )
+}
+
+/** ModelPicker offers what this machine ACTUALLY has, not a typed-in string.
+ *
+ *  A provider is a name in a registry (ADR 0011) and the engine used to accept
+ *  a name and then ignore it — a step saying `provider: devin` ran on the
+ *  default model and said nothing. Now the name selects, so offering a name
+ *  that does not resolve just moves the failure to run time. Anything the
+ *  doctor marks not-ready is shown as such rather than hidden: it is a real
+ *  entry, and "install this CLI" is a more useful answer than an empty list. */
+function ModelPicker({ step, doctor, onChange }: {
+  step: Step; doctor?: Doctor; onChange: (patch: Partial<Step>) => void
+}) {
+  const providers = doctor?.providers || []
+  const chosen = providers.find(p => p.name === step.provider)
+  const def = doctor?.default
+  return (
+    <div className="grid2">
+      <Field label="Provider — where this step's turns come from"
+        hint={chosen
+          ? (chosen.ready
+            ? `${chosen.kind}${chosen.detail ? ` · ${chosen.detail}` : ''}`
+            : `NOT READY on this machine: ${chosen.problem}. The step will be refused rather than run on a different model.`)
+          : def
+            ? `The process default: ${def.model}${def.keySet ? '' : ` — but ${def.apiKeyEnv} is NOT SET`}`
+            : 'The process default.'}>
+        <select value={step.provider || ''} onChange={e => onChange({ provider: e.target.value || undefined })}>
+          <option value="">— default ({def?.model || 'configured model'}) —</option>
+          {providers.map(p => (
+            <option key={p.name} value={p.name}>
+              {p.ready ? '' : '⚠ '}{p.name} · {p.kind}{p.model ? ` · ${p.model}` : ''}
+            </option>))}
+        </select>
+      </Field>
+      <Field label="Model override"
+        hint={step.provider
+          ? 'Selects a model WITHIN that provider; it does not reach past it to the default endpoint.'
+          : 'A model id on the default endpoint. Leave empty to use the configured default.'}>
+        <input className="mono" list="doctor-models" value={step.model || ''}
+          placeholder={chosen?.model || def?.model || ''}
+          onChange={e => onChange({ model: e.target.value || undefined })} />
+        <datalist id="doctor-models">{(doctor?.models || []).map(m => <option key={m} value={m} />)}</datalist>
+      </Field>
     </div>
   )
 }
@@ -74,12 +119,14 @@ function TeamEditor({ step, skills, tools, onChange }: {
   )
 }
 
-export default function StepEditor({ step, index, stepIds, skills, tools, issues, onChange, onRemove, onMove }: {
+export default function StepEditor({ step, index, stepIds, skills, tools, doctor, issues, onChange, onRemove, onMove }: {
   step: Step
   index: number
   stepIds: string[]
   skills: Skill[]
   tools: BuiltinTool[]
+  /** what this machine actually has — drives the provider and model pickers */
+  doctor?: Doctor
   issues: Issue[]
   onChange: (s: Step) => void
   onRemove: () => void
@@ -108,6 +155,8 @@ export default function StepEditor({ step, index, stepIds, skills, tools, issues
       <Field label="Description — what this step is for">
         <input value={step.description || ''} onChange={e => set({ description: e.target.value })} />
       </Field>
+
+      <ModelPicker step={step} doctor={doctor} onChange={set} />
 
       <Field label="Soul — the agent's identity, its system prompt"
         hint="Written in the second person and about character, not task: “You are an adversarial reviewer who did not write this code and does not trust it.”">

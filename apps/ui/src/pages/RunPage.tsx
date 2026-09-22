@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import WorkflowCanvas from '../components/WorkflowCanvas'
 import { api, type Event, type RunDetail } from '../api'
 import EventLog from '../components/EventLog'
 import DecisionPanel from '../components/DecisionPanel'
@@ -67,6 +68,16 @@ export default function RunPage({ id }: { id: string }) {
 
       {run.status === 'done' && finalUrl && (
         <div className="banner ok"><b>PR published</b> — <a href={finalUrl} target="_blank" rel="noreferrer">{finalUrl}</a></div>)}
+
+      {stepDefs.length > 1 && (
+        <div className="card">
+          <div className="subhead"><h3 style={{ margin: 0 }}>Shape</h3></div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Which step this run is on, in the order the engine derived. For a goal-planned
+            workflow the routes not taken are visible here and nowhere else.
+          </div>
+          <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel} />
+        </div>)}
 
       <div className="grid cols-2">
         <div>

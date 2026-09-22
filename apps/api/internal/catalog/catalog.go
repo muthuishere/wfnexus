@@ -31,7 +31,10 @@ const (
 
 // Provider is a source of model turns.
 type Provider struct {
-	Name        string       `json:"name"`
+	// Name is the map KEY on disk, and is filled in by Load. omitempty matters:
+	// a rewrite re-marshals every entry, and without it a single edit stamps
+	// `"name": ""` onto all of them.
+	Name        string       `json:"name,omitempty"`
 	Kind        ProviderKind `json:"kind"`
 	Description string       `json:"description,omitempty"`
 
@@ -57,7 +60,8 @@ func (p Provider) EntryName() string { return p.Name }
 
 // Classifier is a judge backend: the cheap, typed decision tier.
 type Classifier struct {
-	Name        string `json:"name"`
+	// Name is the map KEY on disk; see Provider.Name on omitempty.
+	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	// Backend: typesafe | openrouter | llm | static. typesafe and openrouter set
 	// base, model and key env as a unit — assembling them by hand is how a
@@ -72,7 +76,8 @@ func (c Classifier) EntryName() string { return c.Name }
 
 // McpServer is one entry of an mcp.json `mcpServers` block.
 type McpServer struct {
-	Name        string            `json:"name"`
+	// Name is the map KEY on disk; see Provider.Name on omitempty.
+	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Type        string            `json:"type,omitempty"` // local | remote
 	Command     []string          `json:"command,omitempty"`

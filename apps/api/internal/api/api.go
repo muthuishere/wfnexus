@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -34,7 +35,7 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
-	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "DELETE"}, AllowedHeaders: []string{"*"}}))
+	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"}, AllowedHeaders: []string{"*"}}))
 
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
@@ -50,6 +51,10 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		r.Put("/providers/{name}", s.saveProvider)
+		r.Delete("/providers/{name}", s.deleteProvider)
+		r.Put("/classifiers/{name}", s.saveClassifier)
+		r.Delete("/classifiers/{name}", s.deleteClassifier)
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
@@ -154,6 +159,54 @@ func (s *Server) listRegistries(w http.ResponseWriter, _ *http.Request) {
 		"classifiers": map[string]any{"entries": c.Classifiers.List(), "skipped": c.Classifiers.Skips()},
 		"mcp":         map[string]any{"entries": c.Mcp.List(), "skipped": c.Mcp.Skips()},
 	})
+}
+
+// saveProvider and saveClassifier write one registry entry through the loader's
+// own validation and reload, so the UI cannot create something that silently
+// never loads. The name in the URL is authoritative: the body cannot rename an
+// entry out from under the caller.
+func (s *Server) saveProvider(w http.ResponseWriter, r *http.Request) {
+	var p catalog.Provider
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	p.Name = chi.URLParam(r, "name")
+	if err := s.eng.SaveProvider(p); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
+func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DeleteProvider(chi.URLParam(r, "name")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) saveClassifier(w http.ResponseWriter, r *http.Request) {
+	var c catalog.Classifier
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	c.Name = chi.URLParam(r, "name")
+	if err := s.eng.SaveClassifier(c); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+func (s *Server) deleteClassifier(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DeleteClassifier(chi.URLParam(r, "name")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 // doctor reports what is actually wired on this machine: the default model,

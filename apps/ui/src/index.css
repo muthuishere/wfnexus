@@ -187,3 +187,45 @@ label.inline select, label.inline input:not([type=checkbox]) { width: auto; marg
 .gaterow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) 28px; gap: 6px; align-items: start; border-top: 1px solid var(--border); padding: 8px 0 }
 .gaterow select, .gaterow input { padding: 5px 7px; font-size: 12px }
 @media (max-width: 900px) { .gaterow { grid-template-columns: 1fr 1fr 28px } }
+
+/* ── system page ─────────────────────────────────────────────────────────── */
+/* A ✗ row is the point of the page, so it is tinted rather than merely marked. */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr } }
+
+table.kv { width: 100%; border-collapse: collapse; font-size: 13px }
+table.kv th { text-align: left; color: var(--muted); font-weight: 500; width: 120px; vertical-align: top; padding: 5px 10px 5px 0 }
+table.kv td { padding: 5px 0; vertical-align: top }
+
+table.rows { width: 100%; border-collapse: collapse; font-size: 13px }
+table.rows td { padding: 7px 8px 7px 0; border-top: 1px solid var(--border); vertical-align: top }
+table.rows tr:first-child td { border-top: 0 }
+table.rows tr.rowbad td { background: #241518 }
+
+.pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+  border: 1px solid var(--border); color: var(--muted); background: var(--bg2) }
+.pill.done { border-color: #2c6b3f; color: #7bd99a }
+.pill.failed { border-color: var(--err); color: #ff9aa6 }
+
+/* ── workflow canvas ─────────────────────────────────────────────────────── */
+/* The execution order is derived, never authored, so the diagram is the only
+   place the derivation is visible before a run. */
+.canvas { border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); padding: 6px; overflow-x: auto }
+.canvashead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 4px 6px 8px }
+
+.canvas .edge { fill: none; stroke: #4a5568; stroke-width: 1.6 }
+/* A dashed edge is one POSSIBLE route: with derived planning the order is
+   re-derived after every step, so a solid line would overclaim. */
+.canvas .edge.soft { stroke-dasharray: 4 4; stroke: #5b6478 }
+.canvas .arrowhead { fill: #4a5568 }
+
+.canvas .node rect { fill: var(--bg); stroke: var(--border); stroke-width: 1.5 }
+.canvas .node.clickable { cursor: pointer }
+.canvas .node.clickable:hover rect { stroke: #6b7a90 }
+.canvas .node.active rect { stroke: var(--accent, #6ea8fe); stroke-width: 2.5 }
+.canvas .node.kind-run rect { stroke-dasharray: 5 3 }
+.canvas .node.kind-judge rect { fill: #1b1f2b }
+.canvas .node text { font-size: 12px; fill: var(--text) }
+.canvas .node .nid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px }
+.canvas .node .nkind, .canvas .node .nfact { font-size: 10.5px; fill: var(--muted) }
+.canvas .node .nguard { font-size: 13px; fill: #d9a441 }

@@ -32,6 +32,16 @@ export type JSONSchema = {
 
 export type Step = {
   id: string; name: string; description?: string; prompt?: string; system?: string
+  /** names a provider registry entry; empty ⇒ the process default */
+  provider?: string
+  /** a `run` step's shell: bash | sh | pwsh | powershell | cmd. empty ⇒ this machine's best */
+  shell?: string
+  /** deterministic node: a shell command instead of an agent */
+  run?: string
+  /** DAG edges — a step runs once every id here is done */
+  needs?: string[]
+  /** derived planning (ADR 0014): facts consumed and established */
+  consumes?: string[]; produces?: string[]
   skills: string[]; tools: string[]; mcp?: string[]
   outputSchema: JSONSchema; requiresApproval?: boolean; gates?: Gate[]
   maxTurns?: number; maxAttempts?: number; timeoutSec?: number; model?: string
@@ -76,6 +86,41 @@ export type SkippedSkill = { location: string; reason: string }
 export type SkillRegistry = { roots: string[]; skills: Skill[]; skipped: SkippedSkill[] }
 export type BuiltinTool = { name: string; description: string }
 
+// ── the provider / classifier / mcp registries ─────────────────────────────
+// Every entry is a NAME a step can use (ADR 0011). `apiKeyEnv` is the name of
+// an environment variable and NEVER a value — the UI must never render or
+// collect a secret into it.
+export type ProviderKind = 'http' | 'cli' | 'acp'
+export type Provider = {
+  name: string; kind: ProviderKind; description?: string
+  baseUrl?: string; style?: string; model?: string; apiKeyEnv?: string
+  preset?: string; command?: string[]; args?: string[]; repairs?: number; timeoutSec?: number
+}
+export type Classifier = {
+  name: string; description?: string; backend: string
+  baseUrl?: string; model?: string; apiKeyEnv?: string
+}
+export type McpServer = { name: string; description?: string; command?: string; args?: string[]; url?: string }
+export type Skipped = { location: string; reason: string }
+/** Every registry endpoint answers this shape. `skipped` is what the loader refused. */
+export type Registry<T> = { entries: T[] | null; skipped: Skipped[] | null }
+
+/** What is actually wired on THIS machine, as opposed to what is declared. */
+export type Doctor = {
+  default: { model: string; baseUrl: string; style: string; apiKeyEnv: string; keySet: boolean }
+  providers: DoctorEntry[]
+  classifiers: DoctorEntry[]
+  skills: { count: number; skipped?: string[] }
+  mcp: { count: number }
+  workflows: { count: number }
+  models: string[]
+  shell: { os: string; arch: string; using: string; path: string; problem?: string; available?: string[] }
+  problems: string[]
+}
+export type DoctorEntry = {
+  name: string; kind: string; model?: string; detail?: string; ready: boolean; problem?: string
+}
+
 async function j<T>(r: Promise<Response>): Promise<T> {
   const res = await r
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText)
@@ -95,6 +140,31 @@ export const api = {
       body: JSON.stringify({ definition }),
     })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
+  deleteWorkflow: (name: string) =>
+    j(fetch(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' })),
+
+  /** What is wired on this machine — the default model, every provider and
+   *  classifier, the shell, and whether each could run right now. */
+  doctor: () => j<Doctor>(fetch('/api/doctor')),
+  models: () => j<string[]>(fetch('/api/models')),
+  // These endpoints answer {entries, skipped} — a skipped entry is one the
+  // loader REFUSED, and it is the more interesting half: it is why a name a
+  // workflow uses is not available.
+  providers: () => j<Registry<Provider>>(fetch('/api/providers')),
+  classifiers: () => j<Registry<Classifier>>(fetch('/api/classifiers')),
+  mcp: () => j<Registry<McpServer>>(fetch('/api/mcp')),
+  saveProvider: (p: Provider) =>
+    j<Provider>(fetch(`/api/providers/${encodeURIComponent(p.name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    })),
+  deleteProvider: (name: string) =>
+    j(fetch(`/api/providers/${encodeURIComponent(name)}`, { method: 'DELETE' })),
+  saveClassifier: (c: Classifier) =>
+    j<Classifier>(fetch(`/api/classifiers/${encodeURIComponent(c.name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c),
+    })),
+  deleteClassifier: (name: string) =>
+    j(fetch(`/api/classifiers/${encodeURIComponent(name)}`, { method: 'DELETE' })),
   tools: () => j<BuiltinTool[]>(fetch('/api/tools')),
   runs: () => j<Run[]>(fetch('/api/runs')),
   run: (id: string) => j<RunDetail>(fetch(`/api/runs/${id}`)),

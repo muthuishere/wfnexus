@@ -154,6 +154,41 @@ func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
 	return path, e.ReloadDefinitions()
 }
 
+// SaveProvider and friends write one registry entry and reload the catalog, so
+// a workflow can name it immediately. They go through the loader's own
+// validation (catalog/save.go) — the API cannot accept an entry the loader
+// would skip.
+func (e *Engine) SaveProvider(p catalog.Provider) error {
+	if err := catalog.SaveProvider(e.cfg.RegistriesPath, p); err != nil {
+		return err
+	}
+	return e.ReloadDefinitions()
+}
+
+func (e *Engine) SaveClassifier(c catalog.Classifier) error {
+	if err := catalog.SaveClassifier(e.cfg.RegistriesPath, c); err != nil {
+		return err
+	}
+	return e.ReloadDefinitions()
+}
+
+// DeleteProvider removes an entry. A workflow still naming it then FAILS TO
+// LOAD, which is the loud outcome and the right one — the alternative is a step
+// quietly running on a different model.
+func (e *Engine) DeleteProvider(name string) error {
+	if err := catalog.DeleteProvider(e.cfg.RegistriesPath, name); err != nil {
+		return err
+	}
+	return e.ReloadDefinitions()
+}
+
+func (e *Engine) DeleteClassifier(name string) error {
+	if err := catalog.DeleteClassifier(e.cfg.RegistriesPath, name); err != nil {
+		return err
+	}
+	return e.ReloadDefinitions()
+}
+
 // DeleteWorkflow removes a workflow and reloads. Runs already recorded against
 // it keep their history; only new runs are refused.
 func (e *Engine) DeleteWorkflow(name string) error {

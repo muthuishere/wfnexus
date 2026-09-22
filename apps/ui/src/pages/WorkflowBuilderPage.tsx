@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type BuiltinTool, type Skill, type WorkflowDraft } from '../api'
+import { api, type BuiltinTool, type Doctor, type Skill, type WorkflowDraft } from '../api'
 import { blankStep, forSave, moveItem, removeAt, replaceAt, templateDraft } from '../builder/model'
 import { errorsOnly, validateDraft, type Issue } from '../builder/validate'
 import { toYaml } from '../builder/yaml'
 import SchemaEditor from '../components/builder/SchemaEditor'
 import StepEditor from '../components/builder/StepEditor'
+import WorkflowCanvas from '../components/WorkflowCanvas'
 import { Field, IssueList, Section } from '../components/builder/Bits'
 
 export default function WorkflowBuilderPage({ name }: { name?: string }) {
@@ -14,6 +15,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
   const [draft, setDraft] = useState<WorkflowDraft | undefined>(() => (name ? undefined : templateDraft(undefined, 'read')))
   const [skills, setSkills] = useState<Skill[]>([])
   const [tools, setTools] = useState<BuiltinTool[]>([])
+  const [doctor, setDoctor] = useState<Doctor>()
   const [catalogErr, setCatalogErr] = useState('')
   const [loadErr, setLoadErr] = useState('')
   const [saveErr, setSaveErr] = useState('')
@@ -24,8 +26,10 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
 
   useEffect(() => {
     let live = true
-    Promise.all([api.skills(), api.tools()])
-      .then(([reg, t]) => { if (!live) return; setSkills(reg.skills); setTools(t) })
+    // The doctor drives the provider and model pickers, so the builder offers
+    // what this machine actually has rather than a free-text field.
+    Promise.all([api.skills(), api.tools(), api.doctor()])
+      .then(([reg, t, d]) => { if (!live) return; setSkills(reg.skills); setTools(t); setDoctor(d) })
       .catch(e => live && setCatalogErr(e instanceof Error ? e.message : String(e)))
     return () => { live = false }
   }, [])
@@ -122,13 +126,25 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
 
           <div className="card">
             <div className="subhead">
+              <h3 style={{ margin: 0 }}>Shape</h3>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              The execution order is derived, not authored — from <span className="mono">needs:</span>,
+              or from <span className="mono">consumes:</span>/<span className="mono">produces:</span>, or plain
+              sequence. This is that derivation, so a mistake in it is visible before a run.
+            </div>
+            <WorkflowCanvas steps={draft.steps} />
+          </div>
+
+          <div className="card">
+            <div className="subhead">
               <h2 style={{ margin: 0 }}>Steps <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>{draft.steps.length}</span></h2>
               <button className="ghost small" onClick={() => set({ steps: [...draft.steps, blankStep(draft.steps.length + 1)] })}>+ step</button>
             </div>
             <IssueList issues={issues.filter(i => i.step === -1 && i.field === 'steps')} />
             <div className="stepstack">
               {draft.steps.map((s, i) => (
-                <StepEditor key={i} step={s} index={i} stepIds={stepIds} skills={skills} tools={tools}
+                <StepEditor key={i} step={s} index={i} stepIds={stepIds} skills={skills} tools={tools} doctor={doctor}
                   issues={issues.filter(x => x.step === i)}
                   onChange={next => set({ steps: replaceAt(draft.steps, i, next) })}
                   onRemove={() => set({ steps: removeAt(draft.steps, i) })}

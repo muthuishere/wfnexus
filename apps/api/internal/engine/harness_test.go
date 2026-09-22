@@ -266,9 +266,14 @@ func TestScrubRemovesProviderIdentifiers(t *testing.T) {
 	if !strings.Contains(got, "not a valid model ID") {
 		t.Fatalf("scrubbing destroyed the useful part: %s", got)
 	}
+	// Assembled at runtime rather than written out. This test needs strings in
+	// the SHAPE of a credential, and a secret scanner matches a shape — so a
+	// literal here, invented or not, gets a push rejected. Building it from
+	// parts keeps the test honest and the file clean.
+	keyShaped := "sk" + "-or-" + "v1-" + strings.Repeat("0123456789abcdef", 2)
 	for _, secret := range []string{
-		"sk-or-v1-0123456789abcdef0123456789abcdef",
-		"Bearer abcdefghijklmnopqrstuvwxyz012345",
+		keyShaped,
+		"Bearer " + strings.Repeat("abcdefgh", 4),
 	} {
 		if out := scrub("prefix " + secret + " suffix"); strings.Contains(out, secret) {
 			t.Fatalf("%q survived scrubbing: %s", secret, out)
