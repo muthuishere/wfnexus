@@ -1,6 +1,6 @@
 # Example workflows
 
-These live in `.wfnexus/workflows/` — a workflow belongs in the repository it
+These live in `.wfx/workflows/` — a workflow belongs in the repository it
 acts on, the same arrangement as `.github/workflows/`, and for the same reasons:
 it is reviewed in the pull request that changes it, it travels with a clone, and
 a fork gets it for free.

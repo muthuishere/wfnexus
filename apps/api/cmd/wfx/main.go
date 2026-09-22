@@ -103,7 +103,7 @@ func usage() {
   wfx approve <run-id>             approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
-  wfx import <repo> [--as name]    load a repository's .wfnexus/workflows/
+  wfx import <repo> [--as name]    load a repository's .wfx/workflows/
   wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
   wfx retry <run-id> [--step id]   re-run from a step

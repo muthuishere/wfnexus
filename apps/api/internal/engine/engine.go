@@ -108,7 +108,7 @@ func (e *Engine) ReloadDefinitions() error {
 		return err
 	}
 	// Every source, not just our own: a repository imported with ImportRepo
-	// contributes the workflows in its `.wfnexus/workflows/`.
+	// contributes the workflows in its `.wfx/workflows/`.
 	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat))
 	if err != nil {
 		return err

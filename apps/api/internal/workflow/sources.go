@@ -15,15 +15,16 @@ import (
 // So a source is a directory holding workflow files, and the platform loads
 // from several: its own, plus one per repository it has been pointed at.
 //
-// RepoWorkflowDir is where they live inside a repository. `.wfnexus/workflows`
-// rather than `.github/workflows`, because a repository may reasonably have
-// both and a file written for one runner is not valid for the other — putting
-// ours in their directory would mean GitHub trying to run a file it cannot
-// parse, and vice versa.
-const RepoWorkflowDir = ".wfnexus/workflows"
+// RepoWorkflowDir is where they live inside a repository: `.wfx/workflows`,
+// named after the CLI that reads them.
+//
+// Not `.github/workflows`, because a repository may reasonably have both and a
+// file written for one runner is not valid for the other — sharing the
+// directory would mean each runner trying to parse the other's files.
+const RepoWorkflowDir = ".wfx/workflows"
 
 // RepoTaskDir holds reusable tasks belonging to a repository.
-const RepoTaskDir = ".wfnexus/tasks"
+const RepoTaskDir = ".wfx/tasks"
 
 // Source is one place workflows are loaded from.
 type Source struct {
@@ -40,7 +41,7 @@ type Source struct {
 }
 
 // RepoSource describes a checked-out repository as a workflow source. It does
-// NOT verify the directory exists: a repository with no `.wfnexus/workflows`
+// NOT verify the directory exists: a repository with no `.wfx/workflows`
 // is a normal thing, and contributes nothing rather than failing.
 func RepoSource(name, repoDir, url string) Source {
 	return Source{

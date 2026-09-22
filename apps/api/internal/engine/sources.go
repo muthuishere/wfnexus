@@ -15,7 +15,7 @@ import (
 )
 
 // Importing a repository is how workflows arrive from outside: clone it once,
-// read its `.wfnexus/workflows/`, and its workflows become runnable here.
+// read its `.wfx/workflows/`, and its workflows become runnable here.
 //
 // This is the same arrangement as `.github/workflows/` and it is chosen for the
 // same reasons — a workflow lives next to the code it knows about, it is

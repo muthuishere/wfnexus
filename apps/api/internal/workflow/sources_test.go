@@ -24,7 +24,7 @@ func wf(name string) string {
 // A repository carries its workflows, the same arrangement as .github/workflows.
 func TestARepositorySuppliesItsOwnWorkflows(t *testing.T) {
 	repo := t.TempDir()
-	writeSourceFile(t, filepath.Join(repo, ".wfnexus", "workflows"), "audit", wf("audit"))
+	writeSourceFile(t, filepath.Join(repo, ".wfx", "workflows"), "audit", wf("audit"))
 	local := t.TempDir()
 	writeSourceFile(t, local, "house", wf("house"))
 
@@ -62,7 +62,7 @@ func TestACollidingNameKeepsTheIncumbent(t *testing.T) {
 	local := t.TempDir()
 	writeSourceFile(t, local, "checks", wf("checks"))
 	repo := t.TempDir()
-	writeSourceFile(t, filepath.Join(repo, ".wfnexus", "workflows"), "checks", wf("checks"))
+	writeSourceFile(t, filepath.Join(repo, ".wfx", "workflows"), "checks", wf("checks"))
 
 	defs, skips, err := LoadSources([]Source{
 		{Name: "local", Dir: local},
@@ -94,7 +94,7 @@ func TestABrokenSourceIsSkippedNotFatal(t *testing.T) {
 	good := t.TempDir()
 	writeSourceFile(t, good, "fine", wf("fine"))
 	broken := t.TempDir()
-	writeSourceFile(t, filepath.Join(broken, ".wfnexus", "workflows"), "bad", "name: [this is not a workflow")
+	writeSourceFile(t, filepath.Join(broken, ".wfx", "workflows"), "bad", "name: [this is not a workflow")
 	empty := t.TempDir()
 
 	defs, skips, err := LoadSources([]Source{

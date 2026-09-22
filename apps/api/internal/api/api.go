@@ -250,7 +250,7 @@ func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
 }
 
 // importSource clones (or points at) a repository and loads the workflows in
-// its `.wfnexus/workflows/` directory.
+// its `.wfx/workflows/` directory.
 func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
