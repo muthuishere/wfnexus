@@ -37,7 +37,7 @@ export default function App() {
           <a href="#/skills" className={r[0] === 'skills' ? 'active' : ''}>Skills &amp; tools</a>
           <a href="#/system" className={r[0] === 'system' ? 'active' : ''}>System</a>
         </nav>
-        <div className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>toolnexus · postgres · s3</div>
+        <div className="spacer">toolnexus · postgres · s3</div>
       </div>
       <div className="page">{page}</div>
     </>

@@ -38,12 +38,15 @@ export default function RunPage({ id }: { id: string }) {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div className="head" style={{ alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 2 }}>
+            <a href="#/runs">Runs</a> / <span className="mono">{run.workflow}</span>
+          </div>
           <h1>{run.input?.title || run.workflow}</h1>
-          <div className="muted mono">{run.workflow} · {run.id}</div>
+          <div className="muted mono" style={{ fontSize: 12, marginTop: 3 }}>{run.id}</div>
         </div>
-        <span className={`badge ${run.status}`} style={{ marginLeft: 'auto' }}>{run.status.replace('_', ' ')}</span>
+        <span className={`badge ${run.status}`}>{run.status.replace(/_/g, ' ')}</span>
         {['running', 'queued'].includes(run.status) && <button className="ghost" onClick={() => act(api.cancel(run.id))}>Cancel</button>}
       </div>
       {err && <div className="banner err">{err}</div>}
@@ -71,7 +74,7 @@ export default function RunPage({ id }: { id: string }) {
 
       {stepDefs.length > 1 && (
         <div className="card">
-          <div className="subhead"><h3 style={{ margin: 0 }}>Shape</h3></div>
+          <div className="subhead"><h2>Shape</h2></div>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             Which step this run is on, in the order the engine derived. For a goal-planned
             workflow the routes not taken are visible here and nowhere else.
@@ -82,7 +85,7 @@ export default function RunPage({ id }: { id: string }) {
       <div className="grid cols-2">
         <div>
           <div className="card">
-            <h3>Steps</h3>
+            <div className="subhead"><h2>Steps</h2></div>
             <div className="steps">
               {stepDefs.map((s, i) => {
                 const st = byId[s.id]

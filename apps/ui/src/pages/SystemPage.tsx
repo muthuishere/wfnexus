@@ -3,6 +3,7 @@ import {
   api, type Classifier, type Doctor, type DoctorEntry, type McpServer, type Provider, type Skipped,
 } from '../api'
 import { Field, Section } from '../components/builder/Bits'
+import DataTable, { type Column, type Filter } from '../components/DataTable'
 
 /** SystemPage answers one question: if a step named this right now, would it run?
  *
@@ -120,12 +121,21 @@ export default function SystemPage() {
       <ClassifierForm onSave={c => act(`Saved classifier ${c.name}.`, () => api.saveClassifier(c))} />
 
       <div className="card">
-        <h3>MCP servers <span className="badge">{mcp.length}</span></h3>
-        {mcp.length === 0
-          ? <p className="muted">None configured. A step names one to gain its tools.</p>
-          : <table className="rows"><tbody>{mcp.map(m => (
-            <tr key={m.name}><td className="mono">{m.name}</td><td className="muted">{m.command || m.url}</td></tr>))}
-          </tbody></table>}
+        <div className="subhead"><h2>MCP servers</h2></div>
+        <p className="muted" style={{ marginBottom: 12 }}>
+          A step names one to gain its tools. Like every other registry entry, the name is
+          what travels and the endpoint stays here.
+        </p>
+        <DataTable
+          rows={mcp}
+          columns={[
+            { key: 'name', header: 'Name', width: 180, value: m => m.name, cell: m => <span className="mono" style={{ fontWeight: 500 }}>{m.name}</span> },
+            { key: 'where', header: 'Command or URL', value: m => m.command || m.url || '', cell: m => <span className="mono muted">{m.command || m.url || '—'}</span> },
+            { key: 'description', header: 'What it is for', value: m => m.description || '', cell: m => m.description || <span className="muted">—</span> },
+          ]}
+          getKey={m => m.name} initialSort={{ key: 'name', dir: 'asc' }}
+          searchPlaceholder="Search MCP servers…"
+          empty="None configured." />
       </div>
 
       <div className="card">
@@ -136,15 +146,23 @@ export default function SystemPage() {
         {!!skipped.length && (
           <Section title="Entries the loader refused" count={skipped.length}
             hint="A refused entry is not available to any step. This is usually why a name does not resolve.">
-            <table className="rows"><tbody>{skipped.map((s, i) => (
-              <tr key={i}><td className="mono">{s.location}</td><td className="muted">{s.reason}</td></tr>))}
-            </tbody></table>
+            <DataTable
+              rows={skipped}
+              columns={[
+                { key: 'location', header: 'Entry', width: 260, value: s => s.location, cell: s => <span className="mono">{s.location}</span> },
+                { key: 'reason', header: 'Why it was refused', value: s => s.reason, cell: s => s.reason },
+              ]}
+              getKey={s => s.location + s.reason} pageSize={10}
+              searchPlaceholder="Search refused entries…" empty="Nothing was refused." />
           </Section>)}
         {!!doc.skills.skipped?.length && (
-          <Section title="Skills the loader refused" count={doc.skills.skipped.length}>
-            <ul className="muted" style={{ margin: 0, paddingLeft: 18 }}>
-              {doc.skills.skipped.map((s, i) => <li key={i} className="mono">{s}</li>)}
-            </ul>
+          <Section title="Skills the loader refused" count={doc.skills.skipped.length}
+            hint="Usually a duplicate name: a root earlier in precedence already claimed it.">
+            <DataTable
+              rows={doc.skills.skipped.map(s => ({ s }))}
+              columns={[{ key: 's', header: 'File', value: r => r.s, cell: r => <span className="mono">{r.s}</span> }]}
+              getKey={r => r.s} pageSize={10}
+              searchPlaceholder="Search refused skills…" empty="Every skill loaded." />
           </Section>)}
       </div>
     </>
@@ -162,30 +180,51 @@ function EntryTable({ title, entries, rows, hint, onDelete }: {
   onDelete: (name: string) => void
 }) {
   const describe = new Map(rows.map(r => [r.name, r.description || '']))
+
+  const columns: Column<DoctorEntry>[] = [
+    {
+      key: 'ready', header: '', width: 40, sortable: false,
+      value: e => (e.ready ? 1 : 0),
+      cell: e => <span style={{ color: e.ready ? 'var(--ok)' : 'var(--err)', fontWeight: 700 }}>{e.ready ? '✓' : '✗'}</span>,
+    },
+    { key: 'name', header: 'Name', width: 150, value: e => e.name, cell: e => <span className="mono" style={{ fontWeight: 500 }}>{e.name}</span> },
+    { key: 'kind', header: 'Kind', width: 110, value: e => e.kind, cell: e => <span className="pill">{e.kind}</span> },
+    { key: 'model', header: 'Model', width: 210, value: e => e.model || '', cell: e => e.model ? <span className="mono muted">{e.model}</span> : <span className="muted">—</span> },
+    {
+      key: 'detail', header: 'Where it resolves to',
+      value: e => e.problem || e.detail || '',
+      cell: e => (
+        <>
+          <span className={e.problem ? '' : 'mono muted'} style={e.problem ? { color: 'var(--err)' } : undefined}>
+            {e.problem || e.detail}
+          </span>
+          {describe.get(e.name) && <div className="hint">{describe.get(e.name)}</div>}
+        </>),
+    },
+    {
+      key: 'actions', header: '', width: 90, align: 'right', sortable: false,
+      cell: e => (
+        <button className="ghost small danger-text" onClick={ev => {
+          ev.stopPropagation()
+          if (confirm(`Remove ${e.name}? A workflow still naming it will fail to load — which is deliberate, so you find out now.`)) onDelete(e.name)
+        }}>Remove</button>),
+    },
+  ]
+
+  const filters: Filter<DoctorEntry>[] = [
+    { key: 'kind', label: 'kinds', options: [...new Set(entries.map(e => e.kind))].sort(), match: (e, v) => e.kind === v },
+    { key: 'ready', label: 'states', options: ['ready', 'not ready'], match: (e, v) => (v === 'ready' ? e.ready : !e.ready) },
+  ]
+
   return (
     <div className="card">
-      <h3>{title} <span className="badge">{entries.length}</span></h3>
-      <p className="muted">{hint}</p>
-      <table className="rows">
-        <tbody>
-          {entries.map(e => (
-            <tr key={e.name} className={e.ready ? '' : 'rowbad'}>
-              <td style={{ width: 24 }}>{e.ready ? '✓' : '✗'}</td>
-              <td className="mono">{e.name}</td>
-              <td><span className="pill">{e.kind}</span></td>
-              <td className="mono muted">{e.model}</td>
-              <td className="muted" style={{ maxWidth: 380 }}>
-                {e.problem || e.detail}
-                {describe.get(e.name) && <div className="hint">{describe.get(e.name)}</div>}
-              </td>
-              <td style={{ textAlign: 'right' }}>
-                <button className="ghost" onClick={() => {
-                  if (confirm(`Remove ${e.name}? A workflow still naming it will fail to load — which is deliberate, so you find out now.`)) onDelete(e.name)
-                }}>remove</button>
-              </td>
-            </tr>))}
-        </tbody>
-      </table>
+      <div className="subhead"><h2>{title}</h2></div>
+      <p className="muted" style={{ marginBottom: 12 }}>{hint}</p>
+      <DataTable rows={entries} columns={columns} filters={filters} getKey={e => e.name}
+        rowClass={e => (e.ready ? '' : 'bad')}
+        initialSort={{ key: 'name', dir: 'asc' }}
+        searchPlaceholder={`Search ${title.toLowerCase()}…`}
+        empty={`No ${title.toLowerCase()} configured.`} />
     </div>
   )
 }

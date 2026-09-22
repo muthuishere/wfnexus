@@ -49,7 +49,22 @@ export type Step = {
   soul?: string; budget?: Budget; guardrails?: Guardrail[]; team?: TeamMember[]
   decide?: Decide; askHuman?: boolean
 }
-export type Workflow = { name: string; description: string; inputSchema: JSONSchema; steps: Step[]; path: string }
+/** `on:` — what may start a workflow. Actions' own block (see triggers.go). */
+export type Triggers = {
+  dispatch?: boolean
+  schedule?: Array<{ cron: string; input?: Record<string, unknown> }>
+  repositoryDispatch?: { types?: string[] } | null
+  workflowCall?: boolean
+}
+export type Workflow = {
+  name: string; description: string; inputSchema: JSONSchema; steps: Step[]; path: string
+  on?: Triggers
+  goal?: string
+  maxParallel?: number
+  /** which source this came from — "local", or a repository imported with `wfx import` */
+  source?: string
+  repoDir?: string
+}
 /** What the builder edits and PUTs — `path` is assigned by the API, not authored. */
 export type WorkflowDraft = Omit<Workflow, 'path'> & { path?: string }
 

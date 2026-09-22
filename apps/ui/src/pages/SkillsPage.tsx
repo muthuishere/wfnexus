@@ -1,140 +1,97 @@
 import { useEffect, useState } from 'react'
 import { api, type BuiltinTool, type Skill, type SkillRegistry } from '../api'
+import DataTable, { type Column, type Filter } from '../components/DataTable'
 
-const SOURCE_LABEL: Record<string, string> = {
-  project: 'project · ./skills',
-  claude: 'claude · ~/.claude/skills',
-  agents: 'agents · ~/.agents/skills',
-}
-
-function SkillRow({ s }: { s: Skill }) {
-  return (
-    <div className="skill">
-      <div className="titleline">
-        <b className="mono">{s.name}</b>
-        <span className={`badge src-${s.source}`}>{s.source}</span>
-        {s.shadowed && s.shadowed.length > 0 && <span className="badge awaiting_approval">shadows {s.shadowed.length}</span>}
-      </div>
-      <div className="muted">{s.description || <i>no description in frontmatter</i>}</div>
-      <div className="mono muted loc">{s.location}</div>
-      {s.shadowed && s.shadowed.length > 0 && (
-        <div className="shadow">
-          This root wins, so these same-named skills are never loaded:
-          {s.shadowed.map(l => <div className="mono" key={l}>{l}</div>)}
-        </div>)}
-    </div>
-  )
-}
-
+/** Skills and built-in tools are the two catalogues a step draws from, and a
+ *  step may only name what is in them (ADR 0004: scoping is the security
+ *  model). So this page is a reference you search, not a page you read. */
 export default function SkillsPage() {
   const [reg, setReg] = useState<SkillRegistry>()
   const [tools, setTools] = useState<BuiltinTool[]>()
-  const [skillsErr, setSkillsErr] = useState('')
-  const [toolsErr, setToolsErr] = useState('')
-  const [q, setQ] = useState('')
+  const [err, setErr] = useState('')
+  const [tab, setTab] = useState<'skills' | 'tools' | 'shadowed'>('skills')
 
   useEffect(() => {
-    api.skills().then(setReg).catch(e => setSkillsErr(e.message))
-    api.tools().then(setTools).catch(e => setToolsErr(e.message))
+    api.skills().then(setReg).catch(e => setErr(String(e.message || e)))
+    api.tools().then(setTools).catch(e => setErr(String(e.message || e)))
   }, [])
 
-  const needle = q.trim().toLowerCase()
-  const match = (...fields: string[]) => !needle || fields.some(f => (f || '').toLowerCase().includes(needle))
+  const skills = reg?.skills || []
+  const skipped = reg?.skipped || []
 
-  const grouped: Array<[string, Skill[]]> = []
-  for (const s of reg?.skills || []) {
-    if (!match(s.name, s.description, s.location, s.source)) continue
-    const g = grouped.find(([k]) => k === s.source)
-    if (g) g[1].push(s); else grouped.push([s.source, [s]])
-  }
+  const skillCols: Column<Skill>[] = [
+    { key: 'name', header: 'Skill', width: 210, value: s => s.name, cell: s => <span className="mono" style={{ fontWeight: 500 }}>{s.name}</span> },
+    { key: 'source', header: 'Root', width: 110, value: s => s.source, cell: s => <span className="pill">{s.source}</span> },
+    { key: 'description', header: 'What it is for', value: s => s.description || '', cell: s => s.description || <i className="muted">no description in frontmatter</i> },
+    {
+      key: 'shadows', header: 'Shadows', width: 90, align: 'right',
+      value: s => s.shadowed?.length || 0,
+      // A shadowed skill is a name that silently resolves to a different file
+      // than somebody expects, so the count is worth a column of its own.
+      cell: s => s.shadowed?.length
+        ? <span className="badge awaiting_approval" title={s.shadowed.join('\n')}>{s.shadowed.length}</span>
+        : <span className="muted">—</span>,
+    },
+    { key: 'location', header: 'File', value: s => s.location, cell: s => <span className="mono muted" title={s.location}>{tail(s.location, 44)}</span> },
+  ]
 
-  const shownTools = (tools || []).filter(t => match(t.name, t.description))
-  const total = reg?.skills.length ?? 0
-  const shown = grouped.reduce((n, [, v]) => n + v.length, 0)
+  const skillFilters: Filter<Skill>[] = [
+    { key: 'source', label: 'roots', options: [...new Set(skills.map(s => s.source))].sort(), match: (s, v) => s.source === v },
+    { key: 'shadowed', label: 'shadowing', options: ['shadows others'], match: s => !!s.shadowed?.length },
+  ]
 
-  if (!reg && !tools && !skillsErr && !toolsErr) return <div className="muted">loading…</div>
+  const toolCols: Column<BuiltinTool>[] = [
+    { key: 'name', header: 'Tool', width: 170, value: t => t.name, cell: t => <span className="mono" style={{ fontWeight: 500 }}>{t.name}</span> },
+    { key: 'description', header: 'What it does', value: t => t.description, cell: t => t.description },
+  ]
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+      <div className="head">
         <div>
-          <h1>Registries</h1>
-          <div className="muted">Everything a step's <span className="mono">skills:</span> and <span className="mono">tools:</span> allowlists may draw from.</div>
+          <h1>Skills &amp; tools</h1>
+          <p>
+            Everything a step may name. A step sees exactly what its YAML lists and nothing else,
+            so a name missing here is a name a workflow cannot use.
+          </p>
         </div>
-        <input
-          style={{ marginLeft: 'auto', maxWidth: 320 }} value={q}
-          placeholder="filter skills and tools…" onChange={e => setQ(e.target.value)} />
       </div>
-
-      {skillsErr && <div className="banner err">Skill registry unavailable — {skillsErr}</div>}
-
-      {reg && (
-        <div className="card">
-          <h3>Roots · precedence order</h3>
-          {reg.roots.length === 0 ? <div className="muted">No skill roots configured.</div> : (
-            <ol className="roots">
-              {reg.roots.map((r, i) => (
-                <li key={r}><span className="mono">{r}</span> {i === 0 && <span className="muted">— wins on a name clash</span>}</li>))}
-            </ol>)}
-          <div className="muted" style={{ fontSize: 12 }}>
-            A skill found in an earlier root <b>shadows</b> the same name in a later one; only the winner is ever loaded into an agent.
-          </div>
-        </div>)}
-
-      {reg && (
-        <div className={`card ${reg.skipped.length ? 'skipped-card' : ''}`}>
-          <h3>Skipped</h3>
-          {reg.skipped.length === 0 ? (
-            <div className="banner ok">Every skill on disk parsed cleanly — nothing is silently missing.</div>
-          ) : (
-            <>
-              <div className="banner err">
-                <b>{reg.skipped.length} skill{reg.skipped.length > 1 ? 's were' : ' was'} not loaded.</b> A step listing one of these
-                gets no error — the skill is simply absent from its agent. Fix the frontmatter.
-              </div>
-              {reg.skipped.map(s => (
-                <div className="skipped" key={s.location}>
-                  <div className="mono">{s.location}</div>
-                  <div style={{ color: 'var(--err)' }}>{s.reason}</div>
-                </div>))}
-            </>)}
-        </div>)}
-
-      {reg && (
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Skills</h3>
-            <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{needle ? `${shown} of ${total}` : `${total} loaded`}</span>
-          </div>
-          {total === 0 && <div className="muted" style={{ marginTop: 8 }}>No skills in any root.</div>}
-          {total > 0 && shown === 0 && <div className="muted" style={{ marginTop: 8 }}>Nothing matches “{q}”.</div>}
-          {grouped.map(([source, list]) => (
-            <div className="group" key={source}>
-              <h3>{SOURCE_LABEL[source] || source} <span className="muted">· {list.length}</span></h3>
-              <div className="skills">{list.map(s => <SkillRow key={s.location} s={s} />)}</div>
-            </div>))}
-        </div>)}
+      {err && <div className="banner err">{err}</div>}
 
       <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <h3 style={{ margin: 0 }}>Built-in tools</h3>
-          <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{tools?.length ?? 0} shipped by toolnexus</span>
+        <div className="subhead" style={{ gap: 4 }}>
+          <button className={tab === 'skills' ? '' : 'ghost'} onClick={() => setTab('skills')}>Skills {skills.length}</button>
+          <button className={tab === 'tools' ? '' : 'ghost'} onClick={() => setTab('tools')}>Built-in tools {tools?.length ?? 0}</button>
+          <button className={tab === 'shadowed' ? '' : 'ghost'} onClick={() => setTab('shadowed')}>Refused {skipped.length}</button>
+          {reg && <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
+            roots in precedence order: {reg.roots.join(' → ')}
+          </span>}
         </div>
-        <div className="muted" style={{ fontSize: 12, margin: '6px 0 10px' }}>
-          A step's <span className="mono">tools:</span> list is an allowlist over exactly these. Omit a name and the step cannot call it at all.
-        </div>
-        {toolsErr && <div className="banner err">Tool catalog unavailable — {toolsErr}</div>}
-        {!tools && !toolsErr && <div className="muted">loading…</div>}
-        {tools && tools.length === 0 && <div className="muted">The API reported no built-ins.</div>}
-        {tools && tools.length > 0 && shownTools.length === 0 && <div className="muted">Nothing matches “{q}”.</div>}
-        <div className="tools">
-          {shownTools.map(t => (
-            <div className="tool" key={t.name}>
-              <b className="mono">{t.name}</b>
-              <div className="muted">{t.description}</div>
-            </div>))}
-        </div>
+
+        {tab === 'skills' && (
+          <DataTable rows={skills} columns={skillCols} filters={skillFilters} getKey={s => s.location}
+            initialSort={{ key: 'name', dir: 'asc' }} searchPlaceholder="Search skills…"
+            empty="No skills found in any root." />)}
+
+        {tab === 'tools' && (
+          <DataTable rows={tools || []} columns={toolCols} getKey={t => t.name}
+            initialSort={{ key: 'name', dir: 'asc' }} searchPlaceholder="Search tools…"
+            empty="No built-in tools reported." />)}
+
+        {tab === 'shadowed' && (
+          <DataTable
+            rows={skipped}
+            columns={[
+              { key: 'reason', header: 'Why', width: 180, value: s => s.reason, cell: s => <span className="pill">{s.reason}</span> },
+              { key: 'location', header: 'File', value: s => s.location, cell: s => <span className="mono">{s.location}</span> },
+            ]}
+            getKey={s => s.location} initialSort={{ key: 'reason', dir: 'asc' }}
+            searchPlaceholder="Search refused…"
+            empty="Every skill file in every root loaded." />)}
       </div>
     </>
   )
 }
+
+/** tail keeps the END of a path, which is the part that identifies it. */
+function tail(s: string, n: number) { return s.length > n ? '…' + s.slice(-n) : s }
