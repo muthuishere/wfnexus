@@ -1,0 +1,128 @@
+name: author-workflow
+description: >-
+  Describe what you want done and get a workflow back that has already been
+  checked against this machine. The agent reads the catalogues, drafts, dry runs
+  its own draft, fixes what the dry run found, and only then proposes it.
+  Authoring a workflow is itself a workflow.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  required: [goal]
+  properties:
+    goal:
+      type: string
+      format: textarea
+      title: "What should this workflow do?"
+      description: "Plain English. Say what goes in, what should come out, and anything it must never do."
+    name:
+      type: string
+      title: "Name for the new workflow"
+      description: "lowercase-with-dashes; left empty the agent picks one"
+    cheap:
+      type: boolean
+      title: "Prefer cheap, fast steps"
+      default: true
+
+steps:
+  - id: author
+    name: Draft and check a workflow
+    description: Produce a workflow definition that is valid and would actually run here.
+
+    # A local CLI as the model: authoring is a long, iterative loop and this
+    # costs nothing per turn. Swap the line for `sonnet` if the drafts are weak.
+    provider: opencode
+
+    soul: >-
+      You write workflows for this platform and you do not hand over anything
+      you have not checked. You would rather propose three honest steps than
+      seven you are guessing about. You never invent a name — you look it up —
+      and when the dry run disagrees with you, the dry run is right.
+
+    tools: [wf_catalog, wf_validate, wf_dryrun]
+
+    budget: { max_turns: 30, max_wall_sec: 1200 }
+
+    prompt: |
+      Write a workflow for this platform.
+
+      WHAT IT SHOULD DO
+      {{ .Input.goal }}
+
+      {{ if .Input.name }}Call it `{{ .Input.name }}`.{{ end }}
+      {{ if .Input.cheap }}Prefer cheap steps: use `run:` for anything a shell
+      command can decide, and a `judge` step rather than an agent for a verdict.
+      Only use a full agent step where judgement over a repository is genuinely
+      needed.{{ end }}
+
+      HOW TO WORK
+      1. Call `wf_catalog` with `kind: "shape"` FIRST. That is the real
+         structure of a workflow file — the exact field names a step has. Do
+         not guess them from other workflow formats you have seen; this one has
+         no `title`, no `type` and no `input` on a step.
+      2. Call `wf_catalog` again for the names. Every skill, tool, provider and
+         classifier you use must come from it — a name that is not there makes
+         the whole file fail to load.
+      3. Draft the definition.
+      4. Call `wf_dryrun` on your draft. It will tell you what would actually
+         happen here: the order, the rendered prompts, and anything that would
+         be empty or unresolvable.
+      5. Fix what it found and dry run again. Repeat until it is clean.
+      6. Call `wf_dryrun` ONE LAST TIME on the exact definition you are about to
+         submit — not an earlier version of it, the exact one. This is the most
+         common way to get this wrong: fixing a draft, then submitting something
+         that was never checked.
+      7. Only if that last dry run is clean, call `submit_output` with that same
+         definition. If it is not clean, keep working; a draft you have not
+         verified is not finished.
+
+      WHAT A GOOD WORKFLOW LOOKS LIKE
+      - Each step is a whole agent: a `soul` saying who it is, the tools it
+        needs and NOTHING more, a budget, and an `output_schema` that is a real
+        contract rather than `{summary: string}`.
+      - Steps hand each other typed objects. A later step reads
+        `{{ "{{ .Steps.<earlier-id>.<field> }}" }}` — and that field must exist
+        in the earlier step's output_schema.
+      - A step that only reads should be denied `write` and `edit` with a
+        guardrail saying why.
+      - Give every agent step a turn budget. An agent that is told nothing
+        spends everything.
+
+      Be honest in your explanation about what this workflow does NOT do.
+
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [definition, explanation, dry_run_clean]
+      properties:
+        definition:
+          type: object
+          description: "the whole workflow definition, ready to save"
+        explanation:
+          type: string
+          description: "what it does, step by step, and what it deliberately does not do"
+        dry_run_clean:
+          type: boolean
+          description: "did wf_dryrun report no problems on the final draft"
+        cost_note:
+          type: string
+          description: "the ceiling the dry run reported"
+        open_questions:
+          type: array
+          items: { type: string }
+          description: "anything you had to assume"
+
+    gates:
+      # Advisory only, and deliberately labelled as such: this is the AGENT's
+      # account of its own work, and a live run reported `true` for a definition
+      # the loader then refused. The real check is `wfx apply --from-run`, which
+      # dry runs the submitted definition before installing it.
+      - field: dry_run_clean
+        equals: false
+        action: needs_input
+        message: >-
+          The agent says its draft still has problems. Read the explanation,
+          then either say what to change, or approve and let `wfx apply
+          --from-run` make the final decision.

@@ -55,6 +55,9 @@ func run(args []string) error {
 		}
 		return listWorkflows()
 	case "apply":
+		if len(rest) >= 2 && rest[0] == "--from-run" {
+			return applyFromRun(rest[1], flagOf(rest, "--as", ""))
+		}
 		return apply(rest, true)
 	case "validate":
 		return apply(rest, false)
@@ -98,6 +101,7 @@ func usage() {
   wfx workflows                    list workflows
   wfx workflows show <name>        every step's harness: skills, tools, team, budget, gates
   wfx apply <file.yaml>            validate and install a workflow
+  wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs                         recent runs
@@ -668,6 +672,72 @@ func sources(args []string) error {
 	for _, sk := range d.Skipped {
 		fmt.Printf("  ✗ %s: %s\n", sk.Location, sk.Reason)
 	}
+	return nil
+}
+
+// applyFromRun installs a workflow that `author-workflow` produced.
+//
+// It exists because an agent's own account of having checked its work is not
+// evidence. A live authoring run reported `dry_run_clean: true` and submitted a
+// definition that the loader refused — not because the dry run was wrong, but
+// because the definition submitted was not the one last dry-run. The platform
+// therefore re-checks here, against the same validation every saved workflow
+// passes, and the agent's boolean is treated as a claim rather than a fact.
+func applyFromRun(runID, as string) error {
+	var d struct {
+		Steps []struct {
+			StepID string         `json:"stepId"`
+			Output map[string]any `json:"output"`
+		} `json:"steps"`
+	}
+	if err := call("GET", "/api/runs/"+runID, nil, &d); err != nil {
+		return err
+	}
+	var def map[string]any
+	for _, s := range d.Steps {
+		if v, ok := s.Output["definition"].(map[string]any); ok {
+			def = v
+		}
+	}
+	if def == nil {
+		return fmt.Errorf("run %s produced no `definition` — is it an author-workflow run, and did it finish?", runID)
+	}
+	name, _ := def["name"].(string)
+	if as != "" {
+		name, def["name"] = as, as
+	}
+	if name == "" {
+		return fmt.Errorf("the definition has no name; pass --as <name>")
+	}
+
+	// Checked BEFORE saving, and the result is reported whether or not it
+	// passes — the point is that this verdict comes from the platform.
+	var dry struct {
+		OK       bool
+		Problems []struct {
+			Step, Field, Message string
+			Fatal                bool
+		}
+	}
+	if err := call("POST", "/api/dryrun", map[string]any{"definition": def}, &dry); err != nil {
+		return err
+	}
+	if !dry.OK {
+		fmt.Printf("%s was NOT installed — the dry run found:\n", name)
+		for _, p := range dry.Problems {
+			if p.Fatal {
+				fmt.Printf("  FATAL %s %s: %s\n", p.Step, p.Field, p.Message)
+			}
+		}
+		return fmt.Errorf("fix the workflow, or re-run author-workflow saying what to change")
+	}
+
+	var saved struct{ Path string }
+	if err := call("PUT", "/api/workflows/"+url.PathEscape(name), map[string]any{"definition": def}, &saved); err != nil {
+		return err
+	}
+	fmt.Printf("installed %s → %s\n", name, saved.Path)
+	fmt.Printf("dry run clean. try it with:  wfx dryrun %s\n", name)
 	return nil
 }
 

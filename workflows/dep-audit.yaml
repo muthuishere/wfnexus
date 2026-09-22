@@ -1,0 +1,128 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
+name: dep-audit
+description: 'Check a repository for dependencies with known problems: read manifests, run the ecosystem''s audit command, report only findings reachable from this project''s own code. Never modifies anything.'
+input_schema:
+    properties:
+        repo_path:
+            description: Path to the repository (defaults to current directory)
+            type: string
+    type: object
+steps:
+    - id: detect_manifests
+      name: Detect dependency manifests
+      description: Find all dependency manifest files (package.json, go.mod, Pipfile, requirements.txt, Gemfile, etc.)
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: number
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      run: find . -type f \( -name 'package.json' -o -name 'go.mod' -o -name 'Pipfile' -o -name 'requirements.txt' -o -name 'Gemfile' -o -name 'pom.xml' -o -name 'build.gradle' -o -name 'Cargo.toml' \) 2>/dev/null | head -20
+    - id: run_audit
+      name: Run dependency audit
+      description: Execute npm audit, pip audit, or go mod verify depending on what was found
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: number
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      run: if [ -f package.json ]; then npm audit --json 2>&1; elif [ -f go.mod ]; then go list -m all 2>&1; elif [ -f Pipfile ]; then pip-audit 2>&1; else echo 'No standard manifest found'; fi
+    - id: analyze_reachability
+      name: Analyze vulnerability reachability
+      description: Determine which vulnerabilities are actually reachable from the project's own code
+      prompt: |-
+        Analyze the dependency audit results and determine which vulnerabilities are actually reachable from the project's own code.
+
+        Audit output:
+        {{ .Steps.run_audit.stdout }}
+
+        Your task:
+        1. Parse the audit output to extract all vulnerabilities
+        2. For each vulnerability, determine if it affects a package that is imported/used in the project
+        3. Classify each finding as REACHABLE or UNREACHABLE
+        4. Return a structured list with: package name, vulnerability description, severity, and reachability
+
+        Be conservative: if you cannot determine reachability from the audit output alone, mark as UNREACHABLE and note that manual inspection of imports is needed.
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            findings:
+                items:
+                    properties:
+                        package:
+                            type: string
+                        reachable:
+                            type: boolean
+                        reason:
+                            type: string
+                        severity:
+                            enum:
+                                - critical
+                                - high
+                                - medium
+                                - low
+                            type: string
+                        vulnerability:
+                            type: string
+                    type: object
+                type: array
+            summary:
+                type: string
+        type: object
+      max_turns: 3
+      max_attempts: 3
+    - id: report_findings
+      name: Generate final report
+      description: Create the final audit report focusing on reachable vulnerabilities
+      prompt: |-
+        Based on the vulnerability analysis, generate a concise final report.
+
+        Findings:
+        {{ .Steps.analyze_reachability.findings }}
+
+        Produce a report with:
+        1. Count of reachable vs unreachable vulnerabilities
+        2. Highest severity among reachable findings
+        3. Clear recommendation on priority
+        4. Summary statement
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            highest_severity:
+                type: string
+            reachable_count:
+                type: number
+            recommendation:
+                type: string
+            report:
+                type: string
+            unreachable_count:
+                type: number
+        type: object
+      max_turns: 2
+      max_attempts: 3
+max_parallel: 4

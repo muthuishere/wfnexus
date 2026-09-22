@@ -73,6 +73,10 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	if step.AskHuman {
 		extra = append(extra, e.askHumanTool(step))
 	}
+	// Tools that reach back into this platform — the catalogues, validation, a
+	// dry run — for a step whose job is to AUTHOR a workflow (authoring.go).
+	// Granted only when the step names them, like every other tool.
+	extra = append(extra, e.platformTools(step.Tools)...)
 
 	hooks := e.hooks(ctx, runID, step.ID, data.WorkDir, effectiveTurns(step))
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }

@@ -246,3 +246,32 @@ func validateTriggers(name string, t *Triggers) error {
 	}
 	return nil
 }
+
+// IsZero lets `yaml:",omitempty"` drop the block entirely when the workflow
+// only takes the default trigger. yaml.v3 honours this interface, which is why
+// it is the hook used rather than a pointer field.
+//
+// Without it, every file the platform saved carried `"on": {}` — an empty
+// mapping that means nothing, quoted because `on` is a YAML 1.1 boolean. A file
+// the platform writes should look like one a person would write.
+func (t Triggers) IsZero() bool {
+	return t.none() || (t.Dispatch && len(t.Schedule) == 0 && t.RepositoryDispatch == nil && !t.Call)
+}
+
+// MarshalYAML writes `on:` the way a person writes it.
+func (t Triggers) MarshalYAML() (any, error) {
+	out := map[string]any{}
+	if t.Dispatch {
+		out["workflow_dispatch"] = nil
+	}
+	if len(t.Schedule) > 0 {
+		out["schedule"] = t.Schedule
+	}
+	if t.RepositoryDispatch != nil {
+		out["repository_dispatch"] = t.RepositoryDispatch
+	}
+	if t.Call {
+		out["workflow_call"] = nil
+	}
+	return out, nil
+}

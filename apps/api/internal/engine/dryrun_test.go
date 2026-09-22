@@ -204,3 +204,55 @@ func TestDryRunSeparatesFreeSteps(t *testing.T) {
 		t.Fatalf("summary should say it is free: %s", d.Summary())
 	}
 }
+
+// A workflow FILE says `output_schema`; the JSON API says `outputSchema`. The
+// struct carries both tags, so the decoder decides which applies — and the
+// authoring tools must read the file's dialect, because every example an author
+// has seen is a file and `wf_catalog kind=shape` describes a file.
+//
+// Getting this wrong was silent and expensive: a correct step was reported as
+// missing the very field it had just declared, four times in a row.
+func TestAuthoringToolsReadTheFileDialect(t *testing.T) {
+	def, err := decodeDefinition(map[string]any{
+		"name": "wf",
+		"steps": []any{map[string]any{
+			"id": "a", "prompt": "go",
+			"max_turns":     float64(7),
+			"output_schema": map[string]any{"type": "object"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def.Steps) != 1 {
+		t.Fatalf("steps = %d", len(def.Steps))
+	}
+	if def.Steps[0].OutputSchema == nil {
+		t.Fatal("output_schema was dropped — the step would be reported as having none")
+	}
+	if def.Steps[0].MaxTurns != 7 {
+		t.Fatalf("max_turns = %d, want 7", def.Steps[0].MaxTurns)
+	}
+}
+
+// A guessed field name must be reported where it was written. yaml and json
+// both drop an unknown key silently, so without this the failure surfaces later
+// as something unrelated.
+func TestAuthoringToolsRejectGuessedFieldNames(t *testing.T) {
+	msg := unknownFieldsIn(map[string]any{
+		"name": "wf",
+		"steps": []any{map[string]any{
+			"id": "a", "title": "A", "type": "agent", "prompt": "go",
+		}},
+	})
+	for _, want := range []string{"title", "type", "shape"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message does not mention %q: %s", want, msg)
+		}
+	}
+	if got := unknownFieldsIn(map[string]any{
+		"steps": []any{map[string]any{"id": "a", "prompt": "go", "output_schema": map[string]any{}}},
+	}); got != "" {
+		t.Fatalf("real fields reported as unknown: %s", got)
+	}
+}

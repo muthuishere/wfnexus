@@ -150,15 +150,21 @@ func TestBuiltinAllowlistEmptyMeansNoTools(t *testing.T) {
 }
 
 func TestBuiltinAllowlistFullSetIsTheWholeToolbox(t *testing.T) {
-	var all []string
+	var all, fromToolnexus []string
 	for _, b := range Builtins() {
 		all = append(all, b.Name)
+		if !IsPlatformTool(b.Name) {
+			fromToolnexus = append(fromToolnexus, b.Name)
+		}
 	}
-	if len(all) != 10 {
-		t.Fatalf("expected 10 built-ins, got %d: %v", len(all), all)
+	if len(fromToolnexus) != 10 {
+		t.Fatalf("expected 10 toolnexus built-ins, got %d: %v", len(fromToolnexus), fromToolnexus)
 	}
-	if got := tn.SelectBuiltins(BuiltinAllowlist(all)); len(got) != len(all) {
-		t.Fatalf("granting every tool yielded %d", len(got))
+	// Granting everything yields every TOOLNEXUS built-in. A platform tool is
+	// registered on the toolkit by the engine, so it is not something
+	// SelectBuiltins can return.
+	if got := tn.SelectBuiltins(BuiltinAllowlist(all)); len(got) != len(fromToolnexus) {
+		t.Fatalf("granting every tool yielded %d, want %d", len(got), len(fromToolnexus))
 	}
 	// the Claude-style coding surface must all be present
 	set := BuiltinNames()
@@ -185,4 +191,31 @@ func keys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A platform tool is a name a step may request, so it must validate — and it
+// must NOT be handed to toolnexus, which has never heard of it.
+func TestPlatformToolsAreNamesButNotToolnexusBuiltins(t *testing.T) {
+	names := BuiltinNames()
+	for _, p := range PlatformTools() {
+		if !names[p.Name] {
+			t.Errorf("%s is not a valid tool name, so a workflow naming it would be refused", p.Name)
+		}
+		if !IsPlatformTool(p.Name) {
+			t.Errorf("%s is not recognised as a platform tool", p.Name)
+		}
+	}
+	if miss := MissingBuiltins([]string{ToolCatalog, ToolDryRun, ToolValidate}); len(miss) != 0 {
+		t.Fatalf("platform tools reported as unknown: %v", miss)
+	}
+
+	// A step asking ONLY for platform tools gets no shell, no file access —
+	// it asked for none, and the allowlist must not read that as "all".
+	if got := tn.SelectBuiltins(BuiltinAllowlist([]string{ToolCatalog, ToolDryRun})); len(got) != 0 {
+		var names []string
+		for _, t := range got {
+			names = append(names, t.Name)
+		}
+		t.Fatalf("platform-only step was granted %v", names)
+	}
 }

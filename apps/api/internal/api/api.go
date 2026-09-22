@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -105,6 +106,28 @@ func urlName(r *http.Request, key string) string {
 	return v
 }
 
+// definitionFromBody reads {"definition": {...}} from a request.
+func definitionFromBody(r *http.Request) (*workflow.Definition, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return definitionFrom(raw)
+}
+
+func definitionFrom(raw []byte) (*workflow.Definition, error) {
+	var envelope struct {
+		Definition json.RawMessage `json:"definition"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	if len(envelope.Definition) == 0 {
+		return nil, fmt.Errorf("body needs a `definition`")
+	}
+	return workflow.DecodeDefinition(envelope.Definition)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -150,18 +173,16 @@ func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
 // validateWorkflow is the authoritative verdict with no side effect, so the
 // builder never has to write a file to find out whether it is legal.
 func (s *Server) validateWorkflow(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Definition *workflow.Definition `json:"definition"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Definition == nil {
-		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
+	def, err := definitionFromBody(r)
+	if err != nil {
+		writeErr(w, 400, err)
 		return
 	}
-	if err := s.eng.CheckWorkflow(body.Definition); err != nil {
+	if err := s.eng.CheckWorkflow(def); err != nil {
 		writeJSON(w, 200, map[string]any{"valid": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"valid": true, "definition": body.Definition})
+	writeJSON(w, 200, map[string]any{"valid": true, "definition": def})
 }
 
 func (s *Server) listMcp(w http.ResponseWriter, _ *http.Request) {
@@ -257,19 +278,17 @@ func (s *Server) dryRun(w http.ResponseWriter, r *http.Request) {
 // dryRunDraft checks a definition that is not saved anywhere — which is how the
 // builder, and the authoring agent, check work before proposing it.
 func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Definition *workflow.Definition `json:"definition"`
-		Input      map[string]any       `json:"input"`
+	raw, _ := io.ReadAll(r.Body)
+	var envelope struct {
+		Input map[string]any `json:"input"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	_ = json.Unmarshal(raw, &envelope)
+	def, err := definitionFrom(raw)
+	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if body.Definition == nil {
-		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
-		return
-	}
-	writeJSON(w, 200, s.eng.DryRunDraft(body.Definition, body.Input))
+	writeJSON(w, 200, s.eng.DryRunDraft(def, envelope.Input))
 }
 
 // listSources returns every place workflows are loaded from, and anything that
@@ -328,25 +347,22 @@ func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 // survives a round trip through the real loader.
 func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
-	var body struct {
-		Definition *workflow.Definition `json:"definition"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// Decoded in a dialect-tolerant way: a definition written as a FILE says
+	// `output_schema`, while the UI says `outputSchema`, and dropping the one
+	// we did not expect reported the step as missing a field it had (decode.go).
+	def, err := definitionFromBody(r)
+	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if body.Definition == nil {
-		writeErr(w, 400, fmt.Errorf("body needs a `definition`"))
+	if def.Name == "" {
+		def.Name = name
+	}
+	if def.Name != name {
+		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", def.Name, name))
 		return
 	}
-	if body.Definition.Name == "" {
-		body.Definition.Name = name
-	}
-	if body.Definition.Name != name {
-		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", body.Definition.Name, name))
-		return
-	}
-	path, err := s.eng.SaveWorkflow(body.Definition)
+	path, err := s.eng.SaveWorkflow(def)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
