@@ -108,9 +108,10 @@ outside the enumeration's scope. Two changes followed:
 hole as intended behaviour, and that is worth keeping visible.
 
 **The real conclusion is that this should not be solved here.** With ADR 0015's
-runner as PID 1 with its working directory set to the worktree, a relative path
-lands inside by construction, and `paths.go` stops being necessary. Every fix in
-this ADR is the cost of not having that yet.
+child process running with its working directory set to the worktree, a relative
+path lands inside by construction and `paths.go` stops being necessary. Every
+fix in this ADR is the cost of not having that yet — and none of them needed a
+sandbox to be the answer.
 
 ## Consequences
 

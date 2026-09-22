@@ -2,7 +2,7 @@
 
 Updated 2026-09-22. Kept current so "what's left" is read, not re-derived.
 
-## Decisions recorded (22 ADRs)
+## Decisions recorded (15 ADRs)
 
 | # | decision |
 |---|---|
@@ -20,47 +20,39 @@ Updated 2026-09-22. Kept current so "what's left" is read, not re-derived.
 | 0012 | steps run as a DAG; retry is a step-level policy |
 | 0013 | one API, two front ends |
 | 0014 | the plan is derived, not written down (goal + consumes/produces, replanned each step) |
-| 0015 | the runner is PID 1 of a step's execution unit |
-| 0016 | a real sandbox, one per run; ADR 0006 retired as the security model |
-| 0016a | the three failure kinds are SET, never derived |
-| 0017 | egress is deny-by-default |
-| 0018 | resume by snapshot, not by replay |
-| 0019 | horizontal scale without a broker (Postgres `SKIP LOCKED` + leases) |
-| 0020 | authentication and tenancy |
-| 0021 | the secret model |
+| 0015 | a step runs where it says it runs (child process, cwd = the workspace) |
 
-0015–0021 are **recorded, not implemented**. Each states the decision and its
-consequences so that nothing built before them assumes the opposite; the
-implementation order is the order they are numbered, because 0015 is what makes
-the rest possible.
+## Deliberately not built
 
-## Why 0015 stopped being optional
+Sandboxes, egress proxies, snapshot resume, multi-worker scale, tenancy and a
+secret store were all researched and are all **not now** — see
+[`docs/not-now.md`](not-now.md), which records each one with the trigger that
+would change our mind. The shape we are keeping is GitHub Actions: a workflow
+file, jobs, steps, a working directory, a runner. Anything that adds a concept
+outside that vocabulary has to be paid for by something actually going wrong.
 
-A live `test-backfill` run wrote an 18 KB file into the platform's own checkout
-through a `write` call with an ordinary relative path, because the builtins
-resolve a relative path against the server process's working directory. That is
-the third escape ADR 0006 has recorded and the second class of mechanism it
-missed entirely. It is patched (`internal/engine/paths.go`) and the patch is the
-same shape as the last two. With the runner as PID 1 with cwd = the worktree,
-the whole file stops being necessary.
+The one hard gate in that document: **auth before this is reachable on any
+address that is not localhost.**
 
-## Implementation order for 0015–0021
+## Run live, against a real model
 
-Ranked. The first is the only item that is hard to retrofit, and everything
-below it becomes easy once it exists and stays impossible while it does not.
+Recorded because "it validates and loads" is not the same as "it works", and
+every serious finding this project has had came from running something.
 
-| # | what shipping it means | blocked on |
-|---|---|---|
-| 0015 | `wfnexus run-step` as a subcommand; step spec on stdin; SIGTERM to the process group; an in-process mode kept for tests | — |
-| 0016 | one sandbox per run holding the run's worktree; `--read-only --cap-drop=ALL --network=none`; Seatbelt on the Macs, failing closed | 0015 |
-| 0016a | three set failure kinds on every executor; retry reads the kind | 0015 |
-| 0017 | CONNECT proxy owned by the runner; per-step host allowlist; no allowlist ⇒ no network | 0015, 0016 |
-| 0018 | snapshot = worktree diff + transcript + pending request; resume through `ConversationStore` | 0015 |
-| 0019 | `wfnexus worker`; claim with `FOR UPDATE SKIP LOCKED`; lease + heartbeat | 0015 |
-| 0020 | every request authenticated; `tenant_id` as a required store argument | — |
-| 0021 | providers in Postgres; secrets write-only; injected by name and by need | 0015, 0020 |
+| workflow | result |
+|---|---|
+| `code-review` | **done**, 43 turns. Reviewed our own planner change and found a real cancellation leak. |
+| `triage` | **done.** `classify` 14 turns, then the planner picked exactly one of three alternative producers of `triaged` — `investigate` ran, `answer` and `request-detail` correctly never did. |
+| `test-backfill` | **both steps ran to completion**, then the `proven_failing` gate failed the run: tests were added without being watched to fail first. That is the gate working, not the platform breaking. |
 
-0020 has no technical blocker and is the gate on ever exposing this publicly.
+Two platform defects came out of these runs and are fixed:
+
+- a step that spends its whole budget and never submits loses everything.
+  Stating the budget in the soul was not enough — an agent cannot count its own
+  turns — so the remaining count is now injected near the ceiling. `classify`
+  went from failing at 15/15 to submitting at 14/15.
+- the containment escape recorded in ADR 0006. Re-run after the fix, the written
+  test file landed inside the worktree.
 
 ## Work pending (no decision needed)
 

@@ -1,20 +1,20 @@
-// Command bfp drives the workflow platform from a terminal.
+// Command wfx drives the workflow platform from a terminal.
 //
 // It is a thin client over the same REST API the UI uses, so anything the CLI
 // can do the UI can do and vice versa — there is no second code path and no
 // second source of truth.
 //
-//	bfp workflows                      list workflows
-//	bfp workflows show bug-fix         the full harness of every step
-//	bfp apply workflows/bug-fix.yaml   validate and install a workflow
-//	bfp validate workflows/x.yaml      validate without installing
-//	bfp run bug-fix -i title=… -f      start a run and follow it
-//	bfp runs                           recent runs
-//	bfp show <run>                     a run, step by step
-//	bfp logs <run> [-f]                the activity log
-//	bfp approve <run> | reject <run> -m … | answer <run> -m …
-//	bfp retry <run> [--step id] | cancel <run>
-//	bfp registry [skills|tools|providers|classifiers|mcp]
+//	wfx workflows                      list workflows
+//	wfx workflows show bug-fix         the full harness of every step
+//	wfx apply workflows/bug-fix.yaml   validate and install a workflow
+//	wfx validate workflows/x.yaml      validate without installing
+//	wfx run bug-fix -i title=… -f      start a run and follow it
+//	wfx runs                           recent runs
+//	wfx show <run>                     a run, step by step
+//	wfx logs <run> [-f]                the activity log
+//	wfx approve <run> | reject <run> -m … | answer <run> -m …
+//	wfx retry <run> [--step id] | cancel <run>
+//	wfx registry [skills|tools|providers|classifiers|mcp]
 package main
 
 import (
@@ -84,22 +84,22 @@ func run(args []string) error {
 }
 
 func usage() {
-	fmt.Print(`bfp — run agent workflows over a repository
+	fmt.Print(`wfx — run agent workflows over a repository
 
-  bfp workflows                    list workflows
-  bfp workflows show <name>        every step's harness: skills, tools, team, budget, gates
-  bfp apply <file.yaml>            validate and install a workflow
-  bfp validate <file.yaml>         validate only; writes nothing
-  bfp run <workflow> -i k=v [-f]   start a run (-f follows the log)
-  bfp runs                         recent runs
-  bfp show <run-id>                a run, step by step
-  bfp logs <run-id> [-f]           the activity log
-  bfp approve <run-id>             approve the step waiting on a human
-  bfp reject <run-id> -m "why"     reject it
-  bfp answer <run-id> -m "text"    answer an agent's question
-  bfp retry <run-id> [--step id]   re-run from a step
-  bfp cancel <run-id>
-  bfp registry [skills|tools|providers|classifiers|mcp]
+  wfx workflows                    list workflows
+  wfx workflows show <name>        every step's harness: skills, tools, team, budget, gates
+  wfx apply <file.yaml>            validate and install a workflow
+  wfx validate <file.yaml>         validate only; writes nothing
+  wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
+  wfx runs                         recent runs
+  wfx show <run-id>                a run, step by step
+  wfx logs <run-id> [-f]           the activity log
+  wfx approve <run-id>             approve the step waiting on a human
+  wfx reject <run-id> -m "why"     reject it
+  wfx answer <run-id> -m "text"    answer an agent's question
+  wfx retry <run-id> [--step id]   re-run from a step
+  wfx cancel <run-id>
+  wfx registry [skills|tools|providers|classifiers|mcp]
 
 The API is $WFX_API (default http://127.0.0.1:8090). Add --json to any
 listing for machine-readable output.
@@ -191,7 +191,7 @@ func listWorkflows() error {
 		return err
 	}
 	if len(out) == 0 {
-		fmt.Println("no workflows — add one under workflows/ or `bfp apply <file>`")
+		fmt.Println("no workflows — add one under workflows/ or `wfx apply <file>`")
 		return nil
 	}
 	for _, w := range out {
@@ -265,7 +265,7 @@ func line(label string, vs []string) {
 func apply(args []string, install bool) error {
 	path := first(args)
 	if path == "" {
-		return fmt.Errorf("usage: bfp %s <file.yaml>", map[bool]string{true: "apply", false: "validate"}[install])
+		return fmt.Errorf("usage: wfx %s <file.yaml>", map[bool]string{true: "apply", false: "validate"}[install])
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -322,7 +322,7 @@ type runRow struct {
 
 func startRun(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: bfp run <workflow> -i key=value [-f]")
+		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f]")
 	}
 	name := args[0]
 	input := map[string]any{}
@@ -344,7 +344,7 @@ func startRun(args []string) error {
 	if has(args, "-f") || has(args, "--follow") {
 		return follow(r.ID)
 	}
-	fmt.Printf("follow it with:  bfp logs %s -f\n", r.ID)
+	fmt.Printf("follow it with:  wfx logs %s -f\n", r.ID)
 	return nil
 }
 
@@ -369,7 +369,7 @@ func listRuns() error {
 
 func showRun(id string) error {
 	if id == "" {
-		return fmt.Errorf("usage: bfp show <run-id>")
+		return fmt.Errorf("usage: wfx show <run-id>")
 	}
 	var d struct {
 		Run   runRow `json:"run"`
@@ -409,9 +409,9 @@ func showRun(id string) error {
 	}
 	switch d.Run.Status {
 	case "awaiting_approval":
-		fmt.Printf("\nwaiting for you:  bfp approve %s   (or reject -m \"why\")\n", id)
+		fmt.Printf("\nwaiting for you:  wfx approve %s   (or reject -m \"why\")\n", id)
 	case "needs_input":
-		fmt.Printf("\nwaiting for you:  bfp answer %s -m \"…\"\n", id)
+		fmt.Printf("\nwaiting for you:  wfx answer %s -m \"…\"\n", id)
 	}
 	return nil
 }
@@ -419,7 +419,7 @@ func showRun(id string) error {
 func logs(args []string) error {
 	id := first(args)
 	if id == "" {
-		return fmt.Errorf("usage: bfp logs <run-id> [-f]")
+		return fmt.Errorf("usage: wfx logs <run-id> [-f]")
 	}
 	if has(args, "-f") || has(args, "--follow") {
 		return follow(id)
@@ -497,7 +497,7 @@ func render(stepID, kind string, p map[string]any) string {
 
 func act(id, verb string, body map[string]any) error {
 	if id == "" {
-		return fmt.Errorf("usage: bfp %s <run-id>", verb)
+		return fmt.Errorf("usage: wfx %s <run-id>", verb)
 	}
 	if body == nil {
 		body = map[string]any{}
@@ -543,7 +543,7 @@ func registry(kind string) error {
 			fmt.Printf("%-22s %-8s %s\n", s.Name, s.Source, firstLine(s.Description))
 		}
 		if n := len(d.Skipped); n > 0 {
-			fmt.Printf("\n%d skipped (a skill that does not parse is invisible — `bfp registry skills --json` for the list)\n", n)
+			fmt.Printf("\n%d skipped (a skill that does not parse is invisible — `wfx registry skills --json` for the list)\n", n)
 		}
 		return nil
 	}
