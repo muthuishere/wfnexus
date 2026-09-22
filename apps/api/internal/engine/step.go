@@ -95,18 +95,25 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 		},
 	}
 
-	llm, model, err := e.resolveLLM(step)
+	prov, err := e.resolveLLM(step, data.WorkDir)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
+	defer prov.Close()
 	e.emit(ctx, runID, step.ID, "log", map[string]any{
 		"text": fmt.Sprintf("agent %s → %s (skills=%v tools=%v team=%d guardrails=%d)",
-			step.ID, model, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
+			step.ID, prov.Label, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
 	})
 
+	// A scripted transport (tests) wins over everything: it is how the wire is
+	// held to zero network. Otherwise a local-process provider supplies its own.
+	transport := e.transport
+	if transport == nil {
+		transport = prov.Transport
+	}
 	res, rt := ag.Run(agents.Options{
-		LLM:       llm,
-		Transport: e.transport,
+		LLM:       prov.LLM,
+		Transport: transport,
 	}, prompt)
 
 	// TotalTokens is PARENT-ONLY; the sub-agent tree's spend lives on the

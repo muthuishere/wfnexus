@@ -77,6 +77,8 @@ func run(args []string) error {
 		return act(first(rest), "cancel", nil)
 	case "registry":
 		return registry(first(rest))
+	case "doctor":
+		return doctor()
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -97,6 +99,7 @@ func usage() {
   wfx approve <run-id>             approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
+  wfx doctor                       what is wired: default model, providers, classifiers, skills
   wfx retry <run-id> [--step id]   re-run from a step
   wfx cancel <run-id>
   wfx registry [skills|tools|providers|classifiers|mcp]
@@ -510,6 +513,100 @@ func act(id, verb string, body map[string]any) error {
 }
 
 // ---- registries ------------------------------------------------------------
+
+// doctor prints what is actually wired on this machine, as opposed to what the
+// registries declare. Every entry is a name (ADR 0011), and a name resolves
+// against this machine: an env var that may not be set, a CLI that may not be
+// installed. That used to be discoverable only by starting a run.
+//
+// It prints the NAME of a key variable and whether it is set. Never a value.
+func doctor() error {
+	var d struct {
+		Default struct {
+			Model, BaseURL, Style, APIKeyEnv string
+			KeySet                           bool
+		} `json:"default"`
+		Providers   []doctorEntry `json:"providers"`
+		Classifiers []doctorEntry `json:"classifiers"`
+		Skills      doctorCount   `json:"skills"`
+		Mcp         doctorCount   `json:"mcp"`
+		Workflows   doctorCount   `json:"workflows"`
+		Models      []string      `json:"models"`
+		Problems    []string      `json:"problems"`
+	}
+	if err := call("GET", "/api/doctor", nil, &d); err != nil {
+		return err
+	}
+
+	fmt.Printf("default model    %s\n", d.Default.Model)
+	fmt.Printf("                 %s (%s)\n", d.Default.BaseURL, d.Default.Style)
+	fmt.Printf("                 %s %s\n", d.Default.APIKeyEnv, tick(d.Default.KeySet, "set", "NOT SET"))
+	if len(d.Models) > 1 {
+		fmt.Printf("offered models   %s\n", strings.Join(d.Models, ", "))
+	}
+
+	fmt.Printf("\nproviders (%d)\n", len(d.Providers))
+	for _, p := range d.Providers {
+		printEntry(p)
+	}
+	fmt.Printf("\nclassifiers (%d)\n", len(d.Classifiers))
+	for _, c := range d.Classifiers {
+		printEntry(c)
+	}
+
+	fmt.Printf("\nskills %d   mcp servers %d   workflows %d\n", d.Skills.Count, d.Mcp.Count, d.Workflows.Count)
+	// Capped: a machine with a big skills directory has dozens of duplicate
+	// names, and a page of them buries the problems underneath.
+	for i, sk := range d.Skills.Skipped {
+		if i == 5 {
+			fmt.Printf("  … and %d more skipped skills (wfx registry skills)\n", len(d.Skills.Skipped)-5)
+			break
+		}
+		fmt.Printf("  skipped skill %s\n", sk)
+	}
+
+	if len(d.Problems) == 0 {
+		fmt.Printf("\neverything named is resolvable on this machine.\n")
+		return nil
+	}
+	fmt.Printf("\n%d problem(s) — a step naming one of these fails when it runs:\n", len(d.Problems))
+	for _, p := range d.Problems {
+		fmt.Printf("  ✗ %s\n", p)
+	}
+	return nil
+}
+
+type doctorEntry struct {
+	Name, Kind, Model, Detail, Problem string
+	Ready                              bool
+}
+
+type doctorCount struct {
+	Count   int
+	Skipped []string
+}
+
+func printEntry(e doctorEntry) {
+	mark := "✓"
+	if !e.Ready {
+		mark = "✗"
+	}
+	detail := e.Detail
+	if e.Model != "" {
+		detail = e.Model + "  " + detail
+	}
+	fmt.Printf("  %s %-14s %-6s %s\n", mark, e.Name, e.Kind, detail)
+	if e.Problem != "" {
+		fmt.Printf("      %s\n", e.Problem)
+	}
+}
+
+func tick(ok bool, yes, no string) string {
+	if ok {
+		return yes
+	}
+	return no
+}
 
 func registry(kind string) error {
 	if kind == "" {

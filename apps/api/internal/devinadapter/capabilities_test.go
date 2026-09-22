@@ -1,5 +1,3 @@
-//go:build toolnexus_inprocess
-
 package devinadapter_test
 
 // The rest of the toolnexus surface through the adapter: soul, hooks,
@@ -19,9 +17,9 @@ import (
 	"strings"
 	"testing"
 
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
+	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 )
 
 // agentsFor wires a sub-agent runtime onto the adapter.

@@ -49,6 +49,7 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/classifiers", s.listClassifiers)
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
+		r.Get("/doctor", s.doctor)
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
 		r.Post("/workflows/{name}/runs", s.createRun)
@@ -155,6 +156,12 @@ func (s *Server) listRegistries(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// doctor reports what is actually wired on this machine: the default model,
+// every provider and classifier, and whether each could run right now.
+func (s *Server) doctor(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, s.eng.Doctor())
+}
+
 func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, s.eng.Models())
 }
@@ -205,6 +212,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	var input json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// Fill declared defaults and check the input against input_schema BEFORE a
+	// run exists. A bad input used to become a run that failed several turns in,
+	// and a declared default was never applied at all.
+	input, err := s.eng.PrepareInput(name, input)
+	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}

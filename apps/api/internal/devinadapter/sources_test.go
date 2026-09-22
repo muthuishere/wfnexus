@@ -1,5 +1,3 @@
-//go:build toolnexus_inprocess
-
 // Parked until toolnexus exports InProcessTransport (toolnexus issue #95,
 // shipped on the issues-devin-acp branch, not in v0.18.1 which this module
 // pins). Without the tag this file breaks `go build ./...` for the whole
@@ -24,9 +22,9 @@ import (
 	"sync"
 	"testing"
 
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
+	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 )
 
 // byName replies by looking at which tools the request offers and what has

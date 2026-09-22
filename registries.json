@@ -5,11 +5,10 @@
     "the names travel between machines, the endpoints and credentials do not.",
     "apiKeyEnv is the NAME of an environment variable, never a key."
   ],
-
   "providers": {
     "sonnet": {
       "kind": "http",
-      "description": "Claude Sonnet 4.5 via OpenRouter — the default worker.",
+      "description": "Claude Sonnet 4.5 via OpenRouter \u2014 the default worker.",
       "baseUrl": "https://openrouter.ai/api/v1",
       "style": "openai",
       "model": "anthropic/claude-sonnet-4.5",
@@ -31,7 +30,6 @@
       "model": "openai/gpt-4o",
       "apiKeyEnv": "OPENROUTER_API_KEY"
     },
-
     "devin": {
       "kind": "acp",
       "description": "Devin as the model, over the Agent Client Protocol.",
@@ -40,15 +38,18 @@
       "timeoutSec": 900
     },
     "opencode": {
-      "kind": "acp",
-      "description": "opencode as the model. Cold start is slow (~5s), so prefer it on long steps where startup amortises.",
-      "preset": "opencode",
+      "kind": "cli",
+      "description": "opencode as the model, driven by its own CLI. Cold start is slow (~5s), so prefer it on long steps where startup amortises.",
       "repairs": 2,
-      "timeoutSec": 900
+      "timeoutSec": 900,
+      "command": [
+        "opencode",
+        "run"
+      ]
     },
     "claude-cli": {
       "kind": "cli",
-      "description": "The local `claude` CLI as the model — uses your own subscription rather than an API key.",
+      "description": "The local `claude` CLI as the model \u2014 uses your own subscription rather than an API key.",
       "preset": "claude",
       "repairs": 2,
       "timeoutSec": 900
@@ -61,7 +62,6 @@
       "timeoutSec": 900
     }
   },
-
   "classifiers": {
     "jev": {
       "description": "System One judge over OpenRouter. Calibrated, ~700ms, fractions of a cent.",
@@ -73,14 +73,13 @@
       "backend": "typesafe"
     },
     "chat-judge": {
-      "description": "A chat model answering the same typed questions. Slower, dearer, NOT calibrated — a compatibility exit, not an equivalent.",
+      "description": "A chat model answering the same typed questions. Slower, dearer, NOT calibrated \u2014 a compatibility exit, not an equivalent.",
       "backend": "llm"
     },
     "recorded": {
-      "description": "Replays a recorded corpus. No network, no credential — what tests use.",
+      "description": "Replays a recorded corpus. No network, no credential \u2014 what tests use.",
       "backend": "static"
     }
   },
-
   "mcpServers": {}
 }

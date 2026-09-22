@@ -1,5 +1,3 @@
-//go:build toolnexus_inprocess
-
 // Parked until toolnexus exports InProcessTransport (toolnexus issue #95,
 // shipped on the issues-devin-acp branch, not in v0.18.1 which this module
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
@@ -27,8 +25,8 @@ import (
 	"sync"
 	"testing"
 
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	toolnexus "github.com/muthuishere/toolnexus/golang"
+	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 )
 
 // Triage is the structural answer — its json tags ARE the schema toolnexus

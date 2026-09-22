@@ -25,6 +25,13 @@ func compileSchema(name string, schema map[string]any) (*jsonschema.Schema, erro
 // validateJSON validates an already-decoded value; the error message is written
 // for the MODEL to read (it is fed back as the tool result), so it is terse and lists every failure.
 func validateJSON(s *jsonschema.Schema, v any) error {
+	return validateAs("output", s, v)
+}
+
+// validateAs is validateJSON with the subject named, because the same checker
+// serves a step's output (read by the model) and a run's input (read by a
+// person), and "output does not match" is wrong in front of an operator.
+func validateAs(subject string, s *jsonschema.Schema, v any) error {
 	err := s.Validate(v)
 	if err == nil {
 		return nil
@@ -38,7 +45,7 @@ func validateJSON(s *jsonschema.Schema, v any) error {
 			}
 			lines = append(lines, fmt.Sprintf("- %s: %s", loc, c.ErrorKind.LocalizedString(printer)))
 		}
-		return fmt.Errorf("output does not match the required schema:\n%s", strings.Join(lines, "\n"))
+		return fmt.Errorf("%s does not match the required schema:\n%s", subject, strings.Join(lines, "\n"))
 	}
 	return err
 }
