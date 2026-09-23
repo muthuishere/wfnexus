@@ -93,9 +93,21 @@ User=builder
 WantedBy=multi-user.target
 ```
 
-**Windows:** `wfx-runner join …` once, then run `wfx-runner run` from a
-scheduled task set to *Run whether user is logged on or not*, or wrap it with
-`nssm install wfx-runner`.
+**Windows:** `wfx-runner join …` once, then:
+
+```powershell
+schtasks /Create /TN wfx-runner /SC ONSTART /RU SYSTEM /RL HIGHEST `
+  /TR "C:\wfx-demo\wfx-runner.exe run" /F
+schtasks /Run /TN wfx-runner
+```
+
+The scheduler owns the process, which is the point — `wfx-runner run` blocks
+forever by design, so anything that starts it and then waits on it is held for
+as long as the worker lives. Starting it from a remote-execution tool that
+waits on its output (a CI step, an SSH command, an agentbus job) hangs that
+tool, not the runner, and even redirecting the output is not enough: the child
+inherits the handles and the parent still waits on the pipe. Hand it to the
+scheduler, or to `nssm install wfx-runner`, and let the caller return.
 
 **macOS:** a LaunchAgent with `KeepAlive`, so it comes back when the laptop wakes.
 

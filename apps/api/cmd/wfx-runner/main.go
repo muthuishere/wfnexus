@@ -40,6 +40,11 @@ import (
 // version travels with the worker so the Workers page can say what is out there.
 var version = "dev"
 
+// errRemoved is the platform saying this worker is not in the pool. It is the
+// one refusal that waiting cannot fix, so it ends the loop rather than joining
+// the backoff with the transport failures.
+var errRemoved = errors.New("worker not registered")
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -244,6 +249,13 @@ func cmdRun(args []string) error {
 			if ctx.Err() != nil {
 				break
 			}
+			// A removed worker must EXIT, not retry. Backing off forever
+			// leaves a process nobody is watching holding whatever started
+			// it — a service slot, a scheduled task, an agentbus job — and
+			// the machine looks busy while doing nothing at all.
+			if errors.Is(err, errRemoved) {
+				return fmt.Errorf("this worker is no longer in the pool — run `wfx-runner join` again")
+			}
 			// The platform restarting, or a laptop that closed its lid, must not
 			// end the worker — it backs off and keeps asking.
 			fmt.Fprintln(os.Stderr, "waiting:", err)
@@ -319,7 +331,10 @@ func claim(ctx context.Context, cfg *Config) (*job, error) {
 		var j job
 		return &j, json.NewDecoder(resp.Body).Decode(&j)
 	case http.StatusUnauthorized:
-		return nil, errors.New("this worker was removed from the pool — run `wfx-runner join` again")
+		// Removed from the pool, or the platform's registration was reset.
+		// Reported as a distinct condition rather than a transport error,
+		// because it never resolves by waiting.
+		return nil, errRemoved
 	default:
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("claim: %s: %s", resp.Status, strings.TrimSpace(string(b)))
