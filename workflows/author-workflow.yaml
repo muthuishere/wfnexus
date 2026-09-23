@@ -31,16 +31,21 @@ steps:
     name: Draft and check a workflow
     description: Produce a workflow definition that is valid and would actually run here.
 
-    # A local CLI as the model: authoring is a long, iterative loop and this
-    # costs nothing per turn. Swap the line for `sonnet` if the drafts are weak.
-    provider: opencode
-
     soul: >-
       You write workflows for this platform and you do not hand over anything
-      you have not checked. You would rather propose three honest steps than
-      seven you are guessing about. You never invent a name — you look it up —
-      and when the dry run disagrees with you, the dry run is right.
+      you have not checked. When the dry run disagrees with you, the dry run is
+      right.
 
+    # The DEFAULT model, deliberately. Authoring is the one workflow every
+    # install runs before it has configured anything, so pinning it to a
+    # provider that happens to be on this machine is how a fresh install finds
+    # the feature broken. Name a provider here only if you want a specific one.
+
+    # The method lives in the skill, not in this prompt. It is a skill so it can
+    # be read, edited and reused by any step — including a step somebody writes
+    # to EDIT a workflow rather than create one — instead of being a paragraph
+    # that only this file has.
+    skills: [workflow-author]
     tools: [wf_catalog, wf_validate, wf_dryrun]
 
     budget: { max_turns: 30, max_wall_sec: 1200 }
@@ -52,45 +57,12 @@ steps:
       {{ .Input.goal }}
 
       {{ if .Input.name }}Call it `{{ .Input.name }}`.{{ end }}
-      {{ if .Input.cheap }}Prefer cheap steps: use `run:` for anything a shell
-      command can decide, and a `judge` step rather than an agent for a verdict.
-      Only use a full agent step where judgement over a repository is genuinely
-      needed.{{ end }}
+      {{ if .Input.cheap }}Prefer cheap steps: a `run:` step for anything a
+      shell command can decide, a `judge` step for a verdict, a full agent only
+      where judgement over a repository is genuinely needed.{{ end }}
 
-      HOW TO WORK
-      1. Call `wf_catalog` with `kind: "shape"` FIRST. That is the real
-         structure of a workflow file — the exact field names a step has. Do
-         not guess them from other workflow formats you have seen; this one has
-         no `title`, no `type` and no `input` on a step.
-      2. Call `wf_catalog` again for the names. Every skill, tool, provider and
-         classifier you use must come from it — a name that is not there makes
-         the whole file fail to load.
-      3. Draft the definition.
-      4. Call `wf_dryrun` on your draft. It will tell you what would actually
-         happen here: the order, the rendered prompts, and anything that would
-         be empty or unresolvable.
-      5. Fix what it found and dry run again. Repeat until it is clean.
-      6. Call `wf_dryrun` ONE LAST TIME on the exact definition you are about to
-         submit — not an earlier version of it, the exact one. This is the most
-         common way to get this wrong: fixing a draft, then submitting something
-         that was never checked.
-      7. Only if that last dry run is clean, call `submit_output` with that same
-         definition. If it is not clean, keep working; a draft you have not
-         verified is not finished.
-
-      WHAT A GOOD WORKFLOW LOOKS LIKE
-      - Each step is a whole agent: a `soul` saying who it is, the tools it
-        needs and NOTHING more, a budget, and an `output_schema` that is a real
-        contract rather than `{summary: string}`.
-      - Steps hand each other typed objects. A later step reads
-        `{{ "{{ .Steps.<earlier-id>.<field> }}" }}` — and that field must exist
-        in the earlier step's output_schema.
-      - A step that only reads should be denied `write` and `edit` with a
-        guardrail saying why.
-      - Give every agent step a turn budget. An agent that is told nothing
-        spends everything.
-
-      Be honest in your explanation about what this workflow does NOT do.
+      Follow the workflow-author skill. Submit only a definition whose final
+      dry run was clean.
 
     output_schema:
       type: object

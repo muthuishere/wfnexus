@@ -187,3 +187,9 @@ func finish() turn { return turn{text: "done"} }
 func bashCall(cmd string) turn {
 	return turn{calls: []call{{name: "bash", args: map[string]any{"command": cmd}}}}
 }
+
+// callTool is a scripted call to any tool by name — the authoring tests drive
+// wf_catalog and wf_dryrun through it.
+func callTool(name string, args map[string]any) turn {
+	return turn{calls: []call{{name: name, args: args}}}
+}
