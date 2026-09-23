@@ -24,6 +24,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/secrets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -46,6 +47,11 @@ type Engine struct {
 	// transport overrides the LLM HTTP transport (tests script it).
 	transport http.RoundTripper
 
+	// secrets seals and opens the platform's env store. Nil when no key could
+	// be loaded, which makes the store unavailable rather than plaintext.
+	secrets     store.Sealer
+	secretsFrom string
+
 	// sink replaces the event store on a worker engine, where there is no
 	// database: every event goes here to be posted back to the platform.
 	sink func(kind string, payload any)
@@ -66,11 +72,20 @@ func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*wor
 	if limit < 1 {
 		limit = 1
 	}
-	return &Engine{
+	e := &Engine{
 		cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, catalog: cat,
 		broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{},
 		slots: make(chan struct{}, limit),
 	}
+	// The key is loaded once, at boot. A failure is not fatal — a platform with
+	// no stored secrets works perfectly well — but it is reported, because a
+	// step that expected one will otherwise fail later and further away.
+	if box, from, err := secrets.Load(cfg.SecretKeyEnv, cfg.SecretKeyPath); err == nil {
+		e.secrets, e.secretsFrom = box, from
+	} else {
+		log.Printf("engine: env store unavailable: %v", err)
+	}
+	return e
 }
 
 // UseTransport overrides the LLM HTTP transport (tests script the wire).

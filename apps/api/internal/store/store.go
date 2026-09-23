@@ -401,3 +401,7 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 	}
 	return out, rows.Err()
 }
+
+// Pool exposes the connection pool for tests that need to assert on what is
+// actually stored — that a secret is ciphertext in the table, for instance.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }

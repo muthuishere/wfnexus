@@ -75,6 +75,13 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/projects", s.listProjects)
 		r.Post("/projects", s.createProject)
 		r.Get("/projects/{name}", s.getProject)
+		// The env store: system-wide, and per project.
+		r.Get("/env", s.listSystemEnv)
+		r.Put("/env", s.setSystemEnv)
+		r.Delete("/env/{key}", s.deleteSystemEnv)
+		r.Get("/projects/{name}/env", s.listProjectEnv)
+		r.Put("/projects/{name}/env", s.setProjectEnv)
+		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
 		r.Get("/sources", s.listSources)
 

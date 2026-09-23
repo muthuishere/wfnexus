@@ -30,7 +30,11 @@ type Doctor struct {
 	Workflows   DoctorCount      `json:"workflows"`
 	Models      []string         `json:"models"`
 	Shell       DoctorShell      `json:"shell"`
-	Problems    []string         `json:"problems"`
+	// Problems is never nil. A nil slice marshals to `null`, and the one
+	// consumer that reads it does `problems.length` — so a machine with
+	// NOTHING wrong crashed the System page, while a broken one rendered fine.
+	// The healthy case is the one nobody tests.
+	Problems []string `json:"problems"`
 }
 
 // DoctorShell is what a `run:` step will actually execute through on this
@@ -76,6 +80,7 @@ type DoctorCount struct {
 // lookup, so it is safe to run at boot.
 func (e *Engine) Doctor() Doctor {
 	d := Doctor{
+		Problems: []string{},
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "",

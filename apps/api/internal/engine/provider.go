@@ -40,7 +40,13 @@ func noClose() {}
 //
 // The returned label is what the run log and the UI show, so an operator can
 // see which provider a step actually used rather than which one it asked for.
+// resolveLLM uses the step's own env block. Callers that have the whole
+// cascade — the engine, about to run a step — use resolveLLMWithEnv instead.
 func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, error) {
+	return e.resolveLLMWithEnv(step, workdir, step.Env)
+}
+
+func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string) (resolved, error) {
 	// No provider named: the process-wide default, with `model:` as an override
 	// of the model id only. This is the path every workflow used before
 	// providers existed and it keeps working unchanged.
@@ -71,7 +77,13 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 		if step.Model != "" {
 			model = step.Model
 		}
-		key := os.Getenv(p.APIKeyEnv)
+		// The key may come from the platform's env store as well as this
+		// process's environment: a system-scope entry is exactly how an
+		// operator supplies one without putting it in the unit file.
+		key := stepEnv[p.APIKeyEnv]
+		if key == "" {
+			key = os.Getenv(p.APIKeyEnv)
+		}
 		if key == "" {
 			// Named, not held. Said plainly here rather than discovered as a
 			// 401 twenty turns in. The variable's NAME is safe to print; its
@@ -90,7 +102,7 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 		// The step's env reaches the CLI as well. An agent CLI is a program on
 		// this machine, and a skill that tells it to call an API needs that
 		// API's token in the process that actually makes the call.
-		env, err := workflow.ResolveEnv(step.Env)
+		env, err := workflow.ResolveEnv(stepEnv)
 		if err != nil {
 			return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
 		}

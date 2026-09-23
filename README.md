@@ -157,8 +157,29 @@ project ships its own the same way.
 
 ## Environment
 
-`env:` cascades workflow → job → step, exactly as in Actions — and a value may **name** a variable
-instead of holding one:
+Five layers, each overriding only the names it mentions:
+
+```
+system → project → workflow → job → step
+```
+
+The top two are the **platform's**, held in Postgres and **encrypted at rest** — system is what
+every run on the machine gets (a proxy, a registry, a model key), project belongs to one repository,
+because a token that can push to one repo has no business reaching a workflow from another.
+
+```bash
+wfx env                          # names and kinds; a secret's value is never shown
+echo $TOKEN | wfx env set GH_TOKEN          # read without echo, never in argv or history
+wfx env --project acme set DEPLOY_KEY
+```
+
+A secret goes in and never comes back out: the listing returns names, the API omits the value
+field entirely, and the only path out of the database is into the process about to run a step. The
+key lives in `WFX_SECRET_KEY`, or in a `0600` file written on first boot whose path is logged (never
+its contents). Encryption protects a `pg_dump`, a backup on a laptop, a replica — not someone who
+already runs the process, which is why `${VAR}` references remain better wherever they fit.
+
+The bottom three are the **file's**, and a value may **name** a variable instead of holding one:
 
 ```yaml
 env:
@@ -172,7 +193,7 @@ environment of whatever machine executes the step. A build box's own credential 
 there without the platform ever holding it. A credential written out in full is **refused on save**,
 because the file is committed and saving it is the leak.
 
-It reaches `run:` steps, the agent's `bash` tool, and an agent CLI's own process. `wfx dryrun`
+All of it reaches `run:` steps, the agent's `bash` tool, and an agent CLI's own process. `wfx dryrun`
 lists the variable names a step reads and fails if one is unset — names only, so a dry run is safe
 to paste into an issue.
 

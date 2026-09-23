@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import EnvStore from '../components/EnvStore'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import { ago } from '../lib/time'
@@ -138,6 +139,11 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
             searchPlaceholder="Search workflows…"
             empty={<>No workflows. Add YAML files to <span className="mono">.wfx/workflows/</span> in this repository.</>} />
         </div>)}
+
+      {/* This repository's own environment — a token that can push here has no
+          business reaching a workflow from another project. Shown only on the
+          project itself, not when drilled into one of its workflows. */}
+      {!workflow && <EnvStore project={name} />}
 
       <div className="card">
         <div className="subhead">

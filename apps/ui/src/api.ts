@@ -190,6 +190,19 @@ export type Template = {
   needsSkills: boolean
 }
 
+/** One entry of the platform's env store. A secret arrives with NO value: the
+ *  only path a value takes out of the database is into the process that runs a
+ *  step. A non-secret is ordinary configuration and is shown. */
+export type EnvVar = {
+  scope: string; scopeName?: string; key: string; secret: boolean
+  value?: string; updatedAt: string
+}
+export type EnvList = {
+  scope: string; scopeName: string; vars: EnvVar[]
+  /** where the encryption key came from — a variable name or a path, never the key */
+  keySource: string
+}
+
 export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
@@ -201,6 +214,18 @@ export const api = {
       body: JSON.stringify({ definition }),
     })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
+
+  /** The env store: system-wide, and per project. Values go in; only names
+   *  come back for anything marked secret. */
+  env: (project?: string) => j<EnvList>(fetch(project ? `/api/projects/${encodeURIComponent(project)}/env` : '/api/env')),
+  setEnv: (v: { key: string; value: string; secret: boolean }, project?: string) =>
+    j<{ ok: boolean }>(fetch(project ? `/api/projects/${encodeURIComponent(project)}/env` : '/api/env', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v),
+    })),
+  deleteEnv: (key: string, project?: string) =>
+    j(fetch(project
+      ? `/api/projects/${encodeURIComponent(project)}/env/${encodeURIComponent(key)}`
+      : `/api/env/${encodeURIComponent(key)}`, { method: 'DELETE' })),
 
   /** The template gallery, and copying one into a workflow of your own. */
   templates: () => j<Template[]>(fetch('/api/templates')),

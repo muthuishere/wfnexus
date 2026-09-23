@@ -272,7 +272,7 @@ func TestAPlatformToolStepCannotBePlaced(t *testing.T) {
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t), "")
 
-	_, err := h.eng.packAgentJob(mustRun(t, h), def, &def.Steps[0], "author it", "")
+	_, err := h.eng.packAgentJob(context.Background(), mustRun(t, h), def, &def.Steps[0], "author it", "")
 	if err == nil {
 		t.Fatal("a step using a platform tool was packed for another machine")
 	}

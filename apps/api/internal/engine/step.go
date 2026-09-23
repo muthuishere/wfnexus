@@ -96,7 +96,13 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// Granted only when the step names them, like every other tool.
 	extra = append(extra, e.platformTools(step.Tools)...)
 
-	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), step.Env)
+	// The whole cascade, resolved once for this step: the agent's bash tool and
+	// its CLI provider must see the same environment a `run:` step would.
+	env, err := e.stepEnv(ctx, runID, step)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), env)
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
 	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, extra, hooks, onMetric)
@@ -117,7 +123,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		},
 	}
 
-	prov, err := e.resolveLLM(step, workdir)
+	prov, err := e.resolveLLMWithEnv(step, workdir, env)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}

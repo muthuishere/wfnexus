@@ -93,6 +93,8 @@ func run(args []string) error {
 		return sources(rest)
 	case "workers", "worker":
 		return workers(rest)
+	case "env":
+		return envCmd(rest)
 	case "templates", "template":
 		return templates(rest)
 	case "new":
@@ -113,6 +115,8 @@ func usage() {
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
+  wfx env [--project p]            the platform's env store (values are never shown)
+  wfx env set NAME [--plain]       read a value without echoing it, store it encrypted
   wfx templates [name]             starting points to copy — the shape, minus your skills
   wfx new <template> --as <name>   copy one into a workflow of your own
   wfx workers                      machines in the pool, and the line that adds another

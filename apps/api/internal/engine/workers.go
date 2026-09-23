@@ -235,9 +235,13 @@ type JobResult struct {
 
 // runRemote queues a command for a worker holding `label` and waits for it.
 func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, cmd, label string, data workflow.TemplateData) (map[string]any, error) {
+	env, err := e.stepEnv(ctx, runID, step)
+	if err != nil {
+		return nil, err
+	}
 	payload := JobPayload{
 		RunID: runID.String(), StepID: step.ID, Command: cmd,
-		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: step.Env,
+		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project
@@ -334,7 +338,7 @@ func (e *Engine) PublicURL() string { return e.cfg.PublicURL }
 // CLI does not — `provider: devin` resolves against THAT machine's PATH, with
 // the credential that machine already holds. That asymmetry is the feature.
 func (e *Engine) runAgentRemotely(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, prompt string, data workflow.TemplateData) (stepResult, error) {
-	job, err := e.packAgentJob(runID, def, step, prompt, data.BaseRef)
+	job, err := e.packAgentJob(ctx, runID, def, step, prompt, data.BaseRef)
 	if err != nil {
 		return stepResult{}, err
 	}

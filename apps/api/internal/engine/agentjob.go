@@ -86,7 +86,7 @@ type AgentOutcome struct {
 // ---- packing, on the platform ----
 
 // packAgentJob assembles everything the step needs to run elsewhere.
-func (e *Engine) packAgentJob(runID uuid.UUID, def *workflow.Definition, step *workflow.Step, prompt, baseRef string) (*AgentJob, error) {
+func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, prompt, baseRef string) (*AgentJob, error) {
 	// A step that reaches back into this platform cannot be placed: the
 	// catalogue, the validator and the dry run are THIS process. Refused here
 	// rather than discovered as a missing tool mid-run.
@@ -96,8 +96,18 @@ func (e *Engine) packAgentJob(runID uuid.UUID, def *workflow.Definition, step *w
 				step.ID, t, step.RunsOn)
 		}
 	}
+	// The step travels with its WHOLE environment resolved down to the file's
+	// last word: the worker has no access to this platform's env store, so
+	// what it is not sent, it does not have.
+	placed := *step
+	env, err := e.stepEnv(ctx, runID, step)
+	if err != nil {
+		return nil, err
+	}
+	placed.Env = env
+
 	job := &AgentJob{
-		RunID: runID.String(), Workflow: def.Name, Step: *step, Prompt: prompt, BaseRef: baseRef,
+		RunID: runID.String(), Workflow: def.Name, Step: placed, Prompt: prompt, BaseRef: baseRef,
 		Defaults: LLMDefaults{
 			BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			Model: e.cfg.Model, APIKeyEnv: e.cfg.LLMAPIKeyEnv,

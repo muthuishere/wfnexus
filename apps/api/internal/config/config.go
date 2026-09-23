@@ -62,6 +62,11 @@ type Config struct {
 	// RunnerToken is the registration token a machine presents to join. Empty
 	// means "generate one and keep it", which is what a fresh install does.
 	RunnerToken string
+	// SecretKeyEnv names the variable holding the env store's encryption key;
+	// SecretKeyPath is where one is written on first boot if that is unset.
+	// The key is never stored beside the values it protects.
+	SecretKeyEnv  string
+	SecretKeyPath string
 	// PublicURL is the address a worker can reach this server on, used to build
 	// the join command shown in the dashboard. Empty ⇒ inferred per request.
 	PublicURL string
@@ -116,6 +121,8 @@ func Load() Config {
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", 4),
 		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", "local")),
 		RunnerToken:       env("WFX_RUNNER_TOKEN", ""),
+		SecretKeyEnv:      env("WFX_SECRET_KEY_ENV", "WFX_SECRET_KEY"),
+		SecretKeyPath:     env("WFX_SECRET_KEY_PATH", filepath.Join(home, ".config", "wfnexus", "secret.key")),
 		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", ""), "/"),
 		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
 

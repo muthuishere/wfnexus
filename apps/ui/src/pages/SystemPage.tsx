@@ -4,6 +4,7 @@ import {
 } from '../api'
 import { Field, Section } from '../components/builder/Bits'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
+import EnvStore from '../components/EnvStore'
 
 /** SystemPage answers one question: if a step named this right now, would it run?
  *
@@ -62,11 +63,14 @@ export default function SystemPage() {
       {err && <div className="banner err">{err}</div>}
       {note && <div className="banner ok">{note}</div>}
 
-      {doc.problems.length > 0 && (
+      {/* What every run on this platform gets, before any workflow file. */}
+      <EnvStore />
+
+      {!!doc.problems?.length && (
         <div className="banner err">
-          <strong>{doc.problems.length} problem{doc.problems.length > 1 ? 's' : ''}</strong>
+          <strong>{doc.problems!.length} problem{doc.problems!.length > 1 ? 's' : ''}</strong>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-            {doc.problems.map((p, i) => <li key={i}>{p}</li>)}
+            {doc.problems!.map((p, i) => <li key={i}>{p}</li>)}
           </ul>
         </div>
       )}

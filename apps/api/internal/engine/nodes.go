@@ -71,10 +71,14 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
 	}
-	// The step's env, resolved against THIS machine. A reference to a variable
-	// nobody set is an error naming the variable, rather than an empty string
-	// and a 401 somewhere far away.
-	stepEnv, err := workflow.ResolveEnv(step.Env)
+	// The whole cascade — system, project, then the file — resolved against
+	// THIS machine. A reference to a variable nobody set is an error naming the
+	// variable, rather than an empty string and a 401 somewhere far away.
+	env, err := e.stepEnv(ctx, runID, step)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	stepEnv, err := workflow.ResolveEnv(env)
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
 	}
