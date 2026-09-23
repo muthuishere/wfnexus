@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -277,4 +278,66 @@ func TestAPlatformToolStepCannotBePlaced(t *testing.T) {
 	if !strings.Contains(err.Error(), skills.ToolCatalog) {
 		t.Fatalf("the refusal does not name the tool: %v", err)
 	}
+}
+
+// Re-running the join command on a machine that already joined must UPDATE it.
+// Without this every reinstall and every service restart that re-joins leaves a
+// ghost, and the Workers page fills with offline machines that do not exist —
+// which is what three rows for one laptop looked like in practice.
+func TestRejoiningUpdatesTheMachineRatherThanAddingAnother(t *testing.T) {
+	h := newHarness(t, &workflow.Definition{Name: "rejoin", Steps: []workflow.Step{{
+		ID: "noop", Run: "true",
+	}}}, newFakeLLM(t), "")
+	ctx := context.Background()
+	tok, err := h.eng.RegistrationToken(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "rejoiner-" + uuid.NewString()[:8]
+
+	first, err := h.eng.Join(ctx, JoinRequest{Token: tok, Name: name, Labels: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.store.DeleteWorker(ctx, first.Worker.ID) })
+
+	second, err := h.eng.Join(ctx, JoinRequest{Token: tok, Name: name, Labels: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Worker.ID != first.Worker.ID {
+		t.Fatalf("re-joining made a second machine: %s then %s", first.Worker.ID, second.Worker.ID)
+	}
+
+	var seen int
+	for _, w := range mustWorkers(t, h) {
+		if w.Name == name {
+			seen++
+			if len(w.Labels) != 2 {
+				t.Errorf("the new labels did not replace the old: %v", w.Labels)
+			}
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("%d rows named %q; want 1", seen, name)
+	}
+
+	// The old token must stop working: whoever just ran the join command holds
+	// the new one, and two processes claiming to be one machine would race for
+	// its jobs.
+	if _, err := h.eng.AuthWorker(ctx, first.Token); err == nil {
+		t.Error("the superseded token still authenticates")
+	}
+	if _, err := h.eng.AuthWorker(ctx, second.Token); err != nil {
+		t.Errorf("the new token does not authenticate: %v", err)
+	}
+}
+
+func mustWorkers(t *testing.T, h *harness) []*store.Worker {
+	t.Helper()
+	ws, err := h.store.ListWorkers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ws
 }

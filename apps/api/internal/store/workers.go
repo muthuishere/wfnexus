@@ -107,9 +107,15 @@ func (s *Store) RegisterWorker(ctx context.Context, w *Worker, tokenHash string)
 	if w.Labels == nil {
 		w.Labels = []string{}
 	}
+	// ON CONFLICT (name): a machine is its name. The previous token stops
+	// working, which is correct — whoever just ran the join command holds the
+	// new one, and a machine cannot be in the pool twice.
 	return s.pool.QueryRow(ctx, `
 		INSERT INTO workers (id, name, labels, os, arch, version, token_hash, last_seen)
 		VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+		ON CONFLICT (name) DO UPDATE SET
+			labels=EXCLUDED.labels, os=EXCLUDED.os, arch=EXCLUDED.arch,
+			version=EXCLUDED.version, token_hash=EXCLUDED.token_hash, last_seen=now()
 		RETURNING `+workerCols,
 		w.ID, w.Name, w.Labels, w.OS, w.Arch, w.Version, tokenHash,
 	).Scan(&w.ID, &w.Name, &w.Labels, &w.OS, &w.Arch, &w.Version, &w.LastSeen, &w.Created)
