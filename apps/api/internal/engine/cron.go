@@ -84,7 +84,7 @@ func (e *Engine) StartTriggered(ctx context.Context, name string, trigger workfl
 	if err != nil {
 		return err
 	}
-	run, err := e.store.CreateRun(ctx, name, raw)
+	run, err := e.store.CreateRun(ctx, e.ProjectFor(name), name, raw)
 	if err != nil {
 		return err
 	}

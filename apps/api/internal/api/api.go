@@ -68,6 +68,10 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		r.Get("/projects", s.listProjects)
+		r.Post("/projects", s.createProject)
+		r.Get("/projects/{name}", s.getProject)
+		r.Delete("/projects/{name}", s.deleteProject)
 		r.Get("/sources", s.listSources)
 		r.Post("/sources", s.importSource)
 		r.Delete("/sources/{name}", s.forgetSource)
@@ -291,6 +295,64 @@ func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.eng.DryRunDraft(def, envelope.Input))
 }
 
+// A project is a repository the platform knows about, and it owns its
+// workflows and their runs: project → workflow → runs, the same hierarchy
+// GitHub Actions has.
+func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
+	out, err := s.eng.Projects(r.Context())
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
+	p, err := s.eng.Project(r.Context(), urlName(r, "name"))
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
+// createProject clones a repository (or points at a local checkout, used in
+// place) and loads the workflows in its .wfx/workflows/.
+func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name   string `json:"name"`
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Repo == "" {
+		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place"))
+		return
+	}
+	src, err := s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	p, err := s.eng.Project(r.Context(), src.Name)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 201, p)
+}
+
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.ForgetRepo(urlName(r, "name")); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
 // listSources returns every place workflows are loaded from, and anything that
 // failed to load — a broken file in one imported repository is recorded rather
 // than fatal, so it needs somewhere to be seen.
@@ -397,7 +459,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	run, err := s.store.CreateRun(r.Context(), name, input)
+	run, err := s.store.CreateRun(r.Context(), s.eng.ProjectFor(name), name, input)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -449,8 +511,13 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]any{"ok": true, "workflow": name, "eventType": body.EventType})
 }
 
+// listRuns narrows by project and workflow — the two axes of the hierarchy.
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.store.ListRuns(r.Context(), 100)
+	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
+		Project:  r.URL.Query().Get("project"),
+		Workflow: r.URL.Query().Get("workflow"),
+		Limit:    100,
+	})
 	if err != nil {
 		writeErr(w, 500, err)
 		return

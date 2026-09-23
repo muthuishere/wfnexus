@@ -22,6 +22,12 @@ export default function RunsPage() {
       cell: r => <span className={`badge ${r.status}`}>{r.status.replace(/_/g, ' ')}</span>,
     },
     {
+      key: 'project', header: 'Project', width: 130,
+      value: r => r.project || 'local',
+      cell: r => <a href={`#/projects/${encodeURIComponent(r.project || 'local')}`}
+        className="mono" onClick={e => e.stopPropagation()}>{r.project || 'local'}</a>,
+    },
+    {
       key: 'workflow', header: 'Workflow', width: 190,
       value: r => r.workflow,
       cell: r => <span className="mono">{r.workflow}</span>,
@@ -58,6 +64,11 @@ export default function RunsPage() {
       match: (r, v) => r.status === v,
     },
     {
+      key: 'project', label: 'projects',
+      options: [...new Set(runs.map(r => r.project || 'local'))].sort(),
+      match: (r, v) => (r.project || 'local') === v,
+    },
+    {
       key: 'workflow', label: 'workflows',
       options: [...new Set(runs.map(r => r.workflow))].sort(),
       match: (r, v) => r.workflow === v,
@@ -69,7 +80,10 @@ export default function RunsPage() {
       <div className="head">
         <div>
           <h1>Runs</h1>
-          <p>Every execution, newest first. A run is a workflow over one repository.</p>
+          <p>
+            Every execution across every project, newest first. Usually you want
+            {' '}<a href="#/projects">a project</a> instead — this view is for looking across them.
+          </p>
         </div>
         <a href="#/workflows"><button>New run</button></a>
       </div>

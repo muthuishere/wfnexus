@@ -64,7 +64,7 @@ func run(args []string) error {
 	case "run":
 		return startRun(rest)
 	case "runs":
-		return listRuns()
+		return listRuns(rest...)
 	case "show":
 		return showRun(first(rest))
 	case "logs":
@@ -87,6 +87,8 @@ func run(args []string) error {
 		return dryRun(rest)
 	case "import":
 		return importRepo(rest)
+	case "projects", "project":
+		return projects(rest)
 	case "sources":
 		return sources(rest)
 	default:
@@ -104,14 +106,16 @@ func usage() {
   wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
-  wfx runs                         recent runs
+  wfx runs [--project p] [--workflow w]  recent runs, newest first
   wfx show <run-id>                a run, step by step
   wfx logs <run-id> [-f]           the activity log
   wfx approve <run-id>             approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
-  wfx import <repo> [--as name]    load a repository's .wfx/workflows/
+  wfx projects                     every project: workflows and run activity
+  wfx project add <repo> [--as n]  add a project — a repo whose .wfx/workflows/ we run
+  wfx project rm <name>            forget one (the clone stays on disk)
   wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
   wfx retry <run-id> [--step id]   re-run from a step
@@ -329,6 +333,7 @@ func apply(args []string, install bool) error {
 
 type runRow struct {
 	ID          string         `json:"id"`
+	Project     string         `json:"project"`
 	Workflow    string         `json:"workflow"`
 	Status      string         `json:"status"`
 	CurrentStep string         `json:"currentStep"`
@@ -375,21 +380,36 @@ func startRun(args []string) error {
 	return nil
 }
 
-func listRuns() error {
+func listRuns(args ...string) error {
+	// Narrowed by project and workflow, the two axes of project → workflow →
+	// runs. A flat global list stops meaning anything with a second repository.
+	q := url.Values{}
+	if p := flagOf(args, "--project", ""); p != "" {
+		q.Set("project", p)
+	}
+	if w := flagOf(args, "--workflow", ""); w != "" {
+		q.Set("workflow", w)
+	}
+	path := "/api/runs"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
 	var rows []runRow
-	if err := call("GET", "/api/runs", nil, &rows); err != nil {
+	if err := call("GET", path, nil, &rows); err != nil {
 		return err
 	}
 	if len(rows) == 0 {
 		fmt.Println("no runs yet")
 		return nil
 	}
+	fmt.Printf("%-36s %-12s %-14s %-16s %-12s %s\n", "RUN", "PROJECT", "WORKFLOW", "STATUS", "STEP", "WHAT")
 	for _, r := range rows {
 		title, _ := r.Input["title"].(string)
 		if title == "" {
 			title = r.ID[:8]
 		}
-		fmt.Printf("%-36s %-14s %-18s %-14s %s\n", r.ID, r.Workflow, r.Status, r.CurrentStep, firstLine(title))
+		fmt.Printf("%-36s %-12s %-14s %-16s %-12s %s\n",
+			r.ID, r.Project, r.Workflow, r.Status, r.CurrentStep, firstLine(title))
 	}
 	return nil
 }
@@ -544,6 +564,52 @@ func act(id, verb string, body map[string]any) error {
 // installed. That used to be discoverable only by starting a run.
 //
 // It prints the NAME of a key variable and whether it is set. Never a value.
+// projects is the top of the hierarchy: project → workflow → runs, the same
+// shape GitHub Actions has. A run belongs to the repository it acted on, and
+// "which repo was that" is the first question anyone asks about a run.
+func projects(args []string) error {
+	switch {
+	case len(args) >= 2 && (args[0] == "add" || args[0] == "import"):
+		return importRepo(args[1:])
+	case len(args) >= 2 && (args[0] == "rm" || args[0] == "remove" || args[0] == "forget"):
+		if err := call("DELETE", "/api/projects/"+url.PathEscape(args[1]), nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("forgot %s (the clone is left on disk)\n", args[1])
+		return nil
+	}
+
+	var list []struct {
+		Name, Dir, Repo, URL, LastRun, LastRunAt string
+		Local                                    bool
+		Workflows                                []string
+		Runs                                     int
+		Problems                                 []struct{ Location, Reason string }
+	}
+	if err := call("GET", "/api/projects", nil, &list); err != nil {
+		return err
+	}
+	fmt.Printf("%-16s %-9s %-6s %-12s %s\n", "PROJECT", "WORKFLOWS", "RUNS", "LAST RUN", "WHERE")
+	for _, p := range list {
+		where := p.Repo
+		if p.URL != "" {
+			where = p.URL
+		}
+		if p.Local {
+			where = p.Dir + "  (this platform's own)"
+		}
+		last := p.LastRun
+		if last == "" {
+			last = "—"
+		}
+		fmt.Printf("%-16s %-9d %-6d %-12s %s\n", p.Name, len(p.Workflows), p.Runs, last, where)
+		for _, pr := range p.Problems {
+			fmt.Printf("  ✗ %s: %s\n", pr.Location, pr.Reason)
+		}
+	}
+	return nil
+}
+
 // dryRun answers "would this actually work here?" before anything is spent.
 // Validation asks whether the FILE is well formed; this asks whether THIS
 // MACHINE can run it, which is the question almost every real failure turned

@@ -82,7 +82,7 @@ func newHarness(t *testing.T, def *workflow.Definition, llm *fakeLLM, skillRoot 
 func (h *harness) run(input map[string]any) *store.Run {
 	h.t.Helper()
 	raw, _ := json.Marshal(input)
-	run, err := h.store.CreateRun(context.Background(), h.currentWorkflow(), raw)
+	run, err := h.store.CreateRun(context.Background(), "local", h.currentWorkflow(), raw)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestConcurrentRunsAreBoundedByTheSlotLimit(t *testing.T) {
 
 	ids := make([]uuid.UUID, 0, 3)
 	for i := 0; i < 3; i++ {
-		run, err := h.store.CreateRun(context.Background(), "concurrency", []byte(`{}`))
+		run, err := h.store.CreateRun(context.Background(), "local", "concurrency", []byte(`{}`))
 		if err != nil {
 			t.Fatal(err)
 		}

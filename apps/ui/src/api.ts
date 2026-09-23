@@ -78,7 +78,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; workflow: string; status: string; input: any; currentStep: string; error: string; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
@@ -119,6 +119,18 @@ export type McpServer = { name: string; description?: string; command?: string; 
 export type Skipped = { location: string; reason: string }
 /** Every registry endpoint answers this shape. `skipped` is what the loader refused. */
 export type Registry<T> = { entries: T[] | null; skipped: Skipped[] | null }
+
+/** A PROJECT is a repository the platform knows about, and it owns its
+ *  workflows and their runs: project → workflow → runs, the same hierarchy
+ *  GitHub Actions has. `local` is the platform's own workflows directory. */
+export type Project = {
+  name: string; dir: string; repo?: string; url?: string; local: boolean
+  workflows: string[]
+  runs: number
+  lastRun?: string
+  lastRunAt?: string
+  problems?: Skipped[]
+}
 
 /** What is actually wired on THIS machine, as opposed to what is declared. */
 export type Doctor = {
@@ -181,7 +193,20 @@ export const api = {
   deleteClassifier: (name: string) =>
     j(fetch(`/api/classifiers/${encodeURIComponent(name)}`, { method: 'DELETE' })),
   tools: () => j<BuiltinTool[]>(fetch('/api/tools')),
-  runs: () => j<Run[]>(fetch('/api/runs')),
+  projects: () => j<Project[]>(fetch('/api/projects')),
+  project: (name: string) => j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`)),
+  addProject: (body: { repo: string; name?: string; branch?: string }) =>
+    j<Project>(post('/api/projects', body)),
+  removeProject: (name: string) =>
+    j(fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })),
+
+  /** Runs, narrowed by the two axes of the hierarchy. */
+  runs: (q?: { project?: string; workflow?: string }) => {
+    const p = new URLSearchParams()
+    if (q?.project) p.set('project', q.project)
+    if (q?.workflow) p.set('workflow', q.workflow)
+    return j<Run[]>(fetch('/api/runs' + (p.toString() ? `?${p}` : '')))
+  },
   run: (id: string) => j<RunDetail>(fetch(`/api/runs/${id}`)),
   createRun: (wf: string, input: any) => j<Run>(post(`/api/workflows/${wf}/runs`, input)),
   approve: (id: string, stepId: string) => j(post(`/api/runs/${id}/approve`, { stepId })),

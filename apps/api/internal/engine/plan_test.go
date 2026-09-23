@@ -195,7 +195,7 @@ func TestPlanCancellationIsNotReportedAsStuck(t *testing.T) {
 
 	h := newHarness(t, def, llm, "")
 	raw := []byte(`{"go":"x"}`)
-	run, err := h.store.CreateRun(t.Context(), "cancelme", raw)
+	run, err := h.store.CreateRun(t.Context(), "local", "cancelme", raw)
 	if err != nil {
 		t.Fatal(err)
 	}

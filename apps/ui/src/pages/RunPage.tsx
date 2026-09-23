@@ -41,7 +41,9 @@ export default function RunPage({ id }: { id: string }) {
       <div className="head" style={{ alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
           <div className="muted" style={{ fontSize: 12.5, marginBottom: 2 }}>
-            <a href="#/runs">Runs</a> / <span className="mono">{run.workflow}</span>
+            <a href="#/projects">Projects</a>
+            {' / '}<a href={`#/projects/${encodeURIComponent(run.project || 'local')}`} className="mono">{run.project || 'local'}</a>
+            {' / '}<a href={`#/projects/${encodeURIComponent(run.project || 'local')}/${encodeURIComponent(run.workflow)}`} className="mono">{run.workflow}</a>
           </div>
           <h1>{run.input?.title || run.workflow}</h1>
           <div className="muted mono" style={{ fontSize: 12, marginTop: 3 }}>{run.id}</div>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -19,7 +20,10 @@ import (
 )
 
 type Run struct {
-	ID          uuid.UUID       `json:"id"`
+	ID uuid.UUID `json:"id"`
+	// Project is the repository this run belongs to — "local" for the
+	// platform's own workflows directory.
+	Project     string          `json:"project"`
 	Workflow    string          `json:"workflow"`
 	Status      string          `json:"status"`
 	Input       json.RawMessage `json:"input"`
@@ -105,19 +109,26 @@ func Migrate(url string) error {
 
 // ---- runs ----
 
-func (s *Store) CreateRun(ctx context.Context, workflow string, input json.RawMessage) (*Run, error) {
-	r := &Run{ID: uuid.New(), Workflow: workflow, Status: "queued", Input: input}
+// CreateRun records a run against its PROJECT. project → workflow → runs is
+// the same hierarchy GitHub Actions has, and the project is not optional: a run
+// that belongs to nothing cannot be found again once there is more than one
+// repository.
+func (s *Store) CreateRun(ctx context.Context, project, workflow string, input json.RawMessage) (*Run, error) {
+	if project == "" {
+		project = "local"
+	}
+	r := &Run{ID: uuid.New(), Project: project, Workflow: workflow, Status: "queued", Input: input}
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO workflow_runs (id, workflow, status, input) VALUES ($1,$2,$3,$4) RETURNING created_at, updated_at`,
-		r.ID, r.Workflow, r.Status, r.Input).Scan(&r.CreatedAt, &r.UpdatedAt)
+		`INSERT INTO workflow_runs (id, project, workflow, status, input) VALUES ($1,$2,$3,$4,$5) RETURNING created_at, updated_at`,
+		r.ID, r.Project, r.Workflow, r.Status, r.Input).Scan(&r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
-const runCols = `id, workflow, status, input, current_step, base_ref, error, created_at, updated_at`
+const runCols = `id, project, workflow, status, input, current_step, base_ref, error, created_at, updated_at`
 
 func scanRun(row pgx.Row) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Workflow, &r.Status, &r.Input, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, &r.Input, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -125,8 +136,78 @@ func (s *Store) GetRun(ctx context.Context, id uuid.UUID) (*Run, error) {
 	return scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM workflow_runs WHERE id=$1`, id))
 }
 
+// ProjectActivity is the per-project run summary a dashboard needs: how many,
+// and how the newest one went.
+//
+// Computed in SQL rather than by listing runs and counting them — the listing
+// is capped, so counting it reported the cap as the number of runs and a
+// project with 900 runs and one with 500 looked identical.
+type ProjectActivity struct {
+	Runs        int
+	LastStatus  string
+	LastCreated time.Time
+}
+
+// ProjectRunActivity returns one entry per project that has ever run anything.
+func (s *Store) ProjectRunActivity(ctx context.Context) (map[string]ProjectActivity, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.project, r.n, l.status, l.created_at
+		FROM (SELECT project, count(*) AS n FROM workflow_runs GROUP BY project) r
+		JOIN LATERAL (
+			SELECT status, created_at FROM workflow_runs
+			WHERE project = r.project ORDER BY created_at DESC LIMIT 1
+		) l ON true`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ProjectActivity{}
+	for rows.Next() {
+		var name string
+		var a ProjectActivity
+		if err := rows.Scan(&name, &a.Runs, &a.LastStatus, &a.LastCreated); err != nil {
+			return nil, err
+		}
+		out[name] = a
+	}
+	return out, rows.Err()
+}
+
+// RunFilter narrows a listing to a project, a workflow, or both — the two axes
+// the hierarchy actually has.
+type RunFilter struct {
+	Project  string
+	Workflow string
+	Limit    int
+}
+
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]*Run, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+runCols+` FROM workflow_runs ORDER BY created_at DESC LIMIT $1`, limit)
+	return s.FindRuns(ctx, RunFilter{Limit: limit})
+}
+
+// FindRuns lists runs newest first, optionally within one project or workflow.
+func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
+	if f.Limit <= 0 {
+		f.Limit = 100
+	}
+	q := `SELECT ` + runCols + ` FROM workflow_runs`
+	var where []string
+	var args []any
+	if f.Project != "" {
+		args = append(args, f.Project)
+		where = append(where, fmt.Sprintf("project=$%d", len(args)))
+	}
+	if f.Workflow != "" {
+		args = append(args, f.Workflow)
+		where = append(where, fmt.Sprintf("workflow=$%d", len(args)))
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
+	}
+	args = append(args, f.Limit)
+	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
