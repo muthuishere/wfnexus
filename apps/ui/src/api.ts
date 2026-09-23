@@ -156,6 +156,20 @@ async function j<T>(r: Promise<Response>): Promise<T> {
 const post = (url: string, body?: any) =>
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
 
+/** A machine that has joined the pool. It is known by its LABELS; the platform
+ *  never holds its address, because the worker connects out. */
+export type Worker = {
+  id: string; name: string; labels: string[]; os: string; arch: string
+  version: string; status: 'online' | 'offline' | string; lastSeen: string; createdAt: string
+}
+export type Pool = {
+  workers: Worker[]
+  /** Labels the platform serves in its own process — these need no machine. */
+  localLabels: string[]
+  joinCommand: string
+  url: string
+}
+
 export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
@@ -167,6 +181,11 @@ export const api = {
       body: JSON.stringify({ definition }),
     })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
+
+  /** The worker pool, and the one command that adds a machine to it. */
+  workers: () => j<Pool>(fetch('/api/workers')),
+  rotateWorkerToken: () => j<{ token: string; joinCommand: string }>(post('/api/workers/token/rotate')),
+  removeWorker: (id: string) => j(fetch(`/api/workers/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   deleteWorkflow: (name: string) =>
     j(fetch(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' })),
 

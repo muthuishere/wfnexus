@@ -35,14 +35,28 @@ tasks:
 
   # ---- build ----------------------------------------------------------------
   build:
-    desc: Both binaries — wfnexus (server) and wfx (CLI)
-    deps: [build:api, build:cli, ui:build]
+    desc: All three binaries — wfnexus (server), wfx (CLI), wfx-runner (worker)
+    deps: [build:api, build:cli, build:runner, ui:build]
   build:api:
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfnexus ."]
   build:cli:
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx ./cmd/wfx"]
+  build:runner:
+    dir: apps/api
+    cmds: ["go build -o {{.BIN}}/wfx-runner ./cmd/wfx-runner"]
+  build:runner:all:
+    desc: The worker for every machine you might add — linux, mac, windows
+    dir: apps/api
+    cmds:
+      - for: [linux/amd64, linux/arm64, darwin/arm64, darwin/amd64, windows/amd64, windows/arm64]
+        cmd: >-
+          GOOS={{splitList "/" .ITEM | first}} GOARCH={{splitList "/" .ITEM | last}} CGO_ENABLED=0
+          go build -trimpath -ldflags="-s -w"
+          -o {{.BIN}}/runner/wfx-runner-{{splitList "/" .ITEM | first}}-{{splitList "/" .ITEM | last}}{{if eq (splitList "/" .ITEM | first) "windows"}}.exe{{end}}
+          ./cmd/wfx-runner
+      - "ls -1 {{.BIN}}/runner"
   ui:build:
     dir: apps/ui
     cmds: [npm run build]

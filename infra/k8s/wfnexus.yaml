@@ -1,0 +1,87 @@
+# The platform in Kubernetes. Plain manifests, no chart, no operator: a
+# Deployment, a Service, a Secret and a PVC for run workspaces.
+#
+#   kubectl create ns wfx
+#   kubectl -n wfx apply -f infra/k8s/wfnexus.yaml
+#
+# Postgres and S3 are yours — point DATABASE_URL and S3_ENDPOINT at whatever
+# you already run. Nothing here assumes a managed service or a cloud.
+apiVersion: v1
+kind: Secret
+metadata: { name: wfnexus, namespace: wfx }
+stringData:
+  DATABASE_URL: postgres://bfp:bfp@postgres:5432/bfp?sslmode=disable
+  S3_ACCESS_KEY: bfp
+  S3_SECRET_KEY: bfpbfpbfp
+  # The token a machine presents to join the pool. Generate your own:
+  #   kubectl -n wfx create secret generic wfnexus --from-literal=WFX_RUNNER_TOKEN=wfx_$(openssl rand -hex 24) ...
+  WFX_RUNNER_TOKEN: change-me
+  # The model provider key. Read by name at call time; it is never written to a
+  # workflow file, the database or a run event.
+  OPENROUTER_API_KEY: ""
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: wfnexus-runs, namespace: wfx }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wfnexus, namespace: wfx }
+spec:
+  replicas: 1 # the engine holds running steps in memory; scale with workers, not replicas
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: wfnexus } }
+  template:
+    metadata: { labels: { app: wfnexus } }
+    spec:
+      containers:
+        - name: wfnexus
+          image: ghcr.io/muthuishere/wfnexus:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8090, name: http }]
+          envFrom: [{ secretRef: { name: wfnexus } }]
+          env:
+            - { name: S3_ENDPOINT, value: "minio:9000" }
+            - { name: WFX_WORKDIR, value: "/data/runs" }
+            # The address workers are told to reach, shown in the join command.
+            - { name: WFX_PUBLIC_URL, value: "https://wfx.example.com" }
+            # Labels this pod serves ITSELF. Leave `local` only; anything a
+            # step should run elsewhere gets a different label and a worker.
+            - { name: WFX_RUNNER_LABELS, value: "local" }
+          volumeMounts: [{ name: runs, mountPath: /data }]
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 30
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: runs
+          persistentVolumeClaim: { claimName: wfnexus-runs }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: wfnexus, namespace: wfx }
+spec:
+  selector: { app: wfnexus }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+# Uncomment and adjust for your ingress controller. WFX_PUBLIC_URL above must
+# match, because that is the URL the join command hands out.
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata: { name: wfnexus, namespace: wfx }
+# spec:
+#   rules:
+#     - host: wfx.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend: { service: { name: wfnexus, port: { number: 80 } } }

@@ -7,7 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+// splitList reads a comma-separated env var into trimmed, non-empty entries.
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 type Config struct {
 	Addr         string
@@ -32,6 +44,18 @@ type Config struct {
 	// queued. Each run drives several agents and a repo worktree, so this is the
 	// knob that keeps a burst of reports from thrashing the machine.
 	MaxConcurrentRuns int
+	// RunnerLabels are the labels THIS process serves itself. A step whose
+	// `runs-on` names one of them runs here, in process, exactly as before
+	// workers existed; anything else is queued for a worker that holds the
+	// label. So a single-machine install needs no workers at all, and adding
+	// one is additive rather than a migration.
+	RunnerLabels []string
+	// RunnerToken is the registration token a machine presents to join. Empty
+	// means "generate one and keep it", which is what a fresh install does.
+	RunnerToken string
+	// PublicURL is the address a worker can reach this server on, used to build
+	// the join command shown in the dashboard. Empty ⇒ inferred per request.
+	PublicURL string
 	// LLMAPIKeyEnv names the env var holding the provider key — the NAME, never
 	// the value, so a key cannot end up in config, logs or an event.
 	LLMAPIKeyEnv string
@@ -80,6 +104,9 @@ func Load() Config {
 		Model:          env("WFX_MODEL", "anthropic/claude-sonnet-4.5"),
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", 4),
+		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", "local,self-hosted")),
+		RunnerToken:       env("WFX_RUNNER_TOKEN", ""),
+		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", ""), "/"),
 		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
 
 		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", "https://openrouter.ai/api/v1"),

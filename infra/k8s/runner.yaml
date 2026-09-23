@@ -1,0 +1,33 @@
+# Workers as pods — for the labels you want served inside the cluster.
+#
+# A worker is not a replica of the platform. It is a machine that holds a
+# toolchain, so give each label its own Deployment with the tools that label
+# means: one image with the Devin CLI, another with a JDK, another that is not
+# in Kubernetes at all but a Windows box running `wfx-runner join`.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: wfx-runner-linux, namespace: wfx }
+spec:
+  replicas: 2 # two machines holding the same label; the queue hands each job to one
+  selector: { matchLabels: { app: wfx-runner, wfx-label: linux } }
+  template:
+    metadata: { labels: { app: wfx-runner, wfx-label: linux } }
+    spec:
+      containers:
+        - name: runner
+          image: ghcr.io/muthuishere/wfx-runner:latest
+          env:
+            - { name: WFX_URL, value: "http://wfnexus.wfx.svc.cluster.local" }
+            - { name: WFX_LABELS, value: "self-hosted,linux,docker" }
+            # Each pod joins under its own name, so the Workers page shows two
+            # machines rather than one flapping between identities.
+            - { name: WFX_NAME, valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - name: WFX_TOKEN
+              valueFrom: { secretKeyRef: { name: wfnexus, key: WFX_RUNNER_TOKEN } }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { memory: 4Gi }
+          volumeMounts: [{ name: work, mountPath: /home/wfx/.wfx-runner }]
+      volumes:
+        - name: work
+          emptyDir: {} # checkouts are a cache; losing them costs a clone

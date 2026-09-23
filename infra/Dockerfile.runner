@@ -1,0 +1,25 @@
+# A worker in a container — the same thing `wfx-runner join` makes of a laptop
+# or a Windows VM, for when the machine you want is a pod.
+#
+# It holds the tools the steps it takes will use: git, a shell, and whichever
+# agent CLI you want available on this label. That is the whole reason workers
+# exist — the toolchain lives with the machine, not with the platform.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY apps/api/go.mod apps/api/go.sum ./
+RUN go mod download
+COPY apps/api ./
+ENV CGO_ENABLED=0
+RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-runner ./cmd/wfx-runner
+
+FROM alpine:3.21
+RUN apk add --no-cache git bash curl ca-certificates nodejs npm python3 \
+ && adduser -D -u 10001 wfx
+# Add the agent CLIs this label is meant to provide, e.g.
+#   RUN npm i -g @devin/cli @anthropic-ai/claude-code
+COPY --from=build /out/wfx-runner /usr/local/bin/wfx-runner
+USER wfx
+ENV WFX_RUNNER_HOME=/home/wfx/.wfx-runner
+# join writes the registration, then run takes work until stopped.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "wfx-runner status >/dev/null 2>&1 || wfx-runner join --url \"$WFX_URL\" --token \"$WFX_TOKEN\" --labels \"${WFX_LABELS:-self-hosted}\" ${WFX_NAME:+--name \"$WFX_NAME\"}; exec wfx-runner run"]

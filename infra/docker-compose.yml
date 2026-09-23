@@ -1,0 +1,63 @@
+# The whole platform on one machine: `docker compose -f infra/docker-compose.yml up -d`
+#
+# Postgres, S3-compatible storage, the server, and one worker. The worker is
+# the same container a second machine would run — it is here so a fresh install
+# has a pool of one and `runs-on:` works out of the box.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-bfp}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-bfp}
+      POSTGRES_DB: ${PG_DB:-bfp}
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-bfp}"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-bfp}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-bfpbfpbfp}
+    ports: ["127.0.0.1:9030:9000", "127.0.0.1:9031:9001"]
+    volumes: [minio:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 20
+
+  wfnexus:
+    build: { context: .., dockerfile: infra/Dockerfile }
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_started }
+    environment:
+      DATABASE_URL: postgres://${PG_USER:-bfp}:${PG_PASSWORD:-bfp}@postgres:5432/${PG_DB:-bfp}?sslmode=disable
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-bfp}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-bfpbfpbfp}
+      # Pinned so the worker below can join without a human copying a token.
+      # Leave it unset on a real install and take the token from the Workers page.
+      WFX_RUNNER_TOKEN: ${WFX_RUNNER_TOKEN:-wfx_compose_dev_token}
+      WFX_PUBLIC_URL: ${WFX_PUBLIC_URL:-http://localhost:8090}
+      # The model key is passed by NAME to the process; its value never enters
+      # a workflow file or the database.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports: ["${WFX_PORT:-8090}:8090"]
+    volumes: [runs:/data]
+
+  runner:
+    build: { context: .., dockerfile: infra/Dockerfile.runner }
+    depends_on: [wfnexus]
+    environment:
+      WFX_URL: http://wfnexus:8090
+      WFX_TOKEN: ${WFX_RUNNER_TOKEN:-wfx_compose_dev_token}
+      WFX_LABELS: ${WFX_LABELS:-self-hosted,linux,docker}
+      WFX_NAME: compose-runner
+    volumes: [work:/home/wfx/.wfx-runner]
+    restart: unless-stopped
+
+volumes: { pg: , minio: , runs: , work: }

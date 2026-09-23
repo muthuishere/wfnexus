@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -45,6 +46,10 @@ type DryRunStep struct {
 	Provider string   `json:"provider,omitempty"`
 	Model    string   `json:"model,omitempty"`
 	Shell    string   `json:"shell,omitempty"`
+	// RunsOn is the label this step is placed on, and Workers is how many
+	// machines currently hold it — "where would this actually execute".
+	RunsOn  string `json:"runsOn,omitempty"`
+	Workers int    `json:"workers,omitempty"`
 	Skills   []string `json:"skills,omitempty"`
 	Tools    []string `json:"tools,omitempty"`
 	MaxTurns int      `json:"maxTurns,omitempty"`
@@ -136,11 +141,32 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 
 		// Would its shell exist? A `run:` step on a machine without one fails
 		// at the moment it runs, which is the expensive moment.
+		//
+		// Only for a step that runs HERE. A step placed on a worker is checked
+		// against the pool instead: whether THIS machine has powershell says
+		// nothing about a step that will execute on a Windows box, and failing
+		// the dry run on it would be a false alarm for the normal case.
 		if ds.Kind == "run" {
-			if sh, err := shellFor(s); err != nil {
-				fail(DryProblem{Step: s.ID, Field: "shell", Message: err.Error(), Fatal: true})
+			ds.RunsOn = s.RunsOn
+			if e.servesLocally(s.RunsOn) {
+				if sh, err := shellFor(s); err != nil {
+					fail(DryProblem{Step: s.ID, Field: "shell", Message: err.Error(), Fatal: true})
+				} else {
+					ds.Shell = sh.Name
+				}
+			} else if online, err := e.store.OnlineLabels(context.Background()); err == nil && online[s.RunsOn] == 0 {
+				// Not fatal: a machine can be added in a minute, and a workflow
+				// written for a pool it will join is not wrong. But a run that
+				// waits half an hour for a label nobody holds is the single
+				// failure this check exists to pre-empt.
+				fail(DryProblem{
+					Step: s.ID, Field: "runs-on",
+					Message: fmt.Sprintf("no worker online holds the label %q — this step would wait. "+
+						"Add a machine from the Workers page, or use one of: %s",
+						s.RunsOn, strings.Join(e.LocalLabels(), ", ")),
+				})
 			} else {
-				ds.Shell = sh.Name
+				ds.Workers = online[s.RunsOn]
 			}
 		}
 

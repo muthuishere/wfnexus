@@ -60,6 +60,48 @@ Needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` + `LLM_BASE_URL`) in the environ
 `.env.example` to `.env` for the rest. Nothing reads a secret into config — toolnexus picks the key
 up at call time.
 
+Or the whole thing in containers, including one worker:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d    # → http://localhost:8090
+```
+
+Kubernetes manifests are in [`infra/`](infra/README.md). There is no chart and no operator: a
+Deployment, a Service and a Secret.
+
+## Where a step runs
+
+A job says `runs-on: windows`. That is a **label**, never a machine — the same thing it means in
+GitHub Actions, and the same thing a Jenkins node label means.
+
+A machine joins by running one command, which the **Workers** page (or `wfx workers`) hands you:
+
+```bash
+wfx-runner join --url https://wfx.example.com --token wfx_… --labels windows,devin
+wfx-runner run
+```
+
+From then on that machine takes the steps whose label it holds, and runs them with the toolchain
+installed **there** — the Devin CLI, a JDK, a signing certificate, a licence dongle. The platform
+never connects to it: the worker polls out. So the platform can be a pod behind an ingress and the
+machine can be a laptop behind NAT, and neither has to be reachable from the other.
+
+The result has exactly the shape a local `run:` step produces, so a gate reading `steps.build.ok`
+cannot tell where it ran. Labels this process serves itself (`WFX_RUNNER_LABELS`, default
+`local,self-hosted`) run in process, so a single-machine install needs no worker at all.
+
+`wfx dryrun` says, for nothing, that a `runs-on:` nobody holds would wait:
+
+```
+STEP             KIND    RUNS ON                      BUDGET
+build.whoami     run     buildbox (no machine)        30 turns
+  warning build.whoami.runs-on   no worker online holds the label "buildbox" — this step would wait.
+```
+
+Today a worker runs `run:` steps; agent steps still execute on the platform, where the model
+credentials and the tool loop are. [`infra/README.md`](infra/README.md) has the rest, including
+running the worker as a service and what it does and does not isolate.
+
 ## How a step works
 
 ```yaml
@@ -111,11 +153,17 @@ apps/api/            Go: engine, workflow loader, Postgres store, MinIO blobs, R
   internal/engine/   the run loop, per-step agent, schema validation, event broker
   internal/workflow/ YAML loader + prompt templating
   migrations/        golang-migrate SQL (embedded, applied on boot)
+  cmd/wfx-runner/    the worker: joins a pool by label, takes steps, reports
 apps/ui/             React + TS + Vite: workflow list, run form, live run view
+infra/               Dockerfile, compose, k8s manifests — the whole deploy story
 workflows/*.yaml     the workflows
 skills/*/SKILL.md    the agent skills each step may load
 mcp.json             MCP servers steps may be granted
 ```
+
+Placement: `workers` (a machine and its labels) → `worker_jobs` (one step's work, queued for
+whoever holds the label). `FOR UPDATE SKIP LOCKED` is what makes two machines on the same label
+safe without a lease table.
 
 State: `workflow_runs` → `step_runs` (status, attempts, turns, validated `output jsonb`, usage) →
 `run_events` (the full activity log, replayed into the UI). Artifacts (agent transcript,
@@ -128,6 +176,8 @@ GET  /api/workflows                    POST /api/workflows/reload
 POST /api/workflows/{name}/runs        GET  /api/runs            GET /api/runs/{id}
 GET  /api/runs/{id}/events             SSE, ?after=<id> replays the backlog
 POST /api/runs/{id}/approve|reject|input|retry|cancel
+GET  /api/workers                      the pool + the join command
+POST /api/workers/join|claim|heartbeat|jobs/{id}/result   the whole worker protocol
 GET  /api/runs/{id}/artifacts/{id}     302 → presigned S3 (or ?inline=1)
 ```
 

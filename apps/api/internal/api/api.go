@@ -73,6 +73,16 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/projects/{name}", s.getProject)
 		r.Delete("/projects/{name}", s.deleteProject)
 		r.Get("/sources", s.listSources)
+
+		// Workers — the machines that have joined the pool.
+		r.Get("/workers", s.listWorkers)
+		r.Post("/workers/token/rotate", s.rotateToken)
+		r.Delete("/workers/{id}", s.removeWorker)
+		// ...and what a worker itself calls. These four are the whole protocol.
+		r.Post("/workers/join", s.joinWorker)
+		r.Post("/workers/claim", s.claimJob)
+		r.Post("/workers/heartbeat", s.heartbeat)
+		r.Post("/workers/jobs/{jobId}/result", s.finishJob)
 		r.Post("/sources", s.importSource)
 		r.Delete("/sources/{name}", s.forgetSource)
 		r.Put("/providers/{name}", s.saveProvider)

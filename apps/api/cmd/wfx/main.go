@@ -91,6 +91,8 @@ func run(args []string) error {
 		return projects(rest)
 	case "sources":
 		return sources(rest)
+	case "workers", "worker":
+		return workers(rest)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -107,6 +109,9 @@ func usage() {
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
+  wfx workers                      machines in the pool, and the line that adds another
+  wfx workers rm <id>              forget a machine
+  wfx workers rotate               new join token; machines already joined keep working
   wfx show <run-id>                a run, step by step
   wfx logs <run-id> [-f]           the activity log
   wfx approve <run-id>             approve the step waiting on a human
@@ -628,9 +633,9 @@ func dryRun(args []string) error {
 		Shape    string
 		Waves    [][]string
 		Steps    []struct {
-			ID, Kind, Provider, Model, Shell, Prompt string
-			Skills, Tools                            []string
-			MaxTurns, Wave                           int
+			ID, Kind, Provider, Model, Shell, Prompt, RunsOn string
+			Skills, Tools                                    []string
+			MaxTurns, Wave, Workers                          int
 		}
 		Problems []struct {
 			Step, Field, Message string
@@ -658,7 +663,12 @@ func dryRun(args []string) error {
 	for _, s := range d.Steps {
 		on := s.Model
 		if s.Kind == "run" {
+			// Where it runs is the label when it is placed on a machine, and
+			// the interpreter when it runs here. Both answer the same question.
 			on = s.Shell
+			if s.RunsOn != "" {
+				on = s.RunsOn + " (" + plural(s.Workers, "machine") + ")"
+			}
 		}
 		budget := "—"
 		if s.MaxTurns > 0 {
@@ -1018,4 +1028,15 @@ func toStrings(v []any) []string {
 		out = append(out, fmt.Sprint(x))
 	}
 	return out
+}
+
+// plural is for counts a person reads: "1 machine", "2 machines", "no machine".
+func plural(n int, noun string) string {
+	switch n {
+	case 0:
+		return "no " + noun
+	case 1:
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

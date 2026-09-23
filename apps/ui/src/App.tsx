@@ -8,12 +8,13 @@ import WorkflowBuilderPage from './pages/WorkflowBuilderPage'
 import SystemPage from './pages/SystemPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectPage from './pages/ProjectPage'
+import WorkersPage from './pages/WorkersPage'
 
 // tiny hash router. The hierarchy is project → workflow → runs, so the routes
 // read that way too:
 //   #/projects · #/projects/:name · #/projects/:name/:workflow
 //   #/workflows · #/workflows/new · #/workflows/:name/edit · #/workflows/:name/new
-//   #/runs · #/runs/:id · #/skills · #/system
+//   #/runs · #/runs/:id · #/skills · #/workers · #/system
 function useRoute() {
   const [h, setH] = useState(location.hash || '#/projects')
   useEffect(() => { const f = () => setH(location.hash || '#/projects'); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f) }, [])
@@ -35,6 +36,7 @@ export default function App() {
   else if (r[0] === 'workflows') page = <WorkflowsPage />
   else if (r[0] === 'runs' && r[1]) page = <RunPage id={r[1]} />
   else if (r[0] === 'skills') page = <SkillsPage />
+  else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
   return (
     <>
@@ -46,6 +48,7 @@ export default function App() {
           <a href="#/workflows" className={r[0] === 'workflows' && r[1] !== 'new' && r[2] !== 'edit' ? 'active' : ''}>Workflows</a>
           <a href="#/workflows/new" className={r[0] === 'workflows' && (r[1] === 'new' || r[2] === 'edit') ? 'active' : ''}>Builder</a>
           <a href="#/skills" className={r[0] === 'skills' ? 'active' : ''}>Skills &amp; tools</a>
+          <a href="#/workers" className={r[0] === 'workers' ? 'active' : ''}>Workers</a>
           <a href="#/system" className={r[0] === 'system' ? 'active' : ''}>System</a>
         </nav>
         <div className="spacer">toolnexus · postgres · s3</div>

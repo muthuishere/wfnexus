@@ -81,6 +81,15 @@ check that costs nothing.
 
 ## Work pending (no decision needed)
 
+- **A worker runs `run:` steps, not agent steps.** `wfx-runner` executes a command on the machine
+  that holds the label and reports a result with the same shape a local `run:` produces. An agent
+  step still runs on the platform, because that is where the model credentials and the tool loop
+  are. Placing an agent step on a machine that holds its own CLI — the whole reason someone wants
+  a Windows box in the pool — is the next move, and the payload was shaped for it.
+- **A worker has no sandbox.** It runs the command as the user it runs as. That is the bargain a
+  self-hosted Actions runner and a Jenkins node both make, and it is why docs/not-now.md's sandbox
+  entry now has a second trigger: a worker taking a job from a workflow we did not write.
+
 - **`cli` / `acp` providers still cannot execute a step.** A step naming one is
   now *refused* rather than silently run on the default model, which is the
   honest state. Making them run needs one thing from upstream: a toolnexus

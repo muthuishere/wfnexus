@@ -88,6 +88,14 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 	for _, id := range names {
 		job := d.Jobs[id]
 		job.ID = id
+		// The top of the cascade. The comment below has always said runs-on
+		// goes workflow → job → step, but the workflow level was never read:
+		// only job → step was wired, so a file whose placement was declared
+		// once at the top ran everything here instead. Nothing caught it
+		// because until workers existed the label changed nothing.
+		if job.RunsOn == "" {
+			job.RunsOn = d.RunsOn
+		}
 		steps := job.Steps
 		if len(job.Uses) > 0 {
 			expanded, err := expandInto(d.Name, id, job.Uses, tasks)
