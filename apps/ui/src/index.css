@@ -79,7 +79,10 @@ p  { margin: 0 }
 
 .head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 18px }
 .head h1 + p { margin-top: 4px; color: var(--muted); font-size: 13.5px; max-width: 76ch }
-.head > :last-child { margin-left: auto; flex: none }
+/* Push the trailing action to the right — but only when there IS one. With a
+   single child, :last-child is also :first-child, and the auto margin shoved
+   the page title across to the right (the Workers page, which has no button). */
+.head > :last-child:not(:first-child) { margin-left: auto; flex: none }
 
 .grid { display: grid; gap: 16px }
 .cols-2 { grid-template-columns: 360px 1fr }
@@ -93,7 +96,7 @@ p  { margin: 0 }
 }
 .card + .card { margin-top: 16px }
 .subhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px }
-.subhead > :last-child { margin-left: auto }
+.subhead > :last-child:not(:first-child) { margin-left: auto }
 
 .muted { color: var(--muted) }
 .mono { font-family: var(--mono); font-size: 12.5px; font-variant-ligatures: none }

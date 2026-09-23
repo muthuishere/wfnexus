@@ -168,6 +168,10 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// Env is this step's environment, layered over its job's and the
+	// workflow's. A value may NAME a variable rather than hold one — see
+	// env.go, which is what keeps a credential out of the file.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	// RunsOn places THIS step on a particular runner, overriding its job's.
 	// Actions has no step-level `runs-on`; this is the one place we go past it,
 	// because a task-level worker is the whole point of being able to put work
@@ -214,6 +218,58 @@ type Step struct {
 	AskHuman bool `yaml:"ask_human,omitempty" json:"askHuman,omitempty"`
 }
 
+// TemplateInfo describes a workflow that exists to be copied.
+//
+// A template is not a second kind of file: it is a workflow that loads,
+// validates and dry-runs like any other, so a template that would not run is
+// caught by the same loader rather than discovered by the first person to use
+// it. The only difference is that it refuses to BE run, because the point is
+// the copy.
+type TemplateInfo struct {
+	Is      bool   `json:"is"`
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Fill is what the author must supply to make it theirs — the skills on
+	// each step, usually. Shown beside the copy so the work is visible before
+	// it is started rather than found step by step.
+	Fill []string `json:"fill,omitempty"`
+}
+
+// UnmarshalYAML accepts both `template: true` and the mapping form. The bool
+// came first and files use it; breaking them to add a title would be a poor
+// trade for a field nobody is required to write.
+func (t *TemplateInfo) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		var b bool
+		if err := n.Decode(&b); err != nil {
+			return fmt.Errorf("template: want true/false or a mapping: %w", err)
+		}
+		t.Is = b
+		return nil
+	}
+	var raw struct {
+		Title   string   `yaml:"title"`
+		Summary string   `yaml:"summary"`
+		Fill    []string `yaml:"fill"`
+	}
+	if err := n.Decode(&raw); err != nil {
+		return fmt.Errorf("template: %w", err)
+	}
+	t.Is, t.Title, t.Summary, t.Fill = true, raw.Title, raw.Summary, raw.Fill
+	return nil
+}
+
+// MarshalYAML writes back the shortest form that carries the same meaning.
+func (t TemplateInfo) MarshalYAML() (any, error) {
+	if !t.Is {
+		return nil, nil
+	}
+	if t.Title == "" && t.Summary == "" && len(t.Fill) == 0 {
+		return true, nil
+	}
+	return map[string]any{"title": t.Title, "summary": t.Summary, "fill": t.Fill}, nil
+}
+
 type Definition struct {
 	Name        string         `yaml:"name" json:"name"`
 	Description string         `yaml:"description" json:"description"`
@@ -226,7 +282,12 @@ type Definition struct {
 	// own — Actions' `runs-on`, which is how work is placed on a particular
 	// worker. Empty ⇒ this process.
 	RunsOn string `yaml:"runs-on,omitempty" json:"runsOn,omitempty"`
-	Steps  []Step `yaml:"steps" json:"steps"`
+	// Env is the default environment for every step — Actions' `env:`, with
+	// the same cascade. A value may name a variable (`${GITHUB_PAT}`) rather
+	// than hold one, which is how a credential reaches a step without being
+	// written into the file.
+	Env   map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Steps []Step            `yaml:"steps" json:"steps"`
 	// Jobs are the GitHub-Actions-shaped form: jobs run in parallel, `needs`
 	// orders them, and each holds an ordered list of steps. Flattened into
 	// Steps at load time (see jobs.go), so nothing downstream knows about them.
@@ -234,7 +295,9 @@ type Definition struct {
 	// Uses expand reusable TASKS into steps at load time (see task.go).
 	Uses []Use `yaml:"uses,omitempty" json:"uses,omitempty"`
 	// Template marks a workflow as a starting point to copy rather than run.
-	Template bool `yaml:"template,omitempty" json:"template,omitempty"`
+	// `template: true` is enough; a mapping adds what the gallery shows and
+	// what the author still has to supply.
+	Template TemplateInfo `yaml:"template,omitempty" json:"template,omitempty"`
 	// authoredNeeds records whether the AUTHOR wrote any dependency, as opposed
 	// to the synthetic edges job flattening creates to chain a job's own steps.
 	// Only authored edges conflict with a derived plan; a job's internal
@@ -608,6 +671,10 @@ func normalize(d *Definition) {
 	}
 	for i := range d.Steps {
 		s := &d.Steps[i]
+		// The workflow's env reaches a step written in the flat `steps:` form
+		// too. Jobs merge it on their way through jobs.go; without this, `env:`
+		// would mean one thing in a job and nothing at all outside one.
+		s.Env = MergeEnv(d.Env, s.Env)
 		if s.Name == "" {
 			s.Name = s.ID
 		}

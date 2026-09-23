@@ -61,6 +61,10 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Get("/workflows", s.listWorkflows)
 		r.Post("/workflows/reload", s.reloadWorkflows)
 		r.Get("/workflows/{name}", s.getWorkflow)
+		// Templates — workflows that exist to be copied.
+		r.Get("/templates", s.listTemplates)
+		r.Get("/templates/{name}", s.getTemplate)
+		r.Post("/templates/{name}/copy", s.copyTemplate)
 		r.Post("/workflows/validate", s.validateWorkflow)
 		r.Get("/mcp", s.listMcp)
 		r.Get("/providers", s.listProviders)
@@ -164,8 +168,18 @@ func (s *Server) listTools(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, skills.Builtins())
 }
 
+// listWorkflows is what can be RUN. Templates are excluded: they refuse to run
+// by design, so listing them here only offers a Run button that cannot work.
+// They have their own endpoint and their own page.
 func (s *Server) listWorkflows(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, workflow.Sorted(s.eng.Definitions()))
+	all := workflow.Sorted(s.eng.Definitions())
+	out := make([]*workflow.Definition, 0, len(all))
+	for _, d := range all {
+		if !d.Template.Is {
+			out = append(out, d)
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) reloadWorkflows(w http.ResponseWriter, _ *http.Request) {

@@ -35,6 +35,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // version travels with the worker so the Workers page can say what is out there.
@@ -434,10 +435,14 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	argv := sh.Command(p.Command)
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Dir = dir
-	c.Env = os.Environ()
-	for k, v := range p.Env {
-		c.Env = append(c.Env, k+"="+v)
+	// The step's env is resolved HERE, against this machine. A value like
+	// ${GITHUB_PAT} names a variable this box holds; the platform never had it
+	// and it never crossed the network.
+	stepEnv, err := workflow.ResolveEnv(p.Env)
+	if err != nil {
+		return result{Error: err.Error()}
 	}
+	c.Env = append(os.Environ(), stepEnv...)
 	// The run's identity is in the environment, so a step can tell where it is
 	// and a tool on this machine can tag what it produced.
 	c.Env = append(c.Env,

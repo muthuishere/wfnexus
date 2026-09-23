@@ -71,7 +71,14 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
 	}
-	c.Env = os.Environ()
+	// The step's env, resolved against THIS machine. A reference to a variable
+	// nobody set is an error naming the variable, rather than an empty string
+	// and a 401 somewhere far away.
+	stepEnv, err := workflow.ResolveEnv(step.Env)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	c.Env = append(os.Environ(), stepEnv...)
 	var stdout, stderr strings.Builder
 	c.Stdout, c.Stderr = &stdout, &stderr
 	runErr := c.Run()

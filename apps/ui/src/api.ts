@@ -36,6 +36,12 @@ export type Step = {
   provider?: string
   /** a `run` step's shell: bash | sh | pwsh | powershell | cmd. empty ⇒ this machine's best */
   shell?: string
+  /** the runner label this step is placed on; empty ⇒ the platform itself */
+  runsOn?: string
+  /** environment for this step, layered over its job's and the workflow's.
+   *  A value may NAME a variable (`${GITHUB_PAT}`) instead of holding one —
+   *  that is how a credential reaches a step without entering the file. */
+  env?: Record<string, string>
   /** deterministic node: a shell command instead of an agent */
   run?: string
   /** DAG edges — a step runs once every id here is done */
@@ -170,6 +176,20 @@ export type Pool = {
   url: string
 }
 
+/** A workflow that exists to be copied. Not a second kind of file: it loads,
+ *  validates and dry-runs like any other, so a template that would not run is
+ *  caught by the loader rather than by the first person who uses it. */
+export type TemplatePhase = {
+  id: string; name?: string; kind: string; description?: string
+  skills?: string[]; tools?: string[]; approval?: boolean
+}
+export type Template = {
+  name: string; title: string; summary: string; description?: string
+  fill?: string[]; source?: string; phases: TemplatePhase[]
+  /** true when a phase has no skills yet — the normal state of a template. */
+  needsSkills: boolean
+}
+
 export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
@@ -181,6 +201,12 @@ export const api = {
       body: JSON.stringify({ definition }),
     })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
+
+  /** The template gallery, and copying one into a workflow of your own. */
+  templates: () => j<Template[]>(fetch('/api/templates')),
+  template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
+  copyTemplate: (name: string, as: string) =>
+    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as })),
 
   /** The worker pool, and the one command that adds a machine to it. */
   workers: () => j<Pool>(fetch('/api/workers')),

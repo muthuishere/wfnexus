@@ -86,6 +86,9 @@ export function forSave(d: WorkflowDraft): WorkflowDraft {
       name: s.name?.trim() || s.id.trim(),
       description: s.description?.trim() || undefined,
       soul: s.soul?.trim() || undefined,
+      // A half-typed row — a name with no value yet, or neither — is editor
+      // state, not part of the file.
+      env: cleanEnv(s.env),
       model: s.model?.trim() || undefined,
       skills: trimList(s.skills) || [],
       tools: trimList(s.tools) || [],
@@ -127,3 +130,15 @@ export function renameKey<T>(obj: Record<string, T>, from: string, to: string): 
   return out
 }
 export const schemaProps = (s?: JSONSchema): Array<[string, JSONSchema]> => Object.entries(s?.properties || {})
+
+
+/** Drop the blank rows an env editor leaves behind while someone is typing. */
+function cleanEnv(env?: Record<string, string>): Record<string, string> | undefined {
+  if (!env) return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    const key = k.trim()
+    if (key) out[key] = v
+  }
+  return Object.keys(out).length ? out : undefined
+}

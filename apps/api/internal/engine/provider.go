@@ -87,7 +87,14 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 		}, Label: p.Name + "/" + model, Close: noClose}, nil
 
 	case catalog.KindCLI, catalog.KindACP:
-		return localProvider(p, step.Model, workdir)
+		// The step's env reaches the CLI as well. An agent CLI is a program on
+		// this machine, and a skill that tells it to call an API needs that
+		// API's token in the process that actually makes the call.
+		env, err := workflow.ResolveEnv(step.Env)
+		if err != nil {
+			return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
+		}
+		return localProvider(p, step.Model, workdir, env)
 	}
 	return resolved{}, fmt.Errorf("provider %q has unknown kind %q", p.Name, p.Kind)
 }
@@ -106,13 +113,13 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 //
 // A step therefore runs on Devin or a local `claude` by naming it, with no API
 // key: the credential is the one the CLI already holds.
-func localProvider(p catalog.Provider, stepModel, workdir string) (resolved, error) {
+func localProvider(p catalog.Provider, stepModel, workdir string, env []string) (resolved, error) {
 	model := p.Model
 	if stepModel != "" {
 		model = stepModel
 	}
 
-	agent, closeAgent, err := localAgent(p, model, workdir)
+	agent, closeAgent, err := localAgent(p, model, workdir, env)
 	if err != nil {
 		return resolved{}, err
 	}
@@ -139,13 +146,14 @@ func localProvider(p catalog.Provider, stepModel, workdir string) (resolved, err
 
 // localAgent builds the backend that executes one turn: a persistent ACP
 // process, or a fresh one-shot command per turn.
-func localAgent(p catalog.Provider, model, workdir string) (devinadapter.Agent, func(), error) {
+func localAgent(p catalog.Provider, model, workdir string, env []string) (devinadapter.Agent, func(), error) {
 	// An explicit command in the registry wins over a preset: presets are
 	// conveniences, and the generic argv template is what makes any agent CLI
 	// usable without this package learning its name.
 	if len(p.Command) > 0 {
 		return &devinadapter.CommandAgent{
 			Label: p.Name,
+			Env:   env,
 			Bin:   p.Command[0],
 			Args:  append(append([]string{}, p.Command[1:]...), p.Args...),
 			// Without this the model the step asked for never reaches the CLI,
@@ -173,13 +181,19 @@ func localAgent(p catalog.Provider, model, workdir string) (devinadapter.Agent, 
 	}
 
 	cli := devinadapter.CLI{Model: model}
+	// A preset builds its own CommandAgent, so the step's env is layered on
+	// after: the preset decides the argv, the step decides the environment.
+	withEnv := func(a *devinadapter.CommandAgent) (devinadapter.Agent, func(), error) {
+		a.Env = append(append([]string{}, a.Env...), env...)
+		return a, noClose, nil
+	}
 	switch p.Preset {
 	case "devin", "":
-		return devinadapter.Devin(cli), noClose, nil
+		return withEnv(devinadapter.Devin(cli))
 	case "claude":
-		return devinadapter.Claude(cli), noClose, nil
+		return withEnv(devinadapter.Claude(cli))
 	case "copilot":
-		return devinadapter.Copilot(cli), noClose, nil
+		return withEnv(devinadapter.Copilot(cli))
 	}
 	// Refused rather than guessed. A wrong argv template fails as a parse error
 	// twenty turns in, which is the worst place to learn the name was unknown.

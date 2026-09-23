@@ -59,7 +59,7 @@ func TestATriggerThatIsNotDeclaredIsRefused(t *testing.T) {
 // rather than running and producing a confusing result.
 func TestATemplateCannotBeRun(t *testing.T) {
 	e := &Engine{defs: map[string]*workflow.Definition{
-		"tmpl": {Name: "tmpl", Template: true, On: workflow.Triggers{Dispatch: true}},
+		"tmpl": {Name: "tmpl", Template: workflow.TemplateInfo{Is: true}, On: workflow.Triggers{Dispatch: true}},
 	}}
 	_, err := e.PrepareRun("tmpl", workflow.TriggerDispatch, nil)
 	if err == nil || !strings.Contains(err.Error(), "copy") {

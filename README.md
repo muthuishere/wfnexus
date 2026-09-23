@@ -135,6 +135,47 @@ The one thing that cannot be placed is a step using the platform's own authoring
 step is refused at pack time rather than mid-run. [`infra/README.md`](infra/README.md) has the
 rest, including running the worker as a service and what it does and does not isolate.
 
+## Templates
+
+`wfx templates` (or the Templates page) lists starting points. The headline one is the five-phase
+bug fixer: validate → reproduce → fix → review → publish, with the typed hand-off between phases
+and the human gate before anything leaves the machine already wired.
+
+```bash
+wfx new bug-fixer --as my-bug-fix     # writes a workflow you own
+wfx dryrun my-bug-fix                 # would it run here? costs nothing
+```
+
+**It ships with no skills on any phase, deliberately.** The five phases of a bug fix are the same
+everywhere; what a good report looks like in your shop is not. A template gives you the shape and
+the contracts — the expertise is the part you add.
+
+A template is not a second kind of file and there is no template language: it is an ordinary
+workflow carrying `template:`, loaded and validated by the same code as everything else, so a
+template that would not run is caught at boot rather than by the first person who copies it. A
+project ships its own the same way.
+
+## Environment
+
+`env:` cascades workflow → job → step, exactly as in Actions — and a value may **name** a variable
+instead of holding one:
+
+```yaml
+env:
+  SERVICE_URL: https://api.example.com   # a literal: it is committed, so it is not a secret
+  API_TOKEN: ${GITHUB_PAT}               # a reference: read where the step runs
+```
+
+The distinction is the whole design. A reference is only a name, so the value is never written to
+the file, never stored in the run, never logged, and never sent to a worker — it is read from the
+environment of whatever machine executes the step. A build box's own credential is therefore usable
+there without the platform ever holding it. A credential written out in full is **refused on save**,
+because the file is committed and saving it is the leak.
+
+It reaches `run:` steps, the agent's `bash` tool, and an agent CLI's own process. `wfx dryrun`
+lists the variable names a step reads and fails if one is unset — names only, so a dry run is safe
+to paste into an issue.
+
 ## How a step works
 
 ```yaml

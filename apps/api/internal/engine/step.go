@@ -96,7 +96,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// Granted only when the step names them, like every other tool.
 	extra = append(extra, e.platformTools(step.Tools)...)
 
-	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step))
+	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), step.Env)
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
 	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, extra, hooks, onMetric)
@@ -254,7 +254,14 @@ func (e *Engine) buildToolkit(ctx context.Context, label string, skillNames, too
 // run's workspace, and warn the agent when it is running out of turns.
 //
 // turns is the step's turn ceiling (0 ⇒ none), needed for that last part.
-func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string, turns int) *tn.Hooks {
+func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string, turns int, env map[string]string) *tn.Hooks {
+	// The builtin `bash` tool has no env argument and inherits this process's
+	// environment, so a step's own env goes in front of the command. A
+	// reference is left AS a reference — GH_TOKEN="${GITHUB_PAT}" — which the
+	// child shell expands from what it already inherited. The value is
+	// therefore never rendered, never logged, and never part of the tool call
+	// the run records; only the name is, which is what the file says anyway.
+	envPrefix := workflow.ShellPrefix(env)
 	return &tn.Hooks{
 		// The soul states the budget once, at turn 0. That is necessary and it is
 		// not sufficient: `triage/classify` was told it had 15 turns, spent all 15
@@ -282,16 +289,19 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 		},
 		BeforeTool: func(_ context.Context, ev tn.BeforeToolEvent) (*tn.ToolOverride, error) {
 			var ov *tn.ToolOverride
-			if ev.Name == "bash" && workdir != "" {
-				if wd, _ := ev.Args["workdir"].(string); wd == "" {
-					args := map[string]any{}
-					for k, v := range ev.Args {
-						args[k] = v
-					}
-					args["workdir"] = workdir
-					ov = &tn.ToolOverride{Args: args}
-					ev.Args = args
+			if ev.Name == "bash" && (workdir != "" || envPrefix != "") {
+				args := map[string]any{}
+				for k, v := range ev.Args {
+					args[k] = v
 				}
+				if wd, _ := args["workdir"].(string); wd == "" && workdir != "" {
+					args["workdir"] = workdir
+				}
+				if cmd, _ := args["command"].(string); cmd != "" && envPrefix != "" {
+					args["command"] = envPrefix + cmd
+				}
+				ov = &tn.ToolOverride{Args: args}
+				ev.Args = args
 			} else if args := pinPaths(ev.Name, ev.Args, workdir); args != nil {
 				// A relative path belongs to the WORKSPACE, not to this process's
 				// working directory, which is where the builtins would otherwise

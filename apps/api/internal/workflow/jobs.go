@@ -40,6 +40,9 @@ type Job struct {
 	// what it needs, not which machine. Empty ⇒ the workflow's `runs-on`, then
 	// this process.
 	RunsOn string `yaml:"runs-on,omitempty" json:"runsOn,omitempty"`
+	// Env is this job's environment, layered over the workflow's and under
+	// each step's.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	// If guards the whole job, in the same shape as a step's `when`.
 	If []Guard `yaml:"if,omitempty" json:"if,omitempty"`
 	// Defaults are applied to every step in this job that does not set them —
@@ -96,6 +99,7 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 		if job.RunsOn == "" {
 			job.RunsOn = d.RunsOn
 		}
+		job.Env = MergeEnv(d.Env, job.Env)
 		steps := job.Steps
 		if len(job.Uses) > 0 {
 			expanded, err := expandInto(d.Name, id, job.Uses, tasks)
@@ -126,6 +130,9 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 			if s.RunsOn == "" {
 				s.RunsOn = job.RunsOn
 			}
+			// env layers rather than replacing: a step adding one variable
+			// keeps the workflow's, which is what `env:` means everywhere else.
+			s.Env = MergeEnv(job.Env, s.Env)
 			s.When = append(append([]Guard(nil), job.If...), s.When...)
 			if i == 0 {
 				firsts[id] = s.ID

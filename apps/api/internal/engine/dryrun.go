@@ -49,8 +49,11 @@ type DryRunStep struct {
 	Shell    string `json:"shell,omitempty"`
 	// RunsOn is the label this step is placed on, and Workers is how many
 	// machines currently hold it — "where would this actually execute".
-	RunsOn   string   `json:"runsOn,omitempty"`
-	Workers  int      `json:"workers,omitempty"`
+	RunsOn  string `json:"runsOn,omitempty"`
+	Workers int    `json:"workers,omitempty"`
+	// Env are the variable NAMES this step reads from the environment. Names
+	// only: a dry run has to be safe to paste into an issue.
+	Env      []string `json:"env,omitempty"`
 	Skills   []string `json:"skills,omitempty"`
 	Tools    []string `json:"tools,omitempty"`
 	MaxTurns int      `json:"maxTurns,omitempty"`
@@ -215,6 +218,30 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 						s.RunsOn, strings.Join(e.LocalLabels(), ", ")),
 				})
 			}
+		}
+
+		// Which variables does it read, and are they set HERE? A step whose
+		// token is missing fails at the moment it calls something, which is
+		// late and reads like the API's fault. Names only — a dry run has to be
+		// safe to paste into an issue.
+		if keys := workflow.EnvKeys(s.Env); len(keys) > 0 {
+			ds.Env = keys
+			if e.servesLocally(s.RunsOn) {
+				var missing []string
+				for _, k := range keys {
+					if _, ok := os.LookupEnv(k); !ok {
+						missing = append(missing, k)
+					}
+				}
+				if len(missing) > 0 {
+					fail(DryProblem{
+						Step: s.ID, Field: "env", Fatal: true,
+						Message: strings.Join(missing, ", ") + " is not set in this process's environment",
+					})
+				}
+			}
+			// A placed step reads them on the worker, so this machine's
+			// environment says nothing about whether they are there.
 		}
 
 		if s.Classifier != "" {

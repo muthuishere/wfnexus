@@ -31,6 +31,16 @@ func Check(d *Definition, cat Catalog) error {
 	if err := d.validate(cat); err != nil {
 		return err
 	}
+	// A credential written as a literal is refused here, where it is still only
+	// in memory — the next line marshals this to YAML and writes it.
+	if err := CheckEnv(d.Name, d.Env); err != nil {
+		return err
+	}
+	for i := range d.Steps {
+		if err := CheckEnv(d.Name+"/"+d.Steps[i].ID, d.Steps[i].Env); err != nil {
+			return err
+		}
+	}
 	raw, err := yaml.Marshal(d)
 	if err != nil {
 		return err

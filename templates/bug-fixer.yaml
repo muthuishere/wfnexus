@@ -1,0 +1,212 @@
+name: bug-fixer
+template:
+  title: Bug fixer — five phases
+  summary: >-
+    Validate a report, reproduce it, draft the fix, review it, publish it. The
+    shape, the typed hand-off between phases and the human gate are already
+    wired; the expertise is yours to add.
+  fill:
+    - "skills on each phase — every step ships with none, so each is yours to equip"
+    - "the publish step's command: this template stops at a branch and pushes nothing"
+    - "budgets, if your repository is larger or slower than the defaults assume"
+
+description: >-
+  The five-phase bug fix. Each phase is a whole agent with its own identity,
+  scoped tools, budget and output contract, and no phase can hand work to the
+  next until its output validates. Two phases stop for a human: one when the
+  report is too thin to act on, one before anything leaves the machine.
+
+input_schema:
+  type: object
+  required: [title, description]
+  properties:
+    title:         { type: string,  title: "Bug title" }
+    description:   { type: string,  title: "Bug description", format: textarea }
+    repo_url:      { type: string,  title: "Repo URL (cloned per run)" }
+    repo_path:     { type: string,  title: "…or local repo path" }
+    base_branch:   { type: string,  title: "Base branch", default: main }
+    extra_context: { type: string,  title: "Extra context (logs, versions, answers)", format: textarea }
+    isolate:       { type: boolean, title: "Isolate in a git worktree (recommended)", default: true }
+
+steps:
+  # ------------------------------------------------------------- 1. validate
+  - id: validate
+    name: Validate the report
+    description: Decide whether the report is actionable, and what is missing if not.
+    soul: >-
+      You are a triage engineer, sceptical by default: a report is not
+      actionable until the code you can see makes it plausible. You never invent
+      details the reporter did not give, and you would rather ask one precise
+      question than guess.
+    # Equip me: a skill that knows what a good report looks like in your shop.
+    skills: []
+    tools: [read, grep, glob]
+    budget: { max_turns: 15, max_tool_calls: 40, max_wall_sec: 300 }
+    prompt: |
+      Bug title: {{ .Input.title }}
+
+      {{ .Input.description }}
+
+      {{ if .Input.extra_context }}Extra context:
+      {{ .Input.extra_context }}{{ end }}
+
+      Decide whether this is actionable against the repository you can read.
+      If it is not, say exactly what the reporter must answer.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [valid, severity, summary, component, missing_info]
+      properties:
+        valid:        { type: boolean, description: "true if the report is actionable as-is" }
+        severity:     { type: string, enum: [critical, high, medium, low] }
+        summary:      { type: string, description: "one-paragraph restatement of the bug" }
+        component:    { type: string, description: "module/package/file area most likely involved" }
+        missing_info: { type: array, items: { type: string }, description: "what the reporter must answer when valid=false" }
+    gates:
+      - field: valid
+        equals: false
+        action: needs_input
+        message: "Need more information: {{ join .Output.missing_info \" | \" }}"
+
+  # ------------------------------------------------------------ 2. reproduce
+  - id: reproduce
+    name: Reproduce it
+    description: Reproduce the bug with a failing test or a script that fails for the right reason.
+    soul: >-
+      You are an engineer who trusts only a red test. A reproduction that fails
+      for an unrelated reason — a missing fixture, an import error — is not a
+      reproduction, and you fix the harness before claiming one.
+    # Equip me: how this repository is built, tested and navigated.
+    skills: []
+    tools: [bash, read, write, edit, grep, glob, todowrite]
+    ask_human: true
+    budget: { max_turns: 40, max_tool_calls: 200, max_wall_sec: 900 }
+    prompt: |
+      Validated report: {{ .Steps.validate.summary }}
+      Likely component: {{ .Steps.validate.component }}
+
+      Reproduce it. A reproduction counts only if it fails BECAUSE of this bug.
+      Record the exact command that shows it failing.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [reproduced, method, test_command, evidence, root_cause_hypothesis]
+      properties:
+        reproduced:            { type: boolean }
+        method:                { type: string, enum: [failing_test, script, manual, not_reproduced] }
+        test_command:          { type: string, description: "the exact command that shows it failing" }
+        evidence:              { type: string, description: "the failing output, trimmed to what matters" }
+        root_cause_hypothesis: { type: string }
+    gates:
+      - field: reproduced
+        equals: false
+        action: needs_input
+        message: "Could not reproduce. {{ .Output.root_cause_hypothesis }}"
+
+  # ----------------------------------------------------------------- 3. fix
+  - id: fix
+    name: Draft the fix
+    description: Make the failing test pass without breaking anything else.
+    soul: >-
+      You write the smallest change that makes the red test green. You do not
+      refactor on the way past, you do not reformat files you did not have to
+      touch, and you run the suite yourself rather than claiming it is fine.
+    # Equip me: your conventions — how a change is written here.
+    skills: []
+    tools: [bash, read, write, edit, grep, glob, todowrite]
+    budget: { max_turns: 60, max_tool_calls: 300, max_wall_sec: 1800 }
+    prompt: |
+      Reproduction: {{ .Steps.reproduce.evidence }}
+      It fails with: {{ .Steps.reproduce.test_command }}
+      Hypothesis: {{ .Steps.reproduce.root_cause_hypothesis }}
+
+      Make that command pass. Keep the change as small as the bug requires,
+      then run the whole suite.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [fixed, files_changed, explanation, suite_passed]
+      properties:
+        fixed:         { type: boolean }
+        files_changed: { type: array, items: { type: string } }
+        explanation:   { type: string, description: "what was wrong and why this fixes it" }
+        suite_passed:  { type: boolean, description: "the WHOLE suite, not just the new test" }
+    gates:
+      - field: fixed
+        equals: false
+        action: fail
+        message: "No fix was produced: {{ .Output.explanation }}"
+
+  # -------------------------------------------------------------- 4. review
+  - id: review
+    name: Review the change
+    description: Adversarially review the diff, as someone who did not write it.
+    soul: >-
+      You did not write this change and you do not trust it. Scope creep is a
+      finding. A missing test is a finding. You do not inflate severity to look
+      thorough, and you say plainly when it is fine.
+    # Equip me: a reviewer's skill — what a blocker means to your team.
+    skills: []
+    tools: [bash, read, grep, glob]
+    budget: { max_turns: 30, max_tool_calls: 120, max_wall_sec: 900 }
+    prompt: |
+      The change claims to fix: {{ .Steps.reproduce.root_cause_hypothesis }}
+      Files touched: {{ join .Steps.fix.files_changed ", " }}
+      Author's explanation: {{ .Steps.fix.explanation }}
+
+      Read the diff and judge it. Run the tests yourself.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, findings, verdict]
+      properties:
+        approved: { type: boolean }
+        verdict:  { type: string, description: "one paragraph a human can act on" }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, what]
+            properties:
+              severity: { type: string, enum: [blocker, major, minor, nit] }
+              what:     { type: string }
+              file:     { type: string }
+    gates:
+      - field: approved
+        equals: false
+        action: fail
+        message: "Review rejected the change: {{ .Output.verdict }}"
+
+  # ------------------------------------------------------------- 5. publish
+  - id: publish
+    name: Publish
+    description: The only step allowed to touch the outside world, and only after a human says so.
+    soul: >-
+      You publish what was approved and nothing more. You do not amend the
+      change, you do not rebase it onto something else, and you state exactly
+      what you did.
+    # Equip me: whatever your shop uses to open a PR.
+    skills: []
+    tools: [bash, read]
+    # The human gate. Everything above this line is reversible; this is not.
+    requires_approval: true
+    budget: { max_turns: 15, max_tool_calls: 40, max_wall_sec: 600 }
+    guardrails:
+      - deny: bash
+        args_contain: ["push --force", "push -f", "reset --hard origin"]
+        reason: "force-pushing is never part of publishing a fix"
+    prompt: |
+      Approved: {{ .Steps.review.verdict }}
+
+      Commit the change on a branch off {{ default .Input.base_branch "main" }}
+      and report what you did. This template stops at the branch — add the push
+      or the PR command your shop uses.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [published, branch, summary]
+      properties:
+        published: { type: boolean }
+        branch:    { type: string }
+        url:       { type: string, description: "the PR, once you have added the command that opens one" }
+        summary:   { type: string }

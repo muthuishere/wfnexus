@@ -42,7 +42,7 @@ func (e *Engine) PrepareRun(name string, trigger workflow.TriggerKind, raw json.
 		return nil, fmt.Errorf("%s cannot be started by %s — it declares `on: %s`",
 			name, trigger, strings.Join(def.On.Names(), ", "))
 	}
-	if def.Template {
+	if def.Template.Is {
 		return nil, fmt.Errorf("%s is a template: copy it and run the copy", name)
 	}
 	if def.InputSchema == nil {

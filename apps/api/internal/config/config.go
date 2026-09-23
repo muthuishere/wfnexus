@@ -30,6 +30,10 @@ type Config struct {
 	S3Bucket     string
 	S3UseSSL     bool
 	WorkflowsDir string
+	// TemplatesDir holds workflows that exist to be copied. Separate from
+	// WorkflowsDir so a template is never mistaken for something to run, and so
+	// `wfx apply` cannot quietly overwrite one.
+	TemplatesDir string
 	SkillsDir    string
 	McpConfig    string
 	// RegistriesPath holds providers, classifiers and MCP servers — everything a
@@ -99,6 +103,7 @@ func Load() Config {
 		S3Bucket:       env("S3_BUCKET", "bfp-artifacts"),
 		S3UseSSL:       env("S3_USE_SSL", "false") == "true",
 		WorkflowsDir:   env("WFX_WORKFLOWS_DIR", filepath.Join(root, "workflows")),
+		TemplatesDir:   env("WFX_TEMPLATES_DIR", filepath.Join(root, "templates")),
 		SkillsDir:      env("WFX_SKILLS_DIR", filepath.Join(root, "skills")),
 		McpConfig:      env("WFX_MCP_CONFIG", filepath.Join(root, "mcp.json")),
 		RegistriesPath: env("WFX_REGISTRIES", filepath.Join(root, "registries.json")),

@@ -9,6 +9,7 @@ import SystemPage from './pages/SystemPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectPage from './pages/ProjectPage'
 import WorkersPage from './pages/WorkersPage'
+import TemplatesPage from './pages/TemplatesPage'
 
 // tiny hash router. The hierarchy is project → workflow → runs, so the routes
 // read that way too:
@@ -36,6 +37,7 @@ export default function App() {
   else if (r[0] === 'workflows') page = <WorkflowsPage />
   else if (r[0] === 'runs' && r[1]) page = <RunPage id={r[1]} />
   else if (r[0] === 'skills') page = <SkillsPage />
+  else if (r[0] === 'templates') page = <TemplatesPage />
   else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
   return (
@@ -46,6 +48,7 @@ export default function App() {
           <a href="#/projects" className={r[0] === 'projects' ? 'active' : ''}>Projects</a>
           <a href="#/runs" className={r[0] === 'runs' ? 'active' : ''}>All runs</a>
           <a href="#/workflows" className={r[0] === 'workflows' && r[1] !== 'new' && r[2] !== 'edit' ? 'active' : ''}>Workflows</a>
+          <a href="#/templates" className={r[0] === 'templates' ? 'active' : ''}>Templates</a>
           <a href="#/workflows/new" className={r[0] === 'workflows' && (r[1] === 'new' || r[2] === 'edit') ? 'active' : ''}>Builder</a>
           <a href="#/skills" className={r[0] === 'skills' ? 'active' : ''}>Skills &amp; tools</a>
           <a href="#/workers" className={r[0] === 'workers' ? 'active' : ''}>Workers</a>

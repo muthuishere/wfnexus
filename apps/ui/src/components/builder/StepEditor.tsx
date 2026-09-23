@@ -188,6 +188,10 @@ export default function StepEditor({ step, index, stepIds, skills, tools, doctor
         <IssueList issues={mine('outputSchema')} />
       </Section>
 
+      <Section title="Environment" count={Object.keys(step.env || {}).length}>
+        <EnvEditor env={step.env || {}} onChange={env => set({ env: Object.keys(env).length ? env : undefined })} />
+      </Section>
+
       <Section title="Budget & limits">
         <BudgetGrid budget={step.budget} onChange={b => set({ budget: b })} />
         <div className="three" style={{ marginTop: 10 }}>
@@ -279,5 +283,55 @@ export default function StepEditor({ step, index, stepIds, skills, tools, doctor
         <IssueList issues={mine('gates')} />
       </Section>
     </div>
+  )
+}
+
+
+/** Environment for one step.
+ *
+ *  The distinction this editor exists to make visible: a LITERAL is committed
+ *  with the file, and a REFERENCE (`${GITHUB_PAT}`) is only a name — the value
+ *  is read on whatever machine runs the step, so it never enters the workflow,
+ *  the run log, or the job sent to a worker. Anything that looks like a
+ *  credential is refused on save, so it is worth saying which one you are
+ *  writing before you save it. */
+function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (e: Record<string, string>) => void }) {
+  const rows = Object.entries(env)
+  const setRow = (i: number, k: string, v: string) => {
+    const next: Record<string, string> = {}
+    rows.forEach(([ok, ov], j) => { if (j === i) { if (k) next[k] = v } else next[ok] = ov })
+    onChange(next)
+  }
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Cascades workflow → job → step. Write <span className="mono">{'${VAR_NAME}'}</span> for anything
+        secret: only the name is stored, and the value is read on the machine that runs the step.
+        A credential written out in full is refused on save.
+      </p>
+      <table className="rows"><tbody>
+        {rows.map(([k, v], i) => (
+          <tr key={i}>
+            <td style={{ width: 220 }}>
+              <input className="mono" value={k} placeholder="NAME"
+                onChange={e => setRow(i, e.target.value, v)} />
+            </td>
+            <td>
+              <input className="mono" value={v} placeholder="value, or ${OTHER_VAR}"
+                onChange={e => setRow(i, k, e.target.value)} />
+            </td>
+            <td style={{ width: 90 }}>
+              {/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(v)
+                ? <span className="pill" title="only the name is stored">reference</span>
+                : v ? <span className="muted" style={{ fontSize: 12 }}>literal</span> : null}
+            </td>
+            <td style={{ width: 40 }}>
+              <button className="ghost small" onClick={() => setRow(i, '', '')}>×</button>
+            </td>
+          </tr>))}
+      </tbody></table>
+      <button className="ghost small" style={{ marginTop: 8 }}
+        onClick={() => onChange({ ...env, '': '' })}>+ variable</button>
+    </>
   )
 }

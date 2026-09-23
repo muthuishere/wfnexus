@@ -196,6 +196,11 @@ type JobPayload struct {
 	// Command is already rendered — the worker never sees a template, an input
 	// or a secret it was not sent.
 	Command string `json:"command"`
+	// Env is the step's env block AS WRITTEN — references and all. It is
+	// resolved on the worker, against that machine's environment, so a
+	// credential belonging to a build box is used there without the platform
+	// ever holding it or putting it on the wire.
+	//
 	// Shell names the interpreter, or "" for the best one the worker has. This
 	// is how the same workflow runs on Windows and Linux: the step says bash or
 	// powershell or nothing, and the worker resolves it locally.
@@ -232,7 +237,7 @@ type JobResult struct {
 func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, cmd, label string, data workflow.TemplateData) (map[string]any, error) {
 	payload := JobPayload{
 		RunID: runID.String(), StepID: step.ID, Command: cmd,
-		Shell: step.Shell, TimeoutSec: step.TimeoutSec,
+		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: step.Env,
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project

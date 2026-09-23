@@ -93,6 +93,10 @@ func run(args []string) error {
 		return sources(rest)
 	case "workers", "worker":
 		return workers(rest)
+	case "templates", "template":
+		return templates(rest)
+	case "new":
+		return newFromTemplate(rest)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -109,6 +113,8 @@ func usage() {
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
+  wfx templates [name]             starting points to copy — the shape, minus your skills
+  wfx new <template> --as <name>   copy one into a workflow of your own
   wfx workers                      machines in the pool, and the line that adds another
   wfx workers rm <id>              forget a machine
   wfx workers rotate               new join token; machines already joined keep working
