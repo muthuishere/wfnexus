@@ -75,9 +75,15 @@ machine: the worker polls out. So the platform can be a pod behind an ingress
 and the machine can be a laptop behind NAT, and neither has to be reachable
 from the other.
 
-A label the platform serves itself (`WFX_RUNNER_LABELS`, default
-`local,self-hosted`) runs in process, exactly as before workers existed. A
-single-machine install therefore needs no worker at all.
+A label the platform serves itself (`WFX_RUNNER_LABELS`, default `local`) runs
+in process, exactly as before workers existed. A single-machine install
+therefore needs no worker at all — the platform is its own client, and workers
+are additive.
+
+The default is `local` alone deliberately. `self-hosted` is the label a worker
+advertises, so a platform that served it as well would silently take the work
+of the first machine you joined. `wfx-runner join` warns when a label you offer
+is one the platform already serves.
 
 ### Running it as a service
 

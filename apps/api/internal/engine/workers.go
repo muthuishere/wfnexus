@@ -105,6 +105,9 @@ type JoinRequest struct {
 type JoinResult struct {
 	Worker *store.Worker `json:"worker"`
 	Token  string        `json:"token"`
+	// Shadowed are labels this worker offers that the platform already serves
+	// in-process, so nothing carrying them will ever be queued to it.
+	Shadowed []string `json:"shadowed,omitempty"`
 }
 
 // Join registers a machine into the pool.
@@ -125,12 +128,22 @@ func (e *Engine) Join(ctx context.Context, req JoinRequest) (*JoinResult, error)
 		// looks like a broken platform rather than a missing flag.
 		labels = []string{"self-hosted"}
 	}
+	// A label the platform serves ITSELF can never reach this machine: the step
+	// runs in the server process before it is ever queued. Said at join time,
+	// because the symptom otherwise is a worker that sits there, online and
+	// idle, while the work happens somewhere else.
+	var shadowed []string
+	for _, l := range labels {
+		if e.servesLocally(l) {
+			shadowed = append(shadowed, l)
+		}
+	}
 	w := &store.Worker{Name: req.Name, Labels: labels, OS: req.OS, Arch: req.Arch, Version: req.Version}
 	tok := newToken()
 	if err := e.store.RegisterWorker(ctx, w, HashToken(tok)); err != nil {
 		return nil, err
 	}
-	return &JoinResult{Worker: w, Token: tok}, nil
+	return &JoinResult{Worker: w, Token: tok, Shadowed: shadowed}, nil
 }
 
 // ErrBadToken is a refused join or poll.

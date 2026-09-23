@@ -49,6 +49,11 @@ type Config struct {
 	// workers existed; anything else is queued for a worker that holds the
 	// label. So a single-machine install needs no workers at all, and adding
 	// one is additive rather than a migration.
+	// The default is `local` ALONE, deliberately. `self-hosted` is the label a
+	// worker conventionally advertises — it is what the join command suggests,
+	// and what GitHub's own self-hosted runners carry. If the platform served
+	// it too, the first machine anyone joined would sit idle forever while the
+	// server quietly took its work.
 	RunnerLabels []string
 	// RunnerToken is the registration token a machine presents to join. Empty
 	// means "generate one and keep it", which is what a fresh install does.
@@ -104,7 +109,7 @@ func Load() Config {
 		Model:          env("WFX_MODEL", "anthropic/claude-sonnet-4.5"),
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", 4),
-		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", "local,self-hosted")),
+		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", "local")),
 		RunnerToken:       env("WFX_RUNNER_TOKEN", ""),
 		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", ""), "/"),
 		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),

@@ -178,7 +178,8 @@ func cmdJoin(args []string) error {
 			ID     string   `json:"id"`
 			Labels []string `json:"labels"`
 		} `json:"worker"`
-		Token string `json:"token"`
+		Token    string   `json:"token"`
+		Shadowed []string `json:"shadowed"`
 	}
 	if err := call(context.Background(), http.MethodPost,
 		strings.TrimRight(*url, "/")+"/api/workers/join", "", bytes.NewReader(body), &res); err != nil {
@@ -197,6 +198,15 @@ func cmdJoin(args []string) error {
 	}
 	fmt.Printf("joined %s as %q (%s/%s), serving: %s\n",
 		cfg.URL, cfg.Name, runtime.GOOS, runtime.GOARCH, strings.Join(cfg.Labels, ", "))
+	if len(res.Shadowed) > 0 {
+		// Otherwise this machine sits there online and idle while the platform
+		// quietly does the work itself, which looks like a broken worker.
+		fmt.Fprintf(os.Stderr,
+			"warning: the platform serves %s itself, so nothing with %s will be sent here. "+
+				"Re-join with a label only this machine has.\n",
+			strings.Join(res.Shadowed, ", "),
+			map[bool]string{true: "those labels", false: "that label"}[len(res.Shadowed) > 1])
+	}
 	if *start {
 		return cmdRun(nil)
 	}

@@ -105,8 +105,17 @@ artifact — the work happened on another disk, so the evidence has to be carrie
 record a step that changed nothing.
 
 The result has exactly the shape a local step produces, so a gate reading `steps.build.ok` cannot
-tell where it ran. Labels this process serves itself (`WFX_RUNNER_LABELS`, default
-`local,self-hosted`) run in process, so a single-machine install needs no worker at all.
+tell where it ran.
+
+**Local is the default, and workers are additive.** The platform is its own client: a step with no
+`runs-on:`, or one naming a label this process serves (`WFX_RUNNER_LABELS`, default `local`), runs
+in the server process exactly as it did before workers existed. A single-machine install needs no
+worker, sees an empty Workers page, and is not missing anything. You add a machine when a step
+needs a toolchain this box does not have — not to make the platform work.
+
+The default is `local` **alone** on purpose: `self-hosted` is the label a worker advertises, so if
+the platform served it too, the first machine you joined would sit there online and idle while the
+server quietly took its work. Joining with a label the platform already serves says so.
 
 `wfx dryrun` says, for nothing, that a `runs-on:` nobody holds would wait:
 

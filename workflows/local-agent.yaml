@@ -1,0 +1,29 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
+name: local-agent
+description: An agent step on the platform itself, using a CLI on this machine.
+input_schema:
+    type: object
+steps: []
+jobs:
+    think:
+        steps:
+            - id: answer
+              name: ""
+              prompt: Reply with the single word 'local' as the value, and a one-sentence reason.
+              skills: []
+              tools: []
+              output_schema:
+                properties:
+                    reason:
+                        type: string
+                    value:
+                        type: string
+                required:
+                    - value
+                    - reason
+                type: object
+              max_turns: 4
+              timeout_sec: 240
+              provider: claude-cli
+max_parallel: 4

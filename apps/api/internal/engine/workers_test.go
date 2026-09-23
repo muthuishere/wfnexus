@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 
@@ -340,4 +341,47 @@ func mustWorkers(t *testing.T, h *harness) []*store.Worker {
 		t.Fatal(err)
 	}
 	return ws
+}
+
+// LOCAL FIRST. With no machine in the pool at all, a workflow that says nothing
+// about placement runs in the server process — which is every workflow written
+// before workers existed, and the only configuration most installs ever have.
+func TestWithNoWorkersEverythingRunsOnThePlatform(t *testing.T) {
+	def := &workflow.Definition{Name: "no-workers", Steps: []workflow.Step{
+		{ID: "plain", Run: "echo hi"},                  // no runs-on at all
+		{ID: "named", Run: "echo hi", RunsOn: "local"}, // the label it serves itself
+	}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+
+	if ws, err := h.store.ListWorkers(context.Background()); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, w := range ws {
+			if w.Online() {
+				t.Skip("another worker is polling this store; this test needs an empty pool")
+			}
+		}
+	}
+
+	run := h.run(nil)
+	if run.Status != "done" {
+		t.Fatalf("run = %s (%s) — a workflow must not need a worker", run.Status, run.Error)
+	}
+}
+
+// `self-hosted` is the label a worker advertises — it is what the join command
+// suggests and what GitHub's own runners carry. The platform must NOT serve it,
+// or the first machine anyone joins sits idle forever while the server quietly
+// takes its work.
+func TestThePlatformDoesNotShadowTheDefaultWorkerLabel(t *testing.T) {
+	cfg := config.Load()
+	e := &Engine{}
+	e.cfg.RunnerLabels = cfg.RunnerLabels
+	if e.servesLocally("self-hosted") {
+		t.Fatalf("the platform serves %v, which includes the label a fresh worker joins with", cfg.RunnerLabels)
+	}
+	if !e.servesLocally("local") {
+		t.Fatalf("the platform does not serve `local`: %v", cfg.RunnerLabels)
+	}
 }
