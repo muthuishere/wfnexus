@@ -34,8 +34,8 @@ export default function ProjectsPage() {
     },
     {
       key: 'workflows', header: 'Workflows', width: 100, align: 'right',
-      value: p => p.workflows.length,
-      cell: p => p.workflows.length || <span className="muted">—</span>,
+      value: p => p.workflows?.length ?? 0,
+      cell: p => p.workflows?.length || <span className="muted">—</span>,
     },
     {
       key: 'runs', header: 'Runs', width: 90, align: 'right',
@@ -123,7 +123,7 @@ function AddProject({ onDone, onError }: { onDone: (msg: string) => void; onErro
   const submit = () => {
     setBusy(true)
     api.addProject({ repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined })
-      .then(p => onDone(`Added ${p.name} — ${p.workflows.length} workflow(s).`))
+      .then(p => onDone(`Added ${p.name} — ${p.workflows?.length ?? 0} workflow(s).`))
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }

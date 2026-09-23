@@ -47,7 +47,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
   // of the template is that it is already a workflow that would load.
   useEffect(() => {
     if (editing || !skills.length) return
-    setDraft(d => (d && d.steps.length === 1 && !d.steps[0].skills.length && !d.name
+    setDraft(d => (d && d.steps.length === 1 && !d.steps[0].skills?.length && !d.name
       ? { ...d, steps: [{ ...d.steps[0], skills: [skills[0].name] }] }
       : d))
   }, [skills, editing])

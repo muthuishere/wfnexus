@@ -47,9 +47,19 @@ func (e *Engine) Projects(ctx context.Context) ([]Project, error) {
 	byName := map[string]*Project{}
 	var order []string
 	for _, src := range e.Sources() {
+		// The templates directory is a SOURCE of definitions but not a project:
+		// nothing there is runnable, so listing it beside real repositories
+		// offers a row whose every action is a dead end.
+		if src.Name == templatesSource {
+			continue
+		}
 		p := &Project{
 			Name: src.Name, Dir: src.Dir, Repo: src.Repo, URL: src.URL,
 			Local: src.Name == "local",
+			// Never nil. A nil slice marshals to `null`, and the dashboard
+			// does `workflows.length` — so a project with NO workflows took
+			// the landing page down while every populated one rendered.
+			Workflows: []string{},
 		}
 		byName[src.Name] = p
 		order = append(order, src.Name)
@@ -84,7 +94,7 @@ func (e *Engine) Projects(ctx context.Context) ([]Project, error) {
 		if !ok {
 			// A project that has been forgotten still has real runs, so it is
 			// shown rather than letting them vanish from every view.
-			p = &Project{Name: name}
+			p = &Project{Name: name, Workflows: []string{}}
 			byName[name] = p
 			order = append(order, name)
 		}

@@ -94,6 +94,11 @@ func TestEnvCascadesSystemThenProjectThenStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A run is what makes a project appear in the dashboard, and this one is
+	// scaffolding. Left behind, it is a permanent row named after a test.
+	t.Cleanup(func() {
+		_, _ = h.store.Pool().Exec(context.Background(), `DELETE FROM workflow_runs WHERE project=$1`, project)
+	})
 	run := r.ID
 	step := &workflow.Step{ID: "s", Env: map[string]string{"TIER": "step"}}
 	got, err := h.eng.stepEnv(ctx, run, step)

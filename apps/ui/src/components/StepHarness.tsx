@@ -53,11 +53,11 @@ export default function StepHarness({ step, index }: { step: Step; index: number
         </Panel>)}
 
       <div className="hgrid">
-        <Panel title="Skills" note={`${step.skills.length}`}>
-          <div className="chips">{step.skills.length ? step.skills.map(x => <span key={x}>{x}</span>) : <span className="off">none</span>}</div>
+        <Panel title="Skills" note={`${step.skills?.length ?? 0}`}>
+          <div className="chips">{step.skills?.length ? step.skills.map(x => <span key={x}>{x}</span>) : <span className="off">none</span>}</div>
         </Panel>
-        <Panel title="Tools" note={`${step.tools.length} of the built-ins`}>
-          <div className="chips">{step.tools.length ? step.tools.map(x => <span key={x}>{x}</span>) : <span className="off">none — no built-ins at all</span>}</div>
+        <Panel title="Tools" note={`${step.tools?.length ?? 0} of the built-ins`}>
+          <div className="chips">{step.tools?.length ? step.tools.map(x => <span key={x}>{x}</span>) : <span className="off">none — no built-ins at all</span>}</div>
         </Panel>
         <Panel title="MCP" note={step.mcp?.length ? undefined : 'none granted'}>
           <div className="chips">{step.mcp?.length ? step.mcp.map(x => <span key={x}>{x}</span>) : <span className="off">none</span>}</div>

@@ -38,13 +38,16 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 // Sources returns the platform's own directory plus every imported repository.
 // The platform's own is always first, so its names win a collision — importing
 // a repository never changes what an existing name does.
+// templatesSource is the source name the shipped templates load under.
+const templatesSource = "templates"
+
 func (e *Engine) Sources() []workflow.Source {
 	out := []workflow.Source{{Name: "local", Dir: e.cfg.WorkflowsDir}}
 	// The templates the platform ships. They are loaded by the same loader as
 	// everything else — a template that would not load is a broken template,
 	// found at boot rather than by the first person who copies it.
 	if e.cfg.TemplatesDir != "" {
-		out = append(out, workflow.Source{Name: "templates", Dir: e.cfg.TemplatesDir})
+		out = append(out, workflow.Source{Name: templatesSource, Dir: e.cfg.TemplatesDir})
 	}
 	imported, err := e.readSources()
 	if err != nil {

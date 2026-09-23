@@ -160,7 +160,7 @@ export default function SystemPage() {
               searchPlaceholder="Search refused entries…" empty="Nothing was refused." />
           </Section>)}
         {!!doc.skills.skipped?.length && (
-          <Section title="Skills the loader refused" count={doc.skills.skipped.length}
+          <Section title="Skills the loader refused" count={doc.skills.skipped?.length ?? 0}
             hint="Usually a duplicate name: a root earlier in precedence already claimed it.">
             <DataTable
               rows={doc.skills.skipped.map(s => ({ s }))}
