@@ -1,0 +1,66 @@
+name: cross-platform
+description: >-
+  The same run, on two machines. A build on a Windows box with the toolchain
+  that is installed there, then an agent step that reads the result using the
+  coding-agent CLI on that machine — neither of which the platform has.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  properties:
+    branch: { type: string, title: "Branch to build", default: "main" }
+
+jobs:
+  build:
+    name: Build on Windows
+    # A LABEL, matched against the machines that joined with `wfx-runner join`.
+    # The workflow says what it needs; it never names a machine, and it holds no
+    # address — the worker connects out, so this works whether that box is in a
+    # datacentre or under somebody's desk.
+    runs-on: windows
+    steps:
+      - id: compile
+        shell: powershell
+        run: msbuild /p:Configuration=Release
+        output_schema:
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+
+  triage:
+    name: Read the build
+    runs-on: windows
+    needs: [build]
+    steps:
+      - id: explain
+        # The CLI is the ONE thing that does not travel: this resolves against
+        # that machine's PATH, with the credential it already holds. The skills,
+        # tools, guardrails, budget and output schema below all travel with the
+        # step from here.
+        provider: claude-cli
+        skills: [repo-navigator]
+        tools: [bash, read, grep, glob]
+        max_turns: 20
+        prompt: |
+          The Windows build exited {{ .Steps.build.compile.exitCode }}.
+
+          {{ .Steps.build.compile.stderr }}
+
+          Work out whether this is a real break or an environment problem on
+          this machine, and say which.
+        output_schema:
+          type: object
+          required: [verdict, reason]
+          properties:
+            verdict: { type: string, enum: [code, environment, unclear] }
+            reason:  { type: string }
+        gates:
+          - field: verdict
+            equals: environment
+            action: needs_input
+            message: "Looks like the build machine, not the code: {{ .Output.reason }}"

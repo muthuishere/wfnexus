@@ -81,22 +81,21 @@ check that costs nothing.
 
 ## Work pending (no decision needed)
 
-- **A worker runs `run:` steps, not agent steps.** `wfx-runner` executes a command on the machine
-  that holds the label and reports a result with the same shape a local `run:` produces. An agent
-  step still runs on the platform, because that is where the model credentials and the tool loop
-  are. Placing an agent step on a machine that holds its own CLI — the whole reason someone wants
-  a Windows box in the pool — is the next move, and the payload was shaped for it.
+- **A worker runs agent steps as well as commands.** The step's skills travel as files, with its
+  tools, team, guardrails, budget and output schema; the worker runs the same engine code the
+  platform does. The CLI does not travel — `provider: devin` is that machine's PATH and that
+  machine's credential, which is the point. What cannot be placed: a step using the platform's own
+  authoring tools, refused at pack time.
 - **A worker has no sandbox.** It runs the command as the user it runs as. That is the bargain a
   self-hosted Actions runner and a Jenkins node both make, and it is why docs/not-now.md's sandbox
   entry now has a second trigger: a worker taking a job from a workflow we did not write.
 
-- **`cli` / `acp` providers still cannot execute a step.** A step naming one is
-  now *refused* rather than silently run on the default model, which is the
-  honest state. Making them run needs one thing from upstream: a toolnexus
-  release that exports `InProcessTransport` (issue #95 — present on the
-  `issues-86-93-adrs` branch, absent from the pinned v0.18.1). The adapter
-  itself is written and tested, behind the `toolnexus_inprocess` build tag.
-  **This is the only outstanding dependency on toolnexus.**
+- ~~**`cli` / `acp` providers still cannot execute a step.**~~ **Done.** toolnexus v0.19.0 exports
+  the in-process transport and the pin is on it; a `cli` provider drives a real agent CLI, verified
+  end to end on a worker. What was still missing was the dry run: it built the adapter without
+  touching the program, so a `cli` provider whose binary is absent reported "would run" and then
+  failed at the first turn with an exec error wrapped in an HTTP error — which reads like a network
+  fault and is not. It is a PATH check now.
 - **The workflow builder has not been exercised against a live API** end to end.
 - **No metrics endpoint.** toolnexus emits `MetricEvent` per LLM call and tool
   call and we forward it to the event log; nothing aggregates it.

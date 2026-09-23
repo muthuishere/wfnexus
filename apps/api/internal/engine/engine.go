@@ -46,6 +46,10 @@ type Engine struct {
 	// transport overrides the LLM HTTP transport (tests script it).
 	transport http.RoundTripper
 
+	// sink replaces the event store on a worker engine, where there is no
+	// database: every event goes here to be posted back to the platform.
+	sink func(kind string, payload any)
+
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
 	// slots bounds concurrently EXECUTING runs. A run beyond the limit holds its
@@ -216,6 +220,15 @@ func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
 }
 
 func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string, payload any) {
+	// A worker has no event table. Its activity is posted back to the platform,
+	// which appends it to the run's log — so the live view of a step running on
+	// somebody's Windows box is the same view as one running here.
+	if e.store == nil {
+		if e.sink != nil {
+			e.sink(kind, map[string]any{"stepId": stepID, "kind": kind, "payload": payload})
+		}
+		return
+	}
 	ev, err := e.store.AppendEvent(context.WithoutCancel(ctx), runID, stepID, kind, payload)
 	if err != nil {
 		log.Printf("engine: append event: %v", err)
@@ -232,6 +245,13 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 }
 
 func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p store.StepPatch) {
+	if e.store == nil {
+		// The platform owns the step row; the worker only reports what happened.
+		if p.Status != nil {
+			e.emit(ctx, runID, stepID, "step.status", map[string]any{"status": *p.Status, "error": deref(p.Error)})
+		}
+		return
+	}
 	if err := e.store.PatchStep(context.WithoutCancel(ctx), runID, stepID, p); err != nil {
 		log.Printf("engine: patch step: %v", err)
 	}

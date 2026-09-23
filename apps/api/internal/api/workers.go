@@ -103,6 +103,41 @@ func (s *Server) finishJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// workerEvents takes a worker's live activity for a job it holds and appends it
+// to the run's log. Without it an agent step on another machine would be a
+// blank screen until it finished — the one thing that makes a remote step feel
+// different from a local one.
+func (s *Server) workerEvents(w http.ResponseWriter, r *http.Request) {
+	wk := s.authWorker(w, r)
+	if wk == nil {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "jobId"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	// Only the worker holding the job may write to that run's log.
+	if job.WorkerID == nil || *job.WorkerID != wk.ID {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("this job is not leased to this worker"))
+		return
+	}
+	var body struct {
+		Events []engine.WorkerEvent `json:"events"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s.eng.IngestWorkerEvents(r.Context(), job.RunID, body.Events)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": len(body.Events)})
+}
+
 // heartbeat is how a worker with nothing to do stays counted as online.
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if wk := s.authWorker(w, r); wk != nil {

@@ -26,6 +26,12 @@ type stepResult struct {
 	Output map[string]any
 	// Pending is the human question the step suspended on, if any.
 	Pending *tn.Request
+	// What the step cost and said. Carried on the result rather than written
+	// straight to the store, because the same function runs on a worker that
+	// has no store to write to.
+	Turns       int
+	RawText     string
+	TotalTokens int
 }
 
 // executeStep runs ONE workflow step as a toolnexus agent and returns its
@@ -45,11 +51,23 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	if err != nil {
 		return stepResult{}, fmt.Errorf("render prompt: %w", err)
 	}
+	// Where it runs is the step's own `runs-on`, exactly as for a `run:` step.
+	// A step placed on a worker executes THERE — the same agent, the same
+	// skills, the same schema gate — against that machine's toolchain.
+	if !e.servesLocally(step.RunsOn) {
+		return e.runAgentRemotely(ctx, runID, def, step, prompt, data)
+	}
 	e.setStep(ctx, runID, step.ID, store.StepPatch{
 		Status: str("running"), Prompt: str(prompt), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
+	return e.runAgent(ctx, runID, def.Name, step, prompt, data.WorkDir, data.BaseRef)
+}
 
-	schema, err := compileSchema(def.Name+"/"+step.ID, step.OutputSchema)
+// runAgent is the agent loop itself, with no run bookkeeping around it: the
+// same code executes a step here and on a worker, which is the only way the
+// two can be guaranteed to mean the same thing.
+func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, step *workflow.Step, prompt, workdir, baseRef string) (stepResult, error) {
+	schema, err := compileSchema(wfName+"/"+step.ID, step.OutputSchema)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("output_schema: %w", err)
 	}
@@ -78,10 +96,10 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	// Granted only when the step names them, like every other tool.
 	extra = append(extra, e.platformTools(step.Tools)...)
 
-	hooks := e.hooks(ctx, runID, step.ID, data.WorkDir, effectiveTurns(step))
+	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step))
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
-	ag, closeAgent, err := e.buildAgent(ctx, step, data.WorkDir, extra, hooks, onMetric)
+	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, extra, hooks, onMetric)
 	if err != nil {
 		return stepResult{}, err
 	}
@@ -99,7 +117,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 		},
 	}
 
-	prov, err := e.resolveLLM(step, data.WorkDir)
+	prov, err := e.resolveLLM(step, workdir)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
@@ -132,15 +150,18 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 		Turns: intp(res.Turns), RawText: str(res.Text),
 		Usage: mustJSON(map[string]any{"totalTokens": totalTokens}),
 	})
-	e.saveArtifacts(ctx, runID, step.ID, data.WorkDir, data.BaseRef, res)
+	e.saveArtifacts(ctx, runID, step.ID, workdir, baseRef, res)
+	spent := stepResult{Turns: res.Turns, RawText: res.Text, TotalTokens: totalTokens}
 
 	switch {
 	case res.Status == "pending" && res.Pending != nil:
 		// A durable halt: the Request is plain data, so the question outlives
 		// this process and the answer may arrive hours later.
-		return stepResult{Pending: res.Pending}, nil
+		spent.Pending = res.Pending
+		return spent, nil
 	case submitted != nil:
-		return stepResult{Output: submitted}, nil
+		spent.Output = submitted
+		return spent, nil
 	case res.IsError || res.Status == "error":
 		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, scrub(res.Text))
 	default:
@@ -351,6 +372,9 @@ func assistantText(resp map[string]any) string {
 
 // saveArtifacts stores the step's transcript and the workspace diff in S3.
 func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, workdir, baseRef string, res agents.TaskResult) {
+	if e.blob == nil || e.store == nil {
+		return // a worker has neither; its evidence travels back on the result
+	}
 	ctx = context.WithoutCancel(ctx)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
@@ -369,15 +393,26 @@ func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, wor
 	if res.Text != "" {
 		put("final.txt", "text/plain", []byte(res.Text))
 	}
-	if workdir != "" {
-		from := baseRef
-		if from == "" {
-			from = "HEAD"
-		}
-		c := exec.CommandContext(ctx, "git", "-C", workdir, "diff", from)
-		c.Env = append(os.Environ(), "GIT_PAGER=cat")
-		if diff, err := c.Output(); err == nil && len(bytes.TrimSpace(diff)) > 0 {
-			put("workspace.diff", "text/x-diff", diff)
-		}
+	if diff := workspaceDiff(ctx, workdir, baseRef); len(diff) > 0 {
+		put("workspace.diff", "text/x-diff", diff)
 	}
+}
+
+// workspaceDiff is what the step changed, as evidence. On a worker the work
+// happens on that machine's disk, so this is how it reaches the run at all.
+func workspaceDiff(ctx context.Context, workdir, baseRef string) []byte {
+	if workdir == "" {
+		return nil
+	}
+	from := baseRef
+	if from == "" {
+		from = "HEAD"
+	}
+	c := exec.CommandContext(context.WithoutCancel(ctx), "git", "-C", workdir, "diff", from)
+	c.Env = append(os.Environ(), "GIT_PAGER=cat")
+	diff, err := c.Output()
+	if err != nil || len(bytes.TrimSpace(diff)) == 0 {
+		return nil
+	}
+	return diff
 }

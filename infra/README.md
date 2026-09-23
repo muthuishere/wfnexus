@@ -101,21 +101,49 @@ scheduled task set to *Run whether user is logged on or not*, or wrap it with
 
 ### What a worker actually does
 
-It asks for a job, checks out the project if it was sent a repository, runs the
-command in the interpreter the step named (or the best one the machine has),
-and reports the exit code, stdout and stderr. The result has exactly the shape a
-local `run:` step produces, so a gate reading `steps.build.ok` cannot tell where
-it ran — and must not care.
+It asks for a job, checks out the project if it was sent a repository, and does
+one of two things.
+
+A **`run:` step** is a command: it runs in the interpreter the step named (or
+the best one the machine has) and reports the exit code, stdout and stderr.
+
+An **agent step** is the whole harness. The job carries the step's skills *as
+files* — so the worker needs no skills directory, and adding a machine never
+means deploying and syncing the platform's skill tree to it — along with its
+tool and MCP allowlists, its sub-agent team, its guardrails, its budget and its
+output schema. The worker then runs **the same engine code the platform runs**,
+given no database and a sink that posts the agent's activity back, so a step
+cannot mean one thing on the server and another here. Its tool calls appear in
+the run log live, and its workspace diff is carried back as the step's artifact.
+
+What does not travel is the **CLI**. `provider: devin` means the `devin` on this
+machine's PATH, using the credential this machine already holds. That asymmetry
+is the whole reason to put a worker somewhere: the toolchain lives with the
+machine.
+
+Either way the result has exactly the shape a local step produces, so a gate
+reading `steps.build.ok` cannot tell where it ran — and must not care.
 
 The step's identity is in the environment, for tools that want it:
 `WFX_RUN_ID`, `WFX_STEP_ID`, `WFX_PROJECT`, `WFX_WORKSPACE`, `WFX_RUNNER`.
 
 ### Honest limits, today
 
-- A worker runs **`run:` steps**. Agent (`prompt:`) steps still execute on the
-  platform, because that is where the model credentials and the tool loop are.
-  Placing an agent step on a machine that holds its own CLI is the next step,
-  and the protocol was shaped for it.
+- A step using the platform's **authoring tools** (`workflow_catalog`,
+  `workflow_validate`, `workflow_dryrun`) cannot be placed — those tools *are*
+  the server process. It is refused when the job is packed, not discovered as a
+  missing tool mid-run.
+- **Skills are capped at 8 MB per job.** A skill is documentation and a few
+  scripts; a directory far past that is a mistake — a checked-in
+  `node_modules`, a model file — and shipping it to every worker on every step
+  would be a slow way to find out.
+- An agent step's **model credentials are resolved on the worker**. An `http`
+  provider needs its `apiKeyEnv` set *there*; a `cli` provider needs no key at
+  all, because the CLI holds its own. Only the variable's NAME travels.
+- **Plain `http://` is supported and is not secured.** Most installs are an
+  internal address with no certificate, so refusing them would only teach people
+  to skip verification elsewhere. The join command says so out loud, because the
+  registration token and the worker's own token are bearer credentials.
 - There is **no sandbox**. A worker runs the command as the user it runs as, on
   the machine it is on. That is the same bargain a self-hosted Actions runner or
   a Jenkins node makes, and it is why you put one on a machine you own.

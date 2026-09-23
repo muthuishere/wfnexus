@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -173,6 +174,9 @@ func (e *Engine) Claim(ctx context.Context, w *store.Worker, wait time.Duration)
 // that has never seen this repository. It is deliberately a command and a
 // place to run it: a worker is a shell with a workspace, not a second engine.
 type JobPayload struct {
+	// Kind is "run" (a command) or "agent" (a whole agent step: skills, tools,
+	// guardrails, budget and the schema gate, all carried in Agent).
+	Kind    string `json:"kind,omitempty"`
 	RunID   string `json:"runId"`
 	StepID  string `json:"stepId"`
 	Project string `json:"project"`
@@ -189,7 +193,12 @@ type JobPayload struct {
 	Ref        string            `json:"ref,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	TimeoutSec int               `json:"timeoutSec,omitempty"`
+	// Agent is set when Kind is "agent".
+	Agent *AgentJob `json:"agent,omitempty"`
 }
+
+// IsAgent reports whether this job is a whole agent step rather than a command.
+func (p JobPayload) IsAgent() bool { return p.Kind == "agent" && p.Agent != nil }
 
 // JobResult is the worker's report. Its shape is exactly what a local `run:`
 // step produces, so a gate reading `steps.build.ok` cannot tell — and must not
@@ -202,6 +211,8 @@ type JobResult struct {
 	// Error is set when the worker could not run the command at all, which is a
 	// platform fault and not the command's verdict.
 	Error string `json:"error,omitempty"`
+	// Agent is the outcome of an agent job.
+	Agent *AgentOutcome `json:"agent,omitempty"`
 }
 
 // runRemote queues a command for a worker holding `label` and waits for it.
@@ -296,3 +307,115 @@ func (e *Engine) awaitJob(ctx context.Context, jobID uuid.UUID, wait time.Durati
 
 // PublicURL is the address workers are told to reach this server on.
 func (e *Engine) PublicURL() string { return e.cfg.PublicURL }
+
+// runAgentRemotely executes a whole agent step on the machine holding its
+// label, and records the result here exactly as a local step would be.
+//
+// The step's harness travels: its skills as files, its tool and MCP
+// allowlists, its team, its guardrails, its budget and its output schema. The
+// CLI does not — `provider: devin` resolves against THAT machine's PATH, with
+// the credential that machine already holds. That asymmetry is the feature.
+func (e *Engine) runAgentRemotely(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, prompt string, data workflow.TemplateData) (stepResult, error) {
+	job, err := e.packAgentJob(runID, def, step, prompt, data.BaseRef)
+	if err != nil {
+		return stepResult{}, err
+	}
+	payload := JobPayload{
+		Kind: "agent", RunID: runID.String(), StepID: step.ID,
+		Agent: job, TimeoutSec: step.TimeoutSec,
+	}
+	if run, err := e.store.GetRun(ctx, runID); err == nil {
+		payload.Project = run.Project
+		payload.Ref = run.BaseRef
+		if p, err := e.Project(ctx, run.Project); err == nil && p.URL != "" {
+			payload.RepoURL = p.URL
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return stepResult{}, err
+	}
+	queued, err := e.store.EnqueueJob(ctx, runID, step.ID, step.RunsOn, raw)
+	if err != nil {
+		return stepResult{}, err
+	}
+
+	e.setStep(ctx, runID, step.ID, store.StepPatch{
+		Status: str("running"), Prompt: str(prompt), StartedAt: now(), Error: str(""), ClearPending: true,
+	})
+	e.emit(ctx, runID, step.ID, "log", map[string]any{
+		"text": fmt.Sprintf("agent %s placed on %q — skills and tools travel with it; the CLI is that machine's own",
+			step.ID, step.RunsOn),
+	})
+
+	res, err := e.awaitJob(ctx, queued.ID, workerWait)
+	if err != nil {
+		_ = e.store.CancelJob(context.WithoutCancel(ctx), queued.ID)
+		return stepResult{}, err
+	}
+	if res.Agent == nil {
+		if res.Error != "" {
+			return stepResult{}, fmt.Errorf("worker: %s", res.Error)
+		}
+		return stepResult{}, fmt.Errorf("the worker returned no agent result for step %s", step.ID)
+	}
+	ag := res.Agent
+	if ag.Error != "" {
+		return stepResult{}, fmt.Errorf("%s", ag.Error)
+	}
+
+	// What the step cost is recorded here, because the step row is the
+	// platform's. The worker only reports.
+	e.setStep(ctx, runID, step.ID, store.StepPatch{
+		Turns: intp(ag.Turns), RawText: str(ag.RawText),
+		Usage: mustJSON(map[string]any{"totalTokens": ag.TotalTokens, "runsOn": step.RunsOn}),
+	})
+	e.saveRemoteArtifacts(ctx, runID, step.ID, ag)
+	return stepResult{
+		Output: ag.Output, Pending: ag.Pending,
+		Turns: ag.Turns, RawText: ag.RawText, TotalTokens: ag.TotalTokens,
+	}, nil
+}
+
+// saveRemoteArtifacts stores what the worker changed. The work happened on
+// another disk, so without this the run would record a step that did nothing.
+func (e *Engine) saveRemoteArtifacts(ctx context.Context, runID uuid.UUID, stepID string, ag *AgentOutcome) {
+	if e.blob == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	put := func(name, ctype string, body []byte) {
+		if len(body) == 0 {
+			return
+		}
+		key := fmt.Sprintf("runs/%s/%s/%s", runID, stepID, name)
+		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
+			return
+		}
+		a := &store.Artifact{RunID: runID, StepID: stepID, Name: name, ObjectKey: key, ContentType: ctype, SizeBytes: int64(len(body))}
+		if err := e.store.CreateArtifact(ctx, a); err == nil {
+			e.emit(ctx, runID, stepID, "artifact", a)
+		}
+	}
+	put("final.txt", "text/plain", []byte(ag.RawText))
+	put("workspace.diff", "text/x-diff", ag.Diff)
+}
+
+// WorkerEvent is one line of a worker's activity, posted back while the step is
+// still running so the live view is the same whichever machine it is on.
+type WorkerEvent struct {
+	StepID  string `json:"stepId"`
+	Kind    string `json:"kind"`
+	Payload any    `json:"payload"`
+}
+
+// IngestWorkerEvents appends a worker's activity to the run's log.
+func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, evs []WorkerEvent) {
+	for _, ev := range evs {
+		kind := ev.Kind
+		if kind == "" {
+			kind = "log"
+		}
+		e.emit(ctx, runID, ev.StepID, kind, ev.Payload)
+	}
+}

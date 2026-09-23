@@ -86,8 +86,26 @@ installed **there** — the Devin CLI, a JDK, a signing certificate, a licence d
 never connects to it: the worker polls out. So the platform can be a pod behind an ingress and the
 machine can be a laptop behind NAT, and neither has to be reachable from the other.
 
-The result has exactly the shape a local `run:` step produces, so a gate reading `steps.build.ok`
-cannot tell where it ran. Labels this process serves itself (`WFX_RUNNER_LABELS`, default
+**Agent steps travel too, and this is the interesting part.** A `prompt:` step placed on a worker
+runs there as the *same agent*, built by the same code: its skills (carried as files — the worker
+needs no skills directory), its scoped tools, its sub-agent team, its guardrails, its turn budget
+and its `submit_output` schema gate. What does **not** travel is the CLI:
+
+```yaml
+- id: fix
+  runs-on: windows
+  provider: devin          # the devin on THAT machine's PATH, with ITS credential
+  skills: [fix-author]     # carried there from here
+  tools: [bash, read, write, edit]
+  output_schema: { … }     # still enforced inside the loop, still validated
+```
+
+Its tool calls stream into the run log live, and its workspace diff comes back as the step's
+artifact — the work happened on another disk, so the evidence has to be carried or the run would
+record a step that changed nothing.
+
+The result has exactly the shape a local step produces, so a gate reading `steps.build.ok` cannot
+tell where it ran. Labels this process serves itself (`WFX_RUNNER_LABELS`, default
 `local,self-hosted`) run in process, so a single-machine install needs no worker at all.
 
 `wfx dryrun` says, for nothing, that a `runs-on:` nobody holds would wait:
@@ -98,9 +116,15 @@ build.whoami     run     buildbox (no machine)        30 turns
   warning build.whoami.runs-on   no worker online holds the label "buildbox" — this step would wait.
 ```
 
-Today a worker runs `run:` steps; agent steps still execute on the platform, where the model
-credentials and the tool loop are. [`infra/README.md`](infra/README.md) has the rest, including
-running the worker as a service and what it does and does not isolate.
+`wfx dryrun` tells the two failures apart before either costs anything: a `provider: devin` step
+running *here* is fatal when `devin` is not on **this** PATH, and the same step placed on a worker
+is checked against the pool instead — because whether this box has the CLI says nothing about the
+machine that will run it.
+
+The one thing that cannot be placed is a step using the platform's own authoring tools
+(`workflow_catalog`, `workflow_validate`, `workflow_dryrun`) — those *are* this process, and the
+step is refused at pack time rather than mid-run. [`infra/README.md`](infra/README.md) has the
+rest, including running the worker as a service and what it does and does not isolate.
 
 ## How a step works
 

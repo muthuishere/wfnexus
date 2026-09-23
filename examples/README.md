@@ -22,6 +22,7 @@ always reachable fully qualified (`yours/checks`).
 | file | trigger | what it demonstrates |
 |---|---|---|
 | `checks.yaml` | `repository_dispatch`, `workflow_dispatch` | three parallel jobs of pure `run:` steps. **No model is called**, so it costs nothing — the right thing to run first. Also `runs-on:` and a per-step `shell:`. `runs-on: local` is served by the platform itself; any other label is a machine that joined with `wfx-runner join` (see [`infra/README.md`](../infra/README.md)). |
+| `cross-platform.yaml` | `workflow_dispatch` | two jobs on a `runs-on: windows` worker: a `run:` step with `shell: powershell`, then an **agent** step whose skills and tools travel from here while `provider: claude-cli` resolves on that machine's PATH. The point of workers in one file. |
 | `nightly-audit.yaml` | `schedule`, `workflow_dispatch` | the clock starts it, so the schedule carries the input nobody is there to type. One read-only agent, guardrailed against writing. |
 | `on-issue.yaml` | `repository_dispatch` with `types:` | another system starts it. Two jobs, `needs:` between them, and the second reads the first's typed output. |
 | `reusable-repro.yaml` | `workflow_call` only | a workflow other workflows invoke. Because `workflow_dispatch` is not declared, a person is told so rather than getting a confusing failure. |

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/planner"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -41,15 +42,15 @@ type DryRun struct {
 
 // DryRunStep is what one step would do.
 type DryRunStep struct {
-	ID       string   `json:"id"`
-	Kind     string   `json:"kind"`
-	Provider string   `json:"provider,omitempty"`
-	Model    string   `json:"model,omitempty"`
-	Shell    string   `json:"shell,omitempty"`
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Shell    string `json:"shell,omitempty"`
 	// RunsOn is the label this step is placed on, and Workers is how many
 	// machines currently hold it — "where would this actually execute".
-	RunsOn  string `json:"runsOn,omitempty"`
-	Workers int    `json:"workers,omitempty"`
+	RunsOn   string   `json:"runsOn,omitempty"`
+	Workers  int      `json:"workers,omitempty"`
 	Skills   []string `json:"skills,omitempty"`
 	Tools    []string `json:"tools,omitempty"`
 	MaxTurns int      `json:"maxTurns,omitempty"`
@@ -129,13 +130,61 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 
 		// Would its model resolve? This is the check that catches a provider
 		// naming an env var nobody set on this machine.
+		//
+		// "On this machine" is the whole subtlety. A step placed on a worker
+		// resolves its provider THERE — `provider: devin` means the devin on
+		// that machine's PATH, holding that machine's credential — so checking
+		// it here would fail a workflow that is correct, which is worse than
+		// not checking it.
 		if ds.Kind == "prompt" {
-			prov, err := e.resolveLLM(s, "")
-			if err != nil {
-				fail(DryProblem{Step: s.ID, Field: "provider", Message: err.Error(), Fatal: true})
+			ds.RunsOn = s.RunsOn
+			if e.servesLocally(s.RunsOn) {
+				prov, err := e.resolveLLM(s, "")
+				if err != nil {
+					fail(DryProblem{Step: s.ID, Field: "provider", Message: err.Error(), Fatal: true})
+				} else {
+					ds.Model = prov.Label
+					prov.Close()
+				}
+				// resolveLLM builds the adapter without touching the program:
+				// a `cli` provider whose binary is absent resolves fine and
+				// then fails at the first turn with an exec error wrapped in an
+				// HTTP error, which reads like a network fault and is not.
+				// Caught here, where it costs nothing, and named as what it is.
+				if s.Provider != "" {
+					if p, err := e.catalog.Providers.Require(s.Provider); err == nil {
+						if c := checkProvider(p); !c.Ready {
+							fail(DryProblem{Step: s.ID, Field: "provider", Message: c.Problem, Fatal: true})
+						} else if c.Detail != "" {
+							ds.Shell = c.Detail // where the program actually is
+						}
+					}
+				}
 			} else {
-				ds.Model = prov.Label
-				prov.Close()
+				ds.Workers = e.labelHolders(s)
+				if ds.Workers == 0 {
+					fail(DryProblem{
+						Step: s.ID, Field: "runs-on",
+						Message: fmt.Sprintf("no worker online holds the label %q — this step would wait. "+
+							"Add a machine from the Workers page, or use one of: %s",
+							s.RunsOn, strings.Join(e.LocalLabels(), ", ")),
+					})
+				}
+				// A placed step's skills still have to exist HERE, because they
+				// travel with the job. This is the check that catches the
+				// difference between "the machine lacks a tool" and "the
+				// platform cannot pack the step at all".
+				if _, err := e.bundleSkills(s.Skills); err != nil {
+					fail(DryProblem{Step: s.ID, Field: "skills", Message: err.Error(), Fatal: true})
+				}
+				for _, t := range s.Tools {
+					if skills.IsPlatformTool(t) {
+						fail(DryProblem{
+							Step: s.ID, Field: "tools", Fatal: true,
+							Message: fmt.Sprintf("%q only exists in the server process, so this step cannot run on %q", t, s.RunsOn),
+						})
+					}
+				}
 			}
 		}
 
@@ -154,7 +203,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 				} else {
 					ds.Shell = sh.Name
 				}
-			} else if online, err := e.store.OnlineLabels(context.Background()); err == nil && online[s.RunsOn] == 0 {
+			} else if ds.Workers = e.labelHolders(s); ds.Workers == 0 {
 				// Not fatal: a machine can be added in a minute, and a workflow
 				// written for a pool it will join is not wrong. But a run that
 				// waits half an hour for a label nobody holds is the single
@@ -165,8 +214,6 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 						"Add a machine from the Workers page, or use one of: %s",
 						s.RunsOn, strings.Join(e.LocalLabels(), ", ")),
 				})
-			} else {
-				ds.Workers = online[s.RunsOn]
 			}
 		}
 
@@ -530,4 +577,18 @@ func (e *Engine) DryRunDraft(def *workflow.Definition, input map[string]any) *Dr
 		}
 	}
 	return e.DryRunDefinition(def, input)
+}
+
+// labelHolders is how many workers currently serve a step's label. It answers
+// the question a dry run exists for — would this step wait? — without costing
+// anything.
+func (e *Engine) labelHolders(s *workflow.Step) int {
+	if e.store == nil {
+		return 0
+	}
+	online, err := e.store.OnlineLabels(context.Background())
+	if err != nil {
+		return 0
+	}
+	return online[s.RunsOn]
 }

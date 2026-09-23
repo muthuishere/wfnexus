@@ -3,10 +3,15 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -35,8 +40,9 @@ func TestServesLocally(t *testing.T) {
 // is executed on another machine, and what comes back is INDISTINGUISHABLE
 // from a local `run:` step — same fields, so a gate reading `ok` cannot tell.
 func TestAStepRunsOnTheMachineThatHoldsItsLabel(t *testing.T) {
+	label := "windows-" + uuid.NewString()[:8]
 	def := &workflow.Definition{Name: "placed", Steps: []workflow.Step{{
-		ID: "build", Run: "msbuild /p:Configuration=Release", RunsOn: "windows",
+		ID: "build", Run: "msbuild /p:Configuration=Release", RunsOn: label,
 	}}}
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t), "")
@@ -48,7 +54,7 @@ func TestAStepRunsOnTheMachineThatHoldsItsLabel(t *testing.T) {
 	}
 	joined, err := h.eng.Join(context.Background(), JoinRequest{
 		Token: tok, Name: "buildbox-" + time.Now().Format("150405.000"),
-		Labels: []string{"windows"}, OS: "windows", Arch: "amd64",
+		Labels: []string{label}, OS: "windows", Arch: "amd64",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +113,7 @@ func TestAStepRunsOnTheMachineThatHoldsItsLabel(t *testing.T) {
 	if out["ok"] != true || out["stdout"] != "Build succeeded." {
 		t.Fatalf("the remote result did not come back as a local one would: %v", out)
 	}
-	if out["runsOn"] != "windows" {
+	if out["runsOn"] != label {
 		t.Errorf("the run does not record where it ran: %v", out["runsOn"])
 	}
 }
@@ -143,4 +149,132 @@ func mustRun(t *testing.T, h *harness) uuid.UUID {
 		t.Fatal(err)
 	}
 	return r.ID
+}
+
+// The whole point of option A: a `prompt:` step placed on a worker runs THERE,
+// as the same agent, with its skills carried to that machine — and what comes
+// back is a schema-validated output the run records like any other.
+func TestAnAgentStepRunsOnTheWorkerWithItsSkills(t *testing.T) {
+	// A skill that exists only on the platform. The worker has no skills
+	// directory, so if the step can load it, it travelled.
+	skillRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(skillRoot, "counting"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const skillBody = "---\nname: counting\ndescription: \"How this shop counts things.\"\n---\n# Counting\n\nAlways count in dozens.\n"
+	if err := os.WriteFile(filepath.Join(skillRoot, "counting", "SKILL.md"), []byte(skillBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A label unique to this run. The store is shared with anything else
+	// pointed at it — another test, a real worker somebody left polling — and a
+	// stranger claiming the job is a confusing way to fail.
+	label := "buildbox-" + uuid.NewString()[:8]
+	def := &workflow.Definition{Name: "placed-agent", Steps: []workflow.Step{{
+		ID: "think", Prompt: "count the things", RunsOn: label,
+		Skills: []string{"counting"}, MaxTurns: 4,
+		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
+	}}}
+	normalizeForTest(def)
+
+	llm := newFakeLLM(t, submit(map[string]any{"ok": true}), finish())
+	h := newHarness(t, def, llm, skillRoot)
+
+	tok, err := h.eng.RegistrationToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined, err := h.eng.Join(context.Background(), JoinRequest{
+		Token: tok, Name: "agentbox-" + time.Now().Format("150405.000"),
+		Labels: []string{label}, OS: "linux", Arch: "amd64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.store.DeleteWorker(context.Background(), joined.Worker.ID) })
+
+	// A worker with NO skills registry of its own, running the same engine code
+	// the platform runs.
+	gotSkill := make(chan string, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		w, err := h.eng.AuthWorker(ctx, joined.Token)
+		if err != nil {
+			return
+		}
+		j, err := h.eng.Claim(ctx, w, 20*time.Second)
+		if err != nil || j == nil {
+			return
+		}
+		var p JobPayload
+		if err := json.Unmarshal(j.Payload, &p); err != nil || !p.IsAgent() {
+			gotSkill <- "the job did not arrive as an agent job"
+			return
+		}
+		var carried string
+		for _, f := range p.Agent.Skills {
+			if strings.Contains(string(f.Body), "Always count in dozens") {
+				carried = f.Path
+			}
+		}
+		gotSkill <- carried
+
+		eng := NewWorkerEngine(func(string, any) {})
+		out := eng.RunAgentJob(ctx, p.Agent, t.TempDir())
+		raw, _ := json.Marshal(JobResult{OK: out.Error == "", Agent: &out})
+		_ = h.store.FinishJob(ctx, j.ID, w.ID, raw)
+	}()
+
+	run := h.run(nil)
+	if run.Status != "done" {
+		t.Fatalf("run = %s (%s)", run.Status, run.Error)
+	}
+	select {
+	case p := <-gotSkill:
+		if p != "counting/SKILL.md" {
+			t.Fatalf("the skill did not travel with the step: %q", p)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the worker never reported what it was sent")
+	}
+
+	steps, err := h.store.ListSteps(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range steps {
+		if s.StepID != "think" {
+			continue
+		}
+		if s.Status != "done" {
+			t.Fatalf("step = %s (%s)", s.Status, s.Error)
+		}
+		var out map[string]any
+		_ = json.Unmarshal(s.Output, &out)
+		if out["ok"] != true {
+			t.Fatalf("the remote agent's validated output did not come back: %v", out)
+		}
+	}
+}
+
+// A step that reaches back into the platform — the workflow catalogue, the
+// validator, the dry run — cannot be placed, and says so at pack time rather
+// than as a missing tool twenty turns into somebody else's machine.
+func TestAPlatformToolStepCannotBePlaced(t *testing.T) {
+	def := &workflow.Definition{Name: "authoring-placed", Steps: []workflow.Step{{
+		ID: "write", Prompt: "author it", RunsOn: "buildbox",
+		Tools:        []string{skills.ToolCatalog},
+		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
+	}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+
+	_, err := h.eng.packAgentJob(mustRun(t, h), def, &def.Steps[0], "author it", "")
+	if err == nil {
+		t.Fatal("a step using a platform tool was packed for another machine")
+	}
+	if !strings.Contains(err.Error(), skills.ToolCatalog) {
+		t.Fatalf("the refusal does not name the tool: %v", err)
+	}
 }

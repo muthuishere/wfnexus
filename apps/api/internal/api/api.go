@@ -82,6 +82,7 @@ func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.
 		r.Post("/workers/join", s.joinWorker)
 		r.Post("/workers/claim", s.claimJob)
 		r.Post("/workers/heartbeat", s.heartbeat)
+		r.Post("/workers/jobs/{jobId}/events", s.workerEvents)
 		r.Post("/workers/jobs/{jobId}/result", s.finishJob)
 		r.Post("/sources", s.importSource)
 		r.Delete("/sources/{name}", s.forgetSource)

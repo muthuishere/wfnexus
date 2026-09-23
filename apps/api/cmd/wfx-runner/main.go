@@ -29,9 +29,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 )
 
@@ -151,6 +153,13 @@ func cmdJoin(args []string) error {
 	if *url == "" || *token == "" {
 		return errors.New("--url and --token are required — copy the line from the Workers page")
 	}
+	// Plain HTTP is supported on purpose: most installs are an internal address
+	// with no certificate, and refusing them would only teach people to skip
+	// verification elsewhere. It is said out loud because the token is a bearer
+	// credential and so is the one this machine gets back.
+	if strings.HasPrefix(strings.ToLower(*url), "http://") {
+		fmt.Fprintln(os.Stderr, "note: joining over plain http — the token crosses the network in clear. Fine on a trusted network; use https over anything else.")
+	}
 	who := *name
 	if who == "" {
 		who, _ = os.Hostname()
@@ -266,6 +275,7 @@ type job struct {
 }
 
 type payload struct {
+	Kind       string            `json:"kind"`
 	RunID      string            `json:"runId"`
 	StepID     string            `json:"stepId"`
 	Project    string            `json:"project"`
@@ -275,14 +285,20 @@ type payload struct {
 	Ref        string            `json:"ref"`
 	Env        map[string]string `json:"env"`
 	TimeoutSec int               `json:"timeoutSec"`
+	// Agent is a whole agent step — its skills, tools, guardrails, budget and
+	// output schema — to run here. The step's CLI is NOT carried: a provider
+	// naming `devin` means the devin on this machine's PATH, with this
+	// machine's credential. That is the point of putting a worker here.
+	Agent *engine.AgentJob `json:"agent"`
 }
 
 type result struct {
-	OK       bool   `json:"ok"`
-	ExitCode int    `json:"exitCode"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	Error    string `json:"error,omitempty"`
+	OK       bool                 `json:"ok"`
+	ExitCode int                  `json:"exitCode"`
+	Stdout   string               `json:"stdout"`
+	Stderr   string               `json:"stderr"`
+	Error    string               `json:"error,omitempty"`
+	Agent    *engine.AgentOutcome `json:"agent,omitempty"`
 }
 
 func claim(ctx context.Context, cfg *Config) (*job, error) {
@@ -314,11 +330,20 @@ func claim(ctx context.Context, cfg *Config) (*job, error) {
 // without reporting is handled by the platform requeueing the job, but a worker
 // that is merely confused should say so rather than go quiet.
 func execute(ctx context.Context, cfg *Config, j *job) {
-	fmt.Printf("• %s %s: %s\n", short(j.Payload.RunID), j.Payload.StepID, firstLine(j.Payload.Command))
-	res := do(ctx, cfg, j.Payload)
-	if res.Error != "" {
-		fmt.Printf("  ! %s\n", res.Error)
+	var res result
+	if j.Payload.Kind == "agent" && j.Payload.Agent != nil {
+		fmt.Printf("• %s %s: agent (%s)\n", short(j.Payload.RunID), j.Payload.StepID, providerOf(j.Payload.Agent))
+		res = doAgent(ctx, cfg, j)
 	} else {
+		fmt.Printf("• %s %s: %s\n", short(j.Payload.RunID), j.Payload.StepID, firstLine(j.Payload.Command))
+		res = do(ctx, cfg, j.Payload)
+	}
+	switch {
+	case res.Error != "":
+		fmt.Printf("  ! %s\n", res.Error)
+	case res.Agent != nil:
+		fmt.Printf("  %d turns, %d tokens\n", res.Agent.Turns, res.Agent.TotalTokens)
+	default:
 		fmt.Printf("  exit %d\n", res.ExitCode)
 	}
 	body, _ := json.Marshal(res)
@@ -330,6 +355,41 @@ func execute(ctx context.Context, cfg *Config, j *job) {
 		cfg.URL+"/api/workers/jobs/"+j.ID+"/result", cfg.Token, bytes.NewReader(body), nil); err != nil {
 		fmt.Fprintln(os.Stderr, "could not report result:", err)
 	}
+}
+
+// doAgent runs a whole agent step here. The engine package is the SAME code
+// the platform runs, given no database and a sink that posts the agent's
+// activity back — so a step cannot mean one thing on the server and another on
+// this machine.
+func doAgent(ctx context.Context, cfg *Config, j *job) result {
+	dir, err := workspace(ctx, cfg, j.Payload)
+	if err != nil {
+		return result{Error: err.Error()}
+	}
+	// Events are posted back in small batches while the step runs, so the live
+	// view of a step executing here is the same view as one executing there.
+	post := newEventPoster(ctx, cfg, j.ID)
+	defer post.flush()
+
+	eng := engine.NewWorkerEngine(func(kind string, ev any) { post.add(kind, ev) })
+	if j.Payload.TimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(j.Payload.TimeoutSec)*time.Second)
+		defer cancel()
+	}
+	out := eng.RunAgentJob(ctx, j.Payload.Agent, dir)
+	return result{OK: out.Error == "", Agent: &out}
+}
+
+// providerOf names the CLI or endpoint this step will use here, for the log.
+func providerOf(a *engine.AgentJob) string {
+	if a.Provider != nil {
+		return a.Provider.Name
+	}
+	if a.Step.Model != "" {
+		return a.Step.Model
+	}
+	return a.Defaults.Model
 }
 
 func do(ctx context.Context, cfg *Config, p payload) result {
@@ -426,6 +486,57 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	c.Dir = dir
 	out, err := c.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// eventPoster batches a running agent's activity back to the platform. Batched
+// because an agent emits several events per turn and one request each would
+// spend more time on HTTP than on work; flushed on a timer so the live view
+// does not lag behind a long turn.
+type eventPoster struct {
+	ctx   context.Context
+	cfg   *Config
+	jobID string
+	mu    sync.Mutex
+	buf   []map[string]any
+	last  time.Time
+}
+
+func newEventPoster(ctx context.Context, cfg *Config, jobID string) *eventPoster {
+	return &eventPoster{ctx: ctx, cfg: cfg, jobID: jobID, last: time.Now()}
+}
+
+func (p *eventPoster) add(_ string, ev any) {
+	m, ok := ev.(map[string]any)
+	if !ok {
+		return
+	}
+	p.mu.Lock()
+	p.buf = append(p.buf, m)
+	due := len(p.buf) >= 20 || time.Since(p.last) > time.Second
+	p.mu.Unlock()
+	if due {
+		p.flush()
+	}
+}
+
+func (p *eventPoster) flush() {
+	p.mu.Lock()
+	batch := p.buf
+	p.buf, p.last = nil, time.Now()
+	p.mu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	body, err := json.Marshal(map[string]any{"events": batch})
+	if err != nil {
+		return
+	}
+	// A dropped event must never fail the step: the log is how you watch the
+	// work, not the work.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 10*time.Second)
+	defer cancel()
+	_ = call(ctx, http.MethodPost, p.cfg.URL+"/api/workers/jobs/"+p.jobID+"/events", p.cfg.Token,
+		bytes.NewReader(body), nil)
 }
 
 // ---- plumbing ----
