@@ -22,20 +22,31 @@ The first workflow is bug fixing: **validate → reproduce → draft PR → vali
 
 ## Why this and not n8n / Devin / Copilot
 
-Full analysis with sources: [`docs/research/competitive-landscape.md`](docs/research/competitive-landscape.md).
-The short version — nobody combines all of these in one runtime:
+Full analysis with sources: [`docs/research/competitors-2026-09.md`](docs/research/competitors-2026-09.md)
+(and the earlier [`competitive-landscape.md`](docs/research/competitive-landscape.md)).
 
-| | this | Archon | Windmill | n8n | Copilot/Devin/Jules |
-|---|---|---|---|---|---|
-| User-definable steps | YAML | YAML | flows | nodes | no (fixed loop) |
-| Skills + tools scoped **per step** | yes | no (whole CLI) | per agent step | per agent node | per run |
-| **Schema-validated** hand-off between steps | yes, stored `jsonb` | undocumented | yes (generic) | parser node | no |
-| Approval / needs-input gates | per step | yes | yes | wait node | PR review only |
-| Self-host | Go binary + PG + S3 | Bun | Rust + PG | Node (+Redis) | no |
+| | this | Archon | Windmill | n8n | GitHub agents | Devin/Jules |
+|---|---|---|---|---|---|---|
+| User-definable steps | YAML | YAML | flows | nodes | agent profiles | no (fixed loop) |
+| Skills + tools scoped per step | yes | no (whole CLI) | per agent step | per agent node | **yes** (per profile) | per run |
+| **Schema-validated hand-off, enforced *inside* the agent loop** | yes, stored `jsonb` | undocumented | after the step | parser node | no (`outputs:` are strings) | no |
+| **Static check with no model call** (`wfx dryrun`) | yes | no | no | no | no | no |
+| Runs locally, off any forge, against a working tree | yes | yes | yes | yes | no | no |
+| Self-host | Go binary + PG + S3 | Bun | Rust + PG | Node (+Redis) | no | no |
 
-The wedge is the **typed hand-off**: `reproduce-bug` cannot pass work to `draft-pr` until it has
-emitted `{reproduced, method, test_command, evidence, …}` and that object validated. Free-text
-hand-off between "plan" and "implement" is what every other coding agent does.
+Two honest corrections from the 2026-09-23 pass, because a comparison table that flatters us is
+worse than none:
+
+- **Per-step scoped tools is no longer a differentiator.** GitHub's custom agents take `tools:` and
+  `mcp-servers:` in an agent profile under `.github/agents/`
+  ([docs](https://docs.github.com/en/copilot/reference/custom-agents-configuration)). That row used
+  to say "per run" for them. It was true when it was written and is not true now.
+- **What survives scrutiny is narrower and more defensible.** The typed hand-off is enforced *in
+  the loop* — `submit_output` is a tool whose validation failures come back as tool results, so the
+  model corrects itself mid-turn. LangGraph's `response_format` lands on the final state and
+  CrewAI's guardrails run after the task; Actions' own `outputs:` are untyped strings. And nothing
+  else in the survey has a **static validation pass that costs no tokens**: six of six canvas
+  builders test by really running.
 
 ## Run it
 

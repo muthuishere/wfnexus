@@ -1,3 +1,8 @@
+> **Superseded in part, 2026-09-23.** Read
+> [`competitors-2026-09.md`](competitors-2026-09.md) first: it is the decision pass, it corrects
+> two claims this file makes, and it records that **Charlie Labs shuts down 2026-10-05** and
+> **Earthly is sunset** — treat both entries below as dead.
+
 # Competitive landscape — AI agent workflow platform for automated bug fixing
 
 *Researched 2026-09-21. Every URL was fetched on that date unless marked otherwise. "unknown" = not verifiable from an official source. Numbers are as published; third-party figures are flagged.*

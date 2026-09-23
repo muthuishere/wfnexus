@@ -13,11 +13,24 @@ something actually going wrong — not by being a good idea.
 |---|---|---|
 | **A container / namespace sandbox per run** | ADR 0015 fixes what actually broke three times — a step landing in the wrong directory — with a subprocess and a working directory. A container fixes a threat we have not met. It also costs 307 ms per `docker run` and drags in an image to build, version and ship. | We run somebody else's workflow, or somebody else's repository, on our machine. That is the moment isolation stops being hypothetical. |
 | **Egress allowlist through a proxy** | Same reason. There is one operator and the workflows are ours. A CONNECT proxy is a component to run, configure and debug. | The same trigger: untrusted input reaching a step that can run commands. Prompt injection through a stranger's bug report is the realistic version. |
-| **Snapshot resume instead of replay** | ADR 0005's replay works, and the cost is that steps must be idempotent — which they should be anyway for retry (ADR 0012). | A step that genuinely cannot be made idempotent, or a human question that routinely costs thirty re-run turns. Measure it before building it. |
+| ~~**Snapshot resume instead of replay**~~ — **answered 2026-09-23, and it is neither** | The competitor pass settled this. DBOS, Inngest and Flyte all do the same cheap thing: persist each step's output and SKIP the step on re-drive. We already store `step_runs.output` as jsonb, so most of it exists. Temporal-style deterministic replay is the expensive wrong branch — it imports determinism discipline and a history cap for nothing that memoised output does not give us. | Nothing. It moved to the roadmap: add an input hash and ship `wfx run --recover` / `--only <step-id>`. |
 | **Horizontal scale (Postgres `SKIP LOCKED` + leases)** | One machine is not the bottleneck and there is no queue backing up. Leases bring lease TTLs, heartbeat intervals and double-execution — three new correctness parameters for a problem we do not have. | Runs actually queueing behind the concurrency cap for long enough to notice. |
 | **Auth and tenancy** | There is none, and on localhost that is correct. | **The moment this is exposed on any address that is not localhost.** This is the one item on the list that is a hard gate rather than a judgement call — it is not "when it hurts", it is "before anyone else can reach it". |
 | **Secrets in Postgres** | `apiKeyEnv` already keeps values out of workflow files, which is the property that matters: a workflow is portable and committable because it names a variable. A secret store adds encryption, a master key and a rotation story. | More than one machine running steps (which is the scale item above), or more than one tenant. |
 | **Set failure kinds (`unavailable` / `exited` / `invalid`)** | Worth remembering: an exit code cannot tell "could not start" from "ran and failed" — `docker run` exits 125 for both — so retry cannot tell a flaky worker from a bad command. Today there is one executor and no worker to be flaky. | Arrives with the first thing on this list, or the fourth. Whichever comes first, this comes with it. |
+
+## Answered, not deferred
+
+Two entries above were settled by the 2026-09-23 competitor pass rather than by us building
+anything, which is the cheapest way to close a question:
+
+- **Durable resume** is memoised step output, not snapshots and not replay (see the table).
+- **Expression evaluation** — we were on course to write our own parser for `if:`. We should not.
+  `rhysd/actionlint` (MIT) parses and type-checks Actions expressions, and `nektos/act`'s
+  `exprparser` (MIT) evaluates them with a typed environment and models the implicit `success()`.
+  Writing our own would mean diverging from GitHub's semantics in ways nobody would notice until a
+  workflow behaved differently here than in a repository's own Actions file — which is the exact
+  failure the whole "adopt, never invent" rule exists to prevent.
 
 ## The one rule worth keeping from all of it
 

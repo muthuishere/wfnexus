@@ -54,6 +54,31 @@ Two platform defects came out of these runs and are fixed:
 - the containment escape recorded in ADR 0006. Re-run after the fix, the written
   test file landed inside the worktree.
 
+## Next, from the 2026-09-23 competitor pass
+
+Ranked, with the reason each is cheap:
+
+1. **Do not write an expression parser.** `if:` and `${{ }}` are GitHub's, and so are their
+   semantics. `rhysd/actionlint` (MIT) parses and type-checks; `nektos/act`'s `exprparser` (MIT)
+   evaluates with a typed environment and models the implicit `success()`. Writing our own is how
+   a workflow ends up behaving differently here than in a repository's own Actions file.
+2. **Resume by memoised step output.** `step_runs.output` already exists; add an input hash and
+   ship `wfx run --recover` and `--only <step-id>`. This closes the snapshot-vs-replay question
+   in docs/not-now.md — the answer is neither.
+3. **Sell the dry run.** Six of six canvas builders test by really running. A static pass that
+   costs no tokens is the clearest unoccupied ground in the survey and the README barely mentions
+   it.
+4. **Typed effects instead of a write token.** gh-aw's split is worth taking in the small: an
+   agent step emits a typed effect object, and a privileged `run` step applies it — one generic
+   `effects:` block with a cap, not their forty-handler catalogue. It turns prompt injection into
+   a permissions problem without needing a sandbox.
+
+**The risk to keep in view is GitHub, not Devin.** It owns the syntax, the repository and the
+runner, and gh-aw is our shape one layer down. What would make this project pointless is gh-aw
+gaining `needs:` between agentic jobs *and* schema-validated hand-off between them. What it cannot
+easily take is running the same workflow locally, off any forge, against a working tree, with a
+check that costs nothing.
+
 ## Work pending (no decision needed)
 
 - **`cli` / `acp` providers still cannot execute a step.** A step naming one is
