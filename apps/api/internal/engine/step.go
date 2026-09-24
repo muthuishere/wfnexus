@@ -88,8 +88,18 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		})
 
 	extra := []tn.Tool{submit}
-	if step.AskHuman {
+	// ask_human is an ordinary allowlisted tool name (ADR 0021). The legacy
+	// step-level boolean still grants it so shipped workflows keep running, but
+	// it is announced as deprecated on the run's own event stream rather than
+	// in a changelog nobody reads.
+	if askHumanGranted(step) {
 		extra = append(extra, e.askHumanTool(step))
+		if step.AskHuman && !toolNamed(step.Tools, skills.ToolAskHuman) {
+			e.emit(ctx, runID, step.ID, "log", map[string]any{
+				"text": "deprecated: `ask_human: true` on step " + step.ID +
+					" — name `ask_human` in this step's `tools:` instead (ADR 0021)",
+			})
+		}
 	}
 	// Tools that reach back into this platform — the catalogues, validation, a
 	// dry run — for a step whose job is to AUTHOR a workflow (authoring.go).
@@ -103,7 +113,28 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
 	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), env)
-	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
+
+	// The provider is resolved BEFORE the metric sink because the sink needs
+	// its price: cost is computed as the tokens arrive, not reconstructed
+	// afterwards from a log nobody reads back.
+	prov, err := e.resolveLLMWithEnv(step, workdir, env)
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	defer prov.Close()
+
+	// Every MetricEvent still lands in the append-only event log; it is now
+	// ALSO folded into the step's aggregate and written on a bounded cadence,
+	// so a running step reports progress (ADR 0020). Before this, `turns` and
+	// `usage` were written once, at the end: a 29-call step showed turns=0
+	// until the instant it finished.
+	usage := newUsageAccum(prov.Price, func(u map[string]any, turns int) {
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Turns: intp(turns), Usage: mustJSON(u)})
+	})
+	onMetric := func(m tn.MetricEvent) {
+		e.emit(ctx, runID, step.ID, "metric", m)
+		usage.record(m)
+	}
 
 	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
 	if err != nil {
@@ -123,11 +154,6 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		},
 	}
 
-	prov, err := e.resolveLLMWithEnv(step, workdir, env)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
-	}
-	defer prov.Close()
 	e.emit(ctx, runID, step.ID, "log", map[string]any{
 		"text": fmt.Sprintf("agent %s → %s (skills=%v tools=%v team=%d guardrails=%d)",
 			step.ID, prov.Label, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
@@ -152,9 +178,20 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 			totalTokens = tree
 		}
 	}
+	// The final write. `totalTokens` keeps its old meaning and its old place —
+	// the accumulator only counts what the LLM reported per call, so where the
+	// runtime's whole-tree rollup is larger (a sub-agent team, spikes/01) that
+	// larger number wins and the aggregate says so.
+	final, turns := usage.final()
+	if totalTokens > final["totalTokens"].(int) {
+		final["totalTokens"] = totalTokens
+		final["treeTokens"] = totalTokens
+	}
+	if res.Turns > turns {
+		turns = res.Turns
+	}
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
-		Turns: intp(res.Turns), RawText: str(res.Text),
-		Usage: mustJSON(map[string]any{"totalTokens": totalTokens}),
+		Turns: intp(turns), RawText: str(res.Text), Usage: mustJSON(final),
 	})
 	e.saveArtifacts(ctx, runID, step.ID, workdir, baseRef, res)
 	spent := stepResult{Turns: res.Turns, RawText: res.Text, TotalTokens: totalTokens}
@@ -176,6 +213,21 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		return stepResult{}, fmt.Errorf("step %s stopped as %q without a valid result: %s",
 			step.ID, res.Status, scrub(trim(res.Text, 500)))
 	}
+}
+
+// askHumanGranted reports whether this step may interrupt a person: the tool
+// named in `tools:` (the way it should be), or the deprecated boolean.
+func askHumanGranted(step *workflow.Step) bool {
+	return step.AskHuman || toolNamed(step.Tools, skills.ToolAskHuman)
+}
+
+func toolNamed(tools []string, name string) bool {
+	for _, t := range tools {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 // askHumanTool lets the step's agent stop and ask. It suspends with a Request;

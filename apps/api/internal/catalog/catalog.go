@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
@@ -63,6 +64,14 @@ type Provider struct {
 	// itself. Never a silent fallback.
 	Repairs    int `json:"repairs,omitempty"`
 	TimeoutSec int `json:"timeoutSec,omitempty"`
+
+	// Price, per MILLION tokens, in USD (ADR 0020). Pointers because the
+	// three states are distinct: unset on an `http` provider means the price
+	// is UNKNOWN and cost must render as such, while a `cli` / `acp` entry
+	// bills no tokens and its cost is a known $0.00. An explicit 0 here is
+	// also a known zero — that is what a self-hosted OpenAI-style endpoint is.
+	PricePerMIn  *float64 `json:"pricePerMIn,omitempty"`
+	PricePerMOut *float64 `json:"pricePerMOut,omitempty"`
 }
 
 func (p Provider) EntryName() string { return p.Name }
@@ -100,11 +109,39 @@ func (m McpServer) EntryName() string { return m.Name }
 // Disabled reports an explicitly switched-off server.
 func (m McpServer) Disabled() bool { return m.Enabled != nil && !*m.Enabled }
 
+// Notifier is a place a PAUSE is announced (ADR 0021): a run stopped and needs
+// a person. It is a registry entry rather than Go for the same reason a
+// provider is — Slack, Telegram or an operator's own system is an endpoint,
+// not a package we ship.
+//
+// It carries a POINTER to the pause and never a way to resolve it: see the
+// notify package's doc comment.
+type Notifier struct {
+	// Name is the map KEY on disk; see Provider.Name on omitempty.
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Kind is `webhook` — the one generic adapter. A second kind should be a
+	// very good argument, not a convenience.
+	Kind    string            `json:"kind"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	// SecretEnv is the NAME of an env var holding a bearer token for the
+	// RECEIVER, never the token.
+	SecretEnv string `json:"secretEnv,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+}
+
+func (n Notifier) EntryName() string { return n.Name }
+
+// Disabled reports an explicitly switched-off notifier.
+func (n Notifier) Disabled() bool { return n.Enabled != nil && !*n.Enabled }
+
 // Catalog is the whole set, one registry per kind.
 type Catalog struct {
 	Providers   *registry.Registry[Provider]
 	Classifiers *registry.Registry[Classifier]
 	Mcp         *registry.Registry[McpServer]
+	Notifiers   *registry.Registry[Notifier]
 }
 
 // file is the on-disk shape of registries.json.
@@ -113,6 +150,7 @@ type file struct {
 	Classifiers map[string]Classifier `json:"classifiers"`
 	// McpServers matches mcp.json's own key, so one file can serve both.
 	McpServers map[string]McpServer `json:"mcpServers"`
+	Notifiers  map[string]Notifier  `json:"notifiers"`
 }
 
 // Load reads registries.json and merges mcp.json's servers. Neither file is
@@ -123,6 +161,7 @@ func Load(registriesPath, mcpPath string) (*Catalog, error) {
 		Providers:   registry.New[Provider]("provider"),
 		Classifiers: registry.New[Classifier]("classifier"),
 		Mcp:         registry.New[McpServer]("mcp server"),
+		Notifiers:   registry.New[Notifier]("notifier"),
 	}
 	main, err := readFile(registriesPath)
 	if err != nil {
@@ -154,6 +193,18 @@ func Load(registriesPath, mcpPath string) (*Catalog, error) {
 			c.Mcp.Add(m, src+"#"+name)
 		}
 	}
+	for name, n := range main.Notifiers {
+		n.Name = name
+		if n.Disabled() {
+			c.Notifiers.Skipped(registriesPath+"#"+name, "disabled")
+			continue
+		}
+		if err := validateNotifier(n); err != nil {
+			c.Notifiers.Skipped(registriesPath+"#"+name, err.Error())
+			continue
+		}
+		c.Notifiers.Add(n, registriesPath+"#"+name)
+	}
 	addMcp(registriesPath, main.McpServers)
 	if mcpPath != "" && filepath.Clean(mcpPath) != filepath.Clean(registriesPath) {
 		side, err := readFile(mcpPath)
@@ -183,14 +234,39 @@ func readFile(path string) (file, error) {
 	return f, nil
 }
 
+// httpStyles is the set of wire formats an http provider may name. It is not a
+// taste list: it is exactly the set toolnexus's client implements
+// (tn.StyleOpenAI / tn.StyleAnthropic in client.go), because the engine passes
+// the string straight through as tn.ClientStyle and the client only ever tests
+// it against StyleAnthropic. So an unrecognised style is not rejected
+// downstream — it is silently framed as OpenAI, which is the quiet wrong-answer
+// failure ADR 0016 refuses for presets. Same rule here: refuse the name rather
+// than guess it.
+//
+// "gemini" is deliberately ABSENT. toolnexus exports ToGemini, but that maps
+// TOOL SCHEMAS only; there is no Gemini ClientStyle, so nothing would speak
+// generateContent. Google's own OpenAI-compatible endpoint is how a Gemini
+// model is reached from here, with style "openai".
+var httpStyles = map[string]bool{"openai": true, "anthropic": true}
+
+// HTTPStyles lists the accepted styles, sorted, for error messages and the UI.
+func HTTPStyles() []string {
+	out := make([]string, 0, len(httpStyles))
+	for s := range httpStyles {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func validateProvider(p Provider) error {
 	switch p.Kind {
 	case KindHTTP:
 		if p.BaseURL == "" || p.Model == "" {
 			return fmt.Errorf("an http provider needs baseUrl and model")
 		}
-		if p.Style != "openai" && p.Style != "anthropic" {
-			return fmt.Errorf("style must be openai or anthropic, got %q", p.Style)
+		if !httpStyles[p.Style] {
+			return fmt.Errorf("style must be one of %s, got %q", strings.Join(HTTPStyles(), ", "), p.Style)
 		}
 	case KindCLI, KindACP:
 		if p.Preset == "" && len(p.Command) == 0 {
@@ -201,11 +277,19 @@ func validateProvider(p Provider) error {
 		// error or an empty answer, and the failure looks like the model's
 		// rather than the registry's. Caught by running `opencode run` for
 		// real with exactly this mistake in the entry.
-		if len(p.Command) > 0 && p.Kind == KindCLI {
-			joined := strings.Join(append(append([]string{}, p.Command...), p.Args...), " ")
-			if !strings.Contains(joined, "{{prompt}}") && !strings.Contains(joined, "{{file}}") {
-				return fmt.Errorf("the command needs {{prompt}} or {{file}} to say where the prompt goes; got %q", joined)
-			}
+		joined := strings.Join(append(append([]string{}, p.Command...), p.Args...), " ")
+		hasPlaceholder := strings.Contains(joined, "{{prompt}}") || strings.Contains(joined, "{{file}}")
+		if len(p.Command) > 0 && p.Kind == KindCLI && !hasPlaceholder {
+			return fmt.Errorf("the command needs {{prompt}} or {{file}} to say where the prompt goes; got %q", joined)
+		}
+		// The mirror image for acp. An ACP command is argv for a process that
+		// receives its prompts over the protocol, so a placeholder there is a
+		// sign the entry was written as a one-shot CLI and given the wrong
+		// kind. Substituting it would pin turn one's prompt into the argv of a
+		// process that then runs every later turn — said here rather than
+		// discovered as an agent answering the first question forever.
+		if p.Kind == KindACP && hasPlaceholder {
+			return fmt.Errorf("an acp command is argv, not a prompt template: the prompt travels over the protocol, so {{prompt}}/{{file}} do not belong in %q", joined)
 		}
 	case "":
 		return fmt.Errorf("kind is required (http, cli or acp)")
@@ -223,6 +307,20 @@ func validateClassifier(c Classifier) error {
 		return fmt.Errorf("backend is required (typesafe, openrouter, llm or static)")
 	default:
 		return fmt.Errorf("unknown backend %q", c.Backend)
+	}
+}
+
+func validateNotifier(n Notifier) error {
+	switch n.Kind {
+	case "webhook":
+		if n.URL == "" {
+			return fmt.Errorf("a webhook notifier needs a url")
+		}
+		return nil
+	case "":
+		return fmt.Errorf("kind is required (webhook)")
+	default:
+		return fmt.Errorf("unknown kind %q", n.Kind)
 	}
 }
 

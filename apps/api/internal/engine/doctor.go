@@ -163,7 +163,11 @@ func checkProvider(p catalog.Provider) DoctorProvider {
 	switch p.Kind {
 	case catalog.KindHTTP:
 		out.Detail = p.BaseURL
-		if os.Getenv(p.APIKeyEnv) == "" {
+		// An entry with no apiKeyEnv needs no key — the self-hosted case, the
+		// same rule the runtime path applies. Without this, a provider that is
+		// correctly configured reports `NOT READY:  is not set`, naming no
+		// variable because there is none to name.
+		if p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) == "" {
 			out.Ready, out.Problem = false, p.APIKeyEnv+" is not set"
 		}
 		return out
