@@ -22,14 +22,21 @@ func splitList(v string) []string {
 }
 
 type Config struct {
-	Addr         string
-	DatabaseURL  string
-	S3Endpoint   string
-	S3AccessKey  string
-	S3SecretKey  string
-	S3Bucket     string
-	S3UseSSL     bool
-	WorkflowsDir string
+	Addr string
+	// StorageDriver is "postgres" or "sqlite"; DatabaseURL is its DSN — a URL
+	// for postgres, a file path for sqlite.
+	StorageDriver string
+	DatabaseURL   string
+	// ArtifactDriver is "s3" or "folder"; ArtifactDir is where a folder driver
+	// writes. A laptop wants a folder; a deployment wants a bucket.
+	ArtifactDriver string
+	ArtifactDir    string
+	S3Endpoint     string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3Bucket       string
+	S3UseSSL       bool
+	WorkflowsDir   string
 	// TemplatesDir holds workflows that exist to be copied. Separate from
 	// WorkflowsDir so a template is never mistaken for something to run, and so
 	// `wfx apply` cannot quietly overwrite one.
@@ -96,38 +103,99 @@ func envInt(k string, def int) int {
 	return def
 }
 
+// Load builds the configuration from the file, then the environment, then the
+// built-in defaults — in that order of increasing precedence.
+//
+// The environment WINS over the file, which is the direction that stays correct
+// under a container: an image may carry a config file and its operator sets env
+// vars, and the operator must win. A person on a laptop edits the file, sets no
+// env vars, and never meets the rule.
 func Load() Config {
+	cfg, _ := LoadWithFile(DefaultPath())
+	return cfg
+}
+
+// LoadWithFile is Load against a named file, returning the parse error rather
+// than swallowing it. A malformed config is worth refusing to start over.
+func LoadWithFile(path string) (Config, error) {
+	f, ferr := LoadFile(path)
+	if f == nil {
+		f = &File{}
+	}
 	home, _ := os.UserHomeDir()
 	root := env("WFX_ROOT", ".")
-	return Config{
-		Addr:           env("WFX_ADDR", ":8090"),
-		DatabaseURL:    env("DATABASE_URL", "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"),
-		S3Endpoint:     env("S3_ENDPOINT", "127.0.0.1:9030"),
-		S3AccessKey:    env("S3_ACCESS_KEY", "bfp"),
-		S3SecretKey:    env("S3_SECRET_KEY", "bfpbfpbfp"),
-		S3Bucket:       env("S3_BUCKET", "bfp-artifacts"),
-		S3UseSSL:       env("S3_USE_SSL", "false") == "true",
-		WorkflowsDir:   env("WFX_WORKFLOWS_DIR", filepath.Join(root, "workflows")),
-		TemplatesDir:   env("WFX_TEMPLATES_DIR", filepath.Join(root, "templates")),
-		SkillsDir:      env("WFX_SKILLS_DIR", filepath.Join(root, "skills")),
-		McpConfig:      env("WFX_MCP_CONFIG", filepath.Join(root, "mcp.json")),
-		RegistriesPath: env("WFX_REGISTRIES", filepath.Join(root, "registries.json")),
-		WorkDir:        env("WFX_WORKDIR", filepath.Join(home, ".local", "share", "wfnexus", "runs")),
-		UIDir:          env("WFX_UI_DIR", filepath.Join(root, "apps", "ui", "dist")),
-		LLMBaseURL:     env("LLM_BASE_URL", "https://openrouter.ai/api/v1"),
-		LLMStyle:       env("LLM_STYLE", "openai"),
-		Model:          env("WFX_MODEL", "anthropic/claude-sonnet-4.5"),
 
-		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", 4),
-		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", "local")),
-		RunnerToken:       env("WFX_RUNNER_TOKEN", ""),
-		SecretKeyEnv:      env("WFX_SECRET_KEY_ENV", "WFX_SECRET_KEY"),
-		SecretKeyPath:     env("WFX_SECRET_KEY_PATH", filepath.Join(home, ".config", "wfnexus", "secret.key")),
-		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", ""), "/"),
-		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", "OPENROUTER_API_KEY"),
-
-		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", "https://openrouter.ai/api/v1"),
-		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", "typesafe/jev-1.13"),
-		ClassifierAPIKeyEnv: env("WFX_CLASSIFIER_API_KEY_ENV", "OPENROUTER_API_KEY"),
+	// `mode` is a shorthand for a set of defaults, never a separate code path.
+	// Anything stated explicitly still wins over it.
+	local := strings.EqualFold(f.Mode, "local")
+	defStorage, defArtifacts := "postgres", "s3"
+	defDSN := "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"
+	if local {
+		defStorage, defArtifacts = "sqlite", "folder"
+		defDSN = filepath.Join(home, ".local", "share", "wfnexus", "wfnexus.db")
 	}
+
+	cfg := Config{
+		Addr:           env("WFX_ADDR", or(f.Addr, ":8090")),
+		StorageDriver:  env("WFX_STORAGE_DRIVER", or(f.Storage.Driver, defStorage)),
+		DatabaseURL:    env("DATABASE_URL", or(f.Storage.DSN, defDSN)),
+		ArtifactDriver: env("WFX_ARTIFACT_DRIVER", or(f.Artifacts.Driver, defArtifacts)),
+		ArtifactDir:    env("WFX_ARTIFACT_DIR", or(f.Artifacts.Dir, filepath.Join(home, ".local", "share", "wfnexus", "artifacts"))),
+		S3Endpoint:     env("S3_ENDPOINT", or(f.Artifacts.Endpoint, "127.0.0.1:9030")),
+		S3AccessKey:    env("S3_ACCESS_KEY", or(f.Artifacts.AccessKey, "bfp")),
+		S3SecretKey:    env("S3_SECRET_KEY", or(f.Artifacts.SecretKey, "bfpbfpbfp")),
+		S3Bucket:       env("S3_BUCKET", or(f.Artifacts.Bucket, "bfp-artifacts")),
+		S3UseSSL:       env("S3_USE_SSL", boolStr(f.Artifacts.UseSSL, false)) == "true",
+		WorkflowsDir:   env("WFX_WORKFLOWS_DIR", or(f.Paths.Workflows, filepath.Join(root, "workflows"))),
+		TemplatesDir:   env("WFX_TEMPLATES_DIR", or(f.Paths.Templates, filepath.Join(root, "templates"))),
+		SkillsDir:      env("WFX_SKILLS_DIR", or(f.Paths.Skills, filepath.Join(root, "skills"))),
+		McpConfig:      env("WFX_MCP_CONFIG", or(f.Paths.Mcp, filepath.Join(root, "mcp.json"))),
+		RegistriesPath: env("WFX_REGISTRIES", or(f.Paths.Registries, filepath.Join(root, "registries.json"))),
+		WorkDir:        env("WFX_WORKDIR", or(f.Paths.Work, filepath.Join(home, ".local", "share", "wfnexus", "runs"))),
+		UIDir:          env("WFX_UI_DIR", or(f.Paths.UI, filepath.Join(root, "apps", "ui", "dist"))),
+		LLMBaseURL:     env("LLM_BASE_URL", or(f.Model.BaseURL, "https://openrouter.ai/api/v1")),
+		LLMStyle:       env("LLM_STYLE", or(f.Model.Style, "openai")),
+		Model:          env("WFX_MODEL", or(f.Model.Model, "anthropic/claude-sonnet-4.5")),
+
+		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),
+		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", or(join(f.Runners.Labels), "local"))),
+		RunnerToken:       env("WFX_RUNNER_TOKEN", f.Runners.Token),
+		SecretKeyEnv:      env("WFX_SECRET_KEY_ENV", or(f.Secrets.KeyEnv, "WFX_SECRET_KEY")),
+		SecretKeyPath:     env("WFX_SECRET_KEY_PATH", or(f.Secrets.KeyPath, filepath.Join(home, ".config", "wfnexus", "secret.key"))),
+		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", f.PublicURL), "/"),
+		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", or(f.Model.APIKeyEnv, "OPENROUTER_API_KEY")),
+
+		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", or(f.Classifier.BaseURL, "https://openrouter.ai/api/v1")),
+		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", or(f.Classifier.Model, "typesafe/jev-1.13")),
+		ClassifierAPIKeyEnv: env("WFX_CLASSIFIER_API_KEY_ENV", or(f.Classifier.APIKeyEnv, "OPENROUTER_API_KEY")),
+	}
+	return cfg, ferr
 }
+
+// or is the file's value, or the built-in default when the file said nothing.
+func or(fromFile, def string) string {
+	if fromFile != "" {
+		return fromFile
+	}
+	return def
+}
+
+func orInt(fromFile, def int) int {
+	if fromFile > 0 {
+		return fromFile
+	}
+	return def
+}
+
+func boolStr(b *bool, def bool) string {
+	v := def
+	if b != nil {
+		v = *b
+	}
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+func join(list []string) string { return strings.Join(list, ",") }

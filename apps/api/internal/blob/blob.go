@@ -15,6 +15,14 @@ type Blob struct {
 	bucket string
 }
 
+// Store is what the engine needs of artifact storage. Two implementations: a
+// bucket for a deployment, a folder for a laptop.
+type Store interface {
+	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
+	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	PresignedGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
 func Open(ctx context.Context, endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Blob, error) {
 	c, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
@@ -51,3 +59,9 @@ func (b *Blob) PresignedGet(ctx context.Context, key string, ttl time.Duration) 
 	}
 	return u.String(), nil
 }
+
+// compile-time proof that both drivers satisfy the same contract.
+var (
+	_ Store = (*Blob)(nil)
+	_ Store = (*Folder)(nil)
+)

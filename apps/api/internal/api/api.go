@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,11 +30,11 @@ import (
 type Server struct {
 	eng   *engine.Engine
 	store *store.Store
-	blob  *blob.Blob
+	blob  blob.Store
 	uiDir string
 }
 
-func New(eng *engine.Engine, st *store.Store, bl *blob.Blob, uiDir string) http.Handler {
+func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string) http.Handler {
 	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
@@ -755,6 +756,19 @@ func (s *Server) artifact(w http.ResponseWriter, r *http.Request) {
 	for _, a := range arts {
 		if a.ID.String() != want {
 			continue
+		}
+		// A store that cannot presign — a folder on this machine — is served
+		// from here instead. The caller never has to know which driver runs.
+		if _, err := s.blob.PresignedGet(r.Context(), a.ObjectKey, time.Minute); errors.Is(err, blob.ErrNoPresign) {
+			rc, err := s.blob.Get(r.Context(), a.ObjectKey)
+			if err != nil {
+				writeErr(w, 500, err)
+				return
+			}
+			defer rc.Close()
+			w.Header().Set("Content-Type", a.ContentType)
+			_, _ = io.Copy(w, rc)
+			return
 		}
 		if r.URL.Query().Get("inline") == "1" {
 			rc, err := s.blob.Get(r.Context(), a.ObjectKey)

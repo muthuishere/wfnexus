@@ -56,9 +56,23 @@ func main() {
 	}
 	defer st.Close()
 
-	bl, err := blob.Open(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
-	if err != nil {
-		log.Fatalf("s3: %v", err)
+	// Which artifact store runs is one line of config. A laptop writes files
+	// into a folder and needs nothing running; a deployment writes to a bucket
+	// because artifacts outlive the machine.
+	var bl blob.Store
+	switch cfg.ArtifactDriver {
+	case "folder":
+		bl, err = blob.OpenFolder(cfg.ArtifactDir)
+		if err != nil {
+			log.Fatalf("artifacts: %v", err)
+		}
+		log.Printf("artifacts: folder %s", cfg.ArtifactDir)
+	default:
+		bl, err = blob.Open(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
+		if err != nil {
+			log.Fatalf("s3: %v", err)
+		}
+		log.Printf("artifacts: s3 %s/%s", cfg.S3Endpoint, cfg.S3Bucket)
 	}
 
 	reg := skills.Load(skills.DefaultRoots(cfg.SkillsDir)...)

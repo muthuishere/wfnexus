@@ -33,7 +33,7 @@ import (
 type Engine struct {
 	cfg     config.Config
 	store   *store.Store
-	blob    *blob.Blob
+	blob    blob.Store
 	defs    map[string]*workflow.Definition
 	skills  *skills.Registry
 	catalog *catalog.Catalog
@@ -64,7 +64,7 @@ type Engine struct {
 	slots chan struct{}
 }
 
-func New(cfg config.Config, st *store.Store, bl *blob.Blob, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
+func New(cfg config.Config, st *store.Store, bl blob.Store, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
 	if cat == nil {
 		cat, _ = catalog.Load("", "")
 	}
