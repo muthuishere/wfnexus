@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -39,6 +40,14 @@ func contextsPath() string {
 	if p := os.Getenv("WFX_CONTEXTS"); p != "" {
 		return p
 	}
+	if runtime.GOOS == "windows" {
+		// %AppData%\wfx. Windows has no usable mode bits — see the check in
+		// loadContexts — so the protection here is the LOCATION: the per-user
+		// profile carries a default ACL that other users do not inherit.
+		if dir, err := os.UserConfigDir(); err == nil {
+			return filepath.Join(dir, "wfx", "contexts.json")
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
@@ -59,9 +68,21 @@ func loadContexts() (*contextsFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mode := info.Mode().Perm(); mode&0o077 != 0 {
-		return nil, fmt.Errorf("%s is %#o — it holds a credential and must be readable only by you.\n"+
-			"Fix it with: chmod 600 %s", path, mode, path)
+	// WINDOWS HAS NO MODE BITS TO CHECK. Go reports 0666 for an ordinary file
+	// whatever its ACL says, and os.Chmod there only toggles the read-only
+	// attribute — so this check would refuse every file, and the 0600 we write
+	// would be protecting nothing. The file lives under %AppData% instead,
+	// which is ACL'd to the user by default.
+	//
+	// That is weaker than what we do on Unix and it is not a real ACL hardening
+	// pass: we do not set a DACL ourselves, so a profile whose permissions were
+	// loosened deliberately stays loosened. Said plainly rather than implied by
+	// a check that cannot fire.
+	if runtime.GOOS != "windows" {
+		if mode := info.Mode().Perm(); mode&0o077 != 0 {
+			return nil, fmt.Errorf("%s is %#o — it holds a credential and must be readable only by you.\n"+
+				"Fix it with: chmod 600 %s", path, mode, path)
+		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

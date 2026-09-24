@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,20 @@ func TestContextsFileIsPrivateAndALooseOneIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// WINDOWS HAS NO MODE BITS. Go reports 0666 for any ordinary file whatever
+	// its ACL says, and os.Chmod there only toggles read-only — so neither the
+	// 0600 assertion nor the loose-file refusal can mean anything. The
+	// protection there is contextsPath putting the file under %AppData%, which
+	// is ACL'd to the user; asserted separately below.
+	if runtime.GOOS == "windows" {
+		if cfg, err := os.UserConfigDir(); err == nil && os.Getenv("WFX_CONTEXTS") == "" {
+			if !strings.HasPrefix(path, cfg) {
+				t.Fatalf("on windows the credential store must sit under %s, got %s", cfg, path)
+			}
+		}
+		return
+	}
+
 	if mode := info.Mode().Perm(); mode != 0o600 {
 		t.Fatalf("contexts file is %#o, want 0600", mode)
 	}

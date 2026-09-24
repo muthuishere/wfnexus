@@ -126,12 +126,16 @@ jobs:
         #                        cannot exec. Harness, not product.
         #   internal/blob        folder-store key validation is POSIX-shaped
         #                        ("/etc/passwd" is accepted as a key).
+        #   internal/workflow    same family: checkFiles and checkMounts refuse
+        #                        a POSIX absolute path ("/etc/cron.d/evil",
+        #                        "/data:/etc") and do not recognise a windows
+        #                        one. Same not-now entry as containment.
         #   internal/api         the boot-refusal test reads the process's own
         #                        stdout; capture differs on windows.
         #
         # macOS runs the lot.
         run: >-
           ${{ runner.os == 'Windows'
-            && 'go test ./internal/auth/... ./internal/buildinfo/... ./internal/bundle/... ./internal/catalog/... ./internal/config/... ./internal/secrets/... ./internal/skills/... ./internal/store/... ./internal/workflow/... ./cmd/...'
+            && 'go test ./internal/auth/... ./internal/buildinfo/... ./internal/bundle/... ./internal/catalog/... ./internal/config/... ./internal/secrets/... ./internal/skills/... ./internal/store/... ./cmd/...'
             || 'go test ./internal/... ./cmd/...' }}
         working-directory: apps/api
