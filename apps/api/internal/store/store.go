@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,7 @@ func Migrate(driver, dsn string) error {
 		if err := os.MkdirAll(filepath.Dir(dsn), 0o755); err != nil {
 			return fmt.Errorf("sqlite dir: %w", err)
 		}
-		url = "sqlite://" + dsn + "?_pragma=busy_timeout(5000)"
+		url = sqliteMigrateURL(dsn)
 	}
 	src, err := iofs.New(migrations.FS, dir)
 	if err != nil {
@@ -443,4 +444,40 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// sqliteMigrateURL turns a FILESYSTEM PATH into a URL golang-migrate can parse.
+//
+// It used to be "sqlite://" + the path, which is correct on Unix by accident:
+// an absolute path already starts with "/", so the result has the three
+// slashes a file URL needs. On Windows the path starts "C:\Users\…", so the
+// same concatenation produced "sqlite://C:\Users\…" and url.Parse read "C:" as
+// a host followed by an invalid port — every migration failed before a single
+// statement ran. We ship windows binaries, so this was not a test-only fault.
+//
+// Building it through url.URL makes the platform difference disappear: Path is
+// slash-separated and rooted, which is what a file URL wants on either OS, and
+// the encoder escapes anything a directory name smuggles in.
+func sqliteMigrateURL(dsn string) string {
+	p := filepath.ToSlash(dsn)
+	// ToSlash is a NO-OP off Windows, so a Windows path tested on Linux or a
+	// mac would keep its backslashes and the bug would stay invisible to every
+	// machine we develop on — which is how it shipped. A drive letter says the
+	// path is Windows-shaped whoever is looking at it, so normalise on that
+	// rather than on the host, and the behaviour becomes testable everywhere.
+	if len(p) >= 2 && p[1] == ':' && isDriveLetter(p[0]) {
+		p = strings.ReplaceAll(p, `\`, "/")
+	}
+	if !strings.HasPrefix(p, "/") {
+		// "C:/Users/…" -> "/C:/Users/…". A relative path is rooted the same
+		// way; migrate resolves it against the process's working directory,
+		// which is what the old form did too.
+		p = "/" + p
+	}
+	u := url.URL{Scheme: "sqlite", Path: p, RawQuery: "_pragma=busy_timeout(5000)"}
+	return u.String()
+}
+
+func isDriveLetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

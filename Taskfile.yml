@@ -217,13 +217,14 @@ tasks:
       - npm run build
   workflows:validate:
     desc: Validate every workflow against the live registries
-    deps: [build:cli]
+    # Starts its own server on an ephemeral port and stops it again. `wfx
+    # validate` posts to the API on purpose — whether a provider, classifier,
+    # skill or MCP server resolves is a property of the registries, not of the
+    # file — which used to mean this target only passed when someone happened
+    # to have `task api` running. CI found that on its first run.
+    deps: [build:cli, build:api]
     cmds:
-      - for: { var: FILES }
-        cmd: "{{.BIN}}/wfx validate {{.ITEM}}"
-    vars:
-      FILES:
-        sh: ls workflows/*.yaml
+      - bash .github/scripts/validate-workflows.sh
 
   # ---- the knowledge graph --------------------------------------------------
   graph:
