@@ -4,6 +4,17 @@
 with no configuration at all it runs on SQLite and a folder, and `mode: server` moves it to your
 Postgres and your bucket.
 
+**Build the workflow inside the agent you already use. Publish it with its skills and MCP to a
+server you host. Run it against any backend** — a CLI agent (`claude`, `codex`, `copilot`,
+`opencode`), an ACP agent (`devin`), or your own HTTP model (OpenRouter, or ollama on localhost with
+no key at all). Everyone else ships a runtime you must live inside: Mastra binds you to their
+TypeScript runtime, gh-aw to GitHub plus Copilot, Devin and Jules are their own model. We ship **a
+unit that travels**.
+
+Nobody writes the YAML by hand either — an agent skill generates it inside your own session, and the
+file is the **receipt**: readable, diffable, committable, reviewable by someone who never touched the
+generator.
+
 A workflow is a YAML file. A step is a **prompt + a scoped set of agent skills/tools + a JSON-schema
 output contract**. The engine runs each step as a [toolnexus](https://github.com/muthuishere/toolnexus)
 agent, refuses to advance until the step's output validates against its schema, persists every step's
@@ -24,42 +35,62 @@ The first workflow is bug fixing: **validate → reproduce → draft PR → vali
 
 ## Why this and not n8n / Devin / Copilot
 
-Full analysis with sources: [`docs/research/competitors-2026-09.md`](docs/research/competitors-2026-09.md)
-(and the earlier [`competitive-landscape.md`](docs/research/competitive-landscape.md)).
+Full analysis with sources: [`docs/research/the-pivot-2026-09-24.md`](docs/research/the-pivot-2026-09-24.md),
+which supersedes what [`competitors-2026-09.md`](docs/research/competitors-2026-09.md) said about
+**us** (its competitor facts stand).
 
-| | this | Archon | Windmill | n8n | GitHub agents | Devin/Jules |
-|---|---|---|---|---|---|---|
-| User-definable steps | YAML | YAML | flows | nodes | agent profiles | no (fixed loop) |
-| Skills + tools scoped per step | yes | no (whole CLI) | per agent step | per agent node | **yes** (per profile) | per run |
-| **Schema-validated hand-off, enforced *inside* the agent loop** | yes, stored `jsonb` | undocumented | after the step | parser node | no (`outputs:` are strings) | no |
-| **Static check with no model call** (`wfx dryrun`) | yes | no | no | no | no | no |
-| Runs locally, off any forge, against a working tree | yes | yes | yes | yes | no | no |
-| Self-host | one Go binary (SQLite, or PG + S3) | Bun | Rust + PG | Node (+Redis) | no | no |
+| | this | Mastra | Archon | Windmill | n8n | GitHub agents | Devin/Jules |
+|---|---|---|---|---|---|---|---|
+| User-definable steps | YAML, generated | TypeScript | YAML | flows | nodes | agent profiles | no (fixed loop) |
+| **One workflow, many execution backends** (CLI agent, ACP agent, or HTTP model) | **yes**, 23 providers | no (their TS runtime) | no | no | no | no (Copilot) | no (own model) |
+| Schema-validated hand-off enforced *inside* the agent loop | yes, stored `jsonb` | schemas, validated around the step | undocumented | after the step | parser node | no (`outputs:` are strings) | no |
+| **Static check with no model call** (`wfx dryrun`) | yes | yes (`mastra lint`) | no | no | no | no | no |
+| Runs locally, off any forge, against a working tree | yes | no (Node project, `mastra build`) | yes | yes | yes | no | no |
+| Self-host the executor | one Go binary (SQLite, or PG + S3) | yes, control plane is theirs | Bun | Rust + PG | Node (+Redis) | no | no |
 
-Two honest corrections from the 2026-09-23 pass, because a comparison table that flatters us is
-worse than none:
+Three honest corrections from the 2026-09-24 pass, because a comparison table that flatters us is
+worse than none. All three cost us a row we had been selling:
 
-- **Per-step scoped tools is no longer a differentiator.** GitHub's custom agents take `tools:` and
-  `mcp-servers:` in an agent profile under `.github/agents/`
-  ([docs](https://docs.github.com/en/copilot/reference/custom-agents-configuration)). That row used
-  to say "per run" for them. It was true when it was written and is not true now.
-- **What survives scrutiny is narrower and more defensible.** The typed hand-off is enforced *in
-  the loop* — `submit_output` is a tool whose validation failures come back as tool results, so the
-  model corrects itself mid-turn. LangGraph's `response_format` lands on the final state and
-  CrewAI's guardrails run after the task; Actions' own `outputs:` are untyped strings. And nothing
-  else in the survey has a **static validation pass that costs no tokens**: six of six canvas
-  builders test by really running.
+- **Per-step scoped tools is gone as a claim, and the row with it.** GitHub's custom agents take
+  `tools:` and `mcp-servers:` in a profile under `.github/agents/`
+  ([docs](https://docs.github.com/en/copilot/reference/custom-agents-configuration)), and Mastra
+  scopes per agent **and per call** — `activeTools` / `toolsets` / `clientTools` at `.generate()`
+  time. Theirs is dynamic; ours is a static allowlist. We were behind, not ahead.
+- **Typed step schemas are not ours as a category.** Mastra's `createStep()` takes input *and*
+  output schemas (Standard JSON Schema — Zod, Valibot, ArkType), with TS type inference through
+  `getWorkflow()` **and** runtime validation. What is still ours is narrower: the contract is
+  enforced *in the loop* — `submit_output` is a tool whose validation failures come back as tool
+  results, so the model corrects itself mid-turn rather than the run dying. And for typed edges
+  specifically, `tsc` is a **stronger** check than `wfx dryrun`: it fails the build rather than a
+  command you have to remember to run.
+- **"Nobody ships a static validation pass" was false as written.** `mastra lint` exists —
+  `--strict`, `--json`, `--preflight`, no model calls. The claim is true of the **canvas tier
+  only**: six of six canvas builders test by really running. What `lint` and `tsc` cannot do is
+  close a *generation* loop, because they check code a human already wrote; our dry run proves a
+  workflow the generator has only just invented.
+
+The surface that survived is **portability across execution backends** plus **generation with a
+zero-token static proof**. If Mastra ships a provider abstraction that runs a workflow on a local
+CLI agent, or gh-aw ships `needs:` with typed outputs between agentic jobs, the honest move is to
+stop building a platform and ship the contract gate as a library — that kill criterion is written
+down, in the pivot doc §7.
 
 ## Run it
 
 Downloaded the binary? There is no step two:
 
 ```bash
-./wfx-server      # :8090 — sqlite in ~/.local/share/wfnexus, artifacts in a folder
+./wfx-server      # 127.0.0.1:8090 — sqlite in ~/.local/share/wfnexus, artifacts in a folder
 ```
 
 With no config file and no environment it takes the **local** defaults, migrates its own SQLite
 file on boot, and serves the UI and the API out of the binary. Nothing to install, nothing to start.
+
+**The default bind is `127.0.0.1:8090`, loopback only — it changed, and if you relied on remote
+access you must say so.** There is no authentication yet (see [Status](#status)), so a default of
+`:8090` would have put an unauthenticated server holding encrypted operator credentials on every
+interface of the machine. Set `WFX_ADDR=:8090` to listen everywhere; the containers and the k8s
+manifests state it themselves. Do not do it on a network you share until auth lands.
 
 ### Working on the repo
 
@@ -91,26 +122,204 @@ never quietly falls back to SQLite. Precedence is environment > file > mode > bu
 The containers and the k8s manifests all set `WFX_MODE=server` explicitly, so a deployment gets
 Postgres because it says so rather than because of where a default happens to sit.
 
-### A release
+## Install it
 
-```bash
-task release                       # 18 binaries + wfx-server.tar.gz
+```sh
+curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh
 ```
 
-Three binaries — `wfx-server`, `wfx`, `wfx-runner` — for linux, windows and
-macos on amd64 and arm64, and a **self-contained tarball**: the linux binaries
-travel inside it and its Dockerfile copies them rather than building, so
-`docker compose up` there needs no registry to pull from and no Go toolchain.
-The UI, workflows, templates, skills and provider registry travel with it too.
+Detects your OS and architecture, downloads `checksums.txt`, **refuses to install if the checksum
+does not match or is not published**, and lands the binaries in `~/.local/bin`. `WFX_VERSION=v0.2.0`
+pins a version instead of taking the latest. Windows: `install.ps1`, same behaviour.
 
-Or the whole thing in containers, including one worker:
+macOS will quarantine a downloaded binary; the installer prints the release note's own workaround:
 
-```bash
+```sh
+xattr -d com.apple.quarantine ~/.local/bin/wfx
+```
+
+`wfx version` says which binary you have, and where it came from:
+
+```
+wfx v0.1.0 (a71603f, 2026-09-24, go1.26.3)
+```
+
+### Offline, or air-gapped
+
+Download once, verify it, carry it in. This is the path a site without egress actually uses, which
+is why it comes before the registry:
+
+```sh
+# on a machine with a network
+curl -LO https://github.com/muthuishere/wfnexus/releases/download/v0.1.0/wfx-server-linux-arm64.tar.gz
+curl -LO https://github.com/muthuishere/wfnexus/releases/download/v0.1.0/checksums.txt
+shasum -a 256 -c checksums.txt --ignore-missing
+
+# on the target, with no registry to pull from and no Go toolchain
+tar xzf wfx-server-linux-arm64.tar.gz && cd wfx-server && docker compose up -d
+```
+
+There is one tarball **per Linux architecture**. It carries the linux binaries, the UI, workflows,
+templates, skills, `registries.json`, the k8s manifests and its own Dockerfile, and that Dockerfile
+*copies* the binaries rather than building them.
+
+### From a registry, or from source
+
+```sh
 docker compose -f infra/docker-compose.yml up -d    # → http://localhost:8090
+go install github.com/muthuishere/wfnexus/apps/api/cmd/wfx@latest
 ```
+
+`go install` works for **`wfx`** and **`wfx-runner`**. It does **not** work for `wfx-server`: the UI,
+workflows, templates, skills and provider registry are staged into `internal/assets/embedded/` by
+`task assets:stage` and are not committed, so a `go install` of the server would build a binary that
+serves a 404 at `/`. Use the installer or the tarball for the server.
 
 Kubernetes manifests are in [`infra/`](infra/README.md). There is no chart and no operator: a
 Deployment, a Service and a Secret.
+
+### Versioning
+
+`v0.x` while the API envelope and the workflow schema settle. Until `v1.0`: MINOR may break a
+documented interface and says so in the release notes, PATCH never does. After `v1.0`, semver as
+everyone else means it.
+
+### Building a release yourself
+
+```sh
+task release     # 18 binaries, one tarball per linux arch, checksums.txt
+```
+
+Three binaries — `wfx-server`, `wfx`, `wfx-runner` — for linux, windows and macos on amd64 and
+arm64. CI does exactly this on a tag and attaches the result to a GitHub Release; there is no
+separate release tool to learn.
+
+## The dry run, which costs nothing
+
+`wfx dryrun <workflow>` answers "would this run **here**" without a model call, a clone, or a write.
+It is the check the generator closes its own loop against, and it is the fastest thing in the repo.
+Real output, this repository, today:
+
+```
+$ wfx dryrun code-review
+code-review — sequential, 2 steps
+
+wave 1           survey
+wave 2           review
+
+STEP             KIND    RUNS ON                      BUDGET
+survey           prompt  anthropic/claude-sonnet-4.5  20 turns
+review           prompt  anthropic/claude-sonnet-4.5  30 turns
+
+ceiling: 50 model turns across 2 agent step(s)
+
+would run.
+```
+
+The five-phase bug fixer, same command, same cost:
+
+```
+$ wfx dryrun bug-fix
+bug-fix — sequential, 5 steps
+
+wave 1           validate-bug
+wave 2           reproduce-bug
+wave 3           draft-pr
+wave 4           validate-pr
+wave 5           finalize-pr
+
+STEP             KIND    RUNS ON                      BUDGET
+validate-bug     prompt  anthropic/claude-sonnet-4.5  15 turns
+reproduce-bug    prompt  anthropic/claude-sonnet-4.5  30 turns
+draft-pr         prompt  anthropic/claude-sonnet-4.5  30 turns
+validate-pr      prompt  anthropic/claude-sonnet-4.5  30 turns
+finalize-pr      prompt  anthropic/claude-sonnet-4.5  15 turns
+
+ceiling: 120 model turns across 5 agent step(s)
+
+would run.
+```
+
+The waves are the DAG; `RUNS ON` is the model for an agent step, the interpreter for a `run:` step,
+and the **label** for a placed one. When something is wrong it says so instead of printing `would
+run.`, as `warning` or `FATAL` against the step and field: an env var the step reads and nobody set,
+a `provider:` whose binary is not on **this** PATH, a `runs-on:` no online worker holds. Names only —
+never a value — so a dry run is safe to paste into an issue.
+
+## Backends
+
+23 providers ship in `registries.json`. An adapter is a registry **entry**, not code
+([ADR 0016](docs/adr/0016-an-adapter-is-a-registry-entry-not-code.md)), so adding one is a JSON
+object, not a pull request. The same `prompt + skills + tools + output_schema` runs on all of them.
+
+**Verified end to end on 2026-09-24** — each one answered a real prompt through the argv the registry
+ships, in `TestLiveRegistryArgvs`, so the entry and its proof cannot drift:
+
+| provider | kind | observed |
+|---|---|---|
+| `ollama-cli` | cli | 2.9s |
+| `opencode` | cli | 3.8s |
+| `claude-cli` | cli | 4.7s |
+| `codex-cli` | cli | 12.7s |
+| `copilot-cli` | cli | 18.3s |
+| `devin` | acp | 14.8s |
+| `ollama-http` | http | real 200, OpenAI-shaped body, from `localhost:11434` |
+
+**Doc-verified, not run:** `anthropic`, `openai`, `openrouter` (+ its `gpt`/`haiku`/`sonnet`
+shorthands), `groq`, `cerebras`, `deepseek`, `mistral`, `together`, `fireworks`, `xai`. Their base
+URLs were read off each vendor's own documentation on 2026-09-24 and not one from memory; **the model
+ids are unverified** and move fast. Two that a from-memory guess gets wrong: Groq needs the `/openai`
+path segment, and Anthropic's is the bare host under `style: "anthropic"`.
+
+**Self-hosted, and they need no key at all** — `ollama-http`, `vllm`, `lmstudio`, `llamacpp`. Until
+today two enforcement sites demanded an API key for every `http` provider and reported
+`NOT READY: provider llamacpp:  is not set`, naming no variable because there is none to name; both
+are fixed and the four entries dropped `apiKeyEnv`. This is the bring-your-own-model argument: the
+whole loop runs on a laptop, against a model on that laptop, reaching nothing. LM Studio and
+llama.cpp document no model id — theirs is whichever model is loaded — so those entries carry the
+placeholder `local-model`, which an operator **must** change.
+
+`ollama-cli` has one real limit, named in its own description: the generic argv template appends the
+model as a trailing flag and `ollama run` takes it positionally, so the entry bakes `qwen3:4b` in. A
+step that wants to choose an ollama model uses `ollama-http`.
+
+**`claude-cli` carries a legal caution, in the entry's description.** Anthropic's Consumer Terms,
+Prohibited Uses, restrict accessing the Services "through automated or non-human means, whether
+through a bot, script, or otherwise" **except via an Anthropic API Key**. A pipeline exec'ing
+`claude` is script-driven access on a subscription seat; the clause's own carve-out is an API key,
+which is what the `anthropic` http provider is. We enforce nothing and this is your call with your
+own account — the entry says so rather than staying quiet. GitHub Copilot and Cognition/Devin have
+no clause either way that we could find, and every OpenAI policy URL returned HTTP 403 to the
+checking machine, so **no clause is asserted for `codex-cli`**. Details, with what was and was not
+read, in [`docs/spikes/FINDINGS.md`](docs/spikes/FINDINGS.md) §08.
+
+## What a run costs
+
+Usage and cost are aggregated per step and written **while the step runs** — not at the end —
+coalesced on a one-second deadline (`internal/engine/usage.go`). `select status, turns, usage from
+step_runs` on a running step moves every second:
+
+```
+16:20:04|running|1|{"completionTokens":70,"costUsd":0.001357,"llmCalls":1,"promptTokens":1007,…}
+16:20:12|running|6|… llmCalls:6 toolCalls:5 promptTokens:7192  costUsd:0.009017
+16:20:16|done   |8|… llmCalls:8 toolCalls:7 promptTokens:10198 completionTokens:476 costUsd:0.012578
+```
+
+Two observed runs, both real, neither estimated:
+
+- **`code-review` on this repo, sonnet-4.5 via OpenRouter: $4.37.** It completed — `survey` 4 turns,
+  `review` 27 turns, both with validated typed output, 31 LLM calls, 30 tool calls. It also spent
+  **1,424,154 prompt tokens against 6,541 completion tokens**, because there is **no context
+  compaction**: the 117 KB diff was re-sent every turn. That ratio is the bill.
+- **One step on local `qwen3:4b` via `ollama-http`: a true `$0.00`.** 2 turns, 740 prompt + 907
+  completion, `"costUsd":0` — and the typed contract still held on a 4B model: `submit_output`
+  validated and the step could not finish without it.
+
+Free and unknown are different states. A priced provider reports `costUsd`; a local one reports a
+real `costUsd: 0`; a provider with no price on its registry entry reports `costUnknown: true` and
+**no `costUsd` key at all**, so no UI can render an unknown as `$0.00`. A step naming no `provider:`
+runs on the process-wide default, which is not a registry entry and so has nowhere to carry a price —
+any step that wants a cost must name a provider.
 
 ## Where a step runs
 
@@ -184,9 +393,13 @@ The authoring method is an agent skill, so you can run it inside whatever you
 already use — Claude Code, or anything that reads `~/.claude/skills`:
 
 ```bash
-wfx skill list                    # what this platform ships
-wfx skill install workflow-author # copies it where your agent reads skills
+wfx install --list                # what this platform ships
+wfx install --skills              # copy them where your agents read skills
+wfx install --skills workflow-author   # or just the one
 ```
+
+It writes **both** global roots — `~/.claude/skills` and `~/.agents/skills` — because one machine
+runs several agents and they do not share a root; `--to DIR` puts them somewhere else.
 
 Explicit, like `playwright install`, and for the same reason: a tool that writes
 into another tool's configuration behind your back is one nobody can audit. It
@@ -341,6 +554,30 @@ GET  /api/runs/{id}/artifacts/{id}     302 → presigned S3 (or ?inline=1)
 
 ## Status
 
-Working end to end against a real repo with a real bug. Not yet done: a queue/limit for concurrent
-runs, auth, and the "safe outputs" split that keeps a GitHub write token out of the LLM steps (see
-the features-to-steal list in the research doc).
+Working end to end against a real repo with a real bug, on seven backends, with typed output and a
+per-step cost. What is **not** built, plainly, because the repo's own rule is that a document which
+flatters is worse than none:
+
+- **No authentication and no authorization.** Anyone who can reach the port is an admin. The
+  loopback default above mitigates it and does not fix it; the actor on an approval
+  (`X-WFX-Actor`) is a *claim*, not an identity — the shape is right and nothing checks it.
+  [ADR 0017](docs/adr/0017-identity-is-the-device-grant.md) picks the device grant (RFC 8628) and is
+  the next thing after distribution.
+- **No release has been cut yet.** The install path above is built and tested — CI, a checksum-
+  verifying installer, per-arch tarballs — but there is no git tag, so there is nothing at those
+  URLs until the first one. The workflows have also never executed: their YAML and the scripts they
+  call are verified, a real Actions run is not.
+- **No publish direction.** Everything the server knows it read off a disk at boot. There is no
+  `wfx publish` and no registry to publish to — [ADR 0018](docs/adr/0018-the-registry-has-a-publish-direction.md)
+  is the decision, not the code.
+- **No evals.** Nothing here can show that a workflow passing on sonnet still passes on `qwen3:4b`.
+  That makes "runs anywhere" an unproven claim, which is why
+  [ADR 0019](docs/adr/0019-evals-are-the-proof-of-portability.md) promotes evals from a skipped gap
+  to the proof of the core claim.
+- **No context compaction.** The $4.37 above is what that costs. toolnexus ships `agents.Compactor`
+  and we do not use it; we cap turns instead, which stops work rather than continuing it.
+- **No Prometheus or OTEL export.** Usage and cost are aggregated live per step and stored on
+  `step_runs.usage` — that part is done — but there is no metrics endpoint and no trace export, and
+  nothing rolls the per-step figures up to the run.
+- Also open: a queue/limit for concurrent runs, and the "safe outputs" split that keeps a GitHub
+  write token out of the LLM steps.
