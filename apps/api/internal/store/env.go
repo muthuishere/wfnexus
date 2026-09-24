@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // The platform's own environment store: what a run gets before the workflow
@@ -13,30 +12,6 @@ import (
 // SYSTEM is the platform's — a proxy, a registry, the model key that every run
 // uses. PROJECT belongs to one repository, because a token that can push to one
 // repo has no business being handed to a workflow from another.
-
-const (
-	ScopeSystem  = "system"
-	ScopeProject = "project"
-)
-
-// EnvVar is one entry as the API returns it: never with its value, when secret.
-type EnvVar struct {
-	Scope     string `json:"scope"`
-	ScopeName string `json:"scopeName,omitempty"`
-	Key       string `json:"key"`
-	Secret    bool   `json:"secret"`
-	// Value is present ONLY for a non-secret. A secret's value leaves the
-	// database exactly once, into the process that runs the step.
-	Value     string    `json:"value,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-// Sealer is the encryption the store writes through. It is an interface so the
-// store does not import a key: whoever holds the key passes it in.
-type Sealer interface {
-	Seal(plain string) ([]byte, error)
-	Open(sealed []byte) (string, error)
-}
 
 // PutEnvVar writes one entry, replacing any previous value under that name.
 func (s *Store) PutEnvVar(ctx context.Context, box Sealer, scope, scopeName, key, value string, secret bool) error {

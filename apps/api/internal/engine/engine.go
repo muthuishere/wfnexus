@@ -21,19 +21,18 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/secrets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 type Engine struct {
 	cfg     config.Config
-	store   *store.Store
-	blob    blob.Store
+	store   Store
+	blob    Artifacts
 	defs    map[string]*workflow.Definition
 	skills  *skills.Registry
 	catalog *catalog.Catalog
@@ -49,7 +48,7 @@ type Engine struct {
 
 	// secrets seals and opens the platform's env store. Nil when no key could
 	// be loaded, which makes the store unavailable rather than plaintext.
-	secrets     store.Sealer
+	secrets     model.Sealer
 	secretsFrom string
 
 	// sink replaces the event store on a worker engine, where there is no
@@ -64,7 +63,7 @@ type Engine struct {
 	slots chan struct{}
 }
 
-func New(cfg config.Config, st *store.Store, bl blob.Store, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
+func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
 	if cat == nil {
 		cat, _ = catalog.Load("", "")
 	}
@@ -230,7 +229,7 @@ func (e *Engine) DeleteWorkflow(name string) error {
 	return e.ReloadDefinitions()
 }
 
-func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
+func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *model.Event, func()) {
 	return e.broker.Subscribe(runID)
 }
 
@@ -259,7 +258,7 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 	e.emit(ctx, runID, step, "run.status", map[string]any{"status": status, "step": step, "error": errMsg})
 }
 
-func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p store.StepPatch) {
+func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) {
 	if e.store == nil {
 		// The platform owns the step row; the worker only reports what happened.
 		if p.Status != nil {
@@ -336,7 +335,7 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) er
 	if st.Status != "awaiting_approval" {
 		return fmt.Errorf("step %s is %s, not awaiting_approval", stepID, st.Status)
 	}
-	e.setStep(ctx, runID, stepID, store.StepPatch{Status: str("approved")})
+	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("approved")})
 	// move the run off awaiting_approval synchronously, so a caller that reads
 	// it straight back (the UI does) never sees the state it just cleared
 	e.setRun(ctx, runID, "queued", stepID, "")
@@ -345,7 +344,7 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) er
 }
 
 func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason string) error {
-	e.setStep(ctx, runID, stepID, store.StepPatch{Status: str("rejected"), Error: str(reason)})
+	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("rejected"), Error: str(reason)})
 	e.setRun(ctx, runID, "cancelled", stepID, "rejected: "+reason)
 	return nil
 }
@@ -503,7 +502,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 			return err
 		}
 		if step.RequiresApproval && st.Status != "approved" {
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("awaiting_approval")})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 			return nil
 		}
@@ -552,17 +551,17 @@ func (e *Engine) applyDecideGates(ctx context.Context, runID uuid.UUID, def *wor
 		msg, _ := workflow.Render(g.Message, data)
 		switch g.Action {
 		case "needs_input":
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
 			return -1, true
 		case "fail":
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
 			e.setRun(ctx, runID, "failed", step.ID, msg)
 			return -1, true
 		case "skip_to":
 			pos, _ := def.Step(g.SkipTo)
 			if pos >= 0 {
-				e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("skipped"), FinishedAt: now()})
+				e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
 				return pos, false
 			}
 		}
@@ -573,7 +572,7 @@ func (e *Engine) applyDecideGates(ctx context.Context, runID uuid.UUID, def *wor
 // skipRange marks the steps between two positions skipped.
 func (e *Engine) skipRange(ctx context.Context, runID uuid.UUID, def *workflow.Definition, from, to int) {
 	for j := from; j < to && j < len(def.Steps); j++ {
-		e.setStep(ctx, runID, def.Steps[j].ID, store.StepPatch{Status: str("skipped")})
+		e.setStep(ctx, runID, def.Steps[j].ID, model.StepPatch{Status: str("skipped")})
 	}
 }
 

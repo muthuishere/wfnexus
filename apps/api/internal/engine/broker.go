@@ -5,22 +5,22 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 )
 
 // broker fans persisted run events out to live SSE subscribers.
 type broker struct {
 	mu   sync.Mutex
-	subs map[uuid.UUID]map[chan *store.Event]struct{}
+	subs map[uuid.UUID]map[chan *model.Event]struct{}
 }
 
-func newBroker() *broker { return &broker{subs: map[uuid.UUID]map[chan *store.Event]struct{}{}} }
+func newBroker() *broker { return &broker{subs: map[uuid.UUID]map[chan *model.Event]struct{}{}} }
 
-func (b *broker) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
-	ch := make(chan *store.Event, 256)
+func (b *broker) Subscribe(runID uuid.UUID) (<-chan *model.Event, func()) {
+	ch := make(chan *model.Event, 256)
 	b.mu.Lock()
 	if b.subs[runID] == nil {
-		b.subs[runID] = map[chan *store.Event]struct{}{}
+		b.subs[runID] = map[chan *model.Event]struct{}{}
 	}
 	b.subs[runID][ch] = struct{}{}
 	b.mu.Unlock()
@@ -31,7 +31,7 @@ func (b *broker) Subscribe(runID uuid.UUID) (<-chan *store.Event, func()) {
 	}
 }
 
-func (b *broker) Publish(ev *store.Event) {
+func (b *broker) Publish(ev *model.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subs[ev.RunID] {

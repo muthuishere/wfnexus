@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/secrets"
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -34,7 +34,7 @@ import (
 
 // Secrets is the box the env store is written and read through. Nil when no
 // key could be loaded, which makes the store unavailable rather than plaintext.
-func (e *Engine) Secrets() store.Sealer { return e.secrets }
+func (e *Engine) Secrets() model.Sealer { return e.secrets }
 
 // SecretsSource names where the key came from, for the System page. The NAME —
 // an env var or a path — never the key.
@@ -60,14 +60,14 @@ func (e *Engine) platformEnv(ctx context.Context, project string) (map[string]st
 		// rather than silently running without it.
 		return nil, nil
 	}
-	sys, err := e.store.EnvFor(ctx, e.secrets, store.ScopeSystem, "")
+	sys, err := e.store.EnvFor(ctx, e.secrets, model.ScopeSystem, "")
 	if err != nil {
 		return nil, err
 	}
 	if project == "" {
 		return sys, nil
 	}
-	proj, err := e.store.EnvFor(ctx, e.secrets, store.ScopeProject, project)
+	proj, err := e.store.EnvFor(ctx, e.secrets, model.ScopeProject, project)
 	if err != nil {
 		return nil, err
 	}
@@ -107,11 +107,11 @@ func (e *Engine) SetEnvVar(ctx context.Context, scope, scopeName, key, value str
 	if key == "" {
 		return fmt.Errorf("a variable needs a name")
 	}
-	if scope == store.ScopeProject && scopeName == "" {
+	if scope == model.ScopeProject && scopeName == "" {
 		return fmt.Errorf("which project?")
 	}
-	if scope != store.ScopeSystem && scope != store.ScopeProject {
-		return fmt.Errorf("scope must be %q or %q", store.ScopeSystem, store.ScopeProject)
+	if scope != model.ScopeSystem && scope != model.ScopeProject {
+		return fmt.Errorf("scope must be %q or %q", model.ScopeSystem, model.ScopeProject)
 	}
 	return e.store.PutEnvVar(ctx, e.secrets, scope, scopeName, key, value, secret)
 }
@@ -124,7 +124,7 @@ func (e *Engine) DeleteEnvVar(ctx context.Context, scope, scopeName, key string)
 }
 
 // ListEnvVars is for display: a secret comes back as a name and a timestamp.
-func (e *Engine) ListEnvVars(ctx context.Context, scope, scopeName string) ([]store.EnvVar, error) {
+func (e *Engine) ListEnvVars(ctx context.Context, scope, scopeName string) ([]model.EnvVar, error) {
 	if err := e.requireSecrets(); err != nil {
 		return nil, err
 	}

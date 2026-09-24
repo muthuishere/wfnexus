@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/planner"
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -207,5 +207,5 @@ func ids(as []planner.Action) []string {
 	return out
 }
 
-var _ = store.StepPatch{}
+var _ = model.StepPatch{}
 var _ = fmt.Sprintf
