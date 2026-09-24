@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -72,6 +73,12 @@ func jsonArg(j json.RawMessage) any {
 // a sql.Scanner. Postgres hands back []byte, SQLite hands back a string.
 type rawJSON struct{ dst *json.RawMessage }
 
+// A column holding nothing — NULL, '', or blanks — becomes a NIL RawMessage,
+// never an empty non-nil one. The difference is not cosmetic: json.RawMessage
+// encodes nil as `null` and an empty non-nil slice as a marshal ERROR
+// ("unexpected end of JSON input"), which would take a whole API response down
+// over one blank column. SQLite is where it bites, because the driver returns a
+// text column as a Go string and []byte("") is not nil.
 func (r rawJSON) Scan(src any) error {
 	switch v := src.(type) {
 	case nil:
@@ -80,6 +87,9 @@ func (r rawJSON) Scan(src any) error {
 		*r.dst = json.RawMessage(append([]byte(nil), v...))
 	case string:
 		*r.dst = json.RawMessage(v)
+	}
+	if len(bytes.TrimSpace(*r.dst)) == 0 {
+		*r.dst = nil
 	}
 	return nil
 }
