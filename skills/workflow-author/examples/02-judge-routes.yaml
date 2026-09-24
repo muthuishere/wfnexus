@@ -1,0 +1,51 @@
+# A COMMAND, THEN A VERDICT. The judge is a small model with typed questions —
+# a fraction of a cent to decide something a full agent would charge turns for.
+name: example-judge-routes
+description: Run the suite; if it failed, classify the failure without an agent.
+on: { workflow_dispatch: {} }
+steps:
+  - id: suite
+    run: go test ./... 2>&1
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: classify
+    # `when:` skips the step entirely when the facts do not call for it, so a
+    # green suite costs nothing at all.
+    when:
+      - path: suite.ok
+        equals: false
+    judge:
+      state: |
+        {{ .Steps.suite.stdout }}
+      questions:
+        flaky:
+          type: noul
+          instructions: "Did this fail for a reason unrelated to the code under test?"
+          true:  "a timeout, a port already in use, a missing fixture"
+          false: "an assertion about the behaviour being tested"
+        severity:
+          type: score
+          instructions: "How much does this failure matter?"
+          levels: ["cosmetic", "annoying", "blocks a user", "data loss"]
+        owner:
+          type: choice
+          instructions: "Who should look at this?"
+          options:
+            author: "the person who changed the code is asked to look"
+            infra:  "the build machine is investigated, not the change"
+            ignore: "it is noise and the run ends here"
+      gates:
+        - question: flaky
+          at_least: 0.7
+          action: fail
+          message: "Looks like the environment, not the code."
+        - question: owner
+          is: ignore
+          action: fail
+          message: "Classified as noise."

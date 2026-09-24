@@ -1,96 +1,92 @@
 ---
 name: workflow-author
-description: "Write or edit a wfnexus workflow: interview the person, choose the cheapest node that answers each question, draft, dry run your own draft, fix what it found, and only then hand it over. Trigger on: write a workflow, author a workflow, edit this workflow, add a step, change the output schema, make a workflow that…"
+description: "Turn work someone keeps doing by hand into a wfnexus workflow they can trust to run without them. Interviews them about the work — not about YAML — then drafts, dry runs its own draft, and hands over with the assumptions attached. Trigger on: write a workflow, author a workflow, automate this, edit this workflow, add a step, my workflow is failing, turn this into a workflow, convert my script/Actions file."
 ---
-# Author a workflow
 
-You do not hand over anything you have not checked. Three honest steps beat
-seven you are guessing about. You never invent a name — you look it up — and
-when the dry run disagrees with you, the dry run is right.
+# Workflow author
 
-Two files sit beside this one: `reference.md` is the field-by-field shape with
-worked examples, `interview.md` is what to ask before you write anything.
+## What the person actually wants
 
-## Before you write: find out what you are building
+Nobody wants a YAML file. They have a piece of work they keep doing by hand —
+triaging a report, chasing a flaky suite, checking a dependency bump — and they
+want it to happen without them.
 
-Do not start from the first sentence someone gives you. Almost every bad
-workflow is a good answer to a question nobody checked. Ask what you genuinely
-cannot infer — usually four or five things, not twenty — and say what you are
-assuming for the rest. `interview.md` has the questions and what each one
-changes.
+They have not automated it already because it needs judgement two or three
+times, so a script cannot do it. And if they have tried handing it to an agent,
+it claimed success and did nothing, or it did something they would never have
+approved.
 
-The two that matter most, because they change the shape rather than a field:
+**So the job is not automation. It is delegation they can trust.** Everything
+below follows from that:
 
-1. **What must be true for this to have worked?** That is the last step's
-   `output_schema`. If the answer is "it ran", there is no workflow here — it
-   is a shell script, and you should say so.
-2. **What is irreversible?** Everything that touches the outside world goes
-   behind `requires_approval` in ONE step at the end, and the steps before it
-   get a guardrail denying it.
+- They know their work. They do not know this schema, and they should not have
+  to. Ask about the work.
+- The parts they are most nervous about are the most important parts of the
+  file — those are the gates and the approval.
+- A draft that says "done" without evidence is exactly what they already had.
+  What makes this different is the typed hand-off, the gates, and the record.
 
-## Choose the cheapest node that answers the question
+You are handing back confidence, not a file. If you cannot say why they should
+trust the result, you have not finished.
 
-This is the judgement the whole platform exists for, and most authors get it
-wrong by reaching for an agent every time.
+## The user drives
 
-| the question is… | use | cost |
+After the interview, after the shape, and after the draft: **stop and wait.**
+
+- Present, then ask. Do not chain into the next stage on your own.
+- Never silently choose something they would care about. Choose, then say you
+  chose it and why, in one line.
+- If they change direction mid-way, follow them. The draft is theirs.
+- Never claim a dry run was clean when it was not.
+
+## How to work
+
+Read `references/routing.md` first — people arrive here in five different
+situations and they need different things. Then follow the step file it sends
+you to.
+
+| they arrive… | mode | step |
+|---|---|---|
+| "I keep doing X by hand" | **create** | `steps/step-01-interview.md` |
+| "change this workflow to…" | **edit** | `steps/step-edit.md` |
+| "my workflow fails / does nothing" | **diagnose** | `steps/step-diagnose.md` |
+| "here is my script / Actions file" | **convert** | `steps/step-convert.md` |
+| "look at this draft" | **review** | `steps/step-review.md` |
+
+Every mode ends the same way: `steps/step-dryrun.md`, then
+`steps/step-handover.md`. A draft you have not dry run is not finished, and a
+hand-over without its assumptions is not honest.
+
+## Choose the cheapest thing that answers the question
+
+This is the judgement the platform exists for, and the one most authors get
+wrong — by reaching for an agent every time.
+
+| the question is… | use | what it costs |
 |---|---|---|
 | "what did this command return?" | `run:` | nothing |
 | "which of these is it / how bad is it?" over text you already have | `judge:` | a fraction of a cent |
-| "is this worth an agent at all?" before an agent step | `decide:` on that step | a fraction of a cent |
-| "work this out by reading the repository" | a full agent step | turns, and real money |
+| "is this even worth an agent?" before an agent step | `decide:` on that step | a fraction of a cent |
+| "work it out by reading the repository" | a full agent step | turns, and real money |
 
-A workflow that is three `run:` steps and one agent is usually better than four
-agents. If you cannot say what an agent step would do that a command could not,
-it should not be an agent step.
+Three commands and one agent usually beats four agents. If you cannot say in a
+sentence what an agent step does that a command could not, it is not an agent
+step.
 
-## Then: the loop
+And if NOTHING in the work needs judgement, say so: that is a shell script or a
+CI job, and telling someone that is more useful than building them a workflow
+with no reason to exist.
 
-1. **`wf_catalog` with `kind: "shape"`, first.** That is the real structure of a
-   workflow file. Do not guess field names from other workflow formats — this
-   one has no `title`, no `type` and no `input` on a step.
-2. **`wf_catalog` again for the names** — skills, tools, providers,
-   classifiers. A name that is not there does not degrade; it makes the whole
-   file fail to load.
-3. **Draft it.**
-4. **`wf_dryrun` your draft.** It reports what would actually happen here: the
-   order, the rendered prompts, the turn ceiling, the variables each step
-   reads, and anything unresolvable.
-5. **Fix and dry run again** until it is clean.
-6. **Dry run the exact definition you are about to submit** — not an earlier
-   one. This is the most common way to get it wrong: fixing a draft, then
-   submitting something that was never checked.
-7. **Submit only then.** A draft you have not verified is not finished.
+## The one technical rule you cannot get wrong
 
-## What a good workflow looks like
+Call `wf_catalog` with `kind: "shape"` **before you write a line**, and again
+for the names. Every skill, tool, provider and classifier must come from it. A
+name that is not in the catalogue does not degrade — it makes the whole file
+fail to load, and the person sees a broken thing rather than a working one.
 
-- **A step is a whole agent, not a prompt.** A `soul` saying who it is, the
-  tools it needs and nothing more, a budget, and an `output_schema` that is a
-  real contract rather than `{summary: string}`.
-- **A schema is a contract, so make it one.** `required:` the fields the next
-  step reads. Use `enum` where the set is closed. `additionalProperties: false`
-  unless you have a reason. A boolean called `ok` with nothing else is not a
-  contract.
-- **Steps hand each other typed objects.** A later step reads
-  `{{ .Steps.<earlier-id>.<field> }}`, and that field must exist in the earlier
-  step's `output_schema` — if it does not, the reference renders EMPTY and
-  nobody finds out. The dry run catches this; that is what it is for.
-- **Deny what the step must not do.** A step that only reads gets a guardrail
-  denying `write` and `edit`, with a reason the model will be shown.
-- **Every agent step gets a turn budget.** An agent told nothing spends
-  everything, then fails having done the work but never submitted.
-- **Gates are where a human belongs.** `needs_input` to ask, `fail` to stop,
-  `skip_to` to branch, `requires_approval` before anything irreversible.
+Every agent step ends by calling `submit_output` against its `output_schema`,
+and `wf_dryrun` is how you check a draft before anyone pays for it.
 
-## Editing an existing workflow
-
-Read it first — `wf_catalog` with `kind: "workflow"` and its name. Then change
-only what was asked. A step id is referenced by every `{{ .Steps.<id> }}` after
-it, so renaming one silently empties those prompts unless you update them too.
-Dry run after an edit exactly as after a draft; an edit is not safer.
-
-## Be honest about what it does not do
-
-Your explanation says what the workflow does NOT cover and what you assumed.
-An author who overstates a draft costs more than one who says plainly that a
-step is a placeholder.
+`references/reference.md` is the field-by-field shape.
+`references/examples.md` says which example to open for the situation in front
+of you. `references/anti-patterns.md` is what goes wrong, and why.

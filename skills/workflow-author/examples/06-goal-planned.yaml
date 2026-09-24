@@ -1,0 +1,75 @@
+# THE ORDER IS DERIVED, NOT WRITTEN. Each step says what facts it needs and
+# what it establishes; the planner works out the order and RE-derives it after
+# every step. Use this when the route depends on what is found — and do not
+# also write `needs:`, which would be a second, conflicting order.
+name: example-goal-planned
+description: Establish whether a dependency bump is safe, by whatever route the facts allow.
+on: { workflow_dispatch: {} }
+
+goal: verdict
+
+input_schema:
+  type: object
+  required: [package]
+  properties:
+    package: { type: string, title: "Package to upgrade" }
+
+steps:
+  - id: current
+    produces: [installed]
+    run: "npm ls {{ .Input.package }} --json || true"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: changelog
+    consumes: [installed]
+    produces: [breaking]
+    soul: "You read release notes and report only what they actually say changed."
+    tools: [read, grep, glob]
+    budget: { max_turns: 15 }
+    guardrails:
+      - deny: write
+        reason: "this step reads; it does not change anything"
+    prompt: |
+      Installed: {{ .Steps.current.stdout }}
+
+      What in the newer versions of {{ .Input.package }} is breaking?
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [breaking, notes]
+      properties:
+        breaking: { type: boolean }
+        notes:    { type: string }
+
+  - id: usage
+    consumes: [installed]
+    produces: [surface]
+    soul: "You report where a dependency is actually used, with file:line, and nothing else."
+    tools: [read, grep, glob]
+    budget: { max_turns: 15 }
+    prompt: "Where is {{ .Input.package }} used in this repository?"
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [sites]
+      properties:
+        sites: { type: array, items: { type: string } }
+
+  - id: decide
+    consumes: [breaking, surface]
+    produces: [verdict]
+    judge:
+      state: |
+        Breaking changes: {{ .Steps.changelog.notes }}
+        Used at: {{ join .Steps.usage.sites ", " }}
+      questions:
+        risk:
+          type: score
+          instructions: "How risky is this upgrade for this repository?"
+          levels: ["drop-in", "needs a read", "needs work", "do not"]

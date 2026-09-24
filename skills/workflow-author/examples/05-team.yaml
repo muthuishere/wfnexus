@@ -1,0 +1,33 @@
+# A SUB-AGENT KEEPS RESEARCH OUT OF THE PARENT'S CONTEXT. The explorer reads
+# and reports; the parent decides. Use a team when one step would otherwise
+# fill its whole context with code it read once.
+name: example-team
+description: An agent that delegates reading to an explorer it may call.
+on: { workflow_dispatch: {} }
+input_schema:
+  type: object
+  required: [question]
+  properties:
+    question: { type: string, format: textarea }
+steps:
+  - id: answer
+    soul: "You answer from what the source shows. You delegate reading rather than filling your own context with it."
+    tools: [read, grep, glob, todowrite]
+    budget: { max_turns: 30, max_children: 4, max_concurrent: 2 }
+    team:
+      - id: explorer
+        does: "Read-only research: finds where something lives and reports the call path with file:line. Never edits."
+        soul: "You look things up and report exactly what you found. You never speculate beyond the source."
+        tools: [read, grep, glob]
+        budget: { max_turns: 20 }
+    prompt: |
+      {{ .Input.question }}
+
+      Use your explorer for anything that needs reading across the repository.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [answer, evidence]
+      properties:
+        answer:   { type: string }
+        evidence: { type: array, items: { type: string }, description: "file:line for each claim" }

@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// `wfx skill install` — put this platform's agent skills where YOUR agent will
-// find them.
+// `wfx install --skills` — put this platform's agent skills where YOUR agents
+// will find them.
 //
 // Explicit, like `playwright install`, and for the same reason: a tool that
 // writes into another tool's configuration behind your back is a tool nobody
@@ -20,8 +20,10 @@ import (
 // It copies files. It does not register anything, phone anywhere, or modify a
 // config — so undoing it is `rm -rf` on a directory this command names.
 
-// skillRoots are the directories agents read skills from, in the order they are
-// offered. A root that does not exist is offered anyway: choosing it creates it.
+// skillRoots are the GLOBAL directories agents read skills from. Both are
+// written, not the first that happens to exist: one machine runs several agents
+// and they do not share a root, so installing into one of them silently leaves
+// the others without the skill.
 func skillRoots() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -33,16 +35,21 @@ func skillRoots() []string {
 	}
 }
 
-func skillCmd(args []string) error {
-	switch {
-	case len(args) == 0 || args[0] == "list":
-		return skillList()
-	case args[0] == "install":
-		return skillInstall(args[1:])
+// installCmd is the front door for putting things on this machine. Today that
+// is the skills; the flag is there so adding the next one does not need a new
+// verb.
+func installCmd(args []string) error {
+	if hasFlag(args, "--skills") {
+		return skillInstall(args)
 	}
-	return fmt.Errorf("usage: wfx skill [list | install [name…] [--to DIR] [--force]]")
+	if hasFlag(args, "--list") {
+		return skillList()
+	}
+	return fmt.Errorf("usage: wfx install --skills [name…] [--to DIR] [--force]\n" +
+		"       wfx install --list            what this platform ships")
 }
 
+// skillList shows what would be installed, and where.
 func skillList() error {
 	src, err := skillSourceDir()
 	if err != nil {
@@ -56,7 +63,11 @@ func skillList() error {
 	for _, n := range names {
 		fmt.Printf("  %-20s %s\n", n, firstLine(skillDescription(filepath.Join(src, n, "SKILL.md"))))
 	}
-	fmt.Printf("\ninstall into your own agent:  wfx skill install workflow-author\n")
+	fmt.Printf("\ninstall all of them into your agents:  wfx install --skills\n")
+	fmt.Printf("they go to:\n")
+	for _, r := range skillRoots() {
+		fmt.Printf("  %s\n", r)
+	}
 	return nil
 }
 
@@ -72,13 +83,12 @@ func skillInstall(args []string) error {
 
 	to := flagOf(args, "--to", "")
 	force := hasFlag(args, "--force")
+	// ALL of them by default. These skills are how the platform's own workflows
+	// are written; installing one of them and leaving the rest gives an agent
+	// half a vocabulary, and the missing half is invisible until a workflow
+	// names a skill that is not there.
 	wanted := positional(args)
-	if len(wanted) == 0 {
-		// The authoring skill is the one that makes this platform usable from
-		// somebody else's agent, so it is the default rather than everything.
-		wanted = []string{"workflow-author"}
-	}
-	if len(wanted) == 1 && wanted[0] == "all" {
+	if len(wanted) == 0 || (len(wanted) == 1 && wanted[0] == "all") {
 		wanted = all
 	}
 	for _, w := range wanted {
@@ -87,47 +97,44 @@ func skillInstall(args []string) error {
 		}
 	}
 
-	if to == "" {
-		to = chooseRoot()
-		if to == "" {
-			return fmt.Errorf("could not work out where your agent keeps skills — pass --to DIR")
-		}
+	targets := skillRoots()
+	if to != "" {
+		targets = []string{to}
 	}
-	if err := os.MkdirAll(to, 0o755); err != nil {
-		return err
+	if len(targets) == 0 {
+		return fmt.Errorf("could not work out where your agents keep skills — pass --to DIR")
 	}
 
-	for _, name := range wanted {
-		dest := filepath.Join(to, name)
-		if _, err := os.Stat(dest); err == nil && !force {
-			fmt.Printf("  %-20s already there — pass --force to overwrite\n", name)
-			continue
+	for _, root := range targets {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return err
 		}
-		n, err := copyTree(filepath.Join(src, name), dest)
-		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+		fmt.Printf("%s\n", root)
+		var wrote, skipped int
+		for _, name := range wanted {
+			dest := filepath.Join(root, name)
+			if _, err := os.Stat(dest); err == nil && !force {
+				skipped++
+				continue
+			}
+			n, err := copyTree(filepath.Join(src, name), dest)
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			wrote++
+			_ = n
 		}
-		fmt.Printf("  %-20s → %s (%d files)\n", name, dest, n)
+		fmt.Printf("  %d installed", wrote)
+		if skipped > 0 {
+			fmt.Printf(", %d already there (--force to overwrite)", skipped)
+		}
+		fmt.Println()
 	}
-	fmt.Printf("\nYour agent will pick these up on its next session.\n")
-	fmt.Printf("Remove them with:  rm -rf %s\n", filepath.Join(to, "<name>"))
+
+	fmt.Printf("\n%d skills: %s\n", len(wanted), strings.Join(wanted, ", "))
+	fmt.Printf("Your agents pick these up on their next session.\n")
+	fmt.Printf("Remove with:  rm -rf %s\n", filepath.Join(targets[0], "<name>"))
 	return nil
-}
-
-// chooseRoot picks the first directory that already exists, so an install
-// lands where an agent is actually configured rather than creating a second
-// root it will never read.
-func chooseRoot() string {
-	roots := skillRoots()
-	for _, r := range roots {
-		if st, err := os.Stat(r); err == nil && st.IsDir() {
-			return r
-		}
-	}
-	if len(roots) > 0 {
-		return roots[0]
-	}
-	return ""
 }
 
 // skillSourceDir is where this platform's own skills live.

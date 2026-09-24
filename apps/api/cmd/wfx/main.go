@@ -93,8 +93,8 @@ func run(args []string) error {
 		return sources(rest)
 	case "workers", "worker":
 		return workers(rest)
-	case "skill", "skills":
-		return skillCmd(rest)
+	case "install":
+		return installCmd(rest)
 	case "env":
 		return envCmd(rest)
 	case "templates", "template":
@@ -117,8 +117,8 @@ func usage() {
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
-  wfx skill list                   agent skills this platform ships
-  wfx skill install [name…]        copy them where YOUR agent reads skills
+  wfx install --skills             install every agent skill into ~/.claude and ~/.agents
+  wfx install --list               what this platform ships
   wfx env [--project p]            the platform's env store (values are never shown)
   wfx env set NAME [--plain]       read a value without echoing it, store it encrypted
   wfx templates [name]             starting points to copy — the shape, minus your skills

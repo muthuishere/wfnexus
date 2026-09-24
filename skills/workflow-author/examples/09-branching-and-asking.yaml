@@ -1,0 +1,89 @@
+# WHEN THE WORKFLOW DOES NOT KNOW, IT ASKS.
+#
+# Three different ways of not knowing, and they are not interchangeable:
+#
+#   skip_to       the workflow knows enough to take another route
+#   needs_input   the workflow cannot proceed and a human must answer
+#   ask_human     the AGENT, mid-step, needs one thing to carry on
+#
+# `needs_input` parks the run durably — the answer can arrive hours later and
+# the run picks up where it stopped. It is not a failure, though it is often
+# mistaken for one.
+name: example-branching-and-asking
+description: Route a report three ways, and let the agent ask when it is stuck.
+on: { workflow_dispatch: {} }
+input_schema:
+  type: object
+  required: [report]
+  properties:
+    report: { type: string, format: textarea }
+
+steps:
+  - id: classify
+    judge:
+      state: "{{ .Input.report }}"
+      questions:
+        kind:
+          type: choice
+          instructions: "What kind of report is this?"
+          # Describe each option by what PICKING IT WOULD MEAN. An option
+          # described by its label is a guess; described by its consequence it
+          # is a decision.
+          options:
+            bug:      "something is broken and someone should fix it"
+            question: "someone wants to know how it works"
+            feature:  "someone wants something that does not exist"
+      gates:
+        # A question does not need the investigation below it.
+        - question: kind
+          is: question
+          action: skip_to
+          skip_to: answer
+        - question: kind
+          is: feature
+          action: fail
+          message: "Feature requests do not go through this workflow."
+
+  - id: investigate
+    soul: "You establish what is true in the code before anyone proposes a fix."
+    tools: [read, grep, glob]
+    budget: { max_turns: 25 }
+    # The agent gets a tool to ask ONE thing and wait. Use it where a missing
+    # detail would otherwise make the whole step guesswork.
+    ask_human: true
+    guardrails:
+      - deny: write
+        reason: "this step establishes facts; it does not change them"
+    prompt: |
+      {{ .Input.report }}
+
+      Find the code this concerns. If one missing detail would change your
+      answer, ask for it rather than assuming.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [found, where, summary]
+      properties:
+        found:   { type: boolean }
+        where:   { type: string }
+        summary: { type: string }
+    gates:
+      - field: found
+        equals: false
+        action: needs_input
+        message: "Could not find the code this concerns. Which component is it?"
+
+  - id: answer
+    soul: "You answer plainly, from the source, and you say when you do not know."
+    tools: [read, grep, glob]
+    budget: { max_turns: 15 }
+    prompt: |
+      {{ .Input.report }}
+
+      {{ if .Steps.investigate.summary }}What was found: {{ .Steps.investigate.summary }}{{ end }}
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [reply]
+      properties:
+        reply: { type: string }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +31,26 @@ func TestAuthoringMethodIsASkill(t *testing.T) {
 	if !ok {
 		t.Fatal("the workflow-author skill is not in the registry")
 	}
-	body, err := os.ReadFile(sk.Location)
-	if err != nil {
+	// Read the WHOLE skill, not just SKILL.md. A skill is a directory —
+	// asserting against the entry file alone would fail the moment the method
+	// is properly split into references and steps, which is what a skill this
+	// size should do.
+	dir := filepath.Dir(sk.Location)
+	var whole strings.Builder
+	if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		whole.Write(b)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
+	body := []byte(whole.String())
 	// The three things the loop cannot work without.
 	for _, must := range []string{"wf_catalog", "wf_dryrun", "output_schema"} {
 		if !strings.Contains(string(body), must) {
@@ -47,15 +64,20 @@ func TestAuthoringMethodIsASkill(t *testing.T) {
 			t.Errorf("the skill never mentions %s — nothing tells the author to use the cheap node", must)
 		}
 	}
-	dir := filepath.Dir(sk.Location)
-	for _, f := range []string{"reference.md", "interview.md"} {
+	for _, f := range []string{
+		"references/reference.md", "references/interview.md", "references/routing.md",
+		"references/anti-patterns.md", "references/examples.md",
+		"steps/step-01-interview.md", "steps/step-edit.md", "steps/step-diagnose.md",
+		"steps/step-convert.md", "steps/step-review.md", "steps/step-dryrun.md",
+		"steps/step-handover.md",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s is missing: %v", f, err)
 		}
 	}
 	// The reference must carry the exact question types, because these are the
 	// names an author cannot guess and a wrong one fails the whole file.
-	ref, err := os.ReadFile(filepath.Join(dir, "reference.md"))
+	ref, err := os.ReadFile(filepath.Join(dir, "references", "reference.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,4 +235,85 @@ func hasString(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// EVERY EXAMPLE MUST LOAD.
+//
+// An example that would not run is worse than no example: it is copied,
+// it fails, and the person concludes the platform is broken rather than the
+// documentation. They go through the same loader the server uses, so they
+// cannot rot into something plausible.
+func TestEveryAuthoringExampleLoads(t *testing.T) {
+	dir := repoPath(t, filepath.Join("skills", "workflow-author", "examples"))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("the examples directory is missing: %v", err)
+	}
+	reg := skills.Load(repoPath(t, "skills"))
+	cat, err := catalog.Load(repoPath(t, "registries.json"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs, err := workflow.LoadDir(dir, catalog.NewValidator(reg, cat))
+	if err != nil {
+		t.Fatalf("the examples do not load: %v", err)
+	}
+
+	var yamls int
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".yaml") {
+			yamls++
+		}
+	}
+	if yamls < 8 {
+		t.Errorf("only %d examples — the skill is meant to cover the range of shapes", yamls)
+	}
+	if len(defs) != yamls {
+		t.Errorf("%d files but %d loaded definitions", yamls, len(defs))
+	}
+
+	// Between them they must demonstrate the shapes someone actually needs,
+	// not nine variations of one.
+	var sawRun, sawJudge, sawDecide, sawTeam, sawApproval, sawGoal, sawRunsOn, sawEnv, sawSchedule bool
+	for _, d := range defs {
+		if d.Goal != "" {
+			sawGoal = true
+		}
+		if len(d.On.Schedule) > 0 {
+			sawSchedule = true
+		}
+		if len(d.Env) > 0 {
+			sawEnv = true
+		}
+		for i := range d.Steps {
+			s := &d.Steps[i]
+			switch {
+			case s.Run != "":
+				sawRun = true
+			case s.Judge != nil:
+				sawJudge = true
+			}
+			if s.Decide != nil {
+				sawDecide = true
+			}
+			if len(s.Team) > 0 {
+				sawTeam = true
+			}
+			if s.RequiresApproval {
+				sawApproval = true
+			}
+			if s.RunsOn != "" {
+				sawRunsOn = true
+			}
+		}
+	}
+	for name, seen := range map[string]bool{
+		"a run: step": sawRun, "a judge: step": sawJudge, "a decide: block": sawDecide,
+		"a team": sawTeam, "an approval gate": sawApproval, "a goal-planned workflow": sawGoal,
+		"a runs-on label": sawRunsOn, "an env block": sawEnv, "a schedule": sawSchedule,
+	} {
+		if !seen {
+			t.Errorf("no example demonstrates %s", name)
+		}
+	}
 }

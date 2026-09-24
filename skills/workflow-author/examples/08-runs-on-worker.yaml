@@ -1,0 +1,64 @@
+# WORK THAT MUST HAPPEN ON A PARTICULAR MACHINE.
+#
+# `runs-on:` is a LABEL, never a machine. Somebody ran `wfx-runner join
+# --labels windows` on a box and that box now takes these steps, with the
+# toolchain installed THERE — the compiler, the signing certificate, the agent
+# CLI. The platform never connects to it; the worker polls out.
+#
+# The skills and tools of an agent step travel with it. The CLI does not:
+# `provider: claude-cli` means the claude on that machine's PATH, holding that
+# machine's credential. That asymmetry is the reason to put a worker anywhere.
+name: example-runs-on-worker
+description: Build on a Windows box, then have an agent there read the failure.
+on: { workflow_dispatch: {} }
+
+jobs:
+  build:
+    # A label nobody serves makes the step WAIT, so `wfx dryrun` warns about it
+    # before a run is started rather than after half an hour.
+    runs-on: windows
+    steps:
+      - id: compile
+        shell: powershell
+        run: msbuild /p:Configuration=Release
+        timeout_sec: 1800
+        output_schema:
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+
+  explain:
+    runs-on: windows
+    needs: [build]
+    steps:
+      - id: why
+        when:
+          - path: build.compile.ok
+            equals: false
+        # Resolved on the WORKER's PATH, not this platform's.
+        provider: claude-cli
+        soul: "You read a build log and say what actually failed, not what might have."
+        skills: [repo-navigator]
+        tools: [bash, read, grep, glob]
+        budget: { max_turns: 20 }
+        prompt: |
+          The Windows build exited {{ .Steps.build.compile.exitCode }}.
+
+          {{ .Steps.build.compile.stderr }}
+
+          Is this the code or the machine?
+        output_schema:
+          type: object
+          additionalProperties: false
+          required: [cause, detail]
+          properties:
+            cause:  { type: string, enum: [code, environment, unclear] }
+            detail: { type: string }
+        gates:
+          - field: cause
+            equals: environment
+            action: needs_input
+            message: "Looks like the build machine, not the change: {{ .Output.detail }}"

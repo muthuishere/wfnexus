@@ -1,0 +1,30 @@
+# THE CHEAPEST WORKFLOW THERE IS. No model is called, so it costs nothing.
+# Reach for this shape whenever a command can answer the question.
+name: example-checks
+description: Three independent checks, run at once, no model involved.
+on:
+  workflow_dispatch:
+  repository_dispatch: { types: [push] }
+jobs:
+  build:
+    steps:
+      - id: compile
+        run: go build ./...
+        output_schema: &run_out
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+  test:
+    steps:
+      - id: suite
+        run: go test ./...
+        timeout_sec: 900
+        output_schema: *run_out
+  vet:
+    steps:
+      - id: lint
+        run: go vet ./...
+        output_schema: *run_out

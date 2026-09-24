@@ -1,0 +1,72 @@
+# STARTED BY SOMETHING OTHER THAN A PERSON, and needing a credential.
+#
+# Three triggers, and they compose: a person can still start it by hand while a
+# cron runs it nightly and another system POSTs on an event.
+#
+# The credential is NAMED, never written. `${GITHUB_PAT}` means "whatever that
+# variable holds on the machine running this step" — so the file is safe to
+# commit, and a worker reads its own machine's value rather than being sent
+# ours. The platform refuses a literal credential on save.
+name: example-triggers-and-env
+description: Nightly dependency audit, also startable by hand or by an inbound event.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"          # five fields, UTC — 03:00 every day
+  repository_dispatch:
+    types: [dependency_alert]
+
+# Cascades to every job and step below; a step may add to it or override a name.
+env:
+  REGISTRY_URL: https://registry.npmjs.org
+  GH_TOKEN: ${GITHUB_PAT}
+
+jobs:
+  audit:
+    steps:
+      - id: scan
+        run: npm audit --json || true
+        timeout_sec: 300
+        output_schema: &run_out
+          type: object
+          properties:
+            ok:       { type: boolean }
+            exitCode: { type: integer }
+            stdout:   { type: string }
+            stderr:   { type: string }
+
+      - id: triage
+        when:
+          - path: audit.scan.ok
+            equals: false
+        soul: "You report only what the audit output shows, with package and version."
+        tools: [read, grep, glob]
+        budget: { max_turns: 20 }
+        guardrails:
+          - deny: write
+            reason: "this step reports; it does not change the repository"
+        prompt: |
+          {{ .Steps.audit.scan.stdout }}
+
+          Which of these reach code that actually runs in production here?
+        output_schema:
+          type: object
+          additionalProperties: false
+          required: [reachable, summary]
+          properties:
+            reachable:
+              type: array
+              items:
+                type: object
+                required: [package, why]
+                properties:
+                  package: { type: string }
+                  why:     { type: string }
+            summary: { type: string }
+
+  # A second job, so it runs beside the audit rather than after it.
+  licences:
+    steps:
+      - id: check
+        run: npx license-checker --json || true
+        output_schema: *run_out

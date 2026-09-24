@@ -1,0 +1,50 @@
+# THE CHEAP GATE IN FRONT OF THE EXPENSIVE ONE. `decide:` runs BEFORE the agent
+# on the same step, so a fraction of a cent decides whether turns are spent.
+name: example-decide-before-agent
+description: Only investigate a report that is worth investigating.
+on: { workflow_dispatch: {} }
+input_schema:
+  type: object
+  required: [report]
+  properties:
+    report: { type: string, format: textarea, title: "The report" }
+steps:
+  - id: investigate
+    soul: >-
+      You report only what the source shows, with file:line, and you never
+      speculate beyond it.
+    skills: [repo-navigator]
+    tools: [read, grep, glob]
+    budget: { max_turns: 20, max_tool_calls: 60 }
+    guardrails:
+      - deny: write
+        reason: "this step establishes facts; it does not change the repository"
+      - deny: edit
+        reason: "this step establishes facts; it does not change the repository"
+    decide:
+      state: "{{ .Input.report }}"
+      questions:
+        actionable:
+          type: noul
+          instructions: "Is there enough here to act on against a codebase?"
+          true:  "a concrete symptom, or something specific enough to look for"
+          false: "a feeling, a duplicate, or a question with no repository in it"
+      gates:
+        - question: actionable
+          below: 0.5
+          action: needs_input
+          message: "Too thin to act on. What exactly did you see, and where?"
+    prompt: |
+      Confidence this is actionable: {{ .Decide.actionable }}
+
+      {{ .Input.report }}
+
+      Find the code this concerns and say what is actually true.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [found, component, summary]
+      properties:
+        found:     { type: boolean }
+        component: { type: string, description: "module or file area, with a path" }
+        summary:   { type: string, description: "what the source shows, not what you infer" }

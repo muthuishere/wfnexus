@@ -1,0 +1,122 @@
+# THE TYPED HAND-OFF, which is the whole point of the platform. No phase can
+# give work to the next until its output validates — so "I reproduced it" is a
+# schema, not a claim.
+name: example-pipeline
+description: Validate, reproduce, fix, review, publish. Five agents, four contracts, one human gate.
+on: { workflow_dispatch: {} }
+input_schema:
+  type: object
+  required: [report]
+  properties:
+    report:      { type: string, format: textarea, title: "The report" }
+    base_branch: { type: string, default: main }
+steps:
+  - id: validate
+    soul: "You are sceptical by default. A report is not actionable until the code makes it plausible."
+    tools: [read, grep, glob]
+    budget: { max_turns: 15 }
+    guardrails:
+      - deny: write
+        reason: "triage does not change the repository"
+    prompt: "{{ .Input.report }}\n\nIs this actionable against this repository?"
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [valid, component, summary, missing]
+      properties:
+        valid:     { type: boolean }
+        component: { type: string }
+        summary:   { type: string }
+        missing:   { type: array, items: { type: string } }
+    gates:
+      - field: valid
+        equals: false
+        action: needs_input
+        message: "Need more: {{ join .Output.missing \" | \" }}"
+
+  - id: reproduce
+    soul: "You trust only a red test. A reproduction that fails for an unrelated reason is not one."
+    tools: [bash, read, write, edit, grep, glob]
+    budget: { max_turns: 40, max_wall_sec: 900 }
+    prompt: |
+      {{ .Steps.validate.summary }}
+      Likely in: {{ .Steps.validate.component }}
+
+      Reproduce it. Record the exact command that shows it failing.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [reproduced, command, evidence]
+      properties:
+        reproduced: { type: boolean }
+        command:    { type: string }
+        evidence:   { type: string }
+    gates:
+      - field: reproduced
+        equals: false
+        action: fail
+        message: "Could not reproduce; there is nothing to fix yet."
+
+  - id: fix
+    soul: "You write the smallest change that makes the red test green. You do not refactor on the way past."
+    tools: [bash, read, write, edit, grep, glob]
+    budget: { max_turns: 60, max_wall_sec: 1800 }
+    prompt: |
+      Failing: {{ .Steps.reproduce.command }}
+      {{ .Steps.reproduce.evidence }}
+
+      Make it pass, then run the whole suite.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [fixed, files, explanation, suite_passed]
+      properties:
+        fixed:        { type: boolean }
+        files:        { type: array, items: { type: string } }
+        explanation:  { type: string }
+        suite_passed: { type: boolean }
+
+  - id: review
+    soul: "You did not write this change and you do not trust it. Scope creep is a finding."
+    tools: [bash, read, grep, glob]
+    budget: { max_turns: 30 }
+    guardrails:
+      - deny: write
+        reason: "a reviewer does not edit the thing under review"
+    prompt: |
+      Touched: {{ join .Steps.fix.files ", " }}
+      Claim: {{ .Steps.fix.explanation }}
+
+      Read the diff and run the tests yourself.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, verdict]
+      properties:
+        approved: { type: boolean }
+        verdict:  { type: string }
+    gates:
+      - field: approved
+        equals: false
+        action: fail
+        message: "{{ .Output.verdict }}"
+
+  # The only step that reaches the outside world, and only after a human says so.
+  - id: publish
+    requires_approval: true
+    soul: "You publish what was approved and nothing more."
+    tools: [bash, read]
+    budget: { max_turns: 15 }
+    guardrails:
+      - deny: bash
+        args_contain: ["push --force", "push -f"]
+        reason: "force-pushing is never part of publishing a fix"
+    prompt: "Approved: {{ .Steps.review.verdict }}\n\nCommit on a branch off {{ default .Input.base_branch \"main\" }}."
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [published, branch]
+      properties:
+        published: { type: boolean }
+        branch:    { type: string }
+        url:       { type: string }
