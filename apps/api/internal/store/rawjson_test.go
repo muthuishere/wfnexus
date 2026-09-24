@@ -29,7 +29,7 @@ func TestRawJSONEmptyStringScansAsNull(t *testing.T) {
 	}
 }
 
-// The same thing through a real SQLite file: a run whose input column is ''
+// The same thing through a real SQLite file: a run whose input column is ”
 // must still encode.
 func TestRunWithEmptyJSONColumnStillEncodes(t *testing.T) {
 	st := openSQLite(t)

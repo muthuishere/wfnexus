@@ -73,7 +73,7 @@ func jsonArg(j json.RawMessage) any {
 // a sql.Scanner. Postgres hands back []byte, SQLite hands back a string.
 type rawJSON struct{ dst *json.RawMessage }
 
-// A column holding nothing — NULL, '', or blanks — becomes a NIL RawMessage,
+// A column holding nothing — NULL, ”, or blanks — becomes a NIL RawMessage,
 // never an empty non-nil one. The difference is not cosmetic: json.RawMessage
 // encodes nil as `null` and an empty non-nil slice as a marshal ERROR
 // ("unexpected end of JSON input"), which would take a whole API response down
