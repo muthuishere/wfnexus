@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
+	tn "github.com/muthuishere/toolnexus/golang"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
@@ -42,13 +44,47 @@ type Server struct {
 	// beside it still serves the app.
 	uiDir string
 	uiFS  fs.FS
+
+	// The bind address, and what it decides. Computed once at construction so
+	// no request path can reach a different answer.
+	addr         string
+	loopbackOnly bool
+
+	// The RFC 8628 §5.2 rate limit on the verification endpoint.
+	verify *verifyLimiter
+}
+
+// isLoopback reports whether a bind address is reachable only from this
+// machine. An empty host (":8090", the form the container manifests use) binds
+// every interface and is therefore NOT loopback — treating it as one is the
+// config mistake the whole rule exists to catch.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // New wires the routes. uiDir may be empty and uiFS may be nil; if both are,
 // the UI routes 404 and the API still serves, which is what a headless
 // deployment wants.
-func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS fs.FS) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir, uiFS: uiFS}
+//
+// addr is the bind address the server will listen on. The handler needs it
+// because how it is reachable is the only thing that decides whether
+// authentication applies: bound to loopback the machine is the trust boundary,
+// bound anywhere else it is not. That is a property of the code rather than a
+// setting, so there is nothing to switch off.
+func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
+	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter()}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -69,6 +105,47 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS 
 	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"}, AllowedHeaders: []string{"*"}}))
 
 	r.Route("/api", func(r chi.Router) {
+		// Installed UNCONDITIONALLY — there is no branch that omits it and no
+		// setting that disables it. What varies is only what it does when
+		// nothing resolves: see requireSubject in auth.go.
+		r.Use(s.requireSubject)
+		// ...and then WHAT it may do, out of the local roles table. Also
+		// unconditional: a route with no named permission is refused rather
+		// than allowed (authz.go).
+		r.Use(s.authorize)
+
+		// The device grant (RFC 8628). /code and /token are how a subject is
+		// obtained, so they cannot require one; /verify is the human's
+		// approval and does.
+		r.Post("/device/code", s.deviceAuthorize)
+		r.Post("/device/token", s.deviceToken)
+		r.Post("/device/verify", s.deviceVerify)
+		r.Get("/whoami", s.whoami)
+		r.Delete("/tokens/self", s.revokeSelf)
+
+		// Administration: users and roles are ROWS, created, edited and
+		// deleted here rather than fixed in the binary (ADR 0017).
+		r.Get("/users", s.listUsers)
+		r.Post("/users", s.createUser)
+		r.Put("/users/{name}", s.updateUser)
+		r.Delete("/users/{name}", s.deleteUser)
+		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
+		// be attributed and stored — see publishingEnabled. On a default
+		// single-machine install these paths 404, which is what "absent, not
+		// degraded" means.
+		if s.publishingEnabled() {
+			r.Post("/bundles", s.publishBundle)
+			r.Get("/bundles", s.listBundles)
+			r.Put("/bundles/tags/{tag}", s.setBundleTag)
+			r.Get("/bundles/{digest}", s.getBundle)
+			r.Get("/bundles/{digest}/tar", s.getBundleTar)
+			r.Post("/bundles/{digest}/install", s.installBundle)
+		}
+
+		r.Get("/roles", s.listRoles)
+		r.Put("/roles/{name}", s.saveRole)
+		r.Delete("/roles/{name}", s.deleteRole)
+
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 		r.Get("/skills", s.listSkills)
 		r.Get("/tools", s.listTools)
@@ -142,6 +219,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS 
 		r.Post("/runs/{id}/state", s.setRunState)
 		r.Delete("/runs/{id}/state/{key}", s.deleteRunState)
 	})
+	// The verification page, registered BEFORE the SPA fallback so chi's more
+	// specific route wins. It is served by the API rather than the UI bundle
+	// because a login must work on a host where the UI was never built.
+	r.Get("/device", s.devicePage)
 	r.Get("/*", s.ui)
 	return r
 }
@@ -224,13 +305,20 @@ func (s *Server) listTools(w http.ResponseWriter, _ *http.Request) {
 // listWorkflows is what can be RUN. Templates are excluded: they refuse to run
 // by design, so listing them here only offers a Run button that cannot work.
 // They have their own endpoint and their own page.
-func (s *Server) listWorkflows(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
 	all := workflow.Sorted(s.eng.Definitions())
 	out := make([]*workflow.Definition, 0, len(all))
 	for _, d := range all {
-		if !d.Template.Is {
-			out = append(out, d)
+		if d.Template.Is {
+			continue
 		}
+		// FILTERED, not merely checked on fetch: a scoped subject must not
+		// learn another project's workflow names from a listing it is then
+		// refused access to.
+		if !s.inScope(r, s.eng.ProjectFor(d.Name)) {
+			continue
+		}
+		out = append(out, d)
 	}
 	writeJSON(w, 200, out)
 }
@@ -244,7 +332,11 @@ func (s *Server) reloadWorkflows(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
-	d := s.eng.Definitions()[urlName(r, "name")]
+	name := urlName(r, "name")
+	if !s.workflowInScope(w, r, name) {
+		return
+	}
+	d := s.eng.Definitions()[name]
 	if d == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
 		return
@@ -349,6 +441,9 @@ func (s *Server) deleteClassifier(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dryRun(w http.ResponseWriter, r *http.Request) {
 	var input map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&input)
+	if !s.workflowInScope(w, r, urlName(r, "name")) {
+		return
+	}
 	out, err := s.eng.DryRunWorkflow(urlName(r, "name"), input)
 	if err != nil {
 		writeErr(w, 404, err)
@@ -491,6 +586,9 @@ func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 // survives a round trip through the real loader.
 func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
+	if !s.workflowInScope(w, r, name) {
+		return
+	}
 	// Decoded in a dialect-tolerant way: a definition written as a FILE says
 	// `output_schema`, while the UI says `outputSchema`, and dropping the one
 	// we did not expect reported the step as missing a field it had (decode.go).
@@ -515,6 +613,9 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	if !s.workflowInScope(w, r, urlName(r, "name")) {
+		return
+	}
 	if err := s.eng.DeleteWorkflow(urlName(r, "name")); err != nil {
 		writeErr(w, 400, err)
 		return
@@ -524,6 +625,9 @@ func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
+	if !s.workflowInScope(w, r, name) {
+		return
+	}
 	if s.eng.Definitions()[name] == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
 		return
@@ -547,7 +651,17 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.eng.Start(run.ID)
-	writeJSON(w, 201, run)
+	// The SAME envelope GET /api/runs/{id} answers with. POST used to return the
+	// run FLAT, so a client had to know that `createRun().id` and
+	// `getRun().run.id` were the same field spelled two ways — which misled a
+	// client author in this repo. One shape for a run, everywhere. The lists are
+	// empty by construction: the run was created a microsecond ago.
+	writeJSON(w, 201, map[string]any{
+		"run":        run,
+		"steps":      []*store.StepRun{},
+		"artifacts":  []*store.Artifact{},
+		"definition": s.eng.Definitions()[name],
+	})
 }
 
 // repositoryDispatch is the inbound trigger: another system POSTs and a run
@@ -576,6 +690,9 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := urlName(r, "name")
+	if !s.workflowInScope(w, r, name) {
+		return
+	}
 	def := s.eng.Definitions()[name]
 	if def == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
@@ -595,8 +712,14 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 
 // listRuns narrows by project and workflow — the two axes of the hierarchy.
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	// A scoped subject's listing is filtered to its own project, whatever the
+	// query string asked for.
+	if scope := s.scopeOf(r); scope != "" {
+		project = scope
+	}
 	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
-		Project:  r.URL.Query().Get("project"),
+		Project:  project,
 		Workflow: r.URL.Query().Get("workflow"),
 		Limit:    100,
 	})
@@ -615,6 +738,17 @@ func (s *Server) runID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 	if err != nil {
 		writeErr(w, 400, fmt.Errorf("bad run id"))
 		return id, false
+	}
+	// Every run-addressed route comes through here — read, cancel, and each
+	// pause resolution — so the scope check is in ONE place and a later route
+	// cannot be added without it. Out of scope answers exactly as a run that
+	// does not exist does.
+	if scope := s.scopeOf(r); scope != "" {
+		run, err := s.store.GetRun(r.Context(), id)
+		if err != nil || run.Project != scope {
+			notFound(w)
+			return id, false
+		}
 	}
 	return id, true
 }
@@ -648,7 +782,37 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	if arts == nil {
 		arts = []*store.Artifact{}
 	}
-	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": s.eng.Definitions()[run.Workflow]})
+	def := s.eng.Definitions()[run.Workflow]
+	if def == nil {
+		// The workflow FILE is gone — renamed, deleted, or never on this
+		// machine — but the run is a historical fact and must stay readable.
+		// Rebuilt from the step records the run itself wrote, so every run ever
+		// stored answers with a definition rather than `null`.
+		def = definitionFromSteps(run, steps)
+	}
+	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": def})
+}
+
+// definitionFromSteps reconstructs the MINIMUM a reader needs — the workflow's
+// name and its steps, in the order they ran. It is not the authored file and
+// does not pretend to be: prompts, schemas and gates were never persisted with
+// the run, so they are absent rather than guessed. `path` stays empty, which is
+// how a caller can tell a reconstruction from a loaded file.
+func definitionFromSteps(run *store.Run, steps []*store.StepRun) *workflow.Definition {
+	def := &workflow.Definition{
+		Name:        run.Workflow,
+		Description: "reconstructed from this run's step records; the workflow definition is no longer on disk",
+	}
+	for _, st := range steps {
+		// Empty slices, never nil: `"skills": null` is what took the run page
+		// down once already (app.test.tsx), and a reconstruction should not be
+		// the thing that reintroduces it.
+		def.Steps = append(def.Steps, workflow.Step{
+			ID: st.StepID, Name: st.StepID,
+			Skills: []string{}, Tools: []string{},
+		})
+	}
+	return def
 }
 
 // runEvents replays persisted events from ?after=<id> then streams live ones (SSE).
@@ -712,6 +876,17 @@ type stepBody struct {
 	Reason string         `json:"reason"`
 	Answer string         `json:"answer"`
 	Input  map[string]any `json:"input"`
+	// Actor is WHO is resolving this pause (ADR 0021). It is read ONLY when
+	// there is no authenticated subject — the loopback, one-person case, where
+	// it is an unverified claim and is recorded as one. With a subject it is
+	// IGNORED: a request body must never be able to name somebody else as the
+	// approver. It may also arrive as the X-WFX-Actor header, which is what a
+	// curl finds easier.
+	Actor string `json:"actor"`
+	// Ok distinguishes an ANSWER from a decline; Reason says which kind of
+	// non-answer it was — declined | cancelled | expired. Absent means Ok,
+	// because the overwhelmingly common call is somebody answering.
+	Ok *bool `json:"ok"`
 }
 
 func (s *Server) decodeStep(w http.ResponseWriter, r *http.Request) (uuid.UUID, stepBody, bool) {
@@ -723,6 +898,9 @@ func (s *Server) decodeStep(w http.ResponseWriter, r *http.Request) (uuid.UUID, 
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&b)
 	}
+	if b.Actor == "" {
+		b.Actor = r.Header.Get("X-WFX-Actor")
+	}
 	if b.StepID == "" {
 		if run, err := s.store.GetRun(r.Context(), id); err == nil {
 			b.StepID = run.CurrentStep
@@ -731,12 +909,47 @@ func (s *Server) decodeStep(w http.ResponseWriter, r *http.Request) (uuid.UUID, 
 	return id, b, true
 }
 
+// actorOf is the one place a resolve endpoint learns who is acting.
+//
+// The authenticated subject WINS. A body (or header) actor is read only when
+// there is none — the loopback era, where it is an unverified claim — so a
+// forged `"actor"` cannot attribute an approval to somebody else. The channel
+// is recorded alongside it, which is what makes the unauthenticated era and the
+// authenticated era distinguishable to a later audit.
+func actorOf(r *http.Request, b stepBody) engine.Actor {
+	via := r.Header.Get("X-WFX-Via")
+	switch via {
+	case "api", "ui", "cli":
+	default:
+		via = "api"
+	}
+	if sub, ok := SubjectFrom(r.Context()); ok {
+		return engine.Actor{ID: sub.Name, Via: via}
+	}
+	return engine.Actor{ID: b.Actor, Via: via}
+}
+
+// requireActor refuses a resolution that would record nobody. An empty actor is
+// refused rather than defaulted: a decision with no decider is worse than no
+// decision, because it looks like one afterwards.
+func requireActor(w http.ResponseWriter, by engine.Actor) bool {
+	if by.ID != "" {
+		return true
+	}
+	writeErr(w, http.StatusBadRequest, errors.New("no actor: sign in, or say who is acting (`actor` or X-WFX-Actor)"))
+	return false
+}
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
 	if !ok {
 		return
 	}
-	if err := s.eng.Approve(r.Context(), id, b.StepID); err != nil {
+	by := actorOf(r, b)
+	if !requireActor(w, by) {
+		return
+	}
+	if err := s.eng.Approve(r.Context(), id, b.StepID, by); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -748,7 +961,11 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.eng.Reject(r.Context(), id, b.StepID, b.Reason); err != nil {
+	by := actorOf(r, b)
+	if !requireActor(w, by) {
+		return
+	}
+	if err := s.eng.Reject(r.Context(), id, b.StepID, b.Reason, by); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -773,7 +990,13 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.eng.AnswerQuestion(r.Context(), id, b.StepID, b.Answer); err != nil {
+	ans := tn.Answer{Ok: b.Ok == nil || *b.Ok, Reason: b.Reason,
+		Data: map[string]any{tn.RelayOutputKey: b.Answer}}
+	by := actorOf(r, b)
+	if !requireActor(w, by) {
+		return
+	}
+	if err := s.eng.AnswerQuestion(r.Context(), id, b.StepID, ans, by); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

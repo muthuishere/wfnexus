@@ -208,8 +208,14 @@ func main() {
 			log.Printf("  schedule   %-16s %q", d.Name, sched.Cron)
 		}
 	}
+	// Whether this process may serve at all, decided from the bind address
+	// before the listener opens.
+	if err := bootstrapIdentity(ctx, cfg.Addr, st); err != nil {
+		log.Fatal(err)
+	}
+
 	uiDir, uiFS := uiSource(cfg)
-	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, uiDir, uiFS), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.Addr, uiDir, uiFS), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())
 }
