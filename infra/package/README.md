@@ -7,7 +7,7 @@ a registry to pull from, a Go toolchain, or network access to anything but your
 model provider.
 
 ```
-bin/                wfx-server, wfx, wfx-runner (linux/amd64)
+bin/                wfx-server, wfx, wfx-runner (this tarball's Linux arch)
 ui/                 the built dashboard
 workflows/          the workflows it ships with
 templates/          starting points to copy
@@ -32,8 +32,8 @@ a fresh install with nothing else done.
 ## Just the server, no containers
 
 ```sh
-cp bin/wfx-server-linux-amd64 /usr/local/bin/wfx-server
-cp bin/wfx-linux-amd64        /usr/local/bin/wfx
+cp bin/wfx-server-linux /usr/local/bin/wfx-server
+cp bin/wfx-linux        /usr/local/bin/wfx
 wfx-server
 ```
 
@@ -89,5 +89,14 @@ held that long too. `infra/README.md` in the repository has the systemd,
 
 ## Other platforms
 
-The binaries here are linux/amd64, because that is what the container needs.
-Windows, macOS and arm64 builds are published beside this tarball.
+This tarball holds the binaries for ONE Linux architecture — download
+`wfx-server-linux-amd64.tar.gz` or `wfx-server-linux-arm64.tar.gz` to match the
+machine. Inside, the names are the same either way, so the `Dockerfile` and
+everything above are identical on both. Windows and macOS builds are published
+beside these tarballs as individual binaries.
+
+Verify before you carry it in:
+
+```sh
+shasum -a 256 -c checksums.txt --ignore-missing
+```

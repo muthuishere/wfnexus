@@ -1,0 +1,107 @@
+# The first continuous integration this repository has ever had.
+#
+# WHAT IS GATED ON GREEN: the `check` job below is the required check on `main`
+# — while it is red or incomplete, a pull request cannot merge. That gate is a
+# branch-protection SETTING, not this file; see tasks 4.5/4.6. The `test` matrix
+# legs (macOS, Windows) prove the platforms the product claims; they are
+# advisory until they are added to the required list.
+#
+# It reimplements no build. Every step calls a Taskfile target, so what CI runs
+# is exactly what a contributor runs, and there is no CI-only build path that
+# can drift from the local one.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # go.work `use ./spikes` builds against an UNRELEASED toolnexus. With the
+  # workspace on, a green run would not prove which code it ran against (ADR
+  # 0007) and would fail confusingly on a clean runner. Off, everywhere.
+  GOWORK: "off"
+
+jobs:
+  check:
+    name: check (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git describe --tags` lies on a shallow clone, and that value is
+          # baked into every binary as its version.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Paired migrations
+        # The one convention in openspec/config.yaml that nothing but review
+        # enforces. Every Postgres migration needs its sqlite counterpart, and
+        # every migration needs both an up and a down.
+        run: ./.github/scripts/check-migrations.sh
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: apps/ui
+
+      - name: task check
+        # test + vet (incl. gofmt) + build:all + ui:check + workflows:validate.
+        # build:all depends on assets:stage, which FAILS when
+        # apps/ui/dist/index.html is missing — that is what makes a binary with
+        # an empty embedded UI impossible, and it is exercised on every run.
+        # No bare `go build` of the server package appears anywhere in this file.
+        run: task check
+
+      - name: task test:race
+        run: task test:race
+
+      - name: task e2e
+        # No Postgres, no object store, no model provider, no browser, no
+        # credential of any kind — sqlite and jsdom against the built binary.
+        run: task e2e
+
+  test:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - name: go test
+        # Called directly rather than through Task: a step runs as a subprocess
+        # in a working directory, so path and process behaviour differ per OS
+        # and that is what these legs are for. Not assuming Task on the runner.
+        run: go test ./internal/... ./cmd/...
+        working-directory: apps/api

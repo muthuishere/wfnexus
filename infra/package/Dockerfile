@@ -15,8 +15,12 @@ RUN apk add --no-cache git bash ca-certificates tzdata \
  && adduser -D -u 10001 wfx
 
 WORKDIR /app
-COPY bin/wfx-server-linux-amd64 /usr/local/bin/wfx-server
-COPY bin/wfx-linux-amd64        /usr/local/bin/wfx
+# Architecture-blind ON PURPOSE. The tarball is published once per Linux
+# architecture and each one carries these same fixed names, so the arch is
+# decided when the file is downloaded — not by a `docker build` argument on a
+# machine that may have no network to ask anything.
+COPY bin/wfx-server-linux /usr/local/bin/wfx-server
+COPY bin/wfx-linux        /usr/local/bin/wfx
 RUN chmod +x /usr/local/bin/wfx-server /usr/local/bin/wfx
 
 # The defaults the platform needs on disk: the built UI, the workflows it

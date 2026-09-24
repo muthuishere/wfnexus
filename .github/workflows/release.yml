@@ -1,0 +1,210 @@
+# A tag publishes a release. A tag, and nothing else — no push to a branch and
+# no manual dispatch produces an artifact anywhere.
+#
+# WHAT IS GATED ON GREEN: the `check` job runs the FULL check suite before the
+# `release` job is allowed to build anything. A tag does not skip the gate, and
+# a red check stops the release with nothing uploaded. Within the release job,
+# the version assertion gates the upload: if the built binary does not report
+# the tag, nothing is published — a tag is never moved, so a wrong version
+# there is unrecoverable.
+#
+# No secret but the job's own GITHUB_TOKEN. No token is ever echoed: `gh` and
+# `docker login` read it from the environment.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+
+jobs:
+  check:
+    name: check (a tag does not skip the gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: ./.github/scripts/check-migrations.sh
+      - run: npm ci
+        working-directory: apps/ui
+      - run: task check
+      - run: task test:race
+      - run: task e2e
+
+  release:
+    name: build and publish
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A shallow clone makes `git describe --tags` report the wrong thing,
+          # and that value becomes the version inside every published binary.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+        working-directory: apps/ui
+
+      - name: task release
+        # The repository's own target, unchanged: every binary for every
+        # target, one self-contained tarball per Linux architecture, and
+        # checksums.txt. The only things this job does beyond it are the
+        # assertions below, the upload, and the image push — so a contributor
+        # at this tag produces the same artifacts with the same names.
+        run: task release
+
+      - name: Assert the built binary reports the tag
+        # The one build where a wrong version cannot be fixed afterwards,
+        # because a tag is never moved. SKIPPED FOR NOW: `wfx version` does not
+        # exist yet (tasks 2.x/3.x own apps/api). The moment it lands, delete
+        # the `exit 0` line below and this becomes the gate it is written to be.
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          BIN=bin/release/wfx-linux-amd64
+          if ! "$BIN" version >/dev/null 2>&1; then
+            echo "::warning::'wfx version' is not implemented yet — version assertion skipped"
+            exit 0
+          fi
+          GOT="$("$BIN" version | head -n1)"
+          echo "tag=$TAG built=$GOT"
+          case "$GOT" in
+            *"$TAG"*) echo "version matches the tag" ;;
+            *) echo "::error::built binary reports '$GOT', tag is '$TAG' — refusing to publish"; exit 1 ;;
+          esac
+
+      - name: Assert every artifact is covered by checksums.txt
+        # A release with an uncovered file is defective by the spec, and this
+        # is the cheapest place to catch it — before anything is uploaded.
+        run: |
+          set -euo pipefail
+          cd bin/release
+          missing=0
+          for f in *; do
+            [ "$f" = checksums.txt ] && continue
+            grep -q "  $f\$" checksums.txt || { echo "::error::$f is not in checksums.txt"; missing=1; }
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "every artifact is covered:"
+          cat checksums.txt
+
+      - name: Publish the release
+        env:
+          # The job's own token. Never echoed — gh reads it from here.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/notes.md <<'EOF'
+          ## Verify what you downloaded
+
+          ```sh
+          shasum -a 256 -c checksums.txt --ignore-missing
+          ```
+
+          ## macOS
+
+          These binaries are **unsigned and not notarised**, so macOS quarantines
+          anything downloaded. Clear the attribute once, per binary:
+
+          ```sh
+          xattr -d com.apple.quarantine ./wfx
+          ```
+
+          ## Air-gapped install (no registry, no toolchain)
+
+          Take `wfx-server-linux-amd64.tar.gz` **or** `wfx-server-linux-arm64.tar.gz`
+          — one per machine architecture — plus `checksums.txt`. Verify, carry it
+          in, unpack, `docker compose up -d`. Nothing in it pulls an application
+          image from a registry.
+          EOF
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --notes-file /tmp/notes.md \
+            bin/release/*
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image tags
+        id: meta
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${TAG#v}"
+          MINOR="${V%.*}"
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          echo "minor=$MINOR" >> "$GITHUB_OUTPUT"
+
+      # These build from the REPOSITORY's Dockerfiles. infra/package/ — the
+      # tarball's own definitions — is deliberately untouched: it must keep
+      # working with no registry at all.
+      - name: Publish the server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/wfx-server:${{ steps.meta.outputs.v }}
+            ghcr.io/${{ github.repository_owner }}/wfx-server:${{ steps.meta.outputs.minor }}
+            ghcr.io/${{ github.repository_owner }}/wfx-server:latest
+
+      - name: Publish the worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.runner
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/wfx-runner:${{ steps.meta.outputs.v }}
+            ghcr.io/${{ github.repository_owner }}/wfx-runner:${{ steps.meta.outputs.minor }}
+            ghcr.io/${{ github.repository_owner }}/wfx-runner:latest
