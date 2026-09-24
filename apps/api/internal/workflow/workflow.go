@@ -967,12 +967,28 @@ var funcs = template.FuncMap{
 	// killing the run mid-flight.
 	"stepval": func(root any, path ...string) any {
 		cur := root
-		for _, key := range path {
+		// A step written in the JOBS form has a FLATTENED id — job `message`,
+		// step `diff` is stored under the single key "message.diff". The
+		// rewriter above cannot know that, so it hands this function the path
+		// split on every dot. Walking it key by key would look for a step
+		// called "message", find nothing, and render the reference as empty:
+		// a prompt with a hole in it, sent to a model, with no error anywhere.
+		// So at each position, prefer the LONGEST run of segments that is
+		// actually a key. "message.diff" then "stdout" resolves; a flat id
+		// like "validate-bug" still resolves as one segment.
+		for i := 0; i < len(path); {
 			m, ok := cur.(map[string]any)
 			if !ok {
 				return ""
 			}
-			if cur, ok = m[key]; !ok {
+			matched := false
+			for j := len(path); j > i; j-- {
+				if v, ok := m[strings.Join(path[i:j], ".")]; ok {
+					cur, i, matched = v, j, true
+					break
+				}
+			}
+			if !matched {
 				return ""
 			}
 		}

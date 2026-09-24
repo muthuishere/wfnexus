@@ -247,3 +247,49 @@ func TestRenderSkippedStepRendersEmptyNotError(t *testing.T) {
 		t.Fatalf("render = %q", got)
 	}
 }
+
+// A step written in the jobs form is stored under a flattened id ("suite.test"),
+// while a template references it the way it is written in the file
+// (`.Steps.suite.test.exitCode`). Resolving that path segment by segment finds
+// no step called "suite" and renders NOTHING — which is how the shipped
+// ci-triage workflow was sending its judge a prompt with the test output
+// missing, with no error and no log line.
+func TestTemplateResolvesAFlattenedJobStepID(t *testing.T) {
+	data := TemplateData{Steps: map[string]any{
+		"suite.test":   map[string]any{"exitCode": float64(2), "stdout": "FAIL ./..."},
+		"validate-bug": map[string]any{"summary": "flat ids still work"},
+	}}
+	for _, c := range []struct{ tmpl, want string }{
+		{"{{ .Steps.suite.test.exitCode }}", "2"},
+		{"{{ .Steps.suite.test.stdout }}", "FAIL ./..."},
+		{"{{ .Steps.validate-bug.summary }}", "flat ids still work"},
+		// A genuinely absent step stays empty rather than erroring at run time.
+		{"{{ .Steps.nope.field }}", ""},
+	} {
+		got, err := Render(c.tmpl, data)
+		if err != nil {
+			t.Fatalf("%s: %v", c.tmpl, err)
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.tmpl, got, c.want)
+		}
+	}
+}
+
+// Precedence when both readings exist: a step actually named "a.b" wins over a
+// step "a" with a field "b". The flattened id is the specific thing, and it is
+// the reading the author wrote down; a field is only reachable under its own
+// step. Written as a test because it is a choice, not an accident.
+func TestAFlattenedIDBeatsAFieldOfTheSameName(t *testing.T) {
+	data := TemplateData{Steps: map[string]any{
+		"a":   map[string]any{"b": "the field"},
+		"a.b": map[string]any{"c": "the flattened step"},
+	}}
+	got, err := Render("{{ .Steps.a.b.c }}", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "the flattened step" {
+		t.Errorf("got %q, want the flattened step", got)
+	}
+}
