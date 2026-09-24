@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,11 +33,21 @@ type Server struct {
 	eng   *engine.Engine
 	store *store.Store
 	blob  blob.Store
+	// uiDir is a built bundle ON DISK; uiFS is the copy compiled into the
+	// binary. The directory WINS whenever it holds an index.html — a developer
+	// who just ran `npm run build`, and the tarball that ships a `ui/` folder,
+	// must both see their own files rather than a bundle baked in at release
+	// time. The embedded copy exists only so a downloaded binary with nothing
+	// beside it still serves the app.
 	uiDir string
+	uiFS  fs.FS
 }
 
-func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir}
+// New wires the routes. uiDir may be empty and uiFS may be nil; if both are,
+// the UI routes 404 and the API still serves, which is what a headless
+// deployment wants.
+func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS fs.FS) http.Handler {
+	s := &Server{eng: eng, store: st, blob: bl, uiDir: uiDir, uiFS: uiFS}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -800,18 +812,51 @@ func (s *Server) artifact(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, 404, fmt.Errorf("artifact not found"))
 }
 
-// ui serves the built React app with SPA fallback (dev uses Vite's proxy instead).
+// ui serves the built React app with SPA fallback (dev uses Vite's proxy
+// instead). Disk first, embedded second — see the field comments on Server.
 func (s *Server) ui(w http.ResponseWriter, r *http.Request) {
-	if s.uiDir == "" {
+	clean := filepath.Clean("/" + r.URL.Path)
+	if s.uiDir != "" {
+		if _, err := os.Stat(filepath.Join(s.uiDir, "index.html")); err == nil {
+			p := filepath.Join(s.uiDir, clean)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				http.ServeFile(w, r, p)
+				return
+			}
+			http.ServeFile(w, r, filepath.Join(s.uiDir, "index.html"))
+			return
+		}
+	}
+	if s.uiFS == nil {
 		http.NotFound(w, r)
 		return
 	}
-	p := filepath.Join(s.uiDir, filepath.Clean("/"+r.URL.Path))
-	if st, err := os.Stat(p); err == nil && !st.IsDir() {
-		http.ServeFile(w, r, p)
+	s.serveEmbeddedUI(w, r, clean)
+}
+
+// serveEmbeddedUI answers from the compiled-in bundle, with the same SPA
+// fallback: anything that is not a real file is index.html, because the router
+// lives in the browser.
+func (s *Server) serveEmbeddedUI(w http.ResponseWriter, r *http.Request, clean string) {
+	name := strings.TrimPrefix(filepath.ToSlash(clean), "/")
+	if name != "" {
+		if f, err := s.uiFS.Open(name); err == nil {
+			defer f.Close()
+			if st, err := f.Stat(); err == nil && !st.IsDir() {
+				if rs, ok := f.(io.ReadSeeker); ok {
+					http.ServeContent(w, r, name, st.ModTime(), rs)
+					return
+				}
+			}
+		}
+	}
+	index, err := fs.ReadFile(s.uiFS, "index.html")
+	if err != nil {
+		http.NotFound(w, r)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join(s.uiDir, "index.html"))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(index)
 }
 
 var _ = context.Background

@@ -33,11 +33,42 @@ tasks:
     deps: [infra:up]
     cmds: [task: api]
 
-  # ---- build ----------------------------------------------------------------
+  # ---- what goes INSIDE the binary ------------------------------------------
+  # The UI bundle and the default templates/skills/registries are compiled into
+  # wfx-server by //go:embed, so a downloaded binary works with NOTHING beside
+  # it. go:embed can only see files inside the package, so they are staged into
+  # apps/api/internal/assets/embedded/ first — staged, never committed.
+  #
+  # Every task that produces a server binary depends on this one, and this one
+  # depends on ui:build. That is what makes a stale or empty embedded UI
+  # impossible: the bundle is rebuilt, and a missing dist FAILS the build
+  # instead of quietly embedding nothing.
+  assets:stage:
+    desc: Build the UI and stage everything that gets embedded into wfx-server
+    deps: [ui:build]
+    vars:
+      EMBED: "{{.ROOT_DIR}}/apps/api/internal/assets/embedded"
+    cmds:
+      - >-
+        test -f apps/ui/dist/index.html ||
+        (echo "FAIL: apps/ui/dist/index.html is missing — the UI did not build, and a binary without it would serve a 404 at /" && exit 1)
+      - rm -rf {{.EMBED}}/ui {{.EMBED}}/templates {{.EMBED}}/skills {{.EMBED}}/registries.json
+      - mkdir -p {{.EMBED}}/ui {{.EMBED}}/templates {{.EMBED}}/skills
+      - cp -R apps/ui/dist/. {{.EMBED}}/ui/
+      - cp -R templates/. {{.EMBED}}/templates/
+      - cp -R skills/. {{.EMBED}}/skills/
+      - cp registries.json {{.EMBED}}/registries.json
+      - "echo \"staged: $(find {{.EMBED}} -type f | wc -l | tr -d ' ') files\""
+
   build:
     desc: All three binaries — wfx-server, wfx (CLI), wfx-runner (worker)
-    deps: [build:api, build:cli, build:runner, ui:build]
+    cmds:
+      - task: assets:stage
+      - task: build:api
+      - task: build:cli
+      - task: build:runner
   build:api:
+    deps: [assets:stage]
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx-server ."]
   build:cli:
@@ -49,13 +80,14 @@ tasks:
   # ---- release -------------------------------------------------------------
   release:
     desc: Every binary for every platform, plus the self-contained server tarball
-    deps: [ui:build]
+    deps: [assets:stage]
     cmds:
       - task: release:binaries
       - task: release:tar
 
   release:binaries:
     desc: wfx-server, wfx and wfx-runner for linux, windows and macos
+    deps: [assets:stage]
     dir: apps/api
     vars:
       TARGETS: linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64 darwin/amd64
@@ -158,6 +190,7 @@ tasks:
   # ---- portability ----------------------------------------------------------
   build:all:
     desc: Cross-compile for every target we claim to support
+    deps: [assets:stage]
     dir: apps/api
     cmds:
       - for t in linux/amd64 linux/arm64 windows/amd64 darwin/arm64 darwin/amd64; do

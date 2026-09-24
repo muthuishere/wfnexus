@@ -26,6 +26,9 @@ Read `README.md` first; it is short and accurate.
 - `internal/engine/step.go` — one step = one toolnexus agent (toolkit assembly, hooks, artifacts).
 - `internal/engine/schema.go` — JSON-schema compile + model-readable validation errors.
 - `internal/workflow/` — YAML loader and prompt templating (hyphenated step ids are rewritten).
+- `internal/assets/` — the UI bundle, templates, skills and registries.json compiled into
+  `wfx-server` by go:embed, so a downloaded binary works alone. Disk ALWAYS wins; embedded is the
+  fallback. Staged by `task assets:stage`, which every server build depends on.
 - `internal/store/` — pgx queries. `internal/blob/` — MinIO/S3. `internal/api/` — chi routes + SSE.
 
 ## Working on it
