@@ -29,8 +29,8 @@ output schema.
 
 ## 4. Dry run
 
-`steps/step-dryrun.md`.
+`assets/steps/step-dryrun.md`.
 
 ## 5. Hand over
 
-`steps/step-handover.md`.
+`assets/steps/step-handover.md`.

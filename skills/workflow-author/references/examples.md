@@ -1,6 +1,6 @@
 # Which example to open
 
-Every file in `examples/` is a real workflow that loads on this platform — a
+Every file in `assets/examples/` is a real workflow that loads on this platform — a
 test validates all of them through the same loader the server uses, so none of
 them can rot into something that would not run.
 
@@ -8,15 +8,15 @@ Open the one whose SITUATION matches, not the one whose feature matches.
 
 | the situation in front of you | open |
 |---|---|
-| "just run our checks / our CI" | `01-checks.yaml` |
-| "tell me what kind of failure this was" | `02-judge-routes.yaml` |
-| "don't waste an agent on rubbish input" | `03-decide-before-agent.yaml` |
-| "do the whole job end to end, and don't let it publish anything I haven't seen" | `04-pipeline.yaml` |
-| "it has to read half the repo to answer" | `05-team.yaml` |
-| "the route depends on what it finds" | `06-goal-planned.yaml` |
-| "run it nightly / when our other system fires / it needs a token" | `07-triggers-and-env.yaml` |
-| "it has to build on the Windows box" | `08-runs-on-worker.yaml` |
-| "it should take a different path / ask me when it's stuck" | `09-branching-and-asking.yaml` |
+| "just run our checks / our CI" | `assets/examples/01-checks.yaml` |
+| "tell me what kind of failure this was" | `assets/examples/02-judge-routes.yaml` |
+| "don't waste an agent on rubbish input" | `assets/examples/03-decide-before-agent.yaml` |
+| "do the whole job end to end, and don't let it publish anything I haven't seen" | `assets/examples/04-pipeline.yaml` |
+| "it has to read half the repo to answer" | `assets/examples/05-team.yaml` |
+| "the route depends on what it finds" | `assets/examples/06-goal-planned.yaml` |
+| "run it nightly / when our other system fires / it needs a token" | `assets/examples/07-triggers-and-env.yaml` |
+| "it has to build on the Windows box" | `assets/examples/08-runs-on-worker.yaml` |
+| "it should take a different path / ask me when it's stuck" | `assets/examples/09-branching-and-asking.yaml` |
 
 ## What each one is really demonstrating
 

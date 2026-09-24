@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -65,11 +66,13 @@ func TestAuthoringMethodIsASkill(t *testing.T) {
 		}
 	}
 	for _, f := range []string{
-		"references/reference.md", "references/interview.md", "references/routing.md",
+		"references/reference.md", "references/interview.md",
 		"references/anti-patterns.md", "references/examples.md",
-		"steps/step-01-interview.md", "steps/step-edit.md", "steps/step-diagnose.md",
-		"steps/step-convert.md", "steps/step-review.md", "steps/step-dryrun.md",
-		"steps/step-handover.md",
+		"assets/routing.md",
+		"assets/steps/step-01-interview.md", "assets/steps/step-edit.md",
+		"assets/steps/step-diagnose.md", "assets/steps/step-convert.md",
+		"assets/steps/step-review.md", "assets/steps/step-dryrun.md",
+		"assets/steps/step-handover.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s is missing: %v", f, err)
@@ -244,7 +247,7 @@ func hasString(list []string, want string) bool {
 // documentation. They go through the same loader the server uses, so they
 // cannot rot into something plausible.
 func TestEveryAuthoringExampleLoads(t *testing.T) {
-	dir := repoPath(t, filepath.Join("skills", "workflow-author", "examples"))
+	dir := repoPath(t, filepath.Join("skills", "workflow-author", "assets", "examples"))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("the examples directory is missing: %v", err)
@@ -317,3 +320,49 @@ func TestEveryAuthoringExampleLoads(t *testing.T) {
 		}
 	}
 }
+
+// THE LAYOUT CONVENTION. `references/` is flat prose a reader opens; `assets/`
+// holds what the skill uses and may nest. Pinned because it is the kind of
+// thing that drifts one file at a time and is never noticed until someone is
+// looking for a step file in two places.
+func TestSkillLayoutConvention(t *testing.T) {
+	root := repoPath(t, filepath.Join("skills", "workflow-author"))
+
+	refs, err := os.ReadDir(filepath.Join(root, "references"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range refs {
+		if e.IsDir() {
+			t.Errorf("references/%s is a directory — references is flat; nested material belongs in assets/", e.Name())
+		}
+		if !strings.HasSuffix(e.Name(), ".md") {
+			t.Errorf("references/%s is not prose — references is what a reader opens", e.Name())
+		}
+	}
+
+	// And every path the skill points at must exist, or it sends its reader
+	// somewhere that is not there.
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return err
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range skillRef.FindAllStringSubmatch(string(body), -1) {
+			target := filepath.Join(root, m[1])
+			if _, err := os.Stat(target); err != nil {
+				t.Errorf("%s points at %s, which does not exist", filepath.Base(path), m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// skillRef matches a backticked path into the skill's own material.
+var skillRef = regexp.MustCompile("`((?:assets|references)/[A-Za-z0-9._/-]+\\.(?:md|yaml))`")

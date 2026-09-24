@@ -28,5 +28,5 @@ other things cannot be reviewed.
 
 ## 4. Dry run and hand over
 
-`steps/step-dryrun.md`, then `steps/step-handover.md`. An edit is not safer
+`assets/steps/step-dryrun.md`, then `assets/steps/step-handover.md`. An edit is not safer
 than a draft.

@@ -41,20 +41,23 @@ After the interview, after the shape, and after the draft: **stop and wait.**
 
 ## How to work
 
-Read `references/routing.md` first — people arrive here in five different
+`references/` is flat prose you read; `assets/` holds what the skill *uses* —
+the router, the step files, the example workflows.
+
+Read `assets/routing.md` first — people arrive here in five different
 situations and they need different things. Then follow the step file it sends
 you to.
 
 | they arrive… | mode | step |
 |---|---|---|
-| "I keep doing X by hand" | **create** | `steps/step-01-interview.md` |
-| "change this workflow to…" | **edit** | `steps/step-edit.md` |
-| "my workflow fails / does nothing" | **diagnose** | `steps/step-diagnose.md` |
-| "here is my script / Actions file" | **convert** | `steps/step-convert.md` |
-| "look at this draft" | **review** | `steps/step-review.md` |
+| "I keep doing X by hand" | **create** | `assets/steps/step-01-interview.md` |
+| "change this workflow to…" | **edit** | `assets/steps/step-edit.md` |
+| "my workflow fails / does nothing" | **diagnose** | `assets/steps/step-diagnose.md` |
+| "here is my script / Actions file" | **convert** | `assets/steps/step-convert.md` |
+| "look at this draft" | **review** | `assets/steps/step-review.md` |
 
-Every mode ends the same way: `steps/step-dryrun.md`, then
-`steps/step-handover.md`. A draft you have not dry run is not finished, and a
+Every mode ends the same way: `assets/steps/step-dryrun.md`, then
+`assets/steps/step-handover.md`. A draft you have not dry run is not finished, and a
 hand-over without its assumptions is not honest.
 
 ## Choose the cheapest thing that answers the question
