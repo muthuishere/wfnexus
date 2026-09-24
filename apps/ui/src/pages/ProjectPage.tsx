@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import EnvStore from '../components/EnvStore'
+import StateStore from '../components/StateStore'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import { ago } from '../lib/time'
@@ -144,6 +145,11 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
           business reaching a workflow from another project. Shown only on the
           project itself, not when drilled into one of its workflows. */}
       {!workflow && <EnvStore project={name} />}
+
+      {/* What this workflow remembers between runs — the answer to "why does
+          the scheduled run think it is already up to date?". On the project
+          itself, the project-wide namespace instead. */}
+      <StateStore workflow={workflow} project={workflow ? undefined : name} />
 
       <div className="card">
         <div className="subhead">

@@ -162,3 +162,52 @@ func fieldName(s *workflow.Step) string {
 	}
 	return "prompt"
 }
+
+// stateRef matches a state reference in either spelling: the field form
+// `.Workflow.last_id` and the index form rewriteStatePaths produces for a key
+// holding a dot or a hyphen.
+var (
+	stateRef      = regexp.MustCompile(`\.(Step|Workflow|Project|Global)\.([A-Za-z0-9_.-]+)`)
+	stateIndexRef = regexp.MustCompile(`index\s+\.(Step|Workflow|Project|Global)\s+"([^"]+)"`)
+)
+
+// checkStateRefs reports a reference to a state key that nothing holds and
+// nothing in this workflow writes.
+//
+// It is NOT fatal. State is written by whatever ran last — another workflow, a
+// person at a terminal, a run that has not happened yet — so "nobody has put
+// this here" is a warning about a likely typo, not a verdict. The first run of
+// a correct incremental workflow legitimately reads a key that is not there
+// yet, and it renders empty, which is the documented behaviour.
+func checkStateRefs(s *workflow.Step, text string, known map[string]map[string]string) []DryProblem {
+	var out []DryProblem
+	seen := map[string]bool{}
+	// `ns` is the namespace as the AUTHOR wrote it (.Workflow); the scope is
+	// its lower-case name in the store. The message quotes the author's.
+	report := func(ns, key string) {
+		scope := strings.ToLower(ns)
+		if seen[scope+"."+key] {
+			return
+		}
+		seen[scope+"."+key] = true
+		if _, ok := known[scope][key]; ok {
+			return
+		}
+		out = append(out, DryProblem{
+			Step: s.ID, Field: fieldName(s), Fatal: false,
+			Message: fmt.Sprintf("references .%s.%s, which nothing holds and no step writes — "+
+				"at run time it renders as nothing (state is four separate namespaces; .%s.%s does not fall back to a wider scope)",
+				ns, key, ns, key),
+		})
+	}
+	for _, m := range stateIndexRef.FindAllStringSubmatch(text, -1) {
+		report(m[1], m[2])
+	}
+	for _, m := range stateRef.FindAllStringSubmatch(text, -1) {
+		if strings.ContainsAny(m[2], ".-") {
+			continue // handled by the index form above
+		}
+		report(m[1], m[2])
+	}
+	return out
+}

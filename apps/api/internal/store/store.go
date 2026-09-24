@@ -39,12 +39,18 @@ type (
 	EnvVar          = model.EnvVar
 	Sealer          = model.Sealer
 	Worker          = model.Worker
+	StateVar        = model.StateVar
 	Job             = model.Job
 )
 
 const (
 	ScopeSystem  = model.ScopeSystem
 	ScopeProject = model.ScopeProject
+
+	StateScopeStep     = model.StateScopeStep
+	StateScopeWorkflow = model.StateScopeWorkflow
+	StateScopeProject  = model.StateScopeProject
+	StateScopeGlobal   = model.StateScopeGlobal
 )
 
 type Store struct {

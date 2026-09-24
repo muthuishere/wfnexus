@@ -44,6 +44,11 @@ func DescribeShape() string {
 	b.WriteString("  - Every question under `judge.questions` NEEDS `instructions` — what the judge is\n")
 	b.WriteString("    being asked, in words. A question without them is refused at load.\n")
 	b.WriteString("  - A `run` step needs an `output_schema` too; it gets ok/exitCode/stdout/stderr.\n")
+	b.WriteString("  - STATE survives a run, in four SEPARATE namespaces read as {{ .Step.k }},\n")
+	b.WriteString("    {{ .Workflow.k }}, {{ .Project.k }} and {{ .Global.k }}. They do not fall back to\n")
+	b.WriteString("    one another, and an unwritten key renders empty — use `default`. Write with a\n")
+	b.WriteString("    step's `state:` block (scope → key → template) or `wfx state set`. Plaintext:\n")
+	b.WriteString("    it is not a secret store.\n")
 	return b.String()
 }
 

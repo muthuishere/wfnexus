@@ -80,6 +80,33 @@ And if NOTHING in the work needs judgement, say so: that is a shell script or a
 CI job, and telling someone that is more useful than building them a workflow
 with no reason to exist.
 
+## If it runs on a schedule, ask what it should REMEMBER
+
+A step's output dies with its run. A workflow that runs every fifteen minutes
+and remembers nothing re-reads the world every fifteen minutes — so before you
+write a `schedule:`, ask what "since last time" means here, and give it a
+watermark:
+
+```yaml
+- id: fetch
+  run: 'echo "everything after {{ default "0" .Workflow.last_id }}"'
+  state:
+    workflow:
+      last_id: "{{ .Output.stdout }}"
+```
+
+Four scopes, narrowest to widest: `{{ .Step.x }}` (this step, across runs),
+`{{ .Workflow.x }}`, `{{ .Project.x }}` (every workflow in this repository),
+`{{ .Global.x }}`. They are four SEPARATE namespaces — `.Step.x` does not fall
+back to `.Workflow.x` — so a missing key never looks like a stale one. An
+unwritten key renders empty, which is why the read above has a `default`.
+
+A `run:` step can also write imperatively with `wfx state set --workflow k v`;
+it never names WHICH workflow, because the server reads that off the run.
+Values are strings and PLAINTEXT: this is not a secret store, `wfx env` is.
+
+`assets/examples/10-incremental-state.yaml` is the worked case.
+
 ## The one technical rule you cannot get wrong
 
 Call `wf_catalog` with `kind: "shape"` **before you write a line**, and again

@@ -213,6 +213,20 @@ type Step struct {
 	Classifier string `yaml:"classifier,omitempty" json:"classifier,omitempty"`
 	// Retry re-runs the whole step on failure.
 	Retry *Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
+	// State is how a step WRITES what should survive the run: a scope, then
+	// the keys to persist and the template each one's value comes from. The
+	// engine renders them against this step's own output once it is accepted,
+	// so the write is deterministic and visible in the file — no new tool, and
+	// nothing depending on a model choosing to call one.
+	//
+	//	state:
+	//	  workflow:
+	//	    last_id: "{{ .Output.last_id }}"
+	//
+	// Scopes are `step`, `workflow`, `project`, `global`. A step never names
+	// WHICH workflow or project: that comes from the run, or one workflow could
+	// write another repository's state.
+	State map[string]map[string]string `yaml:"state,omitempty" json:"state,omitempty"`
 	// AskHuman grants the `question` built-in and makes a suspension durable:
 	// the run parks in needs_input until a human answers.
 	AskHuman bool `yaml:"ask_human,omitempty" json:"askHuman,omitempty"`
@@ -984,6 +998,14 @@ type TemplateData struct {
 	Steps   map[string]any // previous step outputs, keyed by step id
 	Output  map[string]any // current step output (gate messages only)
 	Decide  map[string]any // this step's judge answers, keyed by question
+
+	// STATE — what survives a run. Four SEPARATE namespaces, narrowest first,
+	// and deliberately not a cascade: `.Step.x` never falls back to
+	// `.Workflow.x`. See internal/engine/state.go for why.
+	Step     map[string]string // this step of this workflow, across runs
+	Workflow map[string]string // this workflow, across runs
+	Project  map[string]string // every workflow in this repository
+	Global   map[string]string // everything on this platform
 }
 
 var funcs = template.FuncMap{
@@ -1073,6 +1095,26 @@ func toStrings(v any) []string {
 // `.Steps.validate-bug.summary` becomes `index .Steps "validate-bug" "summary"`.
 var hyphenPath = regexp.MustCompile(`\.Steps\.([A-Za-z0-9_-]+)((?:\.[A-Za-z0-9_-]+)*)`)
 
+// statePath rewrites a state reference whose KEY is not a Go identifier —
+// `{{ .Workflow.last-id }}` or `{{ .Step.repo.head }}`. State keys are flat
+// strings chosen by the author and may hold a dot or a hyphen, so everything
+// after the namespace is ONE key, looked up whole.
+//
+// A plain key (`.Global.tier`) is deliberately left as field syntax: that is
+// what lets RenderStrict, and so the dry run, report a typo — `index` on a map
+// returns empty however wrong the name is, and would hide it.
+var statePath = regexp.MustCompile(`\.(Step|Workflow|Project|Global)\.([A-Za-z0-9_.-]+)`)
+
+func rewriteStatePaths(text string) string {
+	return statePath.ReplaceAllStringFunc(text, func(m string) string {
+		parts := strings.SplitN(strings.TrimPrefix(m, "."), ".", 2)
+		if len(parts) != 2 || !strings.ContainsAny(parts[1], ".-") {
+			return m
+		}
+		return fmt.Sprintf("(index .%s %q)", parts[0], parts[1])
+	})
+}
+
 func rewriteStepPaths(text string) string {
 	return hyphenPath.ReplaceAllStringFunc(text, func(m string) string {
 		parts := strings.Split(strings.TrimPrefix(m, ".Steps."), ".")
@@ -1107,7 +1149,7 @@ func RenderStrict(text string, data TemplateData) (string, error) {
 }
 
 func render(text string, data TemplateData, option string) (string, error) {
-	t, err := template.New("p").Funcs(funcs).Option(option).Parse(rewriteStepPaths(text))
+	t, err := template.New("p").Funcs(funcs).Option(option).Parse(rewriteStatePaths(rewriteStepPaths(text)))
 	if err != nil {
 		return "", err
 	}

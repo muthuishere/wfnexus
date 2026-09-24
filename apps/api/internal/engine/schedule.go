@@ -164,6 +164,12 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 	}
 	e.setRun(ctx, runID, "running", step.ID, "")
 
+	// The four state namespaces are loaded HERE, once per step and for every
+	// path into a step, so no caller can render a prompt with them missing —
+	// and freshly, so a `wfx state set` in an earlier step of this same run is
+	// visible to this one.
+	data = e.withState(ctx, data, def, runID, step.ID)
+
 	rec, vals, err := e.decide(ctx, runID, step, data)
 	if err != nil {
 		e.failStep(ctx, runID, step.ID, err)
@@ -188,6 +194,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.setStep(ctx, runID, step.ID, model.StepPatch{
 			Status: str("done"), Output: mustJSON(out), FinishedAt: now(),
 		})
+		e.persistStepState(ctx, def, step, data, out)
 		if halted := e.applyOutputGates(ctx, runID, step, out, data); halted {
 			return nil, stepHalted
 		}
@@ -209,6 +216,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("done"), Output: mustJSON(res.Output), FinishedAt: now(),
 	})
+	e.persistStepState(ctx, def, step, data, res.Output)
 
 	if halted := e.applyOutputGates(ctx, runID, step, res.Output, data); halted {
 		return nil, stepHalted

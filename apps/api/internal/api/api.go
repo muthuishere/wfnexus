@@ -97,6 +97,12 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS 
 		r.Put("/projects/{name}/env", s.setProjectEnv)
 		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
+		// The state store: the operator's door names the scope's owner, a
+		// running step's door (below, under /runs/{id}) never can.
+		r.Get("/state", s.listState)
+		r.Put("/state", s.setState)
+		r.Delete("/state/{key}", s.deleteState)
+		r.Get("/workflows/{name}/state", s.workflowState)
 		r.Get("/sources", s.listSources)
 
 		// Workers — the machines that have joined the pool.
@@ -131,6 +137,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS 
 		r.Post("/runs/{id}/retry", s.retry)
 		r.Post("/runs/{id}/cancel", s.cancel)
 		r.Get("/runs/{id}/artifacts/{artifactId}", s.artifact)
+		r.Get("/runs/{id}/state", s.listRunState)
+		r.Post("/runs/{id}/state", s.setRunState)
+		r.Delete("/runs/{id}/state/{key}", s.deleteRunState)
 	})
 	r.Get("/*", s.ui)
 	return r
