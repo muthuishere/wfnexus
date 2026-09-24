@@ -40,6 +40,14 @@ type Engine struct {
 	// one imported repository must not stop the platform booting, so it is
 	// recorded and reported rather than fatal.
 	sourceSkips []workflow.Skip
+	// bundleRoots are the BUNDLE-SCOPED skill roots — one directory per pulled
+	// bundle, holding exactly that bundle's carried skills. They are PREPENDED
+	// to the machine's own roots, so skills.Load's existing first-root-wins
+	// rule resolves each step's `skills:` to the carried copy and a same-named
+	// machine skill is recorded in Shadowed rather than silently winning.
+	//
+	// The resolution rule is used, not bypassed: it is WHY bundling works.
+	bundleRoots []string
 	broker      *broker
 	// classifierOpts overrides the judge backend; tests set the static one.
 	classifierOpts *tn.ClassifierOptions
@@ -127,7 +135,7 @@ func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 // skill and the step that uses it land in one hot reload. Workflows are
 // validated against the fresh registry; a bad reload changes nothing.
 func (e *Engine) ReloadDefinitions() error {
-	reg := skills.Load(skills.DefaultRoots(e.cfg.SkillsDir)...)
+	reg := skills.Load(e.skillRoots()...)
 	cat, err := catalog.Load(e.cfg.RegistriesPath, e.cfg.McpConfig)
 	if err != nil {
 		return err
@@ -142,6 +150,38 @@ func (e *Engine) ReloadDefinitions() error {
 	e.defs, e.skills, e.catalog, e.sourceSkips = defs, reg, cat, skips
 	e.mu.Unlock()
 	return nil
+}
+
+// skillRoots is every root the registry is built from, bundle roots first.
+func (e *Engine) skillRoots() []string {
+	e.mu.Lock()
+	roots := append([]string(nil), e.bundleRoots...)
+	e.mu.Unlock()
+	return append(roots, skills.DefaultRoots(e.cfg.SkillsDir)...)
+}
+
+// BundleRootDir is where pulled bundles are materialised: one directory per
+// bundle, beside the platform's own skills rather than inside them, so a
+// bundle's copy is never mistaken for a machine-wide install.
+func (e *Engine) BundleRootDir() string {
+	return filepath.Join(filepath.Dir(e.cfg.SkillsDir), "bundles")
+}
+
+// PrependSkillRoot registers a bundle-scoped skill root and rebuilds the
+// registry. Called by the SERVER on a CLI-initiated publish or pull, never by
+// a tool handed to a step — skills/platform.go's rule that a platform tool does
+// not write is untouched by this change.
+func (e *Engine) PrependSkillRoot(dir string) error {
+	e.mu.Lock()
+	for _, r := range e.bundleRoots {
+		if r == dir {
+			e.mu.Unlock()
+			return e.ReloadDefinitions()
+		}
+	}
+	e.bundleRoots = append([]string{dir}, e.bundleRoots...)
+	e.mu.Unlock()
+	return e.ReloadDefinitions()
 }
 
 // CheckWorkflow is SaveWorkflow without the write.
@@ -370,8 +410,53 @@ func (e *Engine) Cancel(ctx context.Context, runID uuid.UUID) {
 	e.setRun(ctx, runID, "cancelled", "", "")
 }
 
+// Actor is WHO resolved a pause (ADR 0021).
+//
+// There is no authentication yet — ADR 0017 is only proposed — so this is
+// whatever the API is told, and it is recorded as a claim, not a verified
+// identity. The point is that the SHAPE exists at every resolve path: when
+// identity lands it is filled from the authenticated subject instead of the
+// request body, and nothing downstream changes.
+//
+// It is REQUIRED. An empty actor is refused rather than defaulted, because
+// "approved by nobody" is exactly the audit record this ADR exists to stop.
+type Actor struct {
+	// ID is the principal's identifier — today a name the caller asserts.
+	ID string
+	// Via is how the claim arrived: "api", "ui", "cli". Recorded with the
+	// actor so a later audit can tell an unauthenticated era from an
+	// authenticated one.
+	Via string
+}
+
+func (a Actor) String() string {
+	if a.Via == "" {
+		return a.ID
+	}
+	return a.ID + " (via " + a.Via + ")"
+}
+
+func (a Actor) validate() error {
+	if strings.TrimSpace(a.ID) == "" {
+		return fmt.Errorf("an actor is required: who is resolving this pause?")
+	}
+	return nil
+}
+
+// resolution is the audit patch: who, when, and what they decided.
+func resolution(a Actor, resolution, reason string) model.StepPatch {
+	now := time.Now().UTC()
+	return model.StepPatch{
+		ResolvedBy: str(a.String()), ResolvedAt: &now,
+		Resolution: str(resolution), ResolutionReason: str(reason),
+	}
+}
+
 // Approve unblocks a step that is awaiting approval and continues the run.
-func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) error {
+func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string, by Actor) error {
+	if err := by.validate(); err != nil {
+		return err
+	}
 	st, err := e.store.GetStep(ctx, runID, stepID)
 	if err != nil {
 		return err
@@ -379,7 +464,10 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) er
 	if st.Status != "awaiting_approval" {
 		return fmt.Errorf("step %s is %s, not awaiting_approval", stepID, st.Status)
 	}
-	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("approved")})
+	p := resolution(by, "approved", "")
+	p.Status = str("approved")
+	e.setStep(ctx, runID, stepID, p)
+	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "approved by " + by.String()})
 	// move the run off awaiting_approval synchronously, so a caller that reads
 	// it straight back (the UI does) never sees the state it just cleared
 	e.setRun(ctx, runID, "queued", stepID, "")
@@ -387,8 +475,15 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string) er
 	return nil
 }
 
-func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason string) error {
-	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("rejected"), Error: str(reason)})
+func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason string, by Actor) error {
+	if err := by.validate(); err != nil {
+		return err
+	}
+	p := resolution(by, "rejected", reason)
+	p.Status = str("rejected")
+	p.Error = str(reason)
+	e.setStep(ctx, runID, stepID, p)
+	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "rejected by " + by.String() + ": " + reason})
 	e.setRun(ctx, runID, "cancelled", stepID, "rejected: "+reason)
 	return nil
 }
@@ -401,7 +496,10 @@ func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason str
 // anyway (spikes/03). The step is our durability boundary, so the answer is
 // folded into the run input and the step re-runs from its prompt — which is
 // also why steps must be idempotent in effect.
-func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID, answer string) error {
+func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
+	if err := by.validate(); err != nil {
+		return err
+	}
 	st, err := e.store.GetStep(ctx, runID, stepID)
 	if err != nil {
 		return err
@@ -413,6 +511,27 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID, an
 	if err := json.Unmarshal(st.Pending, &req); err != nil {
 		return err
 	}
+	// A NOT-OK answer is a real outcome, not a missing one, and its Reason
+	// tells a decline from a timeout — which a bare answer string could not
+	// (toolnexus types.go:76-81). The step does not re-run: nobody answered it.
+	if !ans.Ok {
+		reason := ans.Reason
+		if reason == "" {
+			reason = "declined"
+		}
+		p := resolution(by, reason, req.Prompt)
+		p.Status = str("declined")
+		p.Error = str("question " + reason + ": " + req.Prompt)
+		e.setStep(ctx, runID, stepID, p)
+		e.emit(ctx, runID, stepID, "log", map[string]any{"text": "question " + reason + " by " + by.String()})
+		status := "cancelled"
+		if reason == "expired" {
+			status = "failed"
+		}
+		e.setRun(ctx, runID, status, stepID, "question "+reason+" by "+by.String())
+		return nil
+	}
+	answer, _ := ans.Data[tn.RelayOutputKey].(string)
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -427,8 +546,15 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID, an
 	if err := e.store.UpdateRunInput(ctx, runID, mustJSON(input)); err != nil {
 		return err
 	}
-	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "operator answered: " + req.Prompt})
-	return e.Retry(ctx, runID, stepID)
+	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "answered by " + by.String() + ": " + req.Prompt})
+	// The audit fact is written AFTER the retry: Retry resets the step row
+	// (ResetStepsFrom), so recording first would wipe exactly what we came to
+	// keep. The event above is the second, unerasable copy.
+	if err := e.Retry(ctx, runID, stepID); err != nil {
+		return err
+	}
+	e.setStep(ctx, runID, stepID, resolution(by, "answered", ""))
+	return nil
 }
 
 // ProvideInput merges answers into the run input and re-runs from the step that asked.
@@ -556,6 +682,11 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		if step.RequiresApproval && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
+			// The sequential path halts HERE rather than in runOneStep, so the
+			// announcement has to be here too — a pause nobody is told about is
+			// the failure ADR 0021 names.
+			e.notifyPause(ctx, runID, step.ID, "approval",
+				"step "+step.ID+" needs approval before it runs", nil)
 			return nil
 		}
 		data := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
