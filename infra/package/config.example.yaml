@@ -1,0 +1,77 @@
+# wfx-server configuration.
+#
+# Copy to ~/.config/wfx/config.yaml (or point WFX_CONFIG at it). Everything is
+# optional; an absent file is the normal state of a fresh install.
+#
+# An ENVIRONMENT VARIABLE WINS over anything here. A container sets env vars and
+# its operator must not be overridden by a file baked into an image; a person
+# edits this file, sets no env vars, and never meets the rule.
+#
+# Two things are deliberately NOT fields: the model's API key and the env
+# store's encryption key. Only the NAME of the variable holding them, because
+# this is the file people paste into an issue when something does not work.
+
+# `local` picks the defaults a laptop wants — sqlite and a folder for artifacts.
+# `server` picks postgres and s3. It is a shorthand: anything set explicitly
+# below still wins over it.
+mode: local
+
+addr: ":8090"
+# The address workers are told to reach, when this sits behind an ingress.
+# Get it wrong and every machine you try to add is wrong in the same way.
+# publicUrl: https://wfx.example.com
+
+storage:
+  # sqlite | postgres
+  driver: sqlite
+  # a file path for sqlite, a URL for postgres
+  dsn: ~/.local/share/wfnexus/wfnexus.db
+
+artifacts:
+  # folder | s3
+  driver: folder
+  dir: ~/.local/share/wfnexus/artifacts
+  # For the s3 driver. Prefer the environment for the keys on anything shared —
+  # these are real credentials in a file on disk.
+  # endpoint: minio:9000
+  # bucket: wfx-artifacts
+  # accessKey: ""
+  # secretKey: ""
+  # useSsl: false
+
+model:
+  baseUrl: https://openrouter.ai/api/v1
+  style: openai
+  model: anthropic/claude-sonnet-4.5
+  # The NAME of the variable holding the key, never the key.
+  apiKeyEnv: OPENROUTER_API_KEY
+
+classifier:
+  baseUrl: https://openrouter.ai/api/v1
+  model: typesafe/jev-1.13
+  apiKeyEnv: OPENROUTER_API_KEY
+
+runners:
+  # Labels this process serves ITSELF. `self-hosted` is deliberately absent:
+  # that is the label a worker advertises, and serving it here would silently
+  # take the work of the first machine anyone joins.
+  labels: [local]
+  # A machine presents this to join. Generated and kept if left empty.
+  # token: ""
+
+secrets:
+  # Where the env store's encryption key comes from. The variable wins; the
+  # file is written on first boot if the variable is unset. Lose it and every
+  # stored value is unreadable, so back it up somewhere other than the database.
+  keyEnv: WFX_SECRET_KEY
+  # keyPath: ~/.config/wfnexus/secret.key
+
+maxConcurrentRuns: 4
+
+# paths:
+#   workflows: ~/.config/wfx/workflows
+#   templates: ~/.config/wfx/templates
+#   skills: ~/.config/wfx/skills
+#   registries: ~/.config/wfx/registries.json
+#   work: ~/.local/share/wfnexus/runs
+#   ui: /app/ui

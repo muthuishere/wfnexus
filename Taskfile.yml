@@ -35,17 +35,62 @@ tasks:
 
   # ---- build ----------------------------------------------------------------
   build:
-    desc: All three binaries — wfnexus (server), wfx (CLI), wfx-runner (worker)
+    desc: All three binaries — wfx-server, wfx (CLI), wfx-runner (worker)
     deps: [build:api, build:cli, build:runner, ui:build]
   build:api:
     dir: apps/api
-    cmds: ["go build -o {{.BIN}}/wfnexus ."]
+    cmds: ["go build -o {{.BIN}}/wfx-server ."]
   build:cli:
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx ./cmd/wfx"]
   build:runner:
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx-runner ./cmd/wfx-runner"]
+  # ---- release -------------------------------------------------------------
+  release:
+    desc: Every binary for every platform, plus the self-contained server tarball
+    deps: [ui:build]
+    cmds:
+      - task: release:binaries
+      - task: release:tar
+
+  release:binaries:
+    desc: wfx-server, wfx and wfx-runner for linux, windows and macos
+    dir: apps/api
+    vars:
+      TARGETS: linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64 darwin/amd64
+    cmds:
+      - rm -rf {{.BIN}}/release && mkdir -p {{.BIN}}/release
+      - for: { var: TARGETS }
+        cmd: >-
+          GOOS={{splitList "/" .ITEM | first}} GOARCH={{splitList "/" .ITEM | last}} CGO_ENABLED=0
+          sh -c 'for c in "wfx-server:." "wfx:./cmd/wfx" "wfx-runner:./cmd/wfx-runner"; do
+            name=${c%%:*}; pkg=${c#*:};
+            ext=""; [ "$GOOS" = windows ] && ext=".exe";
+            go build -trimpath -ldflags="-s -w" -o {{.BIN}}/release/${name}-$GOOS-$GOARCH${ext} $pkg || exit 1;
+          done'
+      - "ls -1 {{.BIN}}/release"
+
+  release:tar:
+    desc: A tarball docker compose can run with no registry and no Go toolchain
+    cmds:
+      - rm -rf {{.BIN}}/pkg && mkdir -p {{.BIN}}/pkg/bin {{.BIN}}/pkg/k8s {{.BIN}}/pkg/ui
+      # The linux binaries travel WITH the tar, and the Dockerfile inside copies
+      # them — so `docker compose up` needs no registry to pull from and no Go
+      # on the machine. That is the difference between a tarball someone can use
+      # and one that only works if they can reach your registry.
+      - cp {{.BIN}}/release/wfx-server-linux-amd64 {{.BIN}}/release/wfx-linux-amd64 {{.BIN}}/pkg/bin/
+      - cp {{.BIN}}/release/wfx-runner-linux-amd64 {{.BIN}}/pkg/bin/
+      - cp -R apps/ui/dist/. {{.BIN}}/pkg/ui/
+      - cp -R workflows templates skills registries.json {{.BIN}}/pkg/
+      - cp -R infra/k8s/. {{.BIN}}/pkg/k8s/
+      # The package has its OWN compose and Dockerfiles: the repository's build
+      # from source, these copy the binary that is already in the tarball.
+      - cp infra/package/Dockerfile infra/package/Dockerfile.runner {{.BIN}}/pkg/
+      - cp infra/package/docker-compose.yml infra/package/README.md infra/package/config.example.yaml {{.BIN}}/pkg/
+      - "tar -czf {{.BIN}}/wfx-server.tar.gz -C {{.BIN}}/pkg ."
+      - "echo 'wrote {{.BIN}}/wfx-server.tar.gz' && tar -tzf {{.BIN}}/wfx-server.tar.gz | head -20"
+
   build:runner:all:
     desc: The worker for every machine you might add — linux, mac, windows
     dir: apps/api

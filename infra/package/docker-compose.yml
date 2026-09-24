@@ -1,0 +1,62 @@
+# The whole platform, from this tarball: `docker compose up -d`
+#
+# `build: .` uses the Dockerfile beside this file, which COPIES the binary that
+# is already in bin/ rather than compiling one. So this needs no registry to
+# pull from and no Go toolchain — only Docker.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-wfx}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-wfx}
+      POSTGRES_DB: ${PG_DB:-wfx}
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-wfx}"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-wfx}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-wfxwfxwfx}
+    ports: ["127.0.0.1:9030:9000", "127.0.0.1:9031:9001"]
+    volumes: [minio:/data]
+
+  wfx-server:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_started }
+    environment:
+      DATABASE_URL: postgres://${PG_USER:-wfx}:${PG_PASSWORD:-wfx}@postgres:5432/${PG_DB:-wfx}?sslmode=disable
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-wfx}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-wfxwfxwfx}
+      S3_BUCKET: ${S3_BUCKET:-wfx-artifacts}
+      # Pinned so the worker below joins without a human copying a token.
+      # Leave it unset on a real install and take the token from the Workers page.
+      WFX_RUNNER_TOKEN: ${WFX_RUNNER_TOKEN:-wfx_compose_dev_token}
+      WFX_PUBLIC_URL: ${WFX_PUBLIC_URL:-http://localhost:8090}
+      # The model key is passed by NAME to the process; its value never enters a
+      # workflow file or the database.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports: ["${WFX_PORT:-8090}:8090"]
+    volumes: [data:/data]
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    depends_on: [wfx-server]
+    environment:
+      WFX_URL: http://wfx-server:8090
+      WFX_TOKEN: ${WFX_RUNNER_TOKEN:-wfx_compose_dev_token}
+      WFX_LABELS: ${WFX_LABELS:-self-hosted,linux,docker}
+      WFX_NAME: compose-runner
+    volumes: [work:/home/wfx/.wfx-runner]
+    restart: unless-stopped
+
+volumes: { pg: , minio: , data: , work: }

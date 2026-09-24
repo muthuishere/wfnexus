@@ -21,7 +21,7 @@ RUN go mod download
 COPY apps/api ./
 # Static, so the runtime image needs no libc and the same binary runs anywhere.
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/wfnexus . \
+RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-server . \
  && go build -trimpath -ldflags="-s -w" -o /out/wfx ./cmd/wfx
 
 # ---- what actually ships --------------------------------------------------
@@ -31,7 +31,7 @@ FROM alpine:3.21
 RUN apk add --no-cache git bash ca-certificates tzdata \
  && adduser -D -u 10001 wfx
 WORKDIR /app
-COPY --from=api /out/wfnexus /out/wfx /usr/local/bin/
+COPY --from=api /out/wfx-server /out/wfx /usr/local/bin/
 COPY --from=ui /ui/dist /app/ui
 COPY workflows /app/workflows
 COPY registries.json /app/registries.json
@@ -45,4 +45,4 @@ USER wfx
 EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s \
   CMD wget -qO- http://127.0.0.1:8090/api/health || exit 1
-ENTRYPOINT ["wfnexus"]
+ENTRYPOINT ["wfx-server"]

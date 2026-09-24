@@ -60,6 +60,18 @@ Needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` + `LLM_BASE_URL`) in the environ
 `.env.example` to `.env` for the rest. Nothing reads a secret into config — toolnexus picks the key
 up at call time.
 
+### A release
+
+```bash
+task release                       # 18 binaries + wfx-server.tar.gz
+```
+
+Three binaries — `wfx-server`, `wfx`, `wfx-runner` — for linux, windows and
+macos on amd64 and arm64, and a **self-contained tarball**: the linux binaries
+travel inside it and its Dockerfile copies them rather than building, so
+`docker compose up` there needs no registry to pull from and no Go toolchain.
+The UI, workflows, templates, skills and provider registry travel with it too.
+
 Or the whole thing in containers, including one worker:
 
 ```bash
