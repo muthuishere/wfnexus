@@ -1,11 +1,13 @@
 # wfnexus
 
-**Typed pipelines for coding agents.** One Go binary, your Postgres, your repo.
+**Typed pipelines for coding agents.** One Go binary and your repo. Nothing else, until you want it:
+with no configuration at all it runs on SQLite and a folder, and `mode: server` moves it to your
+Postgres and your bucket.
 
 A workflow is a YAML file. A step is a **prompt + a scoped set of agent skills/tools + a JSON-schema
 output contract**. The engine runs each step as a [toolnexus](https://github.com/muthuishere/toolnexus)
 agent, refuses to advance until the step's output validates against its schema, persists every step's
-state in Postgres, streams the agent's tool calls to the UI over SSE, and stops for a human where the
+state (SQLite or Postgres), streams the agent's tool calls to the UI over SSE, and stops for a human where the
 workflow says so.
 
 The first workflow is bug fixing: **validate → reproduce → draft PR → validate PR → publish PR.**
@@ -32,7 +34,7 @@ Full analysis with sources: [`docs/research/competitors-2026-09.md`](docs/resear
 | **Schema-validated hand-off, enforced *inside* the agent loop** | yes, stored `jsonb` | undocumented | after the step | parser node | no (`outputs:` are strings) | no |
 | **Static check with no model call** (`wfx dryrun`) | yes | no | no | no | no | no |
 | Runs locally, off any forge, against a working tree | yes | yes | yes | yes | no | no |
-| Self-host | Go binary + PG + S3 | Bun | Rust + PG | Node (+Redis) | no | no |
+| Self-host | one Go binary (SQLite, or PG + S3) | Bun | Rust + PG | Node (+Redis) | no | no |
 
 Two honest corrections from the 2026-09-23 pass, because a comparison table that flatters us is
 worse than none:
@@ -50,15 +52,44 @@ worse than none:
 
 ## Run it
 
+Downloaded the binary? There is no step two:
+
+```bash
+./wfx-server      # :8090 — sqlite in ~/.local/share/wfnexus, artifacts in a folder
+```
+
+With no config file and no environment it takes the **local** defaults, migrates its own SQLite
+file on boot, and serves the UI and the API out of the binary. Nothing to install, nothing to start.
+
+### Working on the repo
+
 ```bash
 task infra:up     # Postgres :5460, MinIO :9030 (console :9031)
-task api          # :8090 — migrates on boot, creates the bucket
+task api          # :8090 — WFX_MODE=server, so it meets that Postgres and bucket
 task ui           # :5173 — Vite dev server, proxies /api
 ```
 
-Needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` + `LLM_BASE_URL`) in the environment. Copy
-`.env.example` to `.env` for the rest. Nothing reads a secret into config — toolnexus picks the key
-up at call time.
+`task api` **states** `WFX_MODE=server`, because the no-config default is `local` and a working
+session wants the real pair. `server`'s own defaults are exactly what `task infra:up` brings up, so
+it needs nothing else; copy `.env.example` to `.env` to point it somewhere different.
+
+Needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` + `LLM_BASE_URL`) in the environment. Nothing reads
+a secret into config — toolnexus picks the key up at call time.
+
+### Storage: two modes, one shorthand
+
+| | `mode: local` (the default when nothing says otherwise) | `mode: server` |
+|---|---|---|
+| state | SQLite at `~/.local/share/wfnexus/wfnexus.db` | Postgres (`DATABASE_URL`) |
+| artifacts | a folder at `~/.local/share/wfnexus/artifacts` | S3/MinIO (`S3_ENDPOINT`, …) |
+
+`mode` is a shorthand for a set of defaults, never a second code path. Anything you state yourself —
+`storage.driver` in the file, `WFX_STORAGE_DRIVER` / `DATABASE_URL` / `WFX_ARTIFACT_DRIVER` in the
+environment — beats it, in either direction. A value you state and get wrong **fails on boot**; it
+never quietly falls back to SQLite. Precedence is environment > file > mode > built-in default.
+
+The containers and the k8s manifests all set `WFX_MODE=server` explicitly, so a deployment gets
+Postgres because it says so rather than because of where a default happens to sit.
 
 ### A release
 
@@ -276,7 +307,7 @@ per run instead. Set `isolate: false` to let the agent work directly in your che
 ## Layout
 
 ```
-apps/api/            Go: engine, workflow loader, Postgres store, MinIO blobs, REST+SSE
+apps/api/            Go: engine, workflow loader, SQLite/Postgres store, folder/S3 blobs, REST+SSE
   internal/engine/   the run loop, per-step agent, schema validation, event broker
   internal/workflow/ YAML loader + prompt templating
   migrations/        golang-migrate SQL (embedded, applied on boot)

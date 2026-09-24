@@ -28,7 +28,11 @@ COPY templates/   /app/templates/
 COPY skills/      /app/skills/
 COPY registries.json /app/registries.json
 
-ENV WFX_ADDR=:8090 \
+# `server` is STATED, not inherited: the no-config default is `local` (sqlite
+# and a folder) so the same binary run by hand needs nothing beside it. This
+# image IS the deployed server and must keep getting postgres + s3.
+ENV WFX_MODE=server \
+    WFX_ADDR=:8090 \
     WFX_UI_DIR=/app/ui \
     WFX_WORKFLOWS_DIR=/app/workflows \
     WFX_TEMPLATES_DIR=/app/templates \

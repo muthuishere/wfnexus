@@ -26,6 +26,14 @@ import (
 func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 	t.Helper()
 	cfg := config.Load()
+	// These are the POSTGRES path. The no-config default is now `local`
+	// (sqlite in a file), so postgres is STATED here rather than inherited from
+	// a default that has moved — otherwise this would quietly exercise a
+	// different database and skip the one it means to test.
+	if cfg.StorageDriver != "postgres" {
+		cfg.StorageDriver = "postgres"
+		cfg.DatabaseURL = "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"
+	}
 	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
 		cfg.DatabaseURL = v
 	}

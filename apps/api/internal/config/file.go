@@ -34,6 +34,9 @@ type File struct {
 	// defaults a person wants on a laptop (sqlite, a folder for artifacts),
 	// `server` the ones a deployment wants (postgres, s3). Anything set
 	// explicitly below still wins over the shorthand.
+	//
+	// UNSET means `local`, so a downloaded binary with no file beside it
+	// boots. A deployment states `server`, or states the drivers itself.
 	Mode string `yaml:"mode,omitempty"`
 
 	Addr string `yaml:"addr,omitempty"`

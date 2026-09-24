@@ -29,12 +29,17 @@ Read `README.md` first; it is short and accurate.
 - `internal/assets/` — the UI bundle, templates, skills and registries.json compiled into
   `wfx-server` by go:embed, so a downloaded binary works alone. Disk ALWAYS wins; embedded is the
   fallback. Staged by `task assets:stage`, which every server build depends on.
-- `internal/store/` — pgx queries. `internal/blob/` — MinIO/S3. `internal/api/` — chi routes + SSE.
+- `internal/store/` — one query set over SQLite or Postgres. `internal/blob/` — a folder or S3.
+  `internal/api/` — chi routes + SSE.
+- `internal/config/` — file, then env, then defaults. **The no-config default is `local`**: SQLite
+  and a folder, so a downloaded binary boots alone. `mode: server` / `WFX_MODE=server` selects
+  Postgres + S3, and every container, manifest and dev task states it rather than inheriting it.
+  Anything stated explicitly beats the mode, and a stated value that is wrong fails on boot.
 
 ## Working on it
 
 ```bash
-task infra:up && task api        # :8090   task ui   # :5173
+task infra:up && task api        # :8090 (WFX_MODE=server)   task ui   # :5173
 cd apps/api && go test ./... && go vet ./...
 ```
 

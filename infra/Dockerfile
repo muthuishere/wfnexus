@@ -35,7 +35,12 @@ COPY --from=api /out/wfx-server /out/wfx /usr/local/bin/
 COPY --from=ui /ui/dist /app/ui
 COPY workflows /app/workflows
 COPY registries.json /app/registries.json
-ENV WFX_ADDR=:8090 \
+# `server` is STATED, not inherited: the no-config default is `local` (sqlite
+# and a folder) so a downloaded binary boots on its own. This image IS the
+# deployed server, and it must keep getting postgres + s3 whatever the default
+# does next.
+ENV WFX_MODE=server \
+    WFX_ADDR=:8090 \
     WFX_UI_DIR=/app/ui \
     WFX_WORKFLOWS_DIR=/app/workflows \
     WFX_REGISTRIES=/app/registries.json \
