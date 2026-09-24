@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/planner"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -110,6 +111,10 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		}
 		out.Problems = append(out.Problems, p)
 	}
+
+	// What the four state namespaces would hold, so a reference to a key
+	// nothing has written and nothing will write is reported before the run.
+	state := e.dryState(def)
 
 	waves, shape, err := e.dryWaves(def, sample)
 	out.Shape, out.Waves = shape, waves
@@ -258,6 +263,8 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		}
 		if text != "" {
 			data := dryTemplateData(def, sample, waveOf, s.ID)
+			data.Step, data.Workflow = state[model.StateScopeStep], state[model.StateScopeWorkflow]
+			data.Project, data.Global = state[model.StateScopeProject], state[model.StateScopeGlobal]
 			// Rendered twice on purpose. The lenient render is what the agent
 			// would ACTUALLY read, so it is what we show. The strict render is
 			// the check: at run time a missing key silently becomes empty, so a
@@ -272,6 +279,9 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			// What it REFERENCES, checked against what exists — see dryrefs.go
 			// for why rendering alone catches almost nothing here.
 			for _, p := range checkRefs(def, s, text, waveOf) {
+				fail(p)
+			}
+			for _, p := range checkStateRefs(s, text, state) {
 				fail(p)
 			}
 		}
@@ -483,6 +493,54 @@ func dryTemplateData(def *workflow.Definition, input map[string]any, waveOf map[
 		Output:  map[string]any{},
 		Decide:  map[string]any{},
 	}
+}
+
+// dryState is what each scope would hold for THIS workflow: whatever is stored
+// now, plus every key the workflow itself declares it will write. A reference
+// to anything else is a key nobody produces — usually a typo.
+//
+// The step scope is flattened into one map on purpose: the check is "does any
+// step write this key", not "which one", and telling an author their key is
+// written by a different step of the same workflow would be noise.
+func (e *Engine) dryState(def *workflow.Definition) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, scope := range model.StateScopes {
+		out[scope] = map[string]string{}
+	}
+	if e.store != nil {
+		ctx := context.Background()
+		for _, scope := range model.StateScopes {
+			name, err := stateNameFor(scope, def.Name, "", "")
+			if scope == model.StateScopeStep {
+				// Every step of this workflow, whatever it is called.
+				if vars, err := e.store.ListStateByPrefix(ctx, scope, def.Name+"/"); err == nil {
+					for _, v := range vars {
+						out[scope][v.Key] = v.Value
+					}
+				}
+				continue
+			}
+			if err != nil {
+				continue // project state has no address without a run
+			}
+			if m, err := e.store.StateFor(ctx, scope, name); err == nil {
+				out[scope] = m
+			}
+		}
+	}
+	for i := range def.Steps {
+		for scope, entries := range def.Steps[i].State {
+			if out[scope] == nil {
+				continue
+			}
+			for key := range entries {
+				if _, ok := out[scope][key]; !ok {
+					out[scope][key] = ""
+				}
+			}
+		}
+	}
+	return out
 }
 
 // sampleOutput builds a plausible object for a step's declared output schema,

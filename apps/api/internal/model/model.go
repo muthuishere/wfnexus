@@ -127,6 +127,38 @@ type EnvVar struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// ---- the state store ----
+
+// State is what a workflow REMEMBERS between runs: four separate namespaces of
+// plain string key/value, narrowest first.
+//
+//	step      this step of this workflow, across runs
+//	workflow  this workflow, across runs
+//	project   every workflow in one repository
+//	global    everything on this platform
+//
+// It is NOT a secret store. Values are stored in PLAINTEXT — unlike env_vars,
+// which is sealed. A token belongs in `wfx env`, never here.
+const (
+	StateScopeStep     = "step"
+	StateScopeWorkflow = "workflow"
+	StateScopeProject  = "project"
+	StateScopeGlobal   = "global"
+)
+
+// StateScopes is the whole vocabulary, narrowest to widest.
+var StateScopes = []string{StateScopeStep, StateScopeWorkflow, StateScopeProject, StateScopeGlobal}
+
+// StateVar is one entry as the API returns it. The value is always present:
+// state is plaintext by design.
+type StateVar struct {
+	Scope     string    `json:"scope"`
+	ScopeName string    `json:"scopeName,omitempty"`
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // Sealer is the encryption the store writes through. It is an interface so the
 // store does not import a key: whoever holds the key passes it in.
 type Sealer interface {

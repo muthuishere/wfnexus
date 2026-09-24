@@ -64,6 +64,14 @@ type Store interface {
 	ListEnvVars(ctx context.Context, box model.Sealer, scope, scopeName string) ([]model.EnvVar, error)
 	EnvFor(ctx context.Context, box model.Sealer, scope, scopeName string) (map[string]string, error)
 
+	// the state store — what a workflow remembers between runs (plaintext)
+	PutState(ctx context.Context, scope, scopeName, key, value string) error
+	GetState(ctx context.Context, scope, scopeName, key string) (string, bool, error)
+	DeleteState(ctx context.Context, scope, scopeName, key string) error
+	StateFor(ctx context.Context, scope, scopeName string) (map[string]string, error)
+	ListState(ctx context.Context, scope, scopeName string) ([]model.StateVar, error)
+	ListStateByPrefix(ctx context.Context, scope, prefix string) ([]model.StateVar, error)
+
 	// settings
 	SetSetting(ctx context.Context, key, value string) error
 	SettingOnce(ctx context.Context, key string, gen func() string) (string, error)

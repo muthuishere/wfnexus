@@ -97,6 +97,8 @@ func run(args []string) error {
 		return installCmd(rest)
 	case "env":
 		return envCmd(rest)
+	case "state":
+		return stateCmd(rest)
 	case "templates", "template":
 		return templates(rest)
 	case "new":
@@ -121,6 +123,9 @@ func usage() {
   wfx install --list               what this platform ships
   wfx env [--project p]            the platform's env store (values are never shown)
   wfx env set NAME [--plain]       read a value without echoing it, store it encrypted
+  wfx state list --workflow        what this workflow remembers between runs
+  wfx state set --workflow k v     remember it (also --step, --project, --global)
+  wfx state get --step k           one value; empty when never written
   wfx templates [name]             starting points to copy — the shape, minus your skills
   wfx new <template> --as <name>   copy one into a workflow of your own
   wfx workers                      machines in the pool, and the line that adds another

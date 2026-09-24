@@ -1,0 +1,67 @@
+# "Process everything since last time."
+#
+# The whole point: a step output dies with its run, so a scheduled workflow that
+# cannot remember anything re-reads the world every hour. STATE is the watermark
+# that makes it incremental — `{{ .Workflow.last_id }}` on the way in, a write on
+# the way out.
+#
+# Four scopes, narrowest to widest, each read under its own name:
+#
+#   {{ .Step.x }}      this step of this workflow, across runs
+#   {{ .Workflow.x }}  this workflow, across runs
+#   {{ .Project.x }}   every workflow in this repository
+#   {{ .Global.x }}    everything on this platform
+#
+# They are four SEPARATE namespaces, not a cascade: `.Step.last_id` is empty when
+# only the workflow scope holds `last_id`. That is deliberate — a silent fallback
+# would turn "nobody has written this yet" into somebody else's value, and the
+# workflow would resume from a watermark it never set.
+#
+# Values are strings. A workflow that wants structure puts JSON in the string.
+# State is PLAINTEXT and is not a secret store — a token goes in `wfx env`.
+name: incremental-state
+description: Reads only what is new since the last run, then remembers where it got to.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+steps:
+  # Reading: an unwritten key renders EMPTY, so the first run needs a fallback.
+  # `default` takes the fallback first.
+  - id: fetch
+    run: |
+      since="{{ default "0" .Workflow.last_id }}"
+      echo "everything after id $since"
+      # …fetch it, and print the highest id seen…
+      printf %s "$(( since + 5 ))"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+    # Writing, declaratively: the ENGINE stores these once the step's output is
+    # accepted. Visible in the file, deterministic, and the only write path a
+    # `runs-on:` step has — a worker holds no database, so the value is rendered
+    # and stored on the server.
+    state:
+      workflow:
+        last_id: "{{ .Output.stdout }}"
+
+  # Writing imperatively, from any `run:` step on this machine. The scope's
+  # OWNER is never passed: the CLI sends the run, and the server reads the
+  # workflow and the project off it, so one workflow cannot write another
+  # repository's state.
+  - id: mark
+    run: |
+      wfx state set --workflow last_run_at "$(date -u +%FT%TZ)"
+      wfx state get --workflow last_id
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

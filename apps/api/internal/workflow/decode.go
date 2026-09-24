@@ -91,6 +91,11 @@ func isSchemaKey(key string) bool {
 	// environment and headers. All of these hold names chosen elsewhere.
 	case "with", "input", "clientPayload", "env", "headers", "mcpServers":
 		return true
+	// A step's `state:` block: the inner keys are STATE KEY NAMES the author
+	// chose, and `last_id` must not become `lastId` — the template that reads
+	// it back says `.Workflow.last_id`.
+	case "state":
+		return true
 	}
 	return false
 }

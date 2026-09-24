@@ -100,6 +100,22 @@ describe('the UI a person actually downloads', () => {
     expect(JSON.stringify(d.steps?.[0]?.output)).toContain('the sidecar travelled')
   })
 
+  test("a workflow's state is visible on its page", async () => {
+    // What a person needs when a scheduled workflow says it is up to date: the
+    // watermark itself, on the page, instead of a database client.
+    await api.setState({ scope: 'workflow', name: 'deterministic', key: 'last_id', value: '4120' })
+    await api.setState({ scope: 'global', key: 'tier', value: 'pro' })
+
+    go('#/projects/local/deterministic')
+    await screen.findByText('last_id')
+    await screen.findByText('4120')
+    // The global namespace is shared, so it shows here too — labelled, because
+    // these are four separate namespaces and which one a value is in matters.
+    await screen.findByText('tier')
+    expect(screen.getAllByText('workflow').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('global').length).toBeGreaterThan(0)
+  })
+
   test('every page renders without throwing', async () => {
     for (const route of ['#/projects', '#/runs', '#/workflows', '#/templates', '#/workflows/new', '#/skills', '#/workers', '#/system']) {
       const { container, unmount } = go(route)

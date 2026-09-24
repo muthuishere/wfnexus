@@ -232,6 +232,19 @@ export type EnvList = {
   keySource: string
 }
 
+/** One entry of the state store — what a workflow REMEMBERS between runs.
+ *
+ *  Four scopes, narrowest first: step, workflow, project, global. They are four
+ *  separate namespaces, NOT a cascade: `.Step.x` never falls back to
+ *  `.Workflow.x`.
+ *
+ *  Unlike an env var, the value is always here. State is PLAINTEXT by design —
+ *  it is not a secret store. */
+export type StateVar = {
+  scope: string; scopeName?: string; key: string; value: string; updatedAt: string
+}
+export type StateList = { scope: string; scopeName: string; vars: StateVar[] }
+
 export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
@@ -260,6 +273,20 @@ export const api = {
     j(fetch(project
       ? `/api/projects/${encodeURIComponent(project)}/env/${encodeURIComponent(key)}`
       : `/api/env/${encodeURIComponent(key)}`, { method: 'DELETE' })),
+
+  /** The state store. `workflowState` is the workflow page's view: this
+   *  workflow's memory, each of its steps', and the global namespace. */
+  workflowState: (name: string) =>
+    j<{ vars: StateVar[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/state`)),
+  state: (scope: string, name = '') =>
+    j<StateList>(fetch(`/api/state?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(name)}`)),
+  setState: (v: { scope: string; name?: string; key: string; value: string }) =>
+    j<{ ok: boolean }>(fetch('/api/state', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v),
+    })),
+  deleteState: (scope: string, name: string, key: string) =>
+    j(fetch(`/api/state/${encodeURIComponent(key)}?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(name)}`,
+      { method: 'DELETE' })),
 
   /** The template gallery, and copying one into a workflow of your own. */
   templates: () => j<Template[]>(fetch('/api/templates')),

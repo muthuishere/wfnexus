@@ -17,6 +17,7 @@ Open the one whose SITUATION matches, not the one whose feature matches.
 | "run it nightly / when our other system fires / it needs a token" | `assets/examples/07-triggers-and-env.yaml` |
 | "it has to build on the Windows box" | `assets/examples/08-runs-on-worker.yaml` |
 | "it should take a different path / ask me when it's stuck" | `assets/examples/09-branching-and-asking.yaml` |
+| "only process what is new since last time / remember where it got to" | `assets/examples/10-incremental-state.yaml` |
 
 ## What each one is really demonstrating
 
@@ -40,6 +41,11 @@ that reaches the outside world, with guardrails on everything before it.
 **05 — a sub-agent keeps research out of the parent's context.** The explorer
 reads and reports with file:line; the parent decides. Reach for this when one
 step would otherwise fill its whole context with code it read once.
+
+**10 — it remembers.** A step output dies with its run, so a scheduled workflow
+re-reads the world every time. `{{ .Workflow.last_id }}` on the way in and a
+`state:` block on the way out make it incremental. Four scopes — `.Step`,
+`.Workflow`, `.Project`, `.Global` — and they do NOT fall back to one another.
 
 **06 — the order is derived.** `goal:` plus `consumes`/`produces`: the planner
 works out the order and re-derives it after every step. Do not also write
