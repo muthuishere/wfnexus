@@ -40,8 +40,29 @@ func TestAuthoringMethodIsASkill(t *testing.T) {
 			t.Errorf("the skill never mentions %s", must)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(sk.Location), "reference.md")); err != nil {
-		t.Errorf("the field reference is missing: %v", err)
+	// The judgement calls, not just the field names: an author that reaches for
+	// an agent every time is the expensive failure this skill exists to stop.
+	for _, must := range []string{"judge", "decide", "run:", "cheapest"} {
+		if !strings.Contains(string(body), must) {
+			t.Errorf("the skill never mentions %s — nothing tells the author to use the cheap node", must)
+		}
+	}
+	dir := filepath.Dir(sk.Location)
+	for _, f := range []string{"reference.md", "interview.md"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s is missing: %v", f, err)
+		}
+	}
+	// The reference must carry the exact question types, because these are the
+	// names an author cannot guess and a wrong one fails the whole file.
+	ref, err := os.ReadFile(filepath.Join(dir, "reference.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, must := range []string{"noul", "choice", "score", "at_least", "skip_to", "requires_approval"} {
+		if !strings.Contains(string(ref), must) {
+			t.Errorf("the reference never mentions %q", must)
+		}
 	}
 }
 

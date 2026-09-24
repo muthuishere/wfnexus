@@ -135,6 +135,26 @@ The one thing that cannot be placed is a step using the platform's own authoring
 step is refused at pack time rather than mid-run. [`infra/README.md`](infra/README.md) has the
 rest, including running the worker as a service and what it does and does not isolate.
 
+## Use it from your own agent
+
+The authoring method is an agent skill, so you can run it inside whatever you
+already use — Claude Code, or anything that reads `~/.claude/skills`:
+
+```bash
+wfx skill list                    # what this platform ships
+wfx skill install workflow-author # copies it where your agent reads skills
+```
+
+Explicit, like `playwright install`, and for the same reason: a tool that writes
+into another tool's configuration behind your back is one nobody can audit. It
+copies files, prints where they went, and undoing it is `rm -rf` on a directory
+it names.
+
+The skill interviews you, picks the cheapest node that answers each question
+(`run:` before `judge:` before a full agent), drafts, dry runs its own draft
+through `wfx`, fixes what that found, and only then hands over — with what it
+assumed still attached.
+
 ## Templates
 
 `wfx templates` (or the Templates page) lists starting points. The headline one is the five-phase
