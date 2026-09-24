@@ -358,3 +358,76 @@ pre {
 
 .strlist .row { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 6px }
 .strlist .idx { flex: none; width: 18px; color: var(--muted); padding-top: 9px; font-size: 11px }
+
+/* ── a run, drawn as time ────────────────────────────────────────────────── */
+/* The run is the hero and the hero is a timeline: one row per step, its bar in
+   PROPORTION to how long the step took, so scale is visible rather than read.
+   Colour never carries status alone — every row also says the word. */
+.runcard { padding: 16px 18px }
+.runtop { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px }
+.runtop .big { display: flex; align-items: baseline; gap: 8px }
+.runfacts { margin-left: auto; display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; flex-wrap: wrap }
+@media (max-width: 620px) { .runfacts { margin-left: 0 } }
+
+/* money. Three states, three renderings — a true $0.00 is a FEATURE and must
+   never look like a missing number (ADR 0020). */
+.cost { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--text) }
+.cost.big { font-size: 26px; letter-spacing: -.02em }
+.cost.free { color: var(--ok) }
+.cost.free i { font-style: normal; font-size: .72em; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; background: var(--ok-bg); color: var(--ok); padding: 1px 6px; border-radius: 999px }
+.cost.unknown { color: var(--warn); font-weight: 550 }
+.cost.untracked { color: var(--muted); font-weight: 500 }
+
+.tl { display: flex; flex-direction: column; gap: 4px }
+.tlrow {
+  display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) minmax(190px, max-content);
+  gap: 6px 14px; align-items: center; padding: 9px 10px; border-radius: 9px;
+  border: 1px solid transparent; cursor: pointer;
+}
+.tlrow:hover { background: var(--raised); border-color: var(--border) }
+.tlrow.on { background: var(--blue-50); border-color: var(--blue-200) }
+.tlname { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; font-size: 13.5px }
+.tlname .n { color: var(--muted) }
+.tlname b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+.tlbar { height: 12px; background: #eef0f6; border-radius: 999px; overflow: hidden }
+.tlbar i { display: block; height: 100%; border-radius: 999px; background: var(--border-strong) }
+.tlbar i.done { background: var(--ok) }
+.tlbar i.failed, .tlbar i.cancelled, .tlbar i.rejected { background: var(--err) }
+.tlbar i.running { background: var(--blue-500); animation: pulse 1.3s infinite }
+.tlbar i.awaiting_approval, .tlbar i.needs_input { background: var(--warn) }
+
+.tlfacts { display: flex; gap: 12px; align-items: baseline; justify-content: flex-end;
+  font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; flex-wrap: wrap }
+.tlfacts .t { color: var(--text); font-weight: 550 }
+.tlprog { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; font-size: 12px }
+.tlprog .meter { flex: none; width: 120px; height: 6px; background: var(--blue-100); border-radius: 999px; overflow: hidden }
+.tlprog .meter i { display: block; height: 100%; background: var(--blue-600) }
+
+/* the self-correction: a refused submit_output and the turn that fixed it */
+.corrections { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; margin-top: 4px }
+.correction { border-left: 3px solid var(--warn); background: var(--warn-bg); color: #7a4d00;
+  padding: 8px 11px; border-radius: 0 8px 8px 0; font-size: 12.5px }
+.correction pre { margin-top: 6px; background: var(--surface); border-color: #f0d9a8; white-space: pre-wrap }
+
+.waiting { font-size: 12.5px; color: var(--warn); font-weight: 600; margin-bottom: 6px }
+.hitlhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px }
+
+@media (max-width: 720px) {
+  .tlrow { grid-template-columns: 1fr }
+  .tlfacts { justify-content: flex-start }
+}
+
+/* ── the activity log ────────────────────────────────────────────────────── */
+.log .ev { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px;
+  padding: 4px 0; border-bottom: 1px solid #f0f3f9 }
+.log .ev > .k { color: var(--muted) }
+.log .ev pre { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px }
+.log .ev .tag { display: inline-block; padding: 0 6px; border-radius: 5px; font-size: 10.5px;
+  font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+  background: var(--blue-50); color: var(--blue-600) }
+.log .ev.rejection { background: var(--warn-bg); border-radius: 6px; padding: 6px 8px }
+.log .ev.rejection .tag { background: var(--warn); color: #fff }
+.log .ev.delegation .tag { background: var(--blue-600); color: #fff }
+@media (max-width: 720px) { .log .ev { grid-template-columns: 1fr } }
