@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import EnvStore from '../components/EnvStore'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
+import FileList from '../components/FileList'
 import { ago } from '../lib/time'
 
 /** One project: its workflows, and its runs. The middle of
@@ -59,6 +60,15 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
             <span className="muted" style={{ fontSize: 12 }}>{ago(r.createdAt)}</span></>
           : <span className="muted">never</span>
       },
+    },
+    // THE WHOLE WORKFLOW, not just its name. A workflow is the YAML and
+    // whatever sits beside it, and a list that shows only the name is one you
+    // cannot reuse from: you copy it, and the first run fails on a script
+    // nobody told you about. Nothing is filtered — a README is listed like the
+    // run.js, because the reader is the one who knows what matters.
+    {
+      key: 'files', header: 'Files', width: 220, sortable: false,
+      cell: w => <FileList files={w.files} empty="just the YAML" />,
     },
     {
       key: 'description', header: 'What it does',

@@ -79,6 +79,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, uiDir string, uiFS 
 		r.Get("/templates", s.listTemplates)
 		r.Get("/templates/{name}", s.getTemplate)
 		r.Post("/templates/{name}/copy", s.copyTemplate)
+		r.Post("/workflows/{name}/copy", s.copyWorkflow)
 		r.Post("/workflows/validate", s.validateWorkflow)
 		r.Get("/mcp", s.listMcp)
 		r.Get("/providers", s.listProviders)
@@ -428,6 +429,10 @@ func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"sources": workflow.SortedSources(s.eng.Sources()),
 		"skipped": s.eng.SourceSkips(),
+		// The whole of each workflow, not just its name: a source is listed so
+		// somebody can reuse from it, and a name alone does not say that the
+		// thing they are about to copy ships a run.js.
+		"contents": s.eng.SourceContents(),
 	})
 }
 

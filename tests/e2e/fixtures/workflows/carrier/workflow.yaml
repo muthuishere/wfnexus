@@ -1,0 +1,19 @@
+name: carrier
+description: >-
+  A DIRECTORY-form workflow: its step runs a script that sits beside it, not a
+  heredoc inside the YAML. It exists so the suite can prove the whole workflow
+  travels — list it, copy it, run the copy, and read back a line that could
+  only have come from the file.
+on:
+  workflow_dispatch:
+input_schema: { type: object }
+steps:
+  - id: run-the-sidecar
+    run: sh ./greet.sh
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

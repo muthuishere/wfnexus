@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -49,6 +50,66 @@ type File struct {
 	Path string `json:"path"`
 	Mode uint32 `json:"mode,omitempty"`
 	Body []byte `json:"body"`
+}
+
+// THE LISTING SHOWS THE WHOLE WORKFLOW.
+//
+// A workflow is the YAML *and* everything sitting with it, so a listing that
+// shows only the YAML is a listing you cannot reuse from: you copy it, and the
+// first run fails on a script nobody told you about.
+//
+// Nothing here decides which files matter. A README, a fixture, a .sql the
+// platform has no opinion about — all of it is listed, because the person or
+// agent reading the listing is the one who knows what is relevant, and a
+// platform that guesses can only guess wrong in the direction of hiding
+// something.
+
+// FileInfo is one sidecar as a LISTING shows it: where it is and how big, and
+// no body. A gallery of twenty workflows should not ship twenty scripts to
+// render twenty rows; the body is one fetch away, on the workflow itself.
+type FileInfo struct {
+	Path string `json:"path"`
+	Size int    `json:"size"`
+	Mode uint32 `json:"mode,omitempty"`
+}
+
+// Infos is the listing view of a workflow's files.
+func Infos(files []File) []FileInfo {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]FileInfo, 0, len(files))
+	for _, f := range files {
+		out = append(out, FileInfo{Path: f.Path, Size: len(f.Body), Mode: f.Mode})
+	}
+	return out
+}
+
+// MarshalJSON adds `size` beside the body, so every place a workflow's files
+// are serialised says how big they are — computed from the bytes rather than
+// stored, which is the only way it cannot drift from them. Decoding is
+// unchanged: `size` is derived, and an incoming one is ignored.
+func (f File) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Path string `json:"path"`
+		Size int    `json:"size"`
+		Mode uint32 `json:"mode,omitempty"`
+		Body []byte `json:"body,omitempty"`
+	}{f.Path, len(f.Body), f.Mode, f.Body})
+}
+
+// Clone deep-copies a workflow's files, so a COPY of a workflow never shares
+// bytes with the workflow it came from. Two definitions aliasing one slice is
+// the kind of thing that works until something edits one of them.
+func Clone(files []File) []File {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]File, len(files))
+	for i, f := range files {
+		out[i] = File{Path: f.Path, Mode: f.Mode, Body: append([]byte(nil), f.Body...)}
+	}
+	return out
 }
 
 // maxSidecarBytes and maxSidecarFiles cap what one workflow carries. A sidecar

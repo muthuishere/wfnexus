@@ -64,6 +64,42 @@ describe('the UI a person actually downloads', () => {
     await screen.findAllByText(/the command exited with 3/)
   })
 
+  // A LISTING SHOWS THE WHOLE WORKFLOW.
+  //
+  // `carrier` is a directory-form workflow whose step runs a script beside it.
+  // A list that showed only its name would look reusable and not be: you copy
+  // it, and the first run fails on a file nobody mentioned. So the project's
+  // table names every file — including the README, which the platform has no
+  // idea about and carries anyway.
+  test("a project's workflows list the files that travel with them", async () => {
+    go('#/projects/local')
+    await screen.findByText('carrier')
+    await screen.findByText('greet.sh')
+    await screen.findByText('lib/phrase.sh')
+    await screen.findByText('README.md')
+    // With sizes, so "is this the whole thing" is answerable from the list.
+    expect(screen.getAllByText(/\d+ B$/).length).toBeGreaterThan(0)
+    // And a flat one-file workflow says so rather than showing nothing.
+    await screen.findAllByText('just the YAML')
+  })
+
+  // REUSE CARRIES EVERYTHING, and the proof is a run, not a byte count: the
+  // copy prints a phrase that exists only inside the script beside it, and
+  // only if that script's own `lib/phrase.sh` came along too.
+  test('copying a workflow brings its files, and the copy runs', async () => {
+    const as = `carried-${Date.now().toString(36)}`
+    await api.copyWorkflow('carrier', as)
+    const copy = await api.workflow(as)
+    expect(copy.files?.map(f => f.path).sort()).toEqual(['README.md', 'greet.sh', 'lib/phrase.sh'])
+
+    const run = await api.createRun(as, {})
+    await waitFor(async () => {
+      expect((await api.run(run.id)).run.status).toBe('done')
+    }, { timeout: 20_000, interval: 250 })
+    const d = await api.run(run.id)
+    expect(JSON.stringify(d.steps?.[0]?.output)).toContain('the sidecar travelled')
+  })
+
   test('every page renders without throwing', async () => {
     for (const route of ['#/projects', '#/runs', '#/workflows', '#/templates', '#/workflows/new', '#/skills', '#/workers', '#/system']) {
       const { container, unmount } = go(route)

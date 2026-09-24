@@ -7,6 +7,7 @@ import type { JsonSlots } from '../builder/jsonschema'
 import JsonSchemaEditor from '../components/builder/JsonSchemaEditor'
 import StepEditor, { EnvEditor } from '../components/builder/StepEditor'
 import WorkflowCanvas from '../components/WorkflowCanvas'
+import FileList from '../components/FileList'
 import { Field, IssueList } from '../components/builder/Bits'
 
 /** The builder edits ONE thing at a time.
@@ -225,9 +226,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
               </Field>
               {!!draft.files?.length && (
                 <Field label="files shipped beside this workflow">
-                  <ul className="mono" style={{ fontSize: 12, margin: 0, paddingLeft: 18 }}>
-                    {draft.files.map(f => <li key={f.path}>{f.path}</li>)}
-                  </ul>
+                  <FileList files={draft.files} />
                 </Field>)}
               <IssueList issues={issues.filter(i => i.step === -1 && i.field === 'steps')} />
             </div>

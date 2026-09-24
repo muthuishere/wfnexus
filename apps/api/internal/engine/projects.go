@@ -33,13 +33,63 @@ type Project struct {
 	Local bool `json:"local"`
 
 	Workflows []string `json:"workflows"`
-	Runs      int      `json:"runs"`
+	// Contents is the SAME list, with what each workflow actually consists of:
+	// its definition file and every file sitting with it. `workflows` is kept
+	// beside it because a name is all most callers want — but a name is not
+	// enough to reuse from, and reuse is the point of listing another
+	// project's workflows at all.
+	Contents []WorkflowContents `json:"contents,omitempty"`
+	Runs     int                `json:"runs"`
 	// LastRun is the newest run's status, so a dashboard can say whether the
 	// last thing that happened here worked.
 	LastRun   string `json:"lastRun,omitempty"`
 	LastRunAt string `json:"lastRunAt,omitempty"`
 	// Problems are the workflows in this project that did not load.
 	Problems []workflow.Skip `json:"problems,omitempty"`
+}
+
+// WorkflowContents is one workflow as a project listing shows it: the whole
+// thing, not just its name.
+//
+// The rule is that nothing is hidden. Every file beside the definition is
+// listed — a README, a fixture, a .sql the platform has no opinion about —
+// because whoever is reading the list is the one who knows which of them
+// matter, and a listing that pre-judges can only ever hide something.
+type WorkflowContents struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Path is the definition file itself, on this machine.
+	Path string `json:"path"`
+	// Template marks the ones that exist to be copied rather than run.
+	Template bool `json:"template,omitempty"`
+	// Files is everything else in the workflow's directory. Empty for the flat
+	// `workflows/foo.yaml` form, which is one file and nothing else.
+	Files []workflow.FileInfo `json:"files,omitempty"`
+}
+
+func describeContents(d *workflow.Definition) WorkflowContents {
+	return WorkflowContents{
+		Name: d.Name, Description: d.Description, Path: d.Path,
+		Template: d.Template.Is, Files: workflow.Infos(d.Files),
+	}
+}
+
+// SourceContents is every source's workflows with their files, keyed by source
+// name. Unlike Projects it includes `templates`, because the gallery is
+// exactly the place someone is deciding what to reuse.
+func (e *Engine) SourceContents() map[string][]WorkflowContents {
+	out := map[string][]WorkflowContents{}
+	for _, src := range e.Sources() {
+		out[src.Name] = []WorkflowContents{}
+	}
+	for _, d := range workflow.Sorted(e.Definitions()) {
+		src := d.Source
+		if src == "" {
+			src = "local"
+		}
+		out[src] = append(out[src], describeContents(d))
+	}
+	return out
 }
 
 // Projects lists every project with its workflows and run activity.
@@ -75,6 +125,7 @@ func (e *Engine) Projects(ctx context.Context) ([]Project, error) {
 		}
 		if p, ok := byName[src]; ok {
 			p.Workflows = append(p.Workflows, d.Name)
+			p.Contents = append(p.Contents, describeContents(d))
 		}
 	}
 	for _, sk := range e.SourceSkips() {

@@ -37,6 +37,14 @@ type Template struct {
 	// normal state of a template and the reason the gallery says so: the shape
 	// is given, the expertise is yours.
 	NeedsSkills bool `json:"needsSkills"`
+	// Files are everything sitting beside the definition — a run.js, a
+	// fixture, a README. Shown in the gallery because they are part of what
+	// you are about to copy, and because a template whose step says
+	// `run: node report.js` is unreadable until you can see report.js is
+	// there.
+	Files []workflow.FileInfo `json:"files,omitempty"`
+	// Path is where the definition lives, so a listing can be traced to disk.
+	Path string `json:"path,omitempty"`
 }
 
 // TemplatePhase is one step, as the gallery shows it.
@@ -80,6 +88,7 @@ func describeTemplate(d *workflow.Definition) Template {
 	t := Template{
 		Name: d.Name, Title: d.Template.Title, Summary: d.Template.Summary,
 		Description: d.Description, Fill: d.Template.Fill, Source: d.Source,
+		Files: workflow.Infos(d.Files), Path: d.Path,
 	}
 	if t.Title == "" {
 		t.Title = d.Name
@@ -106,9 +115,29 @@ func describeTemplate(d *workflow.Definition) Template {
 // or a skill the machine does not have is refused here rather than at the next
 // reload.
 func (e *Engine) CopyTemplate(ctx context.Context, name, as string) (*workflow.Definition, error) {
-	src, err := e.Template(name)
-	if err != nil {
+	if _, err := e.Template(name); err != nil {
 		return nil, err
+	}
+	return e.CopyWorkflow(ctx, name, as)
+}
+
+// CopyWorkflow copies ANY loaded workflow into the platform's own directory.
+//
+// REUSE IS NOT A TEMPLATE-ONLY PRIVILEGE. The gallery came first, so copying
+// was template-only plumbing — but the commonest thing anyone actually wants
+// to reuse is an ordinary workflow already working in another repository, and
+// making them mark it `template:` first is a step that exists only because of
+// how this was built.
+//
+// EVERYTHING comes along. The definition and every file beside it: the run.js
+// the step invokes, the fixture it reads, the README that explains it. Nothing
+// here judges which of those matter, because the platform cannot know and the
+// person copying can — and a copy missing one file is a workflow that loads
+// and then fails on its first run, which is the worst place to find out.
+func (e *Engine) CopyWorkflow(ctx context.Context, name, as string) (*workflow.Definition, error) {
+	src := e.Definitions()[name]
+	if src == nil {
+		return nil, fmt.Errorf("no workflow named %q", name)
 	}
 	if as == "" {
 		return nil, fmt.Errorf("the copy needs a name of its own")
@@ -121,7 +150,14 @@ func (e *Engine) CopyTemplate(ctx context.Context, name, as string) (*workflow.D
 	// The copy is a workflow, not a template: it is meant to be run, and
 	// leaving the flag on would make it refuse for no reason anyone could see.
 	copy.Template = workflow.TemplateInfo{}
+	// It belongs to whoever copied it now, not to where it came from. Leaving
+	// the source on would file the copy under someone else's project, and
+	// leaving RepoDir on would point its runs at a checkout it does not own.
 	copy.Source = ""
+	copy.RepoDir = ""
+	copy.Path = ""
+	// Deep, so the copy and the original never share bytes.
+	copy.Files = workflow.Clone(src.Files)
 	return &copy, nil
 }
 

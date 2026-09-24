@@ -71,7 +71,7 @@ export type Workflow = {
   mount?: string[]
   /** The files that sit beside this workflow on disk. Read-only here for now:
    *  the Builder lists them so a save cannot silently drop them. */
-  files?: Array<{ path: string; mode?: number; body?: string }>
+  files?: Array<{ path: string; size: number; mode?: number; body?: string }>
   on?: Triggers
   goal?: string
   maxParallel?: number
@@ -137,9 +137,25 @@ export type Registry<T> = { entries: T[] | null; skipped: Skipped[] | null }
 /** A PROJECT is a repository the platform knows about, and it owns its
  *  workflows and their runs: project → workflow → runs, the same hierarchy
  *  GitHub Actions has. `local` is the platform's own workflows directory. */
+/** One file that travels with a workflow, as a LISTING shows it: where it is
+ *  and how big, with no body. Nothing decides which files count — a README and
+ *  a fixture are listed exactly like the run.js, because reuse means copying
+ *  all of it and the reader is the one who knows what matters. */
+export type FileInfo = { path: string; size: number; mode?: number }
+
+/** A workflow as a project or source listing shows it: the WHOLE thing —
+ *  its definition and every file sitting with it. */
+export type WorkflowContents = {
+  name: string; description?: string; path: string
+  template?: boolean
+  files?: FileInfo[]
+}
+
 export type Project = {
   name: string; dir: string; repo?: string; url?: string; local: boolean
   workflows: string[]
+  /** The same list with what each workflow actually consists of. */
+  contents?: WorkflowContents[]
   runs: number
   lastRun?: string
   lastRunAt?: string
@@ -197,6 +213,10 @@ export type Template = {
   fill?: string[]; source?: string; phases: TemplatePhase[]
   /** true when a phase has no skills yet — the normal state of a template. */
   needsSkills: boolean
+  /** Everything that comes with it — a run.js, a fixture, a README. Shown
+   *  because it is part of what copying gives you. */
+  files?: FileInfo[]
+  path?: string
 }
 
 /** One entry of the platform's env store. A secret arrives with NO value: the
@@ -246,6 +266,10 @@ export const api = {
   template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
   copyTemplate: (name: string, as: string) =>
     j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as })),
+  /** Copying ANY workflow — one in an imported repository, not only a
+   *  template — into your own, with every file beside it. */
+  copyWorkflow: (name: string, as: string) =>
+    j<{ name: string; path: string }>(post(`/api/workflows/${encodeURIComponent(name)}/copy`, { as })),
 
   /** The worker pool, and the one command that adds a machine to it. */
   workers: () => j<Pool>(fetch('/api/workers')),

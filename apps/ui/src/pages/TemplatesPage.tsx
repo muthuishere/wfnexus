@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Template } from '../api'
+import FileList from '../components/FileList'
 
 /** The gallery: workflows that exist to be copied.
  *
@@ -90,6 +91,17 @@ function TemplateCard({ t, onCopied, onError }: { t: Template; onCopied: () => v
           <ul className="muted" style={{ fontSize: 13, marginBottom: 14, paddingLeft: 18 }}>
             {t.fill.map((f, i) => <li key={i}>{f}</li>)}
           </ul>
+        </>)}
+
+      {/* What ELSE comes with it. A template whose step says `run: report.js`
+          is unreadable until you can see report.js is there — and copying
+          brings all of this, so all of it is shown. */}
+      {!!t.files?.length && (
+        <>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+            Files that come with it ({t.files.length}):
+          </div>
+          <div style={{ maxWidth: 420, marginBottom: 14 }}><FileList files={t.files} /></div>
         </>)}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

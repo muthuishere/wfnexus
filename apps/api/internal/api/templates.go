@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // The gallery. A template is an ordinary workflow carrying `template:`, so
@@ -29,6 +32,19 @@ func (s *Server) getTemplate(w http.ResponseWriter, r *http.Request) {
 // before it exists — a template naming a skill you do not have is refused now,
 // with the name of the skill, rather than at the next reload.
 func (s *Server) copyTemplate(w http.ResponseWriter, r *http.Request) {
+	s.copy(w, r, s.eng.CopyTemplate)
+}
+
+// copyWorkflow is the same act without the template requirement: copying an
+// ordinary workflow out of another repository into your own. The gallery route
+// stays exactly as it was — it is the same code with one extra check.
+func (s *Server) copyWorkflow(w http.ResponseWriter, r *http.Request) {
+	s.copy(w, r, s.eng.CopyWorkflow)
+}
+
+type copyFn func(ctx context.Context, name, as string) (*workflow.Definition, error)
+
+func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 	var body struct {
 		As string `json:"as"`
 	}
@@ -36,7 +52,7 @@ func (s *Server) copyTemplate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	def, err := s.eng.CopyTemplate(r.Context(), urlName(r, "name"), body.As)
+	def, err := take(r.Context(), urlName(r, "name"), body.As)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
