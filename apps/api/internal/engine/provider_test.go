@@ -7,6 +7,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -209,5 +210,38 @@ func TestInputDefaultsAreAppliedThenValidated(t *testing.T) {
 		t.Fatal("missing required input accepted")
 	} else if !strings.Contains(err.Error(), "withdefaults input") || !strings.Contains(err.Error(), "repo") {
 		t.Fatalf("unhelpful message: %v", err)
+	}
+}
+
+// `kind` decides the backend, not `command`. An acp entry that names its
+// binary used to be run as a one-shot CommandAgent — the command test came
+// first — so the process never spoke ACP and the entry's own kind was ignored.
+// The two backends are distinguishable without starting a process: only ACP
+// returns a Close that does real work, and only ACP is a *ACPAgent.
+func TestAnACPEntryWithACommandStillSpeaksACP(t *testing.T) {
+	for _, p := range []catalog.Provider{
+		{Name: "acp-cmd", Kind: catalog.KindACP, Command: []string{"myacp", "acp"}, TimeoutSec: 900},
+		{Name: "acp-preset", Kind: catalog.KindACP, Preset: "devin", TimeoutSec: 900},
+	} {
+		agent, closeFn, err := localAgent(p, "m", t.TempDir(), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", p.Name, err)
+		}
+		t.Cleanup(closeFn)
+		if _, ok := agent.(*devinadapter.ACPAgent); !ok {
+			t.Fatalf("%s: kind=acp resolved to %T — the command was run as a one-shot CLI and ACP was never spoken", p.Name, agent)
+		}
+	}
+
+	// A cli entry with a command is still the generic CommandAgent: the fix
+	// must not steal the path ADR 0016 calls the real mechanism.
+	agent, _, err := localAgent(
+		catalog.Provider{Name: "any-cli", Kind: catalog.KindCLI, Command: []string{"mycli", "-p", "{{prompt}}"}},
+		"m", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := agent.(*devinadapter.CommandAgent); !ok {
+		t.Fatalf("a cli command resolved to %T", agent)
 	}
 }

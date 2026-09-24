@@ -160,6 +160,10 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 	if step.RequiresApproval && st.Status != "approved" {
 		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 		e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
+		// The run is already parked; telling somebody is the last thing, so a
+		// dead channel cannot change whether the pause happened (ADR 0021).
+		e.notifyPause(ctx, runID, step.ID, "approval",
+			"step "+step.ID+" needs approval before it runs", nil)
 		return nil, stepHalted
 	}
 	e.setRun(ctx, runID, "running", step.ID, "")
@@ -207,10 +211,17 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	if res.Pending != nil {
+		// Request.URL is the field an answer-here link belongs in, and it was
+		// stored empty until now. It is a POINTER at our own UI — never a link
+		// that resolves the pause by itself (ADR 0021).
+		if res.Pending.URL == "" {
+			res.Pending.URL = e.pauseURL(runID)
+		}
 		e.setStep(ctx, runID, step.ID, model.StepPatch{
 			Status: str("needs_input"), Pending: mustJSON(res.Pending), Error: str(res.Pending.Prompt),
 		})
 		e.setRun(ctx, runID, "needs_input", step.ID, res.Pending.Prompt)
+		e.notifyPause(ctx, runID, step.ID, res.Pending.Kind, res.Pending.Prompt, res.Pending)
 		return nil, stepHalted
 	}
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
@@ -265,6 +276,7 @@ func (e *Engine) applyOutputGates(ctx context.Context, runID uuid.UUID, step *wo
 		case "needs_input":
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
+			e.notifyPause(ctx, runID, step.ID, "input", msg, nil)
 			return true
 		case "fail":
 			e.setRun(ctx, runID, "failed", step.ID, msg)
@@ -332,6 +344,7 @@ func (e *Engine) applyDecideGatesLinear(ctx context.Context, runID uuid.UUID, st
 		case "needs_input":
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
+			e.notifyPause(ctx, runID, step.ID, "input", msg, nil)
 			return true
 		case "fail":
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})

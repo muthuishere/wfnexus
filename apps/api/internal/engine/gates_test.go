@@ -163,7 +163,7 @@ func TestApprovalGateHaltsBeforeTheStepRuns(t *testing.T) {
 		t.Fatal("the gated step consumed turns before approval")
 	}
 
-	if err := h.eng.Approve(context.Background(), run.ID, "publish"); err != nil {
+	if err := h.eng.Approve(context.Background(), run.ID, "publish", Actor{ID: "alice", Via: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	run = h.wait(run.ID)
@@ -195,7 +195,7 @@ func TestRejectStopsTheRun(t *testing.T) {
 		t.Fatalf("run = %s", run.Status)
 	}
 
-	if err := h.eng.Reject(context.Background(), run.ID, "publish", "wrong base branch"); err != nil {
+	if err := h.eng.Reject(context.Background(), run.ID, "publish", "wrong base branch", Actor{ID: "alice", Via: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	run, _ = h.store.GetRun(context.Background(), run.ID)
@@ -221,7 +221,7 @@ func TestApproveOnlyWorksOnAWaitingStep(t *testing.T) {
 	if run.Status != "done" {
 		t.Fatalf("run = %s", run.Status)
 	}
-	err := h.eng.Approve(context.Background(), run.ID, "only")
+	err := h.eng.Approve(context.Background(), run.ID, "only", Actor{ID: "alice", Via: "test"})
 	if err == nil || !strings.Contains(err.Error(), "awaiting_approval") {
 		t.Fatalf("approve on a finished step returned %v", err)
 	}
