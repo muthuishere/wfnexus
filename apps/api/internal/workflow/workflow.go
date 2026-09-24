@@ -678,6 +678,16 @@ func normalize(d *Definition) {
 		if s.Name == "" {
 			s.Name = s.ID
 		}
+		// A step that lists no skills or tools must serialise as [], not null.
+		// Both fields are declared without omitempty precisely so a reader can
+		// rely on them being arrays; a nil slice marshals to null, and the UI
+		// then calls .map on null and white-screens the whole page.
+		if s.Skills == nil {
+			s.Skills = []string{}
+		}
+		if s.Tools == nil {
+			s.Tools = []string{}
+		}
 		if s.MaxTurns == 0 {
 			s.MaxTurns = 30
 		}

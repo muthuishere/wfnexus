@@ -143,6 +143,7 @@ export type Doctor = {
   default: { model: string; baseUrl: string; style: string; apiKeyEnv: string; keySet: boolean }
   providers: DoctorEntry[]
   classifiers: DoctorEntry[]
+  storage: { driver: string; artifacts: string }
   skills: { count: number; skipped?: string[] }
   mcp: { count: number }
   workflows: { count: number }

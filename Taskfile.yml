@@ -71,6 +71,14 @@ tasks:
     deps: [assets:stage]
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx-server ."]
+  e2e:
+    desc: UI tests in jsdom against the built binary — sqlite, no postgres, no model, no browser
+    deps: [build:api]
+    dir: apps/ui
+    cmds:
+      - npm install --silent
+      - npx vitest run
+
   build:cli:
     dir: apps/api
     cmds: ["go build -o {{.BIN}}/wfx ./cmd/wfx"]

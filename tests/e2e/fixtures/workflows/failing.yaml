@@ -1,0 +1,24 @@
+name: failing
+description: >-
+  A step that exits non-zero, with a gate that turns that into a failed run.
+  A `run:` step reports its exit code as data — a workflow decides what a bad
+  exit MEANS — so the honest way to test the failure path is to write the
+  decision down. Invariant 3 is what this asserts: the UI shows the run as
+  failed, never quietly as done.
+on:
+  workflow_dispatch:
+steps:
+  - id: boom
+    run: exit 3
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+    gates:
+      - field: ok
+        equals: false
+        action: fail
+        message: "the command exited with {{ .Output.exitCode }}"

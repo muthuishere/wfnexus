@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { api } from './api'
 import WorkflowsPage from './pages/WorkflowsPage'
 import NewRunPage from './pages/NewRunPage'
 import RunPage from './pages/RunPage'
@@ -24,6 +25,11 @@ function useRoute() {
 
 export default function App() {
   const r = useRoute()
+  // What this server actually runs on, asked once. It used to be hardcoded as
+  // "postgres · s3", which stopped being true when sqlite and folder artifacts
+  // arrived — a header that states the backend has to read it, not assume it.
+  const [backend, setBackend] = useState('')
+  useEffect(() => { api.doctor().then(d => setBackend(`${d.storage.driver} · ${d.storage.artifacts}`)).catch(() => setBackend('')) }, [])
   // Projects is the landing page: it is the top of the hierarchy, and a flat
   // list of every run across every repository is not where anyone starts.
   let page = <ProjectsPage />
@@ -54,7 +60,7 @@ export default function App() {
           <a href="#/workers" className={r[0] === 'workers' ? 'active' : ''}>Workers</a>
           <a href="#/system" className={r[0] === 'system' ? 'active' : ''}>System</a>
         </nav>
-        <div className="spacer">toolnexus · postgres · s3</div>
+        <div className="spacer">{backend ? `toolnexus · ${backend}` : 'toolnexus'}</div>
       </div>
       <div className="page">{page}</div>
     </>

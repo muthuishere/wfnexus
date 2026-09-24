@@ -1,0 +1,31 @@
+name: deterministic
+description: >-
+  Two shell steps and nothing else. It exists so the UI can be tested end to
+  end — start a run, watch it finish, read its output — without a model, a key
+  or a network call. It also carries no `skills:` and no `tools:`, which is the
+  case that once white-screened the run page.
+on:
+  workflow_dispatch:
+input_schema:
+  type: object
+  properties:
+    label: { type: string, title: "Label", default: "e2e" }
+steps:
+  - id: greet
+    run: echo "hello {{ .Input.label }}"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+  - id: count
+    run: printf 'a\nb\nc\n' | wc -l
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

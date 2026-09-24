@@ -15,3 +15,4 @@ go.work.sum
 
 # Agent worktrees, created per-task and discarded
 .claude/worktrees/
+

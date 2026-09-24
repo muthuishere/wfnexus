@@ -101,7 +101,7 @@ export default function RunPage({ id }: { id: string }) {
                         {!!st?.turns && <> · {st.turns} turns · {st.attempts} attempt{st.attempts > 1 ? 's' : ''}</>}
                         {st?.decision && <> · <span className="badge running">judged</span></>}
                       </div>
-                      <div className="chips">{s.skills.map(x => <span key={x}>{x}</span>)}</div>
+                      <div className="chips">{(s.skills ?? []).map(x => <span key={x}>{x}</span>)}</div>
                     </div>
                   </div>)
               })}
@@ -130,8 +130,8 @@ export default function RunPage({ id }: { id: string }) {
               {curRun && curRun.status !== 'running' && <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, current))}>Re-run from here</button>}
             </div>
             <div className="kv" style={{ marginTop: 10 }}>
-              <b>skills</b><span className="mono">{curDef?.skills.join(', ') || '—'}</span>
-              <b>tools</b><span className="mono">{curDef?.tools.join(', ') || '—'}</span>
+              <b>skills</b><span className="mono">{curDef?.skills?.join(', ') || '—'}</span>
+              <b>tools</b><span className="mono">{curDef?.tools?.join(', ') || '—'}</span>
               <b>mcp</b><span className="mono">{curDef?.mcp?.join(', ') || '—'}</span>
               <b>team</b><span className="mono">{curDef?.team?.map(m => m.id).join(', ') || '—'}</span>
               <b>guardrails</b><span className="mono">{curDef?.guardrails?.length ? `${curDef.guardrails.length} deny rules` : '—'}</span>

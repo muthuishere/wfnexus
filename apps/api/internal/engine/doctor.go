@@ -21,6 +21,13 @@ import (
 //
 // Nothing here prints a secret. A provider reports the NAME of its key variable
 // and whether it is set — never a value, not even a prefix.
+// DoctorStorage names the drivers in use. It carries NO dsn: a postgres dsn
+// holds a password, and this endpoint is unauthenticated.
+type DoctorStorage struct {
+	Driver    string `json:"driver"`
+	Artifacts string `json:"artifacts"`
+}
+
 type Doctor struct {
 	Default     DoctorModel      `json:"default"`
 	Providers   []DoctorProvider `json:"providers"`
@@ -30,6 +37,11 @@ type Doctor struct {
 	Workflows   DoctorCount      `json:"workflows"`
 	Models      []string         `json:"models"`
 	Shell       DoctorShell      `json:"shell"`
+	// Storage is what this server is ACTUALLY running on. The UI used to print
+	// a hardcoded "postgres · s3" in its header, which became a lie the moment
+	// the sqlite/folder path existed — a status line nobody can trust is worse
+	// than none.
+	Storage DoctorStorage `json:"storage"`
 	// Problems is never nil. A nil slice marshals to `null`, and the one
 	// consumer that reads it does `problems.length` — so a machine with
 	// NOTHING wrong crashed the System page, while a broken one rendered fine.
@@ -91,6 +103,8 @@ func (e *Engine) Doctor() Doctor {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
 	}
+
+	d.Storage = DoctorStorage{Driver: e.cfg.StorageDriver, Artifacts: e.cfg.ArtifactDriver}
 
 	d.Shell = DoctorShell{OS: runtime.GOOS, Arch: runtime.GOARCH}
 	if sh, err := shell.Default(); err != nil {

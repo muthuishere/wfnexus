@@ -482,4 +482,3 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 	}
 	return out, rows.Err()
 }
-
