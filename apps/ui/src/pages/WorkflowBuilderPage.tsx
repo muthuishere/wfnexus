@@ -1,13 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type BuiltinTool, type Doctor, type Skill, type WorkflowDraft } from '../api'
 import { blankStep, forSave, moveItem, removeAt, replaceAt, templateDraft } from '../builder/model'
 import { errorsOnly, validateDraft, type Issue } from '../builder/validate'
 import { toYaml } from '../builder/yaml'
-import SchemaEditor from '../components/builder/SchemaEditor'
+import type { JsonSlots } from '../builder/jsonschema'
+import JsonSchemaEditor from '../components/builder/JsonSchemaEditor'
 import StepEditor from '../components/builder/StepEditor'
 import WorkflowCanvas from '../components/WorkflowCanvas'
-import { Field, IssueList, Section } from '../components/builder/Bits'
+import { Field, IssueList } from '../components/builder/Bits'
 
+/** The builder edits ONE thing at a time.
+ *
+ *  The diagram on top is the navigation — it is the only view of a workflow
+ *  whose order is derived rather than authored, so it is the thing an author
+ *  already looks at, and clicking a node edits that step. Below it, a list
+ *  that selects, and one pane that shows only what was selected. The page it
+ *  replaces stacked every step's full editor down one scroll, which is why a
+ *  twelve-control output-contract row could not be attributed to anything. */
 export default function WorkflowBuilderPage({ name }: { name?: string }) {
   const editing = !!name
   // The blank template is the initial state, not an effect — #/workflows/new
@@ -23,6 +32,19 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
   const [busy, setBusy] = useState(false)
   const [showYaml, setShowYaml] = useState(true)
   const [copied, setCopied] = useState(false)
+  /** -1 is the workflow itself; otherwise the index of the step being edited. */
+  const [sel, setSel] = useState(0)
+
+  // Raw schema text and its parse error, per box, held here so a half-typed
+  // contract survives selecting another step. See JsonSchemaEditor.
+  const [jsonText, setJsonText] = useState<Record<string, string>>({})
+  const [jsonErrs, setJsonErrs] = useState<Record<string, string>>({})
+  const slots: JsonSlots = {
+    text: jsonText,
+    errors: jsonErrs,
+    setText: (k, v) => setJsonText(t => ({ ...t, [k]: v })),
+    setError: (k, m) => setJsonErrs(e => (e[k] === m ? e : { ...e, [k]: m })),
+  }
 
   useEffect(() => {
     let live = true
@@ -62,110 +84,161 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
   const errs = errorsOnly(issues)
   const yaml = useMemo(() => (draft ? toYaml(forSave(draft)) : ''), [draft])
 
+  // The server is the authority: it runs the loader, the catalog and the
+  // JSON-schema compiler. Asked on a debounce so typing is not a request
+  // storm, and only reported — the save button already shows what it refused.
+  const [verdict, setVerdict] = useState('')
+  const seq = useRef(0)
+  useEffect(() => {
+    if (!draft?.name) { setVerdict(''); return }
+    const mine = ++seq.current
+    const t = setTimeout(() => {
+      api.validateWorkflow(forSave(draft))
+        .then(v => { if (mine === seq.current) setVerdict(v.valid ? '' : v.error || 'refused, with no reason given') })
+        .catch(e => { if (mine === seq.current) setVerdict(e instanceof Error ? e.message : String(e)) })
+    }, 500)
+    return () => clearTimeout(t)
+  }, [draft])
+
   if (loadErr) return <div className="banner err">Could not load <span className="mono">{name}</span> — {loadErr}</div>
   if (!draft) return <div className="muted">loading…</div>
 
   const set = (patch: Partial<WorkflowDraft>) => { setDraft({ ...draft, ...patch }); setSaved('') }
   const stepIds = draft.steps.map(s => s.id)
+  const at = Math.min(sel, draft.steps.length - 1)
+  const step = at >= 0 ? draft.steps[at] : undefined
+
+  // A schema box that does not parse blocks the save outright: the committed
+  // schema is still the last valid one, so saving would quietly write
+  // something other than what is on screen.
+  const badJson = Object.entries(jsonErrs)
+    .filter(([slot, msg]) => msg && (slot === 'input' || Number(slot.split(':')[1]) < draft.steps.length))
+  const blocked = errs.length + badJson.length
+
+  const pick = (id: string) => {
+    const i = draft.steps.findIndex(s => s.id === id)
+    if (i >= 0) setSel(i)
+  }
 
   const save = async () => {
     setBusy(true); setSaveErr(''); setSaved('')
     try {
       const body = forSave(draft)
       await api.saveWorkflow(body.name, body)
-      setSaved(`Saved ${body.name}. The loader accepted it.`)
+      setSaved(`Saved ${body.name}.`)
       if (!editing) location.hash = `#/workflows/${body.name}/edit`
     } catch (e) {
       setSaveErr(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
   }
 
+  const slotLabel = (slot: string) =>
+    slot === 'input' ? 'input_schema' : `${draft.steps[Number(slot.split(':')[1])]?.id || slot} · output_schema`
+
   return (
     <>
       <div className="buildhead">
         <div>
           <h1>{editing ? `Edit · ${name}` : 'New workflow'}</h1>
-          <div className="muted">A step is a whole agent — soul, scoped skills and tools, a team, a budget, a policy, and an output contract it must satisfy to finish.</div>
         </div>
         <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
           <button className="ghost" onClick={() => setShowYaml(!showYaml)}>{showYaml ? 'Hide' : 'Show'} YAML</button>
           <a href="#/workflows"><button className="ghost">Back</button></a>
-          <button disabled={busy || errs.length > 0} onClick={save}>
-            {busy ? 'saving…' : errs.length ? `${errs.length} problem${errs.length > 1 ? 's' : ''} to fix` : editing ? 'Save workflow' : 'Create workflow'}
+          <button disabled={busy || blocked > 0} onClick={save}>
+            {busy ? 'saving…' : blocked ? `${blocked} problem${blocked > 1 ? 's' : ''} to fix` : editing ? 'Save workflow' : 'Create workflow'}
           </button>
         </div>
       </div>
 
-      {catalogErr && <div className="banner warn">Skill/tool registries unavailable — {catalogErr}. Names cannot be checked against the catalog here, and the backend will reject any that do not exist.</div>}
+      {catalogErr && <div className="banner warn">Skill/tool registries unavailable — {catalogErr}.</div>}
       {saveErr && <div className="banner err"><b>The API refused this workflow.</b><div className="mono" style={{ marginTop: 6 }}>{saveErr}</div></div>}
       {saved && <div className="banner ok">{saved}</div>}
-      {errs.length > 0 && (
+      {badJson.length > 0 && (
         <div className="banner err">
-          <b>{errs.length} thing{errs.length > 1 ? 's' : ''} the loader would reject.</b> The backend refuses the whole file on the first one it hits, so they are all listed here instead.
           <div className="errlist">
-            {errs.map((e, i) => <div key={i}><span className="mono">{e.step < 0 ? 'workflow' : `${draft.steps[e.step]?.id || `step ${e.step + 1}`}.${e.field}`}</span> {e.message}</div>)}
+            {badJson.map(([slot, msg]) => (
+              <div key={slot}>
+                <button type="button" className="errjump mono"
+                  onClick={() => setSel(slot === 'input' ? -1 : Number(slot.split(':')[1]))}>{slotLabel(slot)}</button>
+                {' '}{msg}
+              </div>))}
           </div>
         </div>)}
-
-      <div className={showYaml ? 'buildgrid' : ''}>
-        <div>
-          <div className="card">
-            <Field label="Workflow name" issues={issues.filter(i => i.step === -1 && i.field === 'name')}
-              hint="Lowercase and hyphenated — it becomes the filename, the URL and the id runs are created against.">
-              <input className="mono" value={draft.name} placeholder="bug-fix" disabled={editing}
-                onChange={e => set({ name: e.target.value })} />
-            </Field>
-            <Field label="Description">
-              <textarea style={{ minHeight: 60 }} value={draft.description} onChange={e => set({ description: e.target.value })} />
-            </Field>
-            <Section title="Input schema — the form that starts a run" defaultOpen={false}
-              hint="Each property becomes a field on the New run page. `format: textarea` renders a big box; `default` pre-fills it.">
-              <SchemaEditor label="input_schema" schema={draft.inputSchema} onChange={s => set({ inputSchema: s })} />
-            </Section>
+      {errs.length > 0 && (
+        <div className="banner err">
+          <div className="errlist">
+            {errs.map((e, i) => (
+              <div key={i}>
+                <button type="button" className="errjump mono" onClick={() => setSel(e.step)}>
+                  {e.step < 0 ? 'workflow' : `${draft.steps[e.step]?.id || `step ${e.step + 1}`}.${e.field}`}
+                </button> {e.message}
+              </div>))}
           </div>
+        </div>)}
+      {verdict && <div className="banner err"><b>The loader would refuse this.</b><div className="mono" style={{ marginTop: 6 }}>{verdict}</div></div>}
 
-          <div className="card">
-            <div className="subhead">
-              <h3 style={{ margin: 0 }}>Shape</h3>
-            </div>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              The execution order is derived, not authored — from <span className="mono">needs:</span>,
-              or from <span className="mono">consumes:</span>/<span className="mono">produces:</span>, or plain
-              sequence. This is that derivation, so a mistake in it is visible before a run.
-            </div>
-            <WorkflowCanvas steps={draft.steps} />
-          </div>
+      <div className="card canvascard">
+        <WorkflowCanvas steps={draft.steps} active={step?.id} onPick={pick} />
+      </div>
 
-          <div className="card">
-            <div className="subhead">
-              <h2 style={{ margin: 0 }}>Steps <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>{draft.steps.length}</span></h2>
-              <button className="ghost small" onClick={() => set({ steps: [...draft.steps, blankStep(draft.steps.length + 1)] })}>+ step</button>
+      <div className={`buildbody${showYaml ? ' withyaml' : ''}`}>
+        <nav className="stepnav" aria-label="steps">
+          <button type="button" className={`snav${at < 0 ? ' on' : ''}${issues.some(i => i.step === -1 && i.severity === 'error') ? ' bad' : ''}`}
+            onClick={() => setSel(-1)}>
+            <span className="t">{draft.name || 'untitled'}</span>
+            <span className="k">workflow</span>
+          </button>
+          {draft.steps.map((s, i) => {
+            const n = issues.filter(x => x.step === i && x.severity === 'error').length + (jsonErrs[`step:${i}`] ? 1 : 0)
+            return (
+              <button type="button" key={i} className={`snav${i === at ? ' on' : ''}${n ? ' bad' : ''}`} onClick={() => setSel(i)}>
+                <span className="n mono">{i + 1}</span>
+                <span className="t">{s.id || 'untitled'}</span>
+                {n > 0 && <span className="badge failed">{n}</span>}
+              </button>)
+          })}
+          <button type="button" className="ghost small addstep"
+            onClick={() => { set({ steps: [...draft.steps, blankStep(draft.steps.length + 1)] }); setSel(draft.steps.length) }}>
+            + step
+          </button>
+        </nav>
+
+        <div className="buildmain">
+          {at < 0 ? (
+            <div className="card">
+              <Field label="Workflow name" issues={issues.filter(i => i.step === -1 && i.field === 'name')}>
+                <input className="mono" value={draft.name} placeholder="bug-fix" disabled={editing}
+                  onChange={e => set({ name: e.target.value })} />
+              </Field>
+              <Field label="Description">
+                <textarea style={{ minHeight: 60 }} value={draft.description} onChange={e => set({ description: e.target.value })} />
+              </Field>
+              <Field label="input_schema — the form that starts a run">
+                <JsonSchemaEditor slot="input" schema={draft.inputSchema} slots={slots}
+                  onChange={s => set({ inputSchema: s })} />
+              </Field>
+              <IssueList issues={issues.filter(i => i.step === -1 && i.field === 'steps')} />
             </div>
-            <IssueList issues={issues.filter(i => i.step === -1 && i.field === 'steps')} />
-            <div className="stepstack">
-              {draft.steps.map((s, i) => (
-                <StepEditor key={i} step={s} index={i} stepIds={stepIds} skills={skills} tools={tools} doctor={doctor}
-                  issues={issues.filter(x => x.step === i)}
-                  onChange={next => set({ steps: replaceAt(draft.steps, i, next) })}
-                  onRemove={() => set({ steps: removeAt(draft.steps, i) })}
-                  onMove={d => set({ steps: moveItem(draft.steps, i, d) })} />))}
-            </div>
-          </div>
+          ) : step ? (
+            <StepEditor key={at} step={step} index={at} stepIds={stepIds} skills={skills} tools={tools} doctor={doctor}
+              slots={slots}
+              issues={issues.filter(x => x.step === at)}
+              onChange={next => set({ steps: replaceAt(draft.steps, at, next) })}
+              onRemove={() => { set({ steps: removeAt(draft.steps, at) }); setSel(Math.max(0, at - 1)) }}
+              onMove={d => { set({ steps: moveItem(draft.steps, at, d) }); setSel(Math.min(Math.max(at + d, 0), draft.steps.length - 1)) }} />
+          ) : <div className="muted">No steps yet.</div>}
         </div>
 
         {showYaml && (
           <div className="yamlpane">
             <div className="card">
               <div className="subhead">
-                <h3 style={{ margin: 0 }}>YAML preview</h3>
+                <h3 style={{ margin: 0 }}>YAML</h3>
                 <button className="ghost small" onClick={() => {
                   navigator.clipboard?.writeText(yaml).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }, () => setCopied(false))
                 }}>{copied ? 'copied' : 'copy'}</button>
               </div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-                Exactly what a <span className="mono">workflows/*.yaml</span> file would contain. Saving PUTs the same definition as JSON.
-              </div>
-              <pre style={{ maxHeight: '72vh' }}>{yaml}</pre>
+              <pre>{yaml}</pre>
             </div>
           </div>)}
       </div>

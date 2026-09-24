@@ -6,7 +6,8 @@ import {
 import { issuesFor, type Issue } from '../../builder/validate'
 import { Field, IssueList, Picker, Section, StringList, skillOptions } from './Bits'
 import DecideEditor from './DecideEditor'
-import SchemaEditor from './SchemaEditor'
+import type { JsonSlots } from '../../builder/jsonschema'
+import JsonSchemaEditor from './JsonSchemaEditor'
 
 const BUDGET_FIELDS: Array<[keyof Budget, string, string]> = [
   ['maxTurns', 'max_turns', 'LLM turns'],
@@ -119,7 +120,7 @@ function TeamEditor({ step, skills, tools, onChange }: {
   )
 }
 
-export default function StepEditor({ step, index, stepIds, skills, tools, doctor, issues, onChange, onRemove, onMove }: {
+export default function StepEditor({ step, index, stepIds, skills, tools, doctor, issues, slots, onChange, onRemove, onMove }: {
   step: Step
   index: number
   stepIds: string[]
@@ -128,6 +129,9 @@ export default function StepEditor({ step, index, stepIds, skills, tools, doctor
   /** what this machine actually has — drives the provider and model pickers */
   doctor?: Doctor
   issues: Issue[]
+  /** the page-level store of raw schema text, so a half-typed contract
+   *  survives switching steps — see JsonSchemaEditor. */
+  slots: JsonSlots
   onChange: (s: Step) => void
   onRemove: () => void
   onMove: (delta: number) => void
@@ -182,11 +186,11 @@ export default function StepEditor({ step, index, stepIds, skills, tools, doctor
         </div>
       </div>
 
-      <Section title="Output contract" defaultOpen tone={hasErr('outputSchema') ? 'err' : undefined}>
-        <SchemaEditor label="output_schema" schema={step.outputSchema} onChange={s => set({ outputSchema: s })}
-          hint="This becomes the submit_output tool. Validation happens inside the agent loop, so a rejected submission comes back as a tool result and the model corrects itself instead of the step dying." />
+      <Field label="output_schema — the submit_output tool this step must call to finish">
+        <JsonSchemaEditor slot={`step:${index}`} schema={step.outputSchema} slots={slots}
+          onChange={s => set({ outputSchema: s })} />
         <IssueList issues={mine('outputSchema')} />
-      </Section>
+      </Field>
 
       <Section title="Environment" count={Object.keys(step.env || {}).length}>
         <EnvEditor env={step.env || {}} onChange={env => set({ env: Object.keys(env).length ? env : undefined })} />

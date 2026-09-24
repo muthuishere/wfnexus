@@ -1,7 +1,4 @@
-import type { Budget, DecideGate, Gate, Guardrail, JSONSchema, Question, Step, TeamMember, WorkflowDraft } from '../api'
-
-export const SCALAR_TYPES = ['string', 'number', 'integer', 'boolean', 'array', 'object'] as const
-export type ScalarType = (typeof SCALAR_TYPES)[number]
+import type { Budget, DecideGate, Gate, Guardrail, Question, Step, TeamMember, WorkflowDraft } from '../api'
 
 export const emptyBudget = (): Budget => ({})
 export const emptyGuardrail = (): Guardrail => ({ deny: 'bash', argsContain: [], reason: '' })
@@ -129,7 +126,6 @@ export function renameKey<T>(obj: Record<string, T>, from: string, to: string): 
   for (const [k, v] of Object.entries(obj)) out[k === from ? to : k] = v
   return out
 }
-export const schemaProps = (s?: JSONSchema): Array<[string, JSONSchema]> => Object.entries(s?.properties || {})
 
 
 /** Drop the blank rows an env editor leaves behind while someone is typing. */

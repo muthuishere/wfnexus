@@ -208,6 +208,11 @@ export const api = {
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),
+  /** The authoritative verdict, with no side effect: the loader, the catalog
+   *  and the JSON-schema compiler, all of which live on the server. The
+   *  builder mirrors what it can in TypeScript; this is the truth. */
+  validateWorkflow: (definition: WorkflowDraft) =>
+    j<{ valid: boolean; error?: string }>(post('/api/workflows/validate', { definition })),
   /** Create or replace a workflow. The API validates and 400s with {error} on rejection. */
   saveWorkflow: (name: string, definition: WorkflowDraft) =>
     j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}`, {

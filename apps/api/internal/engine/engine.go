@@ -139,7 +139,35 @@ func (e *Engine) ReloadDefinitions() error {
 
 // CheckWorkflow is SaveWorkflow without the write.
 func (e *Engine) CheckWorkflow(d *workflow.Definition) error {
-	return workflow.Check(d, e.validator())
+	if err := workflow.Check(d, e.validator()); err != nil {
+		return err
+	}
+	return checkSchemas(d)
+}
+
+// checkSchemas compiles every schema the definition declares, with the SAME
+// compiler the run loop uses.
+//
+// The loader never did this, so `type: nonsense` or `required: "x"` passed
+// validation and became a `submit_output` tool that no submission could ever
+// satisfy — a run that fails on the first turn, for a mistake that was on
+// screen while it was being authored. It belongs here rather than in
+// workflow.Check because the compiler lives in this package.
+func checkSchemas(d *workflow.Definition) error {
+	if len(d.InputSchema) > 0 {
+		if _, err := compileSchema("input_schema", d.InputSchema); err != nil {
+			return fmt.Errorf("input_schema is not a valid JSON Schema: %w", err)
+		}
+	}
+	for _, s := range d.Steps {
+		if len(s.OutputSchema) == 0 {
+			continue
+		}
+		if _, err := compileSchema("output_schema", s.OutputSchema); err != nil {
+			return fmt.Errorf("step %q: output_schema is not a valid JSON Schema: %w", s.ID, err)
+		}
+	}
+	return nil
 }
 
 // McpServers lists the server names a step may be granted, so an authoring UI
