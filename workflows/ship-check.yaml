@@ -1,0 +1,103 @@
+name: ship-check
+description: >-
+  The gate you want before pushing: formatting, vet, build and tests, each as
+  its own step so the failure names itself, then a local coding-agent CLI reads
+  the diff and drafts the commit message. Nothing leaves the machine — the
+  model is a program on this box, and no step pushes, commits or opens a PR.
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+
+input_schema:
+  type: object
+  properties:
+    dir:
+      type: string
+      title: "Repository"
+      default: "."
+    module:
+      type: string
+      title: "Go module directory, relative to the repository"
+      default: "apps/api"
+
+jobs:
+  checks:
+    name: Deterministic checks
+    # Four cheap commands, run together. They are separate steps because
+    # "ship-check failed" is useless and "gofmt failed" is actionable.
+    steps:
+      - id: fmt
+        name: gofmt
+        run: |
+          cd "{{ .Input.dir }}/{{ .Input.module }}" || exit 64
+          out=$(GOWORK=off gofmt -l .)
+          [ -z "$out" ] || { echo "$out"; exit 1; }
+          echo "formatted"
+        gates: [{ field: ok, equals: false, action: fail, message: "these files are not gofmt'd — see the step output" }]
+      - id: vet
+        name: go vet
+        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go vet ./...
+        gates: [{ field: ok, equals: false, action: fail, message: "go vet is unhappy" }]
+      - id: build
+        name: go build
+        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go build ./...
+        gates: [{ field: ok, equals: false, action: fail, message: "it does not build" }]
+      - id: tests
+        name: go test
+        timeout_sec: 900
+        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go test ./...
+        gates: [{ field: ok, equals: false, action: fail, message: "tests are failing — the diff is not ready to ship" }]
+
+  message:
+    name: Draft the commit message
+    needs: [checks]
+    steps:
+      - id: diff
+        name: Read the staged diff
+        run: |
+          cd "{{ .Input.dir }}" || exit 64
+          git --no-pager diff --cached --stat
+          echo '---'
+          git --no-pager diff --cached | head -c 60000
+
+      - id: draft
+        name: Write it
+        # A program on this machine, not an HTTP endpoint: no key, no network,
+        # no per-token cost beyond the CLI you already pay for.
+        # A provider is resolved when the file loads, not when the run starts,
+        # so it is a literal here by design: the platform refuses to promise a
+        # model it cannot see on this machine. Swap the name for copilot-cli,
+        # opencode or devin and nothing else in this file changes.
+        provider: claude-cli
+        soul: >-
+          You write commit messages the way a careful engineer does: a subject
+          line that says what changed and why it matters, then prose that a
+          reader six months from now can act on. You never invent a motivation
+          the diff does not support, and you never pad.
+        tools: [read, grep, glob]
+        budget: { max_turns: 8, max_tool_calls: 20, max_wall_sec: 600 }
+        guardrails:
+          - deny: "*"
+            args_contain: ["git commit", "git push", "gh pr", "git tag"]
+            reason: this workflow drafts a message; committing stays the human's move
+        prompt: |
+          Repository: {{ .WorkDir }}
+
+          Here is what is staged:
+
+          {{ .Steps.message.diff.stdout }}
+
+          Read any file you need for context, then call submit_output with the
+          commit message. Subject: imperative, under 72 characters, no trailing
+          period, no "Co-authored-by" line, no emoji. Body: what changed and
+          why, wrapped at 80 columns. If the diff does two unrelated things,
+          say so in `concerns` rather than smoothing it over.
+        output_schema:
+          type: object
+          additionalProperties: false
+          required: [subject, body, concerns]
+          properties:
+            subject:  { type: string, maxLength: 72 }
+            body:     { type: string }
+            concerns: { type: array, items: { type: string } }

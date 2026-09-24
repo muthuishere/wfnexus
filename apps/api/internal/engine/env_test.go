@@ -59,13 +59,15 @@ func TestASecretIsNeverListedBack(t *testing.T) {
 		t.Fatalf("entries missing from the listing: %v", vars)
 	}
 
-	// ...and it is not sitting in the table in the clear either.
-	var raw string
+	// ...and it is not sitting in the table in the clear either. Read the
+	// column as bytes: postgres' encode() does not exist in sqlite, and this
+	// assertion is about the stored value, not about either dialect.
+	var raw []byte
 	if err := h.store.DB().QueryRowContext(ctx,
-		`SELECT encode(value_enc,'escape') FROM env_vars WHERE key='GH_TOKEN'`).Scan(&raw); err != nil {
+		`SELECT value_enc FROM env_vars WHERE key='GH_TOKEN'`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(raw, value) {
+	if strings.Contains(string(raw), value) {
 		t.Fatal("the value is stored in plaintext")
 	}
 }
