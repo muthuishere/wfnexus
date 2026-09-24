@@ -12,3 +12,6 @@ go.work.sum
 .ctxoptimize/*
 !.ctxoptimize/config.json
 !.ctxoptimize/instructions.md
+
+# Agent worktrees, created per-task and discarded
+.claude/worktrees/
