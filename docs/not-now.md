@@ -37,3 +37,10 @@ anything, which is the cheapest way to close a question:
 Every mechanism that fails enumerates escapes; every mechanism that works
 enumerates inclusions. ADR 0015 is an inclusion rule — the cwd *is* the
 workspace — which is why it is the one that got built.
+
+## Answered by building something smaller (2026-09-25)
+
+| idea | why not now | what would change our mind |
+|---|---|---|
+| **goreleaser** | `Taskfile.yml` already does the expensive half — the 6-target cross-compile with `-trimpath -ldflags="-s -w" CGO_ENABLED=0`, the embed staging whose *failure* is load-bearing (a missing `apps/ui/dist/index.html` exits 1 so a binary can never ship an empty UI), and a **composite** tarball carrying the binaries, the UI, workflows, templates, skills, `registries.json` and its own Dockerfile. goreleaser's per-target `archives` cannot model that tarball; it would become an `extra_files` hack or a hook that calls the Taskfile anyway. What it would genuinely add is about twenty lines — ldflags, `checksums.txt`, a GitHub Release — and those were adopted directly (`gh release create --generate-notes`). | The first package manager we actually ship to. At a brew tap or a deb/rpm, nfpm or goreleaser stops duplicating the Taskfile and starts doing something it does not. |
+| **Signing and notarisation** | One operator, no paid Apple Developer account, and a checksum already answers "is this the file they published". Notarisation answers a different question — "did Apple see it" — that nobody has asked us. | Someone installs this who did not build it and is not willing to run `xattr -d com.apple.quarantine`. That is the same trigger as the first package manager, and they will probably arrive together. |
