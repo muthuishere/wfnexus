@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -167,10 +168,32 @@ func definitionFrom(raw []byte) (*workflow.Definition, error) {
 	return workflow.DecodeDefinition(envelope.Definition)
 }
 
+// writeJSON encodes BEFORE it commits to a status code.
+//
+// It used to do the opposite — WriteHeader(200), then stream the encoder
+// straight at the socket and discard its error. An encoding failure then
+// produced a 200 with a ZERO-BYTE body and no log line anywhere: the client saw
+// a successful request it could not parse, and the server had no record that
+// anything had gone wrong. That is exactly the failure this codebase refuses
+// elsewhere (never silently succeed), so the order is now: marshal, and only if
+// that worked answer with the status asked for. If it did not, the request is a
+// 500 that says so and is logged.
 func writeJSON(w http.ResponseWriter, code int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("api: encoding a %d response failed: %v", code, err)
+		b, _ = json.Marshal(map[string]any{"error": "response could not be encoded: " + err.Error()})
+		code = http.StatusInternalServerError
+	}
+	b = append(b, '\n')
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	if _, err := w.Write(b); err != nil {
+		// The client went away mid-response. Worth a line: without one, a
+		// truncated answer is invisible on this side.
+		log.Printf("api: writing a %d response failed after %d bytes: %v", code, len(b), err)
+	}
 }
 
 func writeErr(w http.ResponseWriter, code int, err error) {
@@ -592,8 +615,19 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
-	steps, _ := s.store.ListSteps(r.Context(), id)
-	arts, _ := s.store.ListArtifacts(r.Context(), id)
+	// A store error here used to be discarded, and the run was then answered
+	// 200 with "steps":[] — a run that HAS steps reported as having none, with
+	// nothing in the log to say a query had failed. Say it instead.
+	steps, err := s.store.ListSteps(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("reading the steps of run %s: %w", id, err))
+		return
+	}
+	arts, err := s.store.ListArtifacts(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("reading the artifacts of run %s: %w", id, err))
+		return
+	}
 	if steps == nil {
 		steps = []*store.StepRun{}
 	}
