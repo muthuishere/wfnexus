@@ -38,8 +38,12 @@ type Run struct {
 	CurrentStep string          `json:"currentStep"`
 	BaseRef     string          `json:"baseRef"`
 	Error       string          `json:"error"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	// StartedAt is when the run actually LEFT the queue — nil while it is still
+	// queued. CreatedAt is only when the row was written, so a consumer that
+	// wants elapsed time needs this one (migration 000011).
+	StartedAt *time.Time `json:"startedAt"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
 }
 
 type StepRun struct {
@@ -61,6 +65,15 @@ type StepRun struct {
 	Decision   json.RawMessage `json:"decision"`
 	StartedAt  *time.Time      `json:"startedAt"`
 	FinishedAt *time.Time      `json:"finishedAt"`
+	// ResolvedBy / ResolvedAt / Resolution / ResolutionReason are the audit
+	// fact for a pause somebody answered (ADR 0021): who, when, and what they
+	// decided. Resolution is approved|rejected|answered|declined|cancelled|
+	// expired — the last three being toolnexus's Answer.Reason vocabulary, so a
+	// decline and a timeout are different events rather than the same string.
+	ResolvedBy       string     `json:"resolvedBy"`
+	ResolvedAt       *time.Time `json:"resolvedAt"`
+	Resolution       string     `json:"resolution"`
+	ResolutionReason string     `json:"resolutionReason"`
 }
 
 // StepPatch is a partial update to one step row: a nil field is left alone.
@@ -79,6 +92,11 @@ type StepPatch struct {
 	ClearPending bool
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
+
+	ResolvedBy       *string
+	ResolvedAt       *time.Time
+	Resolution       *string
+	ResolutionReason *string
 }
 
 type Event struct {

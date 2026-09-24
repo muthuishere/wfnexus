@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeAll, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import App from './App'
-import { api } from './api'
+import { api, onUnauthenticated } from './api'
+import Identity from './components/Identity'
 
 // These mount the real components and let them make real fetches to a real
 // server. A React render that throws takes the whole tree down, so each test
@@ -123,6 +124,49 @@ describe('the UI a person actually downloads', () => {
       // for the whole class of bug.
       await waitFor(() => expect(container.querySelector('.top')).toBeTruthy())
       unmount()
+    }
+  })
+})
+
+describe('login state', () => {
+  test('the solo install says auth is absent, and shows no login chrome', async () => {
+    // The test server is the solo case: loopback, no users. whoami answers
+    // rather than 401ing, and the answer is "absent", not "denied".
+    const who = await api.whoami()
+    expect(who.authenticated).toBe(false)
+    expect(who.loopback).toBe(true)
+
+    const { container } = go('#/projects')
+    await waitFor(() => expect(container.querySelector('.top')).toBeTruthy())
+    // Nothing about signing in appears anywhere — this is the three-scale rule:
+    // the feature is ABSENT at the smallest scale, not merely inactive.
+    await waitFor(() => expect(screen.getByText(/toolnexus/)).toBeTruthy())
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(container.textContent).not.toMatch(/wfx login/)
+    expect(container.textContent).not.toMatch(/sign in/i)
+  })
+
+  test('a 401 from any call explains, once, that login happens in the terminal', async () => {
+    const seen: string[] = []
+    const off = onUnauthenticated(m => seen.push(m))
+    // Any call, not a login-specific one: the handling is central.
+    await expect(api.run('no-such-run')).rejects.toThrow()
+    expect(seen).toEqual([])   // 404 is not 401
+    off()
+
+    // And the panel the listener drives, rendered directly with a forced 401.
+    const failing = () => Promise.resolve(new Response(
+      JSON.stringify({ error: 'unauthenticated: run `wfx login --url <host>`' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    ))
+    const restore = globalThis.fetch
+    globalThis.fetch = failing as unknown as typeof fetch
+    try {
+      render(<Identity />)
+      const panel = await screen.findByRole('alert')
+      expect(panel.textContent).toContain(`wfx login --url ${location.origin}`)
+    } finally {
+      globalThis.fetch = restore
     }
   })
 })

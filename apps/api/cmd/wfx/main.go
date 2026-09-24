@@ -70,11 +70,11 @@ func run(args []string) error {
 	case "logs":
 		return logs(rest)
 	case "approve":
-		return act(first(rest), "approve", nil)
+		return act(first(rest), "approve", map[string]any{"actor": actorOf(rest)})
 	case "reject":
-		return act(first(rest), "reject", map[string]any{"reason": flagOf(rest, "-m", "rejected")})
+		return act(first(rest), "reject", map[string]any{"reason": flagOf(rest, "-m", "rejected"), "actor": actorOf(rest)})
 	case "answer":
-		return act(first(rest), "answer", map[string]any{"answer": flagOf(rest, "-m", "")})
+		return act(first(rest), "answer", map[string]any{"answer": flagOf(rest, "-m", ""), "actor": actorOf(rest)})
 	case "retry":
 		return act(first(rest), "retry", map[string]any{"stepId": flagOf(rest, "--step", "")})
 	case "cancel":
@@ -93,6 +93,18 @@ func run(args []string) error {
 		return sources(rest)
 	case "workers", "worker":
 		return workers(rest)
+	case "login":
+		return login(rest)
+	case "logout":
+		return logout(rest)
+	case "context", "contexts":
+		return contextCmd(rest)
+	case "version", "--version", "-v":
+		return printVersion(rest)
+	case "publish":
+		return publish(rest)
+	case "pull":
+		return pull(rest)
 	case "install":
 		return installCmd(rest)
 	case "env":
@@ -119,7 +131,13 @@ func usage() {
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
+  wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
+  wfx logout [--url <host>]        revoke this host's token and forget it locally
+  wfx context [list|use|rm <host>] several hosts, side by side; * marks the current one
+  wfx publish <file.yaml> --version v  push a workflow and its skills to the host
+  wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
+  wfx version [--json]             which binary this is, and where it came from
   wfx install --list               what this platform ships
   wfx env [--project p]            the platform's env store (values are never shown)
   wfx env set NAME [--plain]       read a value without echoing it, store it encrypted
@@ -133,7 +151,7 @@ func usage() {
   wfx workers rotate               new join token; machines already joined keep working
   wfx show <run-id>                a run, step by step
   wfx logs <run-id> [-f]           the activity log
-  wfx approve <run-id>             approve the step waiting on a human
+  wfx approve <run-id> [--as who] approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
@@ -146,21 +164,43 @@ func usage() {
   wfx cancel <run-id>
   wfx registry [skills|tools|providers|classifiers|mcp]
 
-The API is $WFX_API (default http://127.0.0.1:8090). Add --json to any
-listing for machine-readable output.
+The API is --url, then $WFX_API, then the current context, then
+http://127.0.0.1:8090. Contexts live in ~/.config/wfx/contexts.json (0600).
+Add --json to any listing for machine-readable output.
 `)
 }
 
 // ---- transport -------------------------------------------------------------
 
+// base is the host a command talks to. WFX_API is kept as a tier above the
+// contexts file, so every existing script keeps working unchanged; see
+// resolveContext for the full order.
 func base() string {
-	if v := os.Getenv("WFX_API"); v != "" {
-		return strings.TrimRight(v, "/")
+	r, err := resolveContext("")
+	if err != nil {
+		// A contexts file that cannot be read is reported by the command that
+		// needs a credential, not by every URL we build.
+		if v := os.Getenv("WFX_API"); v != "" {
+			return strings.TrimRight(v, "/")
+		}
+		return "http://127.0.0.1:8090"
 	}
-	return "http://127.0.0.1:8090"
+	return r.url
 }
 
 func call(method, path string, body any, out any) error {
+	target, err := resolveContext("")
+	if err != nil {
+		return err
+	}
+	return callWith(target, method, path, body, out)
+}
+
+// callWith is the one transport. The only thing identity adds to it is the
+// Authorization header: a resolved context with a token presents it, and the
+// tokenless WFX_API path sends none, which is exactly right against a loopback
+// server that has no authentication to satisfy.
+func callWith(target resolved, method, path string, body any, out any) error {
 	var rdr io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -169,14 +209,20 @@ func call(method, path string, body any, out any) error {
 		}
 		rdr = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, base()+path, rdr)
+	req, err := http.NewRequest(method, target.url+path, rdr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The CHANNEL a state change arrived through, recorded beside the actor so
+	// an audit can tell a CLI approval from one made in the UI (ADR 0021).
+	req.Header.Set("X-WFX-Via", "cli")
+	if target.token != "" {
+		req.Header.Set("Authorization", "Bearer "+target.token)
+	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s — is the API running? (WFX_API=%s)", err, base())
+		return fmt.Errorf("%s — is the API running? (%s)", err, target.url)
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(res.Body)
@@ -392,10 +438,15 @@ func startRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	var r runRow
-	if err := call("POST", "/api/workflows/"+name+"/runs", input, &r); err != nil {
+	// POST answers with the same envelope as GET /api/runs/{id}: the run under
+	// `run`, not flat.
+	var created struct {
+		Run runRow `json:"run"`
+	}
+	if err := call("POST", "/api/workflows/"+name+"/runs", input, &created); err != nil {
 		return err
 	}
+	r := created.Run
 	fmt.Printf("run %s started (%s)\n", r.ID, name)
 	if has(args, "-f") || has(args, "--follow") {
 		return follow(r.ID)
@@ -564,6 +615,27 @@ func render(stepID, kind string, p map[string]any) string {
 		return fmt.Sprintf("%s artifact %s", at, str("name"))
 	}
 	return ""
+}
+
+// actorOf is WHO is resolving the pause (ADR 0021): `--as someone`, or this
+// machine's user. It is a claim, not an authenticated identity — there is no
+// auth yet — but it is recorded, which is the whole point.
+func actorOf(args []string) string {
+	if a := flagOf(args, "--as", ""); a != "" {
+		return a
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u + "@" + hostName()
+	}
+	return "unknown"
+}
+
+func hostName() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "localhost"
+	}
+	return h
 }
 
 func act(id, verb string, body map[string]any) error {

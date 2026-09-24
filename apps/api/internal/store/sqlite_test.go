@@ -381,3 +381,50 @@ func TestSQLitePlaceholderRewriteKeepsIndexes(t *testing.T) {
 		t.Fatal("postgres must pass through untouched")
 	}
 }
+
+// A run's start time is its own fact, stamped once when it leaves the queue —
+// not the first step's started_at, which the UI had been reading as a proxy.
+func TestRunStartedAtIsStampedOnceWhenItLeavesTheQueue(t *testing.T) {
+	st := openSQLite(t)
+	ctx := context.Background()
+
+	run, err := st.CreateRun(ctx, "demo", "hello", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.StartedAt != nil {
+		t.Fatalf("a queued run has not started: %v", run.StartedAt)
+	}
+	got, err := st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StartedAt != nil {
+		t.Fatalf("queued run came back with a start time: %v", got.StartedAt)
+	}
+
+	if err := st.UpdateRun(ctx, run.ID, "running", "build", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StartedAt == nil {
+		t.Fatal("running run has no start time")
+	}
+	first := *got.StartedAt
+
+	// A later status change must NOT restamp it.
+	time.Sleep(10 * time.Millisecond)
+	if err := st.UpdateRun(ctx, run.ID, "done", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(first) {
+		t.Fatalf("start time moved: %v -> %v", first, got.StartedAt)
+	}
+}

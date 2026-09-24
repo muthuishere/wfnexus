@@ -11,6 +11,7 @@ import ProjectsPage from './pages/ProjectsPage'
 import ProjectPage from './pages/ProjectPage'
 import WorkersPage from './pages/WorkersPage'
 import TemplatesPage from './pages/TemplatesPage'
+import Identity from './components/Identity'
 
 // tiny hash router. The hierarchy is project → workflow → runs, so the routes
 // read that way too:
@@ -60,7 +61,11 @@ export default function App() {
           <a href="#/workers" className={r[0] === 'workers' ? 'active' : ''}>Workers</a>
           <a href="#/system" className={r[0] === 'system' ? 'active' : ''}>System</a>
         </nav>
-        <div className="spacer">{backend ? `toolnexus · ${backend}` : 'toolnexus'}</div>
+        <div className="spacer" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>{backend ? `toolnexus · ${backend}` : 'toolnexus'}</span>
+          {/* Nothing at all on a loopback install with no users — see Identity. */}
+          <Identity />
+        </div>
       </div>
       <div className="page">{page}</div>
     </>

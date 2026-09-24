@@ -3,9 +3,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -65,7 +63,7 @@ func (e *Engine) RegistrationToken(ctx context.Context) (string, error) {
 	if e.cfg.RunnerToken != "" {
 		return e.cfg.RunnerToken, nil
 	}
-	return e.store.SettingOnce(ctx, runnerTokenKey, newToken)
+	return e.store.SettingOnce(ctx, runnerTokenKey, auth.NewToken)
 }
 
 // RotateRegistrationToken invalidates the old join command. Workers already
@@ -74,21 +72,8 @@ func (e *Engine) RotateRegistrationToken(ctx context.Context) (string, error) {
 	if e.cfg.RunnerToken != "" {
 		return "", fmt.Errorf("the token is pinned by WFX_RUNNER_TOKEN; change it there")
 	}
-	t := newToken()
+	t := auth.NewToken()
 	return t, e.store.SetSetting(ctx, runnerTokenKey, t)
-}
-
-func newToken() string {
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	return "wfx_" + hex.EncodeToString(b)
-}
-
-// HashToken is how a token is stored and looked up. The value itself is never
-// written to the database, a log or an event.
-func HashToken(t string) string {
-	sum := sha256.Sum256([]byte(t))
-	return hex.EncodeToString(sum[:])
 }
 
 // JoinRequest is what a machine sends when it runs the join command.
@@ -139,8 +124,8 @@ func (e *Engine) Join(ctx context.Context, req JoinRequest) (*JoinResult, error)
 		}
 	}
 	w := &model.Worker{Name: req.Name, Labels: labels, OS: req.OS, Arch: req.Arch, Version: req.Version}
-	tok := newToken()
-	if err := e.store.RegisterWorker(ctx, w, HashToken(tok)); err != nil {
+	tok := auth.NewToken()
+	if err := e.store.RegisterWorker(ctx, w, auth.HashToken(tok)); err != nil {
 		return nil, err
 	}
 	return &JoinResult{Worker: w, Token: tok, Shadowed: shadowed}, nil
@@ -154,7 +139,7 @@ func (e *Engine) AuthWorker(ctx context.Context, token string) (*model.Worker, e
 	if token == "" {
 		return nil, ErrBadToken
 	}
-	w, err := e.store.WorkerByToken(ctx, HashToken(token))
+	w, err := e.store.WorkerByToken(ctx, auth.HashToken(token))
 	if err != nil {
 		return nil, ErrBadToken
 	}

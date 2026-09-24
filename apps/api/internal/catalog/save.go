@@ -206,3 +206,11 @@ func mutate(path string, apply func(*file)) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// LooksLikeSecret is looksLikeSecret for callers outside this package —
+// publishing applies exactly the same rule to a bundle it is about to accept.
+// One function, so a value this file would refuse to write cannot be published
+// by a route that reimplemented the check slightly differently.
+//
+// It never returns the value, and no caller may put the value in its message.
+func LooksLikeSecret(v string) bool { return looksLikeSecret(v) }

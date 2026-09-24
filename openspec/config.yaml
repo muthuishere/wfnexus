@@ -1,0 +1,47 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+context: |
+  wfnexus — typed pipelines for coding agents. One Go binary (apps/api) + React/Vite UI
+  (apps/ui). A workflow is a YAML file; a step is a prompt + scoped agent skills/tools +
+  a JSON-schema output contract enforced INSIDE the agent loop via a `submit_output` tool.
+  Built on toolnexus (Go). SQLite+folder by default, Postgres+S3 in `mode: server`.
+
+  THE PRODUCT CLAIM (docs/research/the-pivot-2026-09-24.md): build a workflow once inside
+  your own agent (Claude Code, Codex, opencode), publish it with its skills and MCP to a
+  server you host, and run it against any backend — a CLI agent, an ACP agent, or your own
+  HTTP model. Everyone else ships a runtime you must live inside; we ship a unit that travels.
+
+  NON-NEGOTIABLE CONVENTIONS:
+  - ADOPT, NEVER INVENT. Borrow GitHub Actions / OCI / npm / RFC vocabulary rather than
+    coining terms. If a standard exists (e.g. RFC 8628 device grant), cite and use it.
+  - THE THREE-SCALE TEST. Every decision must hold for one person (zero config, no auth,
+    localhost, one binary), a small org (shared server, device login, roles, projects),
+    and an enterprise (OIDC/LDAP, RBAC, audit, air-gapped, their own models). State how.
+  - Decisions live in docs/adr/ (0001-0021). Read the relevant ADR before proposing; a
+    proposal that contradicts one must say so and argue it.
+  - docs/not-now.md records what was deliberately deferred and the trigger that would
+    change our mind. Check it before proposing deferred work.
+  - A spike means REAL CODE and OBSERVED OUTPUT in docs/spikes/FINDINGS.md, never prose
+    from documentation. Where a capability did not work, say so.
+  - Secrets: `apiKeyEnv` is the NAME of an env var, never a value. A literal credential is
+    refused on save. Never write a secret's value to a file, a log, or a test.
+  - Migrations are PAIRED: apps/api/migrations/ and apps/api/migrations/sqlite/.

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,7 @@ func Migrate(driver, dsn string) error {
 		if err := os.MkdirAll(filepath.Dir(dsn), 0o755); err != nil {
 			return fmt.Errorf("sqlite dir: %w", err)
 		}
-		url = "sqlite://" + dsn + "?_pragma=busy_timeout(5000)"
+		url = sqliteMigrateURL(dsn)
 	}
 	src, err := iofs.New(migrations.FS, dir)
 	if err != nil {
@@ -168,11 +169,11 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 	return r, err
 }
 
-const runCols = `id, project, workflow, status, input, current_step, base_ref, error, created_at, updated_at`
+const runCols = `id, project, workflow, status, input, current_step, base_ref, error, started_at, created_at, updated_at`
 
 func scanRun(row rowScanner) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.StartedAt, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -276,7 +277,12 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 
 func (s *Store) UpdateRun(ctx context.Context, id uuid.UUID, status, currentStep, errMsg string) error {
 	_, err := s.exec(ctx,
-		`UPDATE workflow_runs SET status=$2, current_step=$3, error=$4, updated_at=now() WHERE id=$1`,
+		// started_at is stamped ONCE, on the first transition out of `queued`:
+		// COALESCE keeps the first stamp, and the CASE leaves it NULL while the
+		// run is still queued. No extra statement, no engine change.
+		`UPDATE workflow_runs SET status=$2, current_step=$3, error=$4, updated_at=now(),
+		    started_at = COALESCE(started_at, CASE WHEN $2 <> 'queued' THEN now() END)
+		 WHERE id=$1`,
 		id, status, currentStep, errMsg)
 	return err
 }
@@ -295,13 +301,14 @@ func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error 
 
 // ---- step runs ----
 
-const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at`
+const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at, resolved_by, resolved_at, resolution, resolution_reason`
 
 func scanStep(row rowScanner) (*StepRun, error) {
 	st := &StepRun{}
 	err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Position, &st.Status, &st.Attempts, &st.Turns,
 		&st.Prompt, rawJSON{&st.Output}, &st.RawText, &st.Error, rawJSON{&st.Usage},
-		rawJSON{&st.Pending}, rawJSON{&st.Decision}, &st.StartedAt, &st.FinishedAt)
+		rawJSON{&st.Pending}, rawJSON{&st.Decision}, &st.StartedAt, &st.FinishedAt,
+		&st.ResolvedBy, &st.ResolvedAt, &st.Resolution, &st.ResolutionReason)
 	return st, err
 }
 
@@ -347,17 +354,24 @@ func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p
 		pending     = CASE WHEN $11::text = 'clear' THEN NULL ELSE COALESCE($12, pending) END,
 		decision    = COALESCE($13, decision),
 		started_at  = COALESCE($14, started_at),
-		finished_at = COALESCE($15, finished_at)
+		finished_at = COALESCE($15, finished_at),
+		resolved_by       = COALESCE($16, resolved_by),
+		resolved_at       = COALESCE($17, resolved_at),
+		resolution        = COALESCE($18, resolution),
+		resolution_reason = COALESCE($19, resolution_reason)
 		WHERE run_id=$1 AND step_id=$2`,
 		runID, stepID, p.Status, p.Attempts, p.Turns, p.Prompt, nullableJSON(p.Output), p.RawText, p.Error,
-		nullableJSON(p.Usage), pendingOp(p), nullableJSON(p.Pending), nullableJSON(p.Decision), p.StartedAt, p.FinishedAt)
+		nullableJSON(p.Usage), pendingOp(p), nullableJSON(p.Pending), nullableJSON(p.Decision), p.StartedAt, p.FinishedAt,
+		p.ResolvedBy, p.ResolvedAt, p.Resolution, p.ResolutionReason)
 	return err
 }
 
 // ResetStepsFrom marks the given step and everything after it pending again (used by retry / re-run).
 func (s *Store) ResetStepsFrom(ctx context.Context, runID uuid.UUID, position int) error {
 	_, err := s.exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
-		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL WHERE run_id=$1 AND position>=$2`, runID, position)
+		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL,
+		resolved_by='', resolved_at=NULL, resolution='', resolution_reason=''
+		WHERE run_id=$1 AND position>=$2`, runID, position)
 	return err
 }
 
@@ -430,4 +444,40 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// sqliteMigrateURL turns a FILESYSTEM PATH into a URL golang-migrate can parse.
+//
+// It used to be "sqlite://" + the path, which is correct on Unix by accident:
+// an absolute path already starts with "/", so the result has the three
+// slashes a file URL needs. On Windows the path starts "C:\Users\…", so the
+// same concatenation produced "sqlite://C:\Users\…" and url.Parse read "C:" as
+// a host followed by an invalid port — every migration failed before a single
+// statement ran. We ship windows binaries, so this was not a test-only fault.
+//
+// Building it through url.URL makes the platform difference disappear: Path is
+// slash-separated and rooted, which is what a file URL wants on either OS, and
+// the encoder escapes anything a directory name smuggles in.
+func sqliteMigrateURL(dsn string) string {
+	p := filepath.ToSlash(dsn)
+	// ToSlash is a NO-OP off Windows, so a Windows path tested on Linux or a
+	// mac would keep its backslashes and the bug would stay invisible to every
+	// machine we develop on — which is how it shipped. A drive letter says the
+	// path is Windows-shaped whoever is looking at it, so normalise on that
+	// rather than on the host, and the behaviour becomes testable everywhere.
+	if len(p) >= 2 && p[1] == ':' && isDriveLetter(p[0]) {
+		p = strings.ReplaceAll(p, `\`, "/")
+	}
+	if !strings.HasPrefix(p, "/") {
+		// "C:/Users/…" -> "/C:/Users/…". A relative path is rooted the same
+		// way; migrate resolves it against the process's working directory,
+		// which is what the old form did too.
+		p = "/" + p
+	}
+	u := url.URL{Scheme: "sqlite", Path: p, RawQuery: "_pragma=busy_timeout(5000)"}
+	return u.String()
+}
+
+func isDriveLetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

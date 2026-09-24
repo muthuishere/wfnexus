@@ -24,6 +24,9 @@ type resolved struct {
 	Transport http.RoundTripper
 	Label     string
 	Close     func()
+	// Price is the registry entry's per-million token price, and whether one
+	// is known at all (ADR 0020). The zero value means unknown.
+	Price pricing
 }
 
 func noClose() {}
@@ -77,14 +80,25 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 		if step.Model != "" {
 			model = step.Model
 		}
-		// The key may come from the platform's env store as well as this
-		// process's environment: a system-scope entry is exactly how an
-		// operator supplies one without putting it in the unit file.
-		key := stepEnv[p.APIKeyEnv]
-		if key == "" {
-			key = os.Getenv(p.APIKeyEnv)
+		// NO apiKeyEnv MEANS NO KEY IS NEEDED, and that is the self-hosted
+		// case, not an oversight: an Ollama, vLLM, LM Studio or llama.cpp
+		// endpoint on your own network authenticates nobody. `apiKeyEnv` is
+		// already `omitempty` in the catalog, so an entry that omits it is
+		// well-formed — requiring one anyway failed those providers at boot
+		// with "needs  and it is not set", naming nothing, and took the
+		// bring-your-own-model path down with it. That path is the whole
+		// enterprise argument: the model is theirs and the data never leaves.
+		var key string
+		if p.APIKeyEnv != "" {
+			// The key may come from the platform's env store as well as this
+			// process's environment: a system-scope entry is exactly how an
+			// operator supplies one without putting it in the unit file.
+			key = stepEnv[p.APIKeyEnv]
+			if key == "" {
+				key = os.Getenv(p.APIKeyEnv)
+			}
 		}
-		if key == "" {
+		if p.APIKeyEnv != "" && key == "" {
 			// Named, not held. Said plainly here rather than discovered as a
 			// 401 twenty turns in. The variable's NAME is safe to print; its
 			// value never appears anywhere.
@@ -96,7 +110,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Style:   tn.ClientStyle(p.Style),
 			Model:   model,
 			APIKey:  key,
-		}, Label: p.Name + "/" + model, Close: noClose}, nil
+		}, Label: p.Name + "/" + model, Close: noClose, Price: priceOf(p)}, nil
 
 	case catalog.KindCLI, catalog.KindACP:
 		// The step's env reaches the CLI as well. An agent CLI is a program on
@@ -153,12 +167,38 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Transport: ad.Transport(),
 		Label:     p.Name + "/" + label,
 		Close:     closeAgent,
+		Price:     priceOf(p),
 	}, nil
 }
 
 // localAgent builds the backend that executes one turn: a persistent ACP
 // process, or a fresh one-shot command per turn.
 func localAgent(p catalog.Provider, model, workdir string, env []string) (devinadapter.Agent, func(), error) {
+	// KIND FIRST, then command. `kind: acp` says the process speaks the Agent
+	// Client Protocol; the command only says which binary to start. Testing
+	// the command first meant an `acp` entry that named its binary was run as
+	// a one-shot `bin <prompt>` and never spoke ACP at all — the wrong backend,
+	// silently, with the entry's own `kind` ignored. An acp command is
+	// therefore argv (bin + args), never a prompt template.
+	if p.Kind == catalog.KindACP {
+		// One ACP process is one conversation, so it is per-step, not shared:
+		// two steps on one session would interleave into the same transcript.
+		bin, extra := p.Preset, append([]string{}, p.Args...)
+		if len(p.Command) > 0 {
+			bin, extra = p.Command[0], append(append([]string{}, p.Command[1:]...), p.Args...)
+		}
+		// "devin" is the adapter's own default binary, and NewACP spells it
+		// itself; an empty preset means the same thing.
+		if bin == "devin" {
+			bin = ""
+		}
+		a := devinadapter.NewACP(devinadapter.ACP{
+			Bin: bin, Model: model, Cwd: workdir, ExtraArgs: extra,
+			StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
+		})
+		return a, func() { _ = a.Close() }, nil
+	}
+
 	// An explicit command in the registry wins over a preset: presets are
 	// conveniences, and the generic argv template is what makes any agent CLI
 	// usable without this package learning its name.
@@ -174,22 +214,6 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 			// "Unexpected server error".
 			ModelFlag: p.ModelFlag,
 		}, noClose, nil
-	}
-
-	if p.Kind == catalog.KindACP {
-		// One ACP process is one conversation, so it is per-step, not shared:
-		// two steps on one session would interleave into the same transcript.
-		a := devinadapter.NewACP(devinadapter.ACP{
-			Bin: p.Preset, Model: model, Cwd: workdir,
-			StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
-		})
-		if p.Preset == "devin" || p.Preset == "" {
-			a = devinadapter.NewACP(devinadapter.ACP{
-				Model: model, Cwd: workdir,
-				StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
-			})
-		}
-		return a, func() { _ = a.Close() }, nil
 	}
 
 	cli := devinadapter.CLI{Model: model}

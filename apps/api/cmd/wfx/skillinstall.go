@@ -93,7 +93,7 @@ func skillInstall(args []string) error {
 	}
 	for _, w := range wanted {
 		if !containsStr(all, w) {
-			return fmt.Errorf("no skill named %q here — `wfx skill list` shows what there is", w)
+			return fmt.Errorf("no skill named %q here — `wfx install --list` shows what there is", w)
 		}
 	}
 

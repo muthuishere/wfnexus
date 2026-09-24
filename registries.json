@@ -3,29 +3,94 @@
     "Everything a workflow step can NAME. A step references an entry by name;",
     "the entry is defined once, here. That is what makes a workflow portable:",
     "the names travel between machines, the endpoints and credentials do not.",
-    "apiKeyEnv is the NAME of an environment variable, never a key."
+    "apiKeyEnv is the NAME of an environment variable, never a key.",
+    "Every http baseUrl here was read off the vendor's own documentation on",
+    "2026-09-24, never from memory; model ids are what those pages showed that",
+    "day and move fast. Every cli argv was derived from the CLI's own --help and",
+    "then RUN (ADR 0016: no adapter we have not verified by running it) — the",
+    "runs and the help output are in docs/spikes/FINDINGS.md section 08, and the",
+    "argvs are re-executable as TestLiveRegistryArgvs.",
+    "A cli entry that runs on a SUBSCRIPTION SEAT says so in its description,",
+    "with what the vendor's terms actually say and whether we could read them.",
+    "That honesty is the only mechanism ADR 0016 has; we enforce nothing."
   ],
   "providers": {
+    "anthropic": {
+      "kind": "http",
+      "description": "Anthropic's native Messages API — style `anthropic`, not the OpenAI framing. baseUrl from platform.claude.com/docs/en/api/messages (2026-09-24); the host is bare, /v1/messages is the path. ANTHROPIC_API_KEY is the SDK convention, not stated on that page.",
+      "baseUrl": "https://api.anthropic.com",
+      "style": "anthropic",
+      "model": "claude-opus-4-5",
+      "apiKeyEnv": "ANTHROPIC_API_KEY"
+    },
+    "cerebras": {
+      "kind": "http",
+      "description": "Cerebras inference, OpenAI-compatible. From inference-docs.cerebras.ai/resources/openai (2026-09-24).",
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "style": "openai",
+      "model": "qwen-3.8-27b",
+      "apiKeyEnv": "CEREBRAS_API_KEY"
+    },
     "claude-cli": {
       "kind": "cli",
-      "description": "The local `claude` CLI as the model \u2014 uses your own subscription rather than an API key.",
+      "description": "The local `claude` CLI as the model — your own subscription seat, not an API key. Verified live 2026-09-24 (`claude -p <prompt> --model <m>`, 4.7s). READ THIS BEFORE AUTOMATING IT: Anthropic's Consumer Terms, Prohibited Uses, say \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" A pipeline exec'ing this CLI is script-driven access on a subscription seat, so on the plain reading it is the thing that clause names. The clause's own carve-out is an API key — use the `anthropic` http provider for automation. (anthropic.com/legal/consumer-terms, read 2026-09-24.) We enforce nothing; this is your call with your own account, and the entry says so rather than staying quiet.",
       "preset": "claude",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "codex-cli": {
+      "kind": "cli",
+      "description": "OpenAI's `codex` CLI as the model, on your own ChatGPT plan. `codex exec` is its documented non-interactive entry; --skip-git-repo-check because a turn runs in a scratch workdir, --color never so the reply carries no escapes. Verified live 2026-09-24 (12.7s, clean stdout). TERMS: UNVERIFIED — every OpenAI policy page returned HTTP 403 to the machine that checked on 2026-09-24, so no clause was actually read and none is asserted here. Treat it as you would claude-cli until you have read openai.com/policies/terms-of-use yourself: a subscription seat driven by a program may not be a permitted backend. The unambiguous path is the `openai` http provider with your own API key.",
+      "command": [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "{{prompt}}"
+      ],
+      "modelFlag": "-m",
       "repairs": 2,
       "timeoutSec": 900
     },
     "copilot-cli": {
       "kind": "cli",
-      "description": "GitHub Copilot's CLI as the model.",
-      "preset": "copilot",
+      "description": "GitHub Copilot's CLI as the model, on your own seat. An explicit command rather than the preset because copilot's own help calls --allow-all-tools \"required for non-interactive mode\"; without it the run waits for a confirmation nobody is there to give. Verified live 2026-09-24 (18.3s). TERMS: UNRESOLVED, and read conservatively. Neither the Copilot Product Specific Terms nor GitHub's Acceptable Use Policies contain a clause on programmatic or scripted use of a seat; the nearest is the AUP's ban on \"excessive automated bulk activity\", which is a volume ceiling rather than a prohibition. So: not known to be forbidden, not known to be allowed, and bulk use is the part that is explicitly at risk. (Read 2026-09-24.)",
+      "command": [
+        "copilot",
+        "-p",
+        "{{prompt}}",
+        "--allow-all-tools",
+        "--log-level",
+        "none",
+        "--no-color"
+      ],
+      "modelFlag": "--model",
       "repairs": 2,
       "timeoutSec": 900
     },
+    "deepseek": {
+      "kind": "http",
+      "description": "DeepSeek, OpenAI-compatible. Their docs show the bare host; /v1 also works and is not a model version. From api-docs.deepseek.com (2026-09-24).",
+      "baseUrl": "https://api.deepseek.com",
+      "style": "openai",
+      "model": "deepseek-flash",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    },
     "devin": {
       "kind": "acp",
-      "description": "Devin as the model, over the Agent Client Protocol.",
+      "description": "Devin as the model, over the Agent Client Protocol. Verified live 2026-09-24 (14.8s). TERMS: UNRESOLVED. Cognition's Platform Terms §2.3 restrict competing products and making the Services available to anyone who is not an Authorized User, but say nothing either way about programmatic access by the seat holder themselves. Their Acceptable Use Policy was not fetched and may add a clause about autonomous interaction with third-party systems. One seat, one human — do not let a pipeline turn it into shared access. (Read 2026-09-24.)",
       "preset": "devin",
       "repairs": 2,
       "timeoutSec": 900
+    },
+    "fireworks": {
+      "kind": "http",
+      "description": "Fireworks AI, OpenAI-compatible. From docs.fireworks.ai/tools-sdks/openai-compatibility (2026-09-24). Their compat page reuses OPENAI_API_KEY as the variable name; FIREWORKS_API_KEY appears elsewhere in their docs but was NOT confirmed on a fetched page, so the name here is the one that was.",
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "style": "openai",
+      "model": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+      "apiKeyEnv": "OPENAI_API_KEY"
     },
     "gpt": {
       "kind": "http",
@@ -33,7 +98,17 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "style": "openai",
       "model": "openai/gpt-4o",
-      "apiKeyEnv": "OPENROUTER_API_KEY"
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "pricePerMIn": 2.5,
+      "pricePerMOut": 10.0
+    },
+    "groq": {
+      "kind": "http",
+      "description": "Groq, OpenAI-compatible. The /openai segment in the path is required and is easy to drop. From console.groq.com/docs/openai (2026-09-24).",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "style": "openai",
+      "model": "openai/gpt-oss-120b",
+      "apiKeyEnv": "GROQ_API_KEY"
     },
     "haiku": {
       "kind": "http",
@@ -41,11 +116,71 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "style": "openai",
       "model": "anthropic/claude-haiku-4.5",
-      "apiKeyEnv": "OPENROUTER_API_KEY"
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "pricePerMIn": 1.0,
+      "pricePerMOut": 5.0
+    },
+    "llamacpp": {
+      "kind": "http",
+      "description": "llama.cpp's llama-server, OpenAI-compatible. Default port 8080, binding 127.0.0.1, from the llama.cpp server README (2026-09-24). The model id is the loaded GGUF — the docs name none, so the one here is a placeholder you must change. llama-server can enforce a key with --api-key. NO REAL KEY IS NEEDED. No apiKeyEnv: a self-hosted endpoint on your own network needs no key, and that is the point — the model is yours and nothing leaves.",
+      "baseUrl": "http://localhost:8080/v1",
+      "style": "openai",
+      "model": "local-model",
+      "pricePerMIn": 0,
+      "pricePerMOut": 0
+    },
+    "lmstudio": {
+      "kind": "http",
+      "description": "LM Studio's local server, OpenAI-compatible. Default port 1234, from lmstudio.ai/docs/developer/openai-compat (2026-09-24). The model id is whichever model you have LOADED — the docs name none, so the one here is a placeholder you must change. LM Studio can be configured to enforce a bearer token. NO REAL KEY IS NEEDED. No apiKeyEnv: a self-hosted endpoint on your own network needs no key, and that is the point — the model is yours and nothing leaves.",
+      "baseUrl": "http://localhost:1234/v1",
+      "style": "openai",
+      "model": "local-model",
+      "pricePerMIn": 0,
+      "pricePerMOut": 0
+    },
+    "mistral": {
+      "kind": "http",
+      "description": "Mistral's API, OpenAI-compatible. From docs.mistral.ai/api (2026-09-24).",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "style": "openai",
+      "model": "mistral-medium-3-5-26-04",
+      "apiKeyEnv": "MISTRAL_API_KEY"
+    },
+    "ollama-cli": {
+      "kind": "cli",
+      "description": "A local model through `ollama run`. No account, no key, no network, and no terms question — ollama is MIT and a local inference run touches no vendor service, so this is the free way to prove a workflow is portable. (ollama.com's own terms do restrict automated access to their website and registry; that reads on `ollama pull`, not on a model already on disk.) NOTE: `ollama run MODEL [PROMPT]` takes the model POSITIONALLY and has no --model flag, so the model is baked into the command and modelFlag is empty; a step's `model:` cannot override it — use `ollama-http` for that. Verified live 2026-09-24 (qwen3:4b, 2.9s).",
+      "command": [
+        "ollama",
+        "run",
+        "qwen3:4b",
+        "{{prompt}}",
+        "--hidethinking"
+      ],
+      "repairs": 2,
+      "timeoutSec": 900,
+      "pricePerMIn": 0,
+      "pricePerMOut": 0
+    },
+    "ollama-http": {
+      "kind": "http",
+      "description": "Ollama's own OpenAI-compatible endpoint — the same local models over HTTP instead of the CLI, so a step's `model:` actually selects one (the CLI entry cannot, see ollama-cli). Default port 11434, from docs.ollama.com/api/openai-compatibility (2026-09-24). Verified live on this machine 2026-09-24: a real 200 with an OpenAI-shaped body. NO REAL KEY IS NEEDED. No apiKeyEnv: a self-hosted endpoint on your own network needs no key, and that is the point — the model is yours and nothing leaves.",
+      "baseUrl": "http://localhost:11434/v1",
+      "style": "openai",
+      "model": "qwen3:4b",
+      "pricePerMIn": 0,
+      "pricePerMOut": 0
+    },
+    "openai": {
+      "kind": "http",
+      "description": "OpenAI's own API. baseUrl from developers.openai.com/api/docs/quickstart (2026-09-24).",
+      "baseUrl": "https://api.openai.com/v1",
+      "style": "openai",
+      "model": "gpt-6-astra",
+      "apiKeyEnv": "OPENAI_API_KEY"
     },
     "opencode": {
       "kind": "cli",
-      "description": "opencode as the model, driven by its own CLI. Its default model returns a server error, so a model is named explicitly.",
+      "description": "opencode as the model, driven by its own CLI — the worked example of the generic `command` mechanism: no Go knows the word. Its default model returns a server error, so a model is named explicitly. Verified live 2026-09-24 (3.8s). TERMS: opencode itself is MIT and restricts nothing. But it is a CLIENT: whatever provider credential you configure it with carries that provider's terms, so pointing it at a Claude subscription seat inherits claude-cli's problem and pointing it at an API key does not.",
       "command": [
         "opencode",
         "run",
@@ -56,18 +191,53 @@
       "repairs": 2,
       "timeoutSec": 900
     },
-    "sonnet": {
+    "openrouter": {
       "kind": "http",
-      "description": "Claude Sonnet 4.5 via OpenRouter \u2014 the default worker.",
+      "description": "OpenRouter's whole catalogue behind one key — name any of its models with a step's `model:`. From openrouter.ai/docs/quickstart (2026-09-24).",
       "baseUrl": "https://openrouter.ai/api/v1",
       "style": "openai",
       "model": "anthropic/claude-sonnet-4.5",
       "apiKeyEnv": "OPENROUTER_API_KEY"
+    },
+    "sonnet": {
+      "kind": "http",
+      "description": "Claude Sonnet 4.5 via OpenRouter — the default worker.",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "style": "openai",
+      "model": "anthropic/claude-sonnet-4.5",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "pricePerMIn": 3.0,
+      "pricePerMOut": 15.0
+    },
+    "together": {
+      "kind": "http",
+      "description": "Together AI, OpenAI-compatible. From docs.together.ai/docs/openai-api-compatibility (2026-09-24).",
+      "baseUrl": "https://api.together.ai/v1",
+      "style": "openai",
+      "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "apiKeyEnv": "TOGETHER_API_KEY"
+    },
+    "vllm": {
+      "kind": "http",
+      "description": "A self-hosted vLLM server, OpenAI-compatible — the enterprise case: their own weights, their own hardware, nothing leaves. Default port 8000, from docs.vllm.ai quickstart (2026-09-24). Point baseUrl at your own host and set model to whatever you served. NO REAL KEY IS NEEDED. No apiKeyEnv: a self-hosted endpoint on your own network needs no key, and that is the point — the model is yours and nothing leaves.",
+      "baseUrl": "http://localhost:8000/v1",
+      "style": "openai",
+      "model": "Qwen/Qwen2.5-1.5B-Instruct",
+      "pricePerMIn": 0,
+      "pricePerMOut": 0
+    },
+    "xai": {
+      "kind": "http",
+      "description": "xAI (Grok), OpenAI-compatible. From docs.x.ai/docs/overview (2026-09-24).",
+      "baseUrl": "https://api.x.ai/v1",
+      "style": "openai",
+      "model": "grok-4.7",
+      "apiKeyEnv": "XAI_API_KEY"
     }
   },
   "classifiers": {
     "chat-judge": {
-      "description": "A chat model answering the same typed questions. Slower, dearer, NOT calibrated \u2014 a compatibility exit, not an equivalent.",
+      "description": "A chat model answering the same typed questions. Slower, dearer, NOT calibrated — a compatibility exit, not an equivalent.",
       "backend": "llm"
     },
     "jev": {
@@ -80,9 +250,10 @@
       "backend": "typesafe"
     },
     "recorded": {
-      "description": "Replays a recorded corpus. No network, no credential \u2014 what tests use.",
+      "description": "Replays a recorded corpus. No network, no credential — what tests use.",
       "backend": "static"
     }
   },
-  "mcpServers": {}
+  "mcpServers": {},
+  "notifiers": {}
 }

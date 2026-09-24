@@ -11,7 +11,7 @@ RUN apk add --no-cache git bash curl ca-certificates nodejs npm python3 \
 # The CLIs this worker's label promises, e.g.
 #   RUN npm i -g @devin/cli @anthropic-ai/claude-code
 
-COPY bin/wfx-runner-linux-amd64 /usr/local/bin/wfx-runner
+COPY bin/wfx-runner-linux /usr/local/bin/wfx-runner
 RUN chmod +x /usr/local/bin/wfx-runner
 
 # The runner's home is created and owned HERE, before the volume is mounted.

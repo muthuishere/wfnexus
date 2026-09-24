@@ -92,11 +92,14 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
   decision?: Decision
+  /** who answered this step's pause, when, and what they decided (ADR 0021) —
+   *  the audit fact itself, not the prose log line that echoes it. */
+  resolvedBy?: string; resolvedAt?: string | null; resolution?: string; resolutionReason?: string
 }
 export type Artifact = { id: string; runId: string; stepId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }
 export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow }
@@ -179,9 +182,35 @@ export type DoctorEntry = {
   name: string; kind: string; model?: string; detail?: string; ready: boolean; problem?: string
 }
 
+/** WHO the server says we are (GET /api/whoami). Three shapes, one type:
+ *  - {authenticated:false, loopback:true}  — the solo install. Auth is ABSENT,
+ *    not merely satisfied, so the UI shows no login chrome at all.
+ *  - {authenticated:false, loopback:false} — off loopback, no credential.
+ *  - {authenticated:true, kind, name, role, project} — a resolved subject. */
+export type WhoAmI = {
+  authenticated: boolean
+  loopback?: boolean
+  kind?: string; name?: string; role?: string; project?: string
+}
+
+// A 401 is handled ONCE, here, rather than by every page: any call that comes
+// back unauthenticated notifies the listeners, and the shell explains that
+// login happens in the terminal. There is deliberately no browser login flow.
+type Unauthenticated = (message: string) => void
+const unauthListeners = new Set<Unauthenticated>()
+/** Subscribe to "the server said 401". Returns an unsubscribe. */
+export function onUnauthenticated(fn: Unauthenticated): () => void {
+  unauthListeners.add(fn)
+  return () => { unauthListeners.delete(fn) }
+}
+
 async function j<T>(r: Promise<Response>): Promise<T> {
   const res = await r
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText)
+  if (!res.ok) {
+    const message = (await res.json().catch(() => ({}))).error || res.statusText
+    if (res.status === 401) for (const fn of unauthListeners) fn(message)
+    throw new Error(message)
+  }
   return res.json()
 }
 const post = (url: string, body?: any) =>
@@ -245,7 +274,22 @@ export type StateVar = {
 }
 export type StateList = { scope: string; scopeName: string; vars: StateVar[] }
 
+// actor is WHO is resolving a pause (ADR 0021). There is no sign-in yet, so
+// the browser asks once and remembers the claim; when ADR 0017's identity lands
+// the server takes it from the session and stops reading this.
+function actor(): string {
+  let a = localStorage.getItem('wfx.actor') || ''
+  if (!a) {
+    a = window.prompt('Who is approving? (recorded on the run)') || ''
+    if (a) localStorage.setItem('wfx.actor', a)
+  }
+  return a
+}
+
 export const api = {
+  /** Asked once on load. It never 401s on a loopback install with no users —
+   *  it answers {authenticated:false, loopback:true} instead. */
+  whoami: () => j<WhoAmI>(fetch('/api/whoami')),
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),
@@ -343,9 +387,12 @@ export const api = {
     return j<Run[]>(fetch('/api/runs' + (p.toString() ? `?${p}` : '')))
   },
   run: (id: string) => j<RunDetail>(fetch(`/api/runs/${id}`)),
-  createRun: (wf: string, input: any) => j<Run>(post(`/api/workflows/${wf}/runs`, input)),
-  approve: (id: string, stepId: string) => j(post(`/api/runs/${id}/approve`, { stepId })),
-  reject: (id: string, stepId: string, reason: string) => j(post(`/api/runs/${id}/reject`, { stepId, reason })),
+  /** POST answers with the same envelope as GET /api/runs/{id} — the run under
+   *  `run` — so it is unwrapped here and callers still receive a Run. */
+  createRun: (wf: string, input: any) =>
+    j<RunDetail>(post(`/api/workflows/${wf}/runs`, input)).then((d) => d.run),
+  approve: (id: string, stepId: string) => j(post(`/api/runs/${id}/approve`, { stepId, actor: actor() })),
+  reject: (id: string, stepId: string, reason: string) => j(post(`/api/runs/${id}/reject`, { stepId, reason, actor: actor() })),
   input: (id: string, input: any) => j(post(`/api/runs/${id}/input`, { input })),
   retry: (id: string, stepId: string) => j(post(`/api/runs/${id}/retry`, { stepId })),
   cancel: (id: string) => j(post(`/api/runs/${id}/cancel`)),

@@ -203,7 +203,7 @@ func TestAskHumanParksTheRunAndTheAnswerResumesIt(t *testing.T) {
 	}
 
 	// the operator answers, hours later, possibly in another process
-	if err := h.eng.AnswerQuestion(context.Background(), run.ID, "gather", "2.1.0"); err != nil {
+	if err := h.eng.AnswerQuestion(context.Background(), run.ID, "gather", tn.Answer{Ok: true, Data: map[string]any{tn.RelayOutputKey: "2.1.0"}}, Actor{ID: "alice", Via: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	run = h.wait(run.ID)
@@ -233,7 +233,7 @@ func TestAnswerRefusedWhenNothingWasAsked(t *testing.T) {
 	llm := newFakeLLM(t, submit(map[string]any{"ok": true}), finish())
 	h := newHarness(t, def, llm, "")
 	run := h.run(nil)
-	err := h.eng.AnswerQuestion(context.Background(), run.ID, "only", "hello")
+	err := h.eng.AnswerQuestion(context.Background(), run.ID, "only", tn.Answer{Ok: true, Data: map[string]any{tn.RelayOutputKey: "hello"}}, Actor{ID: "alice", Via: "test"})
 	if err == nil || !strings.Contains(err.Error(), "not waiting") {
 		t.Fatalf("answering an unasked step returned %v", err)
 	}

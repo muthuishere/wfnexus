@@ -179,7 +179,15 @@ func LoadWithFile(path string) (Config, error) {
 	artifactDriver := env("WFX_ARTIFACT_DRIVER", or(f.Artifacts.Driver, defArtifacts))
 
 	cfg := Config{
-		Addr:           env("WFX_ADDR", or(f.Addr, ":8090")),
+		// LOOPBACK, not every interface. There is no auth yet (docs/not-now.md
+		// calls that the one hard gate: auth BEFORE this is reachable on any
+		// address that is not localhost), and a step runs commands with the
+		// operator's own credentials — so a default of ":8090" put an
+		// unauthenticated command runner on the wifi. The containers and the
+		// k8s manifests STATE `WFX_ADDR=:8090` themselves, the same way they
+		// state WFX_MODE=server, so a deployment listens widely because it
+		// says so rather than because of where a default happens to sit.
+		Addr:           env("WFX_ADDR", or(f.Addr, "127.0.0.1:8090")),
 		StorageDriver:  storageDriver,
 		DatabaseURL:    env("DATABASE_URL", or(f.Storage.DSN, defDSN)),
 		ArtifactDriver: artifactDriver,

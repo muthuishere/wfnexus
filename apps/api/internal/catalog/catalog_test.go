@@ -140,3 +140,55 @@ func TestMissingHelpers(t *testing.T) {
 		t.Fatalf("a disabled server must read as missing: %v", got)
 	}
 }
+
+// The style list is the set toolnexus's client actually implements, so it is
+// asserted rather than described: an unrecognised style is NOT rejected
+// downstream — the client tests only for "anthropic" and frames everything
+// else as OpenAI — so a typo or an aspirational style would run, wrongly, and
+// quietly. "gemini" is the live example: toolnexus exports ToGemini for TOOL
+// SCHEMAS but has no Gemini ClientStyle, so naming it here would produce
+// OpenAI framing under a Gemini name.
+func TestOnlyImplementedWireStylesAreAccepted(t *testing.T) {
+	if got := HTTPStyles(); len(got) != 2 || got[0] != "anthropic" || got[1] != "openai" {
+		t.Fatalf("HTTPStyles() = %v", got)
+	}
+	dir := t.TempDir()
+	js := `{"providers":{
+	  "ok-openai":    {"kind":"http","baseUrl":"https://a.invalid/v1","model":"m","style":"openai"},
+	  "ok-anthropic": {"kind":"http","baseUrl":"https://a.invalid","model":"m","style":"anthropic"},
+	  "gemini-wire":  {"kind":"http","baseUrl":"https://a.invalid","model":"m","style":"gemini"}
+	}}`
+	c, err := Load(write(t, dir, "registries.json", js), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Providers.Len() != 2 {
+		t.Fatalf("registered %v", c.Providers.Names())
+	}
+	if _, err := c.Providers.Require("gemini-wire"); err == nil {
+		t.Fatal("an unimplemented wire style was accepted; it would have been framed as OpenAI")
+	}
+}
+
+// An acp command is ARGV for a process that receives prompts over the
+// protocol. A placeholder in it means the entry was written as a one-shot CLI
+// and given the wrong kind — caught here rather than as an agent that answers
+// turn one's question forever.
+func TestAnACPCommandIsArgvNotAPromptTemplate(t *testing.T) {
+	dir := t.TempDir()
+	js := `{"providers":{
+	  "acp-ok":  {"kind":"acp","command":["myacp","acp"]},
+	  "acp-bad": {"kind":"acp","command":["myacp","-p","{{prompt}}"]},
+	  "cli-bad": {"kind":"cli","command":["mycli","run"]}
+	}}`
+	c, err := Load(write(t, dir, "registries.json", js), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Providers.Len() != 1 || c.Providers.Names()[0] != "acp-ok" {
+		t.Fatalf("registered %v", c.Providers.Names())
+	}
+	if len(c.Providers.Skips()) != 2 {
+		t.Fatalf("skips = %v", c.Providers.Skips())
+	}
+}

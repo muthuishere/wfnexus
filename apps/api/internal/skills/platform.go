@@ -23,11 +23,21 @@ const (
 	ToolCatalog  = "wf_catalog"
 	ToolValidate = "wf_validate"
 	ToolDryRun   = "wf_dryrun"
+	// ToolAskHuman stops the step and asks the operator. It is named in
+	// `tools:` like any other tool (ADR 0021): a capability reachable through a
+	// second door is not scoped, and scoping is the security model (ADR 0004).
+	// The step-level `ask_human: true` boolean still grants it, deprecated.
+	ToolAskHuman = "ask_human"
 )
 
 // PlatformTools describes them for the same listings the built-ins appear in.
 func PlatformTools() []BuiltinTool {
 	return []BuiltinTool{
+		{
+			Name: ToolAskHuman,
+			Description: "Ask the human operator a question and wait. The run parks in needs_input until " +
+				"somebody answers, so name it only on a step that may genuinely need a person.",
+		},
 		{
 			Name: ToolCatalog,
 			Description: "List what a workflow may NAME on this machine: skills, built-in tools, providers, " +

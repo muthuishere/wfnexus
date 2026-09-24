@@ -227,8 +227,11 @@ type Step struct {
 	// WHICH workflow or project: that comes from the run, or one workflow could
 	// write another repository's state.
 	State map[string]map[string]string `yaml:"state,omitempty" json:"state,omitempty"`
-	// AskHuman grants the `question` built-in and makes a suspension durable:
-	// the run parks in needs_input until a human answers.
+	// AskHuman is DEPRECATED (ADR 0021): name `ask_human` in `tools:` instead,
+	// so the capability passes the same per-step allowlist as every other tool
+	// (ADR 0004). It is still honoured — shipped workflows use it and failing
+	// their load would break a running installation on upgrade — and the engine
+	// logs a deprecation on the run when a step arrives with the boolean only.
 	AskHuman bool `yaml:"ask_human,omitempty" json:"askHuman,omitempty"`
 }
 
@@ -1159,3 +1162,22 @@ func render(text string, data TemplateData, option string) (string, error) {
 	}
 	return buf.String(), nil
 }
+
+// ParseYAML reads ONE workflow document — what a published bundle carries as
+// its workflow.yaml — without touching a disk and without validating against a
+// catalog. Validation is the caller's: a bundle is checked against the roots it
+// was published from, not against the receiving machine's.
+//
+// `uses:` and `jobs:` are already expanded in a published document, so this is
+// unmarshal plus the same normalize() a loaded file gets.
+func ParseYAML(raw []byte) (*Definition, error) {
+	d := &Definition{}
+	if err := yaml.Unmarshal(raw, d); err != nil {
+		return nil, err
+	}
+	normalize(d)
+	return d, nil
+}
+
+// MarshalYAML renders a definition as the document a bundle carries.
+func MarshalYAML(d *Definition) ([]byte, error) { return yaml.Marshal(d) }

@@ -4,6 +4,23 @@ dotenv: [".env"]
 
 vars:
   BIN: "{{.ROOT_DIR}}/bin"
+  # The version a binary reports comes from the tag, and from nowhere else. A
+  # build off a tag reports the tag; anything else reports the commit, with
+  # -dirty when the tree is modified — so a build can never claim to be a
+  # release it is not. CI checks out with fetch-depth: 0 because a shallow
+  # clone makes `git describe --tags` lie.
+  VERSION: { sh: 'git describe --tags --always --dirty 2>/dev/null || echo dev' }
+  COMMIT: { sh: 'git rev-parse --short HEAD 2>/dev/null || echo unknown' }
+  DATE: { sh: 'date -u +%Y-%m-%dT%H:%M:%SZ' }
+  # These land in internal/buildinfo and are what `wfx version` reports. A
+  # binary built WITHOUT them (a plain `go build`, or `go install …@latest`)
+  # still answers, from debug.ReadBuildInfo — so the flags improve the answer
+  # rather than being required for one.
+  LDFLAGS: >-
+    -s -w
+    -X github.com/muthuishere/wfnexus/apps/api/internal/buildinfo.Version={{.VERSION}}
+    -X github.com/muthuishere/wfnexus/apps/api/internal/buildinfo.Commit={{.COMMIT}}
+    -X github.com/muthuishere/wfnexus/apps/api/internal/buildinfo.Date={{.DATE}}
 
 tasks:
   default:
@@ -75,7 +92,7 @@ tasks:
   build:api:
     deps: [assets:stage]
     dir: apps/api
-    cmds: ["go build -o {{.BIN}}/wfx-server ."]
+    cmds: ['go build -ldflags="{{.LDFLAGS}}" -o {{.BIN}}/wfx-server .']
   e2e:
     desc: UI tests in jsdom against the built binary — sqlite, no postgres, no model, no browser
     deps: [build:api]
@@ -86,10 +103,10 @@ tasks:
 
   build:cli:
     dir: apps/api
-    cmds: ["go build -o {{.BIN}}/wfx ./cmd/wfx"]
+    cmds: ['go build -ldflags="{{.LDFLAGS}}" -o {{.BIN}}/wfx ./cmd/wfx']
   build:runner:
     dir: apps/api
-    cmds: ["go build -o {{.BIN}}/wfx-runner ./cmd/wfx-runner"]
+    cmds: ['go build -ldflags="{{.LDFLAGS}}" -o {{.BIN}}/wfx-runner ./cmd/wfx-runner']
   # ---- release -------------------------------------------------------------
   release:
     desc: Every binary for every platform, plus the self-contained server tarball
@@ -97,6 +114,7 @@ tasks:
     cmds:
       - task: release:binaries
       - task: release:tar
+      - task: release:checksums
 
   release:binaries:
     desc: wfx-server, wfx and wfx-runner for linux, windows and macos
@@ -112,29 +130,47 @@ tasks:
           sh -c 'for c in "wfx-server:." "wfx:./cmd/wfx" "wfx-runner:./cmd/wfx-runner"; do
             name=${c%%:*}; pkg=${c#*:};
             ext=""; [ "$GOOS" = windows ] && ext=".exe";
-            go build -trimpath -ldflags="-s -w" -o {{.BIN}}/release/${name}-$GOOS-$GOARCH${ext} $pkg || exit 1;
+            go build -trimpath -ldflags="{{.LDFLAGS}}" -o {{.BIN}}/release/${name}-$GOOS-$GOARCH${ext} $pkg || exit 1;
           done'
       - "ls -1 {{.BIN}}/release"
 
   release:tar:
-    desc: A tarball docker compose can run with no registry and no Go toolchain
+    desc: One self-contained tarball per Linux arch — docker compose, no registry, no Go
+    # ONE TARBALL PER ARCHITECTURE. It used to copy linux/amd64 only while the
+    # release built arm64 too, so the air-gapped install — the whole point of
+    # this artifact — could not run on an arm64 machine. The architecture is
+    # now chosen when the file is DOWNLOADED, never at `docker build` time on a
+    # disconnected machine: inside every tarball the binaries carry the same
+    # fixed names, so infra/package/Dockerfile stays architecture-blind.
+    vars:
+      ARCHES: amd64 arm64
     cmds:
-      - rm -rf {{.BIN}}/pkg && mkdir -p {{.BIN}}/pkg/bin {{.BIN}}/pkg/k8s {{.BIN}}/pkg/ui
-      # The linux binaries travel WITH the tar, and the Dockerfile inside copies
-      # them — so `docker compose up` needs no registry to pull from and no Go
-      # on the machine. That is the difference between a tarball someone can use
-      # and one that only works if they can reach your registry.
-      - cp {{.BIN}}/release/wfx-server-linux-amd64 {{.BIN}}/release/wfx-linux-amd64 {{.BIN}}/pkg/bin/
-      - cp {{.BIN}}/release/wfx-runner-linux-amd64 {{.BIN}}/pkg/bin/
-      - cp -R apps/ui/dist/. {{.BIN}}/pkg/ui/
-      - cp -R workflows templates skills registries.json {{.BIN}}/pkg/
-      - cp -R infra/k8s/. {{.BIN}}/pkg/k8s/
-      # The package has its OWN compose and Dockerfiles: the repository's build
-      # from source, these copy the binary that is already in the tarball.
-      - cp infra/package/Dockerfile infra/package/Dockerfile.runner {{.BIN}}/pkg/
-      - cp infra/package/docker-compose.yml infra/package/README.md infra/package/config.example.yaml {{.BIN}}/pkg/
-      - "tar -czf {{.BIN}}/wfx-server.tar.gz -C {{.BIN}}/pkg ."
-      - "echo 'wrote {{.BIN}}/wfx-server.tar.gz' && tar -tzf {{.BIN}}/wfx-server.tar.gz | head -20"
+      - for: { var: ARCHES }
+        cmd: >-
+          set -e;
+          A={{.ITEM}}; P={{.BIN}}/pkg-$A;
+          rm -rf $P && mkdir -p $P/bin $P/k8s $P/ui;
+          cp {{.BIN}}/release/wfx-server-linux-$A $P/bin/wfx-server-linux;
+          cp {{.BIN}}/release/wfx-linux-$A        $P/bin/wfx-linux;
+          cp {{.BIN}}/release/wfx-runner-linux-$A $P/bin/wfx-runner-linux;
+          cp -R apps/ui/dist/. $P/ui/;
+          cp -R workflows templates skills registries.json $P/;
+          cp -R infra/k8s/. $P/k8s/;
+          cp infra/package/Dockerfile infra/package/Dockerfile.runner $P/;
+          cp infra/package/docker-compose.yml infra/package/README.md infra/package/config.example.yaml $P/;
+          tar -czf {{.BIN}}/release/wfx-server-linux-$A.tar.gz -C $P .;
+          echo "wrote {{.BIN}}/release/wfx-server-linux-$A.tar.gz"
+
+  release:checksums:
+    desc: A SHA-256 for every published file, so a download can be verified offline
+    # Every file in bin/release/ other than checksums.txt itself gets an entry.
+    # The installer refuses to install anything whose digest is not in here, so
+    # a file missing from this list is a broken install, not a soft warning.
+    dir: "{{.BIN}}/release"
+    cmds:
+      - rm -f checksums.txt
+      - "ls -1 | grep -v '^checksums.txt$' | xargs shasum -a 256 > checksums.txt"
+      - cat checksums.txt
 
   build:runner:all:
     desc: The worker for every machine you might add — linux, mac, windows
@@ -143,7 +179,7 @@ tasks:
       - for: [linux/amd64, linux/arm64, darwin/arm64, darwin/amd64, windows/amd64, windows/arm64]
         cmd: >-
           GOOS={{splitList "/" .ITEM | first}} GOARCH={{splitList "/" .ITEM | last}} CGO_ENABLED=0
-          go build -trimpath -ldflags="-s -w"
+          go build -trimpath -ldflags="{{.LDFLAGS}}"
           -o {{.BIN}}/runner/wfx-runner-{{splitList "/" .ITEM | first}}-{{splitList "/" .ITEM | last}}{{if eq (splitList "/" .ITEM | first) "windows"}}.exe{{end}}
           ./cmd/wfx-runner
       - "ls -1 {{.BIN}}/runner"
@@ -181,13 +217,14 @@ tasks:
       - npm run build
   workflows:validate:
     desc: Validate every workflow against the live registries
-    deps: [build:cli]
+    # Starts its own server on an ephemeral port and stops it again. `wfx
+    # validate` posts to the API on purpose — whether a provider, classifier,
+    # skill or MCP server resolves is a property of the registries, not of the
+    # file — which used to mean this target only passed when someone happened
+    # to have `task api` running. CI found that on its first run.
+    deps: [build:cli, build:api]
     cmds:
-      - for: { var: FILES }
-        cmd: "{{.BIN}}/wfx validate {{.ITEM}}"
-    vars:
-      FILES:
-        sh: ls workflows/*.yaml
+      - bash .github/scripts/validate-workflows.sh
 
   # ---- the knowledge graph --------------------------------------------------
   graph:
