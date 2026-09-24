@@ -193,6 +193,22 @@ table.kv { width: 100%; border-collapse: collapse; font-size: 13.5px }
 table.kv th { text-align: left; color: var(--muted); font-weight: 550; width: 130px; vertical-align: top; padding: 6px 12px 6px 0; white-space: nowrap }
 table.kv td { padding: 6px 0; vertical-align: top }
 
+/* The run page's key/value block and a step's output contract are DIVs, and
+ * the only `kv` rule here was for a <table> — so both rendered as one run-on
+ * line: "skills-tools-mcp-team-guardrailsmodeldefaultusage{}". Two grids. */
+div.kv {
+  display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px;
+  font-size: 13.5px; align-items: baseline;
+}
+div.kv > b { color: var(--muted); font-weight: 550 }
+div.kv > span { min-width: 0; overflow-wrap: anywhere }
+
+.contract { display: grid; gap: 6px; font-size: 13.5px }
+.contract .field { display: grid; grid-template-columns: minmax(90px, max-content) minmax(60px, max-content) 1fr; gap: 10px; align-items: baseline }
+.contract .name { font-weight: 550 }
+.contract .name.req::after { content: '*'; color: var(--err); margin-left: 2px }
+.contract .type { color: var(--muted); font-size: 12.5px }
+
 table.rows { width: 100%; border-collapse: collapse; font-size: 13.5px }
 table.rows td { padding: 8px 10px 8px 0; border-top: 1px solid var(--border); vertical-align: top }
 table.rows tr:first-child td { border-top: 0 }

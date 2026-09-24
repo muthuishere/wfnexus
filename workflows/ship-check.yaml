@@ -11,11 +11,15 @@ on:
 
 input_schema:
   type: object
+  required: [repo_path]
   properties:
-    dir:
+    # The platform's own input: it makes the run's workspace a git worktree of
+    # this repository, so every step below already stands in the right place.
+    # A `dir` of our own would be a second, wronger answer to the same question
+    # — and "." would mean the run's empty scratch directory, not your checkout.
+    repo_path:
       type: string
-      title: "Repository"
-      default: "."
+      title: "Local repository path"
     module:
       type: string
       title: "Go module directory, relative to the repository"
@@ -30,23 +34,25 @@ jobs:
       - id: fmt
         name: gofmt
         run: |
-          cd "{{ .Input.dir }}/{{ .Input.module }}" || exit 64
+          cd "{{ .Input.module }}" || { echo "no such module directory: {{ .Input.module }}"; exit 64; }
           out=$(GOWORK=off gofmt -l .)
           [ -z "$out" ] || { echo "$out"; exit 1; }
           echo "formatted"
-        gates: [{ field: ok, equals: false, action: fail, message: "these files are not gofmt'd — see the step output" }]
+        gates:
+          - { field: exitCode, equals: 64, action: fail, message: "there is no {{ .Input.module }} in this repository — check the module path" }
+          - { field: ok, equals: false, action: fail, message: "these files are not gofmt'd — see the step output" }
       - id: vet
         name: go vet
-        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go vet ./...
+        run: cd "{{ .Input.module }}" && GOWORK=off go vet ./...
         gates: [{ field: ok, equals: false, action: fail, message: "go vet is unhappy" }]
       - id: build
         name: go build
-        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go build ./...
+        run: cd "{{ .Input.module }}" && GOWORK=off go build ./...
         gates: [{ field: ok, equals: false, action: fail, message: "it does not build" }]
       - id: tests
         name: go test
         timeout_sec: 900
-        run: cd "{{ .Input.dir }}/{{ .Input.module }}" && GOWORK=off go test ./...
+        run: cd "{{ .Input.module }}" && GOWORK=off go test ./...
         gates: [{ field: ok, equals: false, action: fail, message: "tests are failing — the diff is not ready to ship" }]
 
   message:
@@ -56,7 +62,6 @@ jobs:
       - id: diff
         name: Read the staged diff
         run: |
-          cd "{{ .Input.dir }}" || exit 64
           git --no-pager diff --cached --stat
           echo '---'
           git --no-pager diff --cached | head -c 60000

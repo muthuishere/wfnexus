@@ -1,0 +1,51 @@
+name: ask-folder
+description: >-
+  Ask a question about a folder on this machine and get an answer with
+  citations. The model is a coding-agent CLI on this box, so nothing leaves the
+  machine and nothing is billed per token.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  required: [repo_path, question]
+  properties:
+    repo_path:
+      type: string
+      title: "Folder to read"
+    question:
+      type: string
+      title: "What do you want to know?"
+      format: textarea
+
+steps:
+  - id: answer
+    name: Read it and answer
+    provider: claude-cli
+    soul: >-
+      You answer only from the files in front of you. You would rather say "the
+      folder does not say" than guess, and every claim you make names the file
+      it came from.
+    tools: [read, grep, glob]
+    budget: { max_turns: 14, max_tool_calls: 40, max_wall_sec: 900 }
+    guardrails:
+      - deny: "*"
+        args_contain: ["git push", "gh ", "curl", "rm "]
+        reason: reading a folder never needs the network or a delete
+    prompt: |
+      Folder: {{ .WorkDir }}
+
+      {{ .Input.question }}
+
+      Read what you need, then call submit_output. Cite the files you actually
+      opened. If the folder does not answer the question, say so in `answer`
+      and leave `cited` empty rather than reaching.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [answer, cited, confident]
+      properties:
+        answer:    { type: string, description: "the answer, in prose" }
+        cited:     { type: array, items: { type: string }, description: "files actually read" }
+        confident: { type: boolean, description: "false when the folder did not really answer it" }
