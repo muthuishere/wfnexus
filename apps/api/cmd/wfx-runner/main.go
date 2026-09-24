@@ -308,6 +308,12 @@ type payload struct {
 	Ref        string            `json:"ref"`
 	Env        map[string]string `json:"env"`
 	TimeoutSec int               `json:"timeoutSec"`
+	// Mount is the workflow's `mount:` lines, resolved against THIS machine's
+	// disk — the platform's folders were never sent and could not be. Files are
+	// the workflow's own scripts, which did travel, and are staged into the
+	// workspace so `run: node run.js` works here too.
+	Mount []workflow.Mount `json:"mount"`
+	Files []workflow.File  `json:"files"`
 	// Agent is a whole agent step — its skills, tools, guardrails, budget and
 	// output schema — to run here. The step's CLI is NOT carried: a provider
 	// naming `devin` means the devin on this machine's PATH, with this
@@ -423,6 +429,13 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	if err != nil {
 		return result{Error: err.Error()}
 	}
+	// The workflow's folders and files, attached here by the same code the
+	// server runs (engine.Attach). A mount line naming a folder this machine
+	// does not have fails by name, rather than running against the wrong one.
+	_, mountEnv, err := engine.Attach(dir, cfg.WorkDir, p.Mount, p.Files)
+	if err != nil {
+		return result{Error: err.Error()}
+	}
 	sh, err := resolveShell(p.Shell)
 	if err != nil {
 		return result{Error: err.Error()}
@@ -438,16 +451,19 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	// The step's env is resolved HERE, against this machine. A value like
 	// ${GITHUB_PAT} names a variable this box holds; the platform never had it
 	// and it never crossed the network.
-	stepEnv, err := workflow.ResolveEnv(p.Env)
+	// The run's facts and the mount destinations sit UNDER the step's own env,
+	// so a workflow that sets one of those names still wins — the precedence
+	// table in internal/engine/env.go, applied on this machine too.
+	stepEnv, err := workflow.ResolveEnv(workflow.MergeEnv(
+		workflow.MergeEnv(mountEnv, engine.RunEnv(p.RunID, p.StepID, p.Project, dir)), p.Env))
 	if err != nil {
 		return result{Error: err.Error()}
 	}
 	c.Env = append(os.Environ(), stepEnv...)
-	// The run's identity is in the environment, so a step can tell where it is
-	// and a tool on this machine can tag what it produced.
-	c.Env = append(c.Env,
-		"WFX_RUN_ID="+p.RunID, "WFX_STEP_ID="+p.StepID,
-		"WFX_PROJECT="+p.Project, "WFX_WORKSPACE="+dir, "WFX_RUNNER="+cfg.Name)
+	// WFX_RUN_ID / STEP_ID / PROJECT / WORKSPACE came through the cascade
+	// above, where they are also available to a LOCAL step. Only the runner's
+	// own name is particular to being here.
+	c.Env = append(c.Env, "WFX_RUNNER="+cfg.Name)
 
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr

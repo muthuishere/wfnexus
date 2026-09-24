@@ -158,6 +158,8 @@ export function toYaml(d: WorkflowDraft): string {
     name: d.name,
     description: d.description,
     input_schema: d.inputSchema,
+    env: d.env && Object.keys(d.env).length ? d.env : undefined,
+    mount: d.mount?.length ? d.mount : undefined,
     steps: d.steps.map(stepDoc),
   })
   const out: string[] = []

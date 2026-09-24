@@ -286,8 +286,19 @@ type Definition struct {
 	// the same cascade. A value may name a variable (`${GITHUB_PAT}`) rather
 	// than hold one, which is how a credential reaches a step without being
 	// written into the file.
-	Env   map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-	Steps []Step            `yaml:"steps" json:"steps"`
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Mount attaches folders from the machine that runs the step, one line
+	// each: HOST[:AT][:ro]. See mount.go — read-only is the default, and a
+	// relative HOST resolves against the platform's data dir.
+	Mount []Mount `yaml:"mount,omitempty" json:"mount,omitempty"`
+	// Files are the files that sit BESIDE this workflow on disk, when it is
+	// written as a directory (workflow.yaml + run.js + …). They are staged
+	// into the run's workspace before the first step, so `run: node run.js`
+	// works. Never written into the YAML — the directory is the declaration
+	// (files.go) — hence `yaml:"-"`, and carried in JSON so they can travel to
+	// a worker that cannot see this machine's disk.
+	Files []File `yaml:"-" json:"files,omitempty"`
+	Steps []Step `yaml:"steps" json:"steps"`
 	// Jobs are the GitHub-Actions-shaped form: jobs run in parallel, `needs`
 	// orders them, and each holds an ordered list of steps. Flattened into
 	// Steps at load time (see jobs.go), so nothing downstream knows about them.
@@ -349,6 +360,15 @@ func (d *Definition) validate(cat Catalog) error {
 		d.On.Dispatch = true
 	}
 	if err := validateTriggers(d.Name, &d.On); err != nil {
+		return err
+	}
+	// Mounts and sidecar files are checked BEFORE the steps, because they
+	// decide what the steps can reach. A workflow that could not attach its
+	// folders safely must not load at all, let alone run.
+	if err := CheckMounts(d.Name, d.Mount); err != nil {
+		return err
+	}
+	if err := CheckFiles(d.Name, d.Files, d.Mount); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
@@ -626,20 +646,40 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog) (map[string]*Definition
 	}
 	out := map[string]*Definition{}
 	for _, e := range entries {
-		ext := filepath.Ext(e.Name())
-		if e.IsDir() || (ext != ".yaml" && ext != ".yml") {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
+		// A workflow is either a file or a DIRECTORY holding workflow.yaml plus
+		// the files that travel with it (files.go). Both forms load here; the
+		// flat one is untouched, so nothing that exists breaks.
+		var (
+			p     string
+			raw   []byte
+			files []File
+			err   error
+		)
+		if e.IsDir() {
+			raw, p, files, err = loadWorkflowDir(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if raw == nil {
+				continue // a directory with no workflow.yaml is not ours
+			}
+		} else {
+			ext := filepath.Ext(e.Name())
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			p = filepath.Join(dir, e.Name())
+			raw, err = os.ReadFile(p)
+			if err != nil {
+				return nil, err
+			}
 		}
 		d := &Definition{}
 		if err := yaml.Unmarshal(raw, d); err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		d.Path = p
+		d.Files = files
 		for _, st := range d.Steps {
 			if len(st.Needs) > 0 {
 				d.authoredNeeds = true

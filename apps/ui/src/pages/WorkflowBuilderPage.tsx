@@ -5,7 +5,7 @@ import { errorsOnly, validateDraft, type Issue } from '../builder/validate'
 import { toYaml } from '../builder/yaml'
 import type { JsonSlots } from '../builder/jsonschema'
 import JsonSchemaEditor from '../components/builder/JsonSchemaEditor'
-import StepEditor from '../components/builder/StepEditor'
+import StepEditor, { EnvEditor } from '../components/builder/StepEditor'
 import WorkflowCanvas from '../components/WorkflowCanvas'
 import { Field, IssueList } from '../components/builder/Bits'
 
@@ -60,7 +60,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
     if (!name) return
     let live = true
     api.workflow(name)
-      .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [] }) })
+      .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [], env: w.env, mount: w.mount, files: w.files }) })
       .catch(e => live && setLoadErr(e instanceof Error ? e.message : String(e)))
     return () => { live = false }
   }, [name])
@@ -217,6 +217,18 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
                 <JsonSchemaEditor slot="input" schema={draft.inputSchema} slots={slots}
                   onChange={s => set({ inputSchema: s })} />
               </Field>
+              <Field label="env — every step gets these">
+                <EnvEditor env={draft.env || {}} onChange={env => set({ env: Object.keys(env).length ? env : undefined })} />
+              </Field>
+              <Field label="mount — folders this workflow needs">
+                <MountEditor mount={draft.mount || []} onChange={mount => set({ mount: mount.length ? mount : undefined })} />
+              </Field>
+              {!!draft.files?.length && (
+                <Field label="files shipped beside this workflow">
+                  <ul className="mono" style={{ fontSize: 12, margin: 0, paddingLeft: 18 }}>
+                    {draft.files.map(f => <li key={f.path}>{f.path}</li>)}
+                  </ul>
+                </Field>)}
               <IssueList issues={issues.filter(i => i.step === -1 && i.field === 'steps')} />
             </div>
           ) : step ? (
@@ -243,5 +255,19 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
           </div>)}
       </div>
     </>
+  )
+}
+
+/** Attached folders, one per line, exactly as the file spells them.
+ *
+ *  A textarea rather than a row-per-field table on purpose: the file's form IS
+ *  one line, and a three-column editor would teach a shape the YAML does not
+ *  have. What the box holds is what the file holds. */
+function MountEditor({ mount, onChange }: { mount: string[]; onChange: (m: string[]) => void }) {
+  return (
+    <textarea className="mono" style={{ minHeight: 70, width: '100%' }}
+      value={mount.join('\n')}
+      placeholder={'/Users/me/datasets:data:ro\nreports:out:rw'}
+      onChange={e => onChange(e.target.value.split('\n').map(l => l.trim()).filter(Boolean))} />
   )
 }

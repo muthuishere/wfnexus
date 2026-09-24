@@ -211,6 +211,14 @@ type JobPayload struct {
 	Ref        string            `json:"ref,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	TimeoutSec int               `json:"timeoutSec,omitempty"`
+	// Mount and Files are the workflow's attachments. The mount SPEC travels,
+	// never the folder: the worker resolves each line against its OWN disk, so
+	// an absolute mount must exist there and a relative one lands under that
+	// machine's data dir. Files DO travel by value — they are the workflow's
+	// own scripts and they are small — because a worker has no copy of the
+	// repository the workflow lives in.
+	Mount []workflow.Mount `json:"mount,omitempty"`
+	Files []workflow.File  `json:"files,omitempty"`
 	// Agent is set when Kind is "agent".
 	Agent *AgentJob `json:"agent,omitempty"`
 }
@@ -235,13 +243,15 @@ type JobResult struct {
 
 // runRemote queues a command for a worker holding `label` and waits for it.
 func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, cmd, label string, data workflow.TemplateData) (map[string]any, error) {
-	env, err := e.stepEnv(ctx, runID, step)
+	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
+	mounts, files := e.attachmentsOf(runID)
 	payload := JobPayload{
 		RunID: runID.String(), StepID: step.ID, Command: cmd,
 		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
+		Mount: mounts, Files: files,
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project

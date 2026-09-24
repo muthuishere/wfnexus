@@ -64,6 +64,14 @@ export type Triggers = {
 }
 export type Workflow = {
   name: string; description: string; inputSchema: JSONSchema; steps: Step[]; path: string
+  /** Workflow-level env. It cascades into every step, which is why the builder
+   *  shows it beside the step's own — the two are one table with an order. */
+  env?: Record<string, string>
+  /** Attached folders, one line each: HOST[:AT][:ro]. */
+  mount?: string[]
+  /** The files that sit beside this workflow on disk. Read-only here for now:
+   *  the Builder lists them so a save cannot silently drop them. */
+  files?: Array<{ path: string; mode?: number; body?: string }>
   on?: Triggers
   goal?: string
   maxParallel?: number

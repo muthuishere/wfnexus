@@ -66,6 +66,11 @@ type AgentJob struct {
 	Defaults LLMDefaults       `json:"defaults"`
 	Skills   []BundledFile     `json:"skills,omitempty"`
 	MCP      map[string]any    `json:"mcp,omitempty"`
+	// Mount and Files are the workflow's attachments, exactly as for a `run:`
+	// job (workers.go): the mount spec is resolved on the worker's own disk and
+	// the workflow's files travel by value.
+	Mount []workflow.Mount `json:"mount,omitempty"`
+	Files []workflow.File  `json:"files,omitempty"`
 }
 
 // AgentOutcome is what comes back. It carries the same facts a local step
@@ -100,14 +105,16 @@ func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflo
 	// last word: the worker has no access to this platform's env store, so
 	// what it is not sent, it does not have.
 	placed := *step
-	env, err := e.stepEnv(ctx, runID, step)
+	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
 	placed.Env = env
 
+	mounts, wfFiles := e.attachmentsOf(runID)
 	job := &AgentJob{
 		RunID: runID.String(), Workflow: def.Name, Step: placed, Prompt: prompt, BaseRef: baseRef,
+		Mount: mounts, Files: wfFiles,
 		Defaults: LLMDefaults{
 			BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			Model: e.cfg.Model, APIKeyEnv: e.cfg.LLMAPIKeyEnv,
@@ -273,6 +280,25 @@ func (e *Engine) RunAgentJob(ctx context.Context, job *AgentJob, workdir string)
 
 	runID, _ := uuid.Parse(job.RunID)
 	step := job.Step
+	// The workflow's folders are attached HERE, against this machine. Nothing
+	// was copied over the wire but the workflow's own files; a `mount:` line
+	// names a folder that must exist on this box, and says so by name if it
+	// does not.
+	roots, mountEnv, err := Attach(workdir, e.cfg.WorkDir, job.Mount, job.Files)
+	if err != nil {
+		return here(err)
+	}
+	e.mu.Lock()
+	if e.attached == nil {
+		e.attached = map[uuid.UUID]mountState{}
+	}
+	e.attached[runID] = mountState{Roots: roots, Env: mountEnv}
+	e.mu.Unlock()
+	defer e.releaseAttachments(runID)
+	// The run's own facts, filled in by the machine that actually has the
+	// workspace — the platform could not know this path.
+	step.Env = workflow.MergeEnv(
+		workflow.MergeEnv(mountEnv, RunEnv(job.RunID, step.ID, "", workdir)), step.Env)
 	res, err := e.runAgent(ctx, runID, job.Workflow, &step, job.Prompt, workdir, job.BaseRef)
 	if err != nil {
 		return here(err)

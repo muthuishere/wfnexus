@@ -32,6 +32,10 @@
 | `timeout_sec` | wall clock for a `run:` step |
 | `consumes`, `produces` | named facts, for a goal-planned workflow |
 
+Workflow level, not step level: `mount:` (folders the run needs) and `env:`
+(which cascades into every step). The files beside a directory-form workflow
+need no field at all. All three below.
+
 ## The three node kinds, cheapest first
 
 **`run:` — no model, no cost.** Output is always exactly
@@ -157,6 +161,96 @@ team:
   workflow → job → step.
 - **`goal:` + `consumes`/`produces`** — the order is DERIVED and re-derived
   after every step. Do not also write `needs:`; they conflict.
+
+## Folders a run needs — `mount:`
+
+Workflow level, one line per folder, docker's spelling: `HOST[:AT][:ro]`.
+
+```yaml
+name: score-imports
+mount:
+  - /Users/me/datasets/2026:data:ro     # absolute, read-only
+  - reports:out:rw                      # relative → the platform's data dir
+steps:
+  - id: count
+    run: wc -l data/imports.csv && echo done > out/marker.txt
+```
+
+- **Read-only is the default.** `:ro` means the folder is **copied** into the
+  workspace — there is no portable unprivileged read-only bind mount, so a copy
+  is the only version of "read-only" that is true. The run can write to it and
+  the real folder is untouched. Big folders are capped; point the mount at the
+  subfolder you actually read.
+- **`:rw` is real two-way access** to the user's folder, by symlink, and it is
+  the only thing that widens the run's containment. Type it on purpose.
+- **A relative HOST resolves under the platform's data dir** (`<work dir>/mounts/`),
+  never the workspace and never the server's cwd. This is the portable spelling:
+  it means the same thing on the server and on a worker.
+- **A mount is never templated.** `{{ .Input.dir }}:data` is refused at load —
+  otherwise whoever starts a run chooses which folder the workflow can read.
+  Nor can it be a home directory, `.ssh`/`.aws`/`.gnupg`/`.config`, or the
+  system tree.
+- **On a worker** the *line* travels, not the folder. An absolute mount must
+  exist on that machine or the step fails by name. `WFX_MOUNT_<AT>` is exported
+  either way, so a script need not hardcode the path.
+
+## Files a workflow ships — put them next to it
+
+Write the workflow as a **directory** and everything beside it is staged into
+the run's workspace. There is no `files:` key: the directory is the declaration.
+
+```
+workflows/
+  report/
+    workflow.yaml
+    run.js
+    lib/format.js
+```
+
+```yaml
+# workflows/report/workflow.yaml
+name: report
+steps:
+  - id: build
+    run: node run.js
+    timeout_sec: 120
+```
+
+`run.js` lands at the workspace root, so the step names it exactly as it is
+written on disk. Flat `workflows/report.yaml` still works and carries no files.
+A sidecar may not climb out of the workspace, and it may not land inside a
+`mount:` — a workflow's own file never overwrites somebody's attached folder.
+
+## Custom environment — `env:`
+
+Workflow level and step level, both `NAME: value` or `NAME: ${VAR}`.
+
+```yaml
+name: score-imports
+env:
+  REPORT_TIER: nightly          # a literal: committed, so not a secret
+  GH_TOKEN: ${GITHUB_PAT}       # a reference: read where the step runs
+steps:
+  - id: show
+    env:
+      REPORT_TIER: manual       # overrides the workflow's, only this name
+    run: echo "$REPORT_TIER in $WFX_WORKSPACE"
+```
+
+Later wins, and only for the names it mentions:
+
+| | where it comes from |
+|---|---|
+| 1 system | the stored env store, every run on this machine |
+| 2 project | the stored env store, one repository |
+| 3 run | `WFX_RUN_ID`, `WFX_STEP_ID`, `WFX_PROJECT`, `WFX_WORKSPACE`, `WFX_MOUNT_<AT>` |
+| 4 workflow | `env:` at the top of the file |
+| 5 step | `env:` on the step |
+
+The same map reaches a `run:` step, an agent step's `bash` tool and its CLI
+provider, here and on a worker. A credential written out in full is refused on
+save — name it (`${GITHUB_PAT}`) and the value is read on the machine that runs
+the step, never committed and never put on the wire.
 
 ## Triggers
 

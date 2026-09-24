@@ -159,7 +159,7 @@ func TestRelativePathsArePinnedToTheWorkspace(t *testing.T) {
 // Containment runs AHEAD of a step's own rules, so YAML can never widen it.
 func TestContainmentCannotBeWidenedByYAML(t *testing.T) {
 	ws := t.TempDir()
-	rails := withContainment(ws, []workflow.Guardrail{
+	rails := withContainment(ws, nil, []workflow.Guardrail{
 		{Deny: "bash", ArgsContain: []string{"nothing-matches-this"}, Reason: "unrelated"},
 	})
 	if len(rails) != 2 {
@@ -179,7 +179,7 @@ func TestSubAgentsAreContainedToo(t *testing.T) {
 		ID: "s", Team: []workflow.TeamMember{{ID: "explorer", Does: "reads", Tools: []string{"bash"}}},
 	}
 	ws := t.TempDir()
-	team, tks, err := e.buildTeam(t.Context(), step, ws, nil, nil)
+	team, tks, err := e.buildTeam(t.Context(), step, ws, nil, nil, nil)
 	for _, tk := range tks {
 		defer tk.Close()
 	}
