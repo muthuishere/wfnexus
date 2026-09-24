@@ -75,6 +75,47 @@ CLI agent, or gh-aw ships `needs:` with typed outputs between agentic jobs, the 
 stop building a platform and ship the contract gate as a library — that kill criterion is written
 down, in the pivot doc §7.
 
+## Use it from your own agent
+
+The authoring method is an agent skill, so you can run it inside whatever you
+already use — Claude Code, or anything that reads `~/.claude/skills`:
+
+```bash
+wfx install --list                # what this platform ships
+wfx install --skills              # copy them where your agents read skills
+wfx install --skills workflow-author   # or just the one
+```
+
+It writes **both** global roots — `~/.claude/skills` and `~/.agents/skills` — because one machine
+runs several agents and they do not share a root; `--to DIR` puts them somewhere else.
+
+Explicit, like `playwright install`, and for the same reason: a tool that writes
+into another tool's configuration behind your back is one nobody can audit. It
+copies files, prints where they went, and undoing it is `rm -rf` on a directory
+it names.
+
+The skill interviews you, picks the cheapest node that answers each question
+(`run:` before `judge:` before a full agent), drafts, dry runs its own draft
+through `wfx`, fixes what that found, and only then hands over — with what it
+assumed still attached.
+
+Then it goes somewhere else, which is the point of authoring it here:
+
+```bash
+wfx dryrun my-workflow                     # free: no model, no repo, no writes
+wfx login --url https://wfx.example.com    # prints a code; no browser needed here
+wfx publish my-workflow.yaml --version 1.0.0
+```
+
+`publish` sends a **bundle**: the workflow's skills and MCP declarations resolve now and travel
+with it, addressed by digest, so it runs on a host holding none of them. `wfx context list` shows
+every host you are signed in to and `wfx context use` switches between them — "deploy it wherever
+you want" is a context, not a rebuild.
+
+`wfx login` is the OAuth 2.0 device grant (RFC 8628) for one specific reason: it prints a code and
+needs no browser and no callback on the machine running it, so it works over SSH, in a container,
+and **inside another agent's session** — which is exactly where the authoring happens.
+
 ## Run it
 
 Downloaded the binary? There is no step two:
@@ -386,30 +427,6 @@ The one thing that cannot be placed is a step using the platform's own authoring
 (`workflow_catalog`, `workflow_validate`, `workflow_dryrun`) — those *are* this process, and the
 step is refused at pack time rather than mid-run. [`infra/README.md`](infra/README.md) has the
 rest, including running the worker as a service and what it does and does not isolate.
-
-## Use it from your own agent
-
-The authoring method is an agent skill, so you can run it inside whatever you
-already use — Claude Code, or anything that reads `~/.claude/skills`:
-
-```bash
-wfx install --list                # what this platform ships
-wfx install --skills              # copy them where your agents read skills
-wfx install --skills workflow-author   # or just the one
-```
-
-It writes **both** global roots — `~/.claude/skills` and `~/.agents/skills` — because one machine
-runs several agents and they do not share a root; `--to DIR` puts them somewhere else.
-
-Explicit, like `playwright install`, and for the same reason: a tool that writes
-into another tool's configuration behind your back is one nobody can audit. It
-copies files, prints where they went, and undoing it is `rm -rf` on a directory
-it names.
-
-The skill interviews you, picks the cheapest node that answers each question
-(`run:` before `judge:` before a full agent), drafts, dry runs its own draft
-through `wfx`, fixes what that found, and only then hands over — with what it
-assumed still attached.
 
 ## Templates
 

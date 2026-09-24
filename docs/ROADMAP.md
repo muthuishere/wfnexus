@@ -159,9 +159,12 @@ whichever model happens to be on that machine, with a check that costs nothing.
 
 All present in the pinned v0.19.0 and worth taking, most valuable first.
 
+**Context compaction** (`agents.Compactor`, the `BeforeLLM` hook) is now **taken**
+— `budget: { compact_at_tokens: N }` on a step, off by default, measured in
+spikes/FINDINGS.md §11.
+
 | capability | why we want it |
 |---|---|
-| **Context compaction** (`agents.Compactor`, a `BeforeLLM` hook) | a long step dies at the context limit today; we cap turns instead, which stops work rather than continuing it. The single biggest gap. |
 | **Multimodal content parts** (`tn.File`, `tn.Bytes`) | a bug report is often a screenshot. We can only take text. |
 | **HTTP / OpenAPI tools** (`tn.HTTPTool`) | a step can name skills, built-ins and MCP servers but cannot call a plain REST endpoint. This belongs in the registry as a fourth tool kind. |
 | **Conversation memory** (`ConversationStore`) | would let a resumed step continue a transcript rather than replay a prompt — the mechanism ADR 0017 needs. |

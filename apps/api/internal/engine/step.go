@@ -136,6 +136,21 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		usage.record(m)
 	}
 
+	// A scripted transport (tests) wins over everything: it is how the wire is
+	// held to zero network. Otherwise a local-process provider supplies its own.
+	transport := e.transport
+	if transport == nil {
+		transport = prov.Transport
+	}
+
+	// Compaction is composed onto the SAME BeforeLLM seam the turn-budget
+	// warning already uses, and goes first so the warning lands on the
+	// compacted transcript. Off unless the step's budget names
+	// `compact_at_tokens`; nil hook ⇒ chainBeforeLLM returns the warning alone.
+	if compact := e.compactorHook(ctx, runID, step.ID, step, prov, transport, onMetric); compact != nil {
+		hooks.BeforeLLM = chainBeforeLLM(compact, hooks.BeforeLLM)
+	}
+
 	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
 	if err != nil {
 		return stepResult{}, err
@@ -159,12 +174,6 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 			step.ID, prov.Label, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
 	})
 
-	// A scripted transport (tests) wins over everything: it is how the wire is
-	// held to zero network. Otherwise a local-process provider supplies its own.
-	transport := e.transport
-	if transport == nil {
-		transport = prov.Transport
-	}
 	res, rt := ag.Run(agents.Options{
 		LLM:       prov.LLM,
 		Transport: transport,

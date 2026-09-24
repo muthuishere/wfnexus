@@ -42,6 +42,11 @@ type Budget struct {
 	MaxChildren   int   `yaml:"max_children,omitempty" json:"maxChildren,omitempty"`
 	MaxConcurrent int   `yaml:"max_concurrent,omitempty" json:"maxConcurrent,omitempty"`
 	MaxDepth      int   `yaml:"max_depth,omitempty" json:"maxDepth,omitempty"`
+	// CompactAtTokens turns on context compaction for this step: once the
+	// working transcript's estimate passes this many tokens, the older head is
+	// summarized and a recent tail is kept (toolnexus agents.Compactor). 0 ⇒
+	// off, which is the default and is byte-identical to no compaction.
+	CompactAtTokens int64 `yaml:"compact_at_tokens,omitempty" json:"compactAtTokens,omitempty"`
 }
 
 // Guardrail is a POLICY check on a tool call — "may it?", never "is it right?".

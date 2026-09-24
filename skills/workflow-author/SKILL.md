@@ -117,6 +117,70 @@ fail to load, and the person sees a broken thing rather than a working one.
 Every agent step ends by calling `submit_output` against its `output_schema`,
 and `wf_dryrun` is how you check a draft before anyone pays for it.
 
+`references/authoring-step-skills.md` is how to WRITE the skills a step loads —
+read it before you name one that does not exist yet. A template ships with no
+skills on purpose; the expertise is the part the person adds, and helping them
+write it is the most valuable thing you do here.
+
 `references/reference.md` is the field-by-field shape.
 `references/examples.md` says which example to open for the situation in front
 of you. `references/anti-patterns.md` is what goes wrong, and why.
+
+## Test it for real before you hand it over
+
+A workflow that only exists in the directory you wrote it in is a draft. The
+point of authoring it *here*, inside the agent the person already uses, is that
+it goes somewhere else afterwards — their server, a colleague's, a build box
+that holds a licence this laptop does not.
+
+So do not stop at a valid file. Finish the job:
+
+A dry run proves it would START. It does not prove the prompts work, that a
+gate fires, or that a step can satisfy its own schema — and those are what
+actually go wrong. So run it once, cheaply, before anyone else does:
+
+```sh
+wfx dryrun my-workflow                     # free: structure, budgets, env names, PATH
+wfx apply my-workflow.yaml                 # install it
+wfx run my-workflow -i key=value -f        # a real run, following the log
+```
+
+Make the first real run **cheap on purpose**: put `provider: haiku` or a local
+`ollama-http` on the expensive steps while you are still shaping prompts, and
+move to the real model once the contract holds. A step on a local model costs a
+true $0.00 and still enforces `submit_output` exactly as the paid one does —
+that is the whole point of the contract being in the loop rather than after it.
+
+Watch for the two failures a dry run cannot see: a step that burns its whole
+budget without ever calling `submit_output`, and a gate that never fires because
+the field it reads is not the field the step emits.
+
+## Then get it off this machine
+
+```sh
+wfx login --url https://wfx.example.com   # prints a code; no browser needed here
+wfx publish my-workflow.yaml --version 1.0.0
+```
+
+`publish` sends a **bundle**, not a file: the workflow's skills and its MCP
+declarations are resolved now and travel with it, addressed by digest. That is
+why it can run on a host holding none of them — and why publishing REFUSES,
+here rather than at run time, a skill that does not resolve, a digest that does
+not match, and any `env:` value that looks like a credential rather than a
+variable name.
+
+`wfx login` is the OAuth device grant, which matters for exactly this case: it
+prints a code and needs no browser and no callback on the machine running it, so
+it works over SSH, in a container, and **inside this session** — you are an
+agent in someone's terminal, and that is the one place a redirect-based login
+cannot reach.
+
+Several hosts at once is normal. `wfx context list` shows them, `wfx context use
+<host>` switches, and `--url` overrides for a single command — so "deploy it
+wherever you want" is a context, not a rebuild.
+
+**What to tell the person when you hand over.** Not "here is a YAML file". Say
+which host it is on, its version and digest, what it costs to run (`wfx dryrun`
+prints the turn ceiling; the run page prints real money, and a step on a local
+CLI model prints a true $0.00), and which gate will stop and ask them. Those are
+the four things they actually need, and none of them are in the file.
