@@ -47,13 +47,17 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	if err := store.Migrate(cfg.DatabaseURL); err != nil {
+	// Which database runs is one line of config, exactly like the artifact
+	// store below: a laptop gets a SQLite file it can delete, a deployment gets
+	// Postgres. The queries are the same either way.
+	if err := store.Migrate(cfg.StorageDriver, cfg.DatabaseURL); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.StorageDriver, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
+		log.Fatalf("%s: %v", cfg.StorageDriver, err)
 	}
+	log.Printf("storage: %s %s", cfg.StorageDriver, cfg.DatabaseURL)
 	defer st.Close()
 
 	// Which artifact store runs is one line of config. A laptop writes files

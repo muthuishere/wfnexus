@@ -30,10 +30,10 @@ func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 		cfg.DatabaseURL = v
 	}
 	ctx := context.Background()
-	if err := store.Migrate(cfg.DatabaseURL); err != nil {
+	if err := store.Migrate(cfg.StorageDriver, cfg.DatabaseURL); err != nil {
 		t.Skipf("no postgres (task infra:up): %v", err)
 	}
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.StorageDriver, cfg.DatabaseURL)
 	if err != nil {
 		t.Skipf("no postgres: %v", err)
 	}

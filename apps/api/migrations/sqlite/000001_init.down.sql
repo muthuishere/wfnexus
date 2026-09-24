@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS env_vars;
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS worker_jobs;
+DROP TABLE IF EXISTS workers;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS run_events;
+DROP TABLE IF EXISTS step_runs;
+DROP TABLE IF EXISTS workflow_runs;

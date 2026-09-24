@@ -61,7 +61,7 @@ func TestASecretIsNeverListedBack(t *testing.T) {
 
 	// ...and it is not sitting in the table in the clear either.
 	var raw string
-	if err := h.store.Pool().QueryRow(ctx,
+	if err := h.store.DB().QueryRowContext(ctx,
 		`SELECT encode(value_enc,'escape') FROM env_vars WHERE key='GH_TOKEN'`).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestEnvCascadesSystemThenProjectThenStep(t *testing.T) {
 	// A run is what makes a project appear in the dashboard, and this one is
 	// scaffolding. Left behind, it is a permanent row named after a test.
 	t.Cleanup(func() {
-		_, _ = h.store.Pool().Exec(context.Background(), `DELETE FROM workflow_runs WHERE project=$1`, project)
+		_, _ = h.store.DB().ExecContext(context.Background(), `DELETE FROM workflow_runs WHERE project=$1`, project)
 	})
 	run := r.ID
 	step := &workflow.Step{ID: "s", Env: map[string]string{"TIER": "step"}}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 )
 
 // The platform's own environment store: what a run gets before the workflow
@@ -46,7 +45,7 @@ func (s *Store) PutEnvVar(ctx context.Context, box Sealer, scope, scopeName, key
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = s.exec(ctx, `
 		INSERT INTO env_vars (scope, scope_name, key, value_enc, secret, updated_at)
 		VALUES ($1,$2,$3,$4,$5, now())
 		ON CONFLICT (scope, scope_name, key) DO UPDATE SET
@@ -56,7 +55,7 @@ func (s *Store) PutEnvVar(ctx context.Context, box Sealer, scope, scopeName, key
 }
 
 func (s *Store) DeleteEnvVar(ctx context.Context, scope, scopeName, key string) error {
-	_, err := s.pool.Exec(ctx,
+	_, err := s.exec(ctx,
 		`DELETE FROM env_vars WHERE scope=$1 AND scope_name=$2 AND key=$3`, scope, scopeName, key)
 	return err
 }
@@ -65,7 +64,7 @@ func (s *Store) DeleteEnvVar(ctx context.Context, scope, scopeName, key string) 
 // its name and nothing else — the value is not fetched, not decrypted and not
 // serialised, so there is no path by which it reaches a screen or a log.
 func (s *Store) ListEnvVars(ctx context.Context, box Sealer, scope, scopeName string) ([]EnvVar, error) {
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.query(ctx, `
 		SELECT scope, scope_name, key, value_enc, secret, updated_at
 		FROM env_vars WHERE scope=$1 AND scope_name=$2 ORDER BY key`, scope, scopeName)
 	if err != nil {
@@ -97,7 +96,7 @@ func (s *Store) ListEnvVars(ctx context.Context, box Sealer, scope, scopeName st
 // path a secret's value takes out of the database, and its one caller is the
 // engine, about to run a step.
 func (s *Store) EnvFor(ctx context.Context, box Sealer, scope, scopeName string) (map[string]string, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.query(ctx,
 		`SELECT key, value_enc FROM env_vars WHERE scope=$1 AND scope_name=$2`, scope, scopeName)
 	if err != nil {
 		return nil, err
@@ -122,7 +121,7 @@ func (s *Store) EnvFor(ctx context.Context, box Sealer, scope, scopeName string)
 // EnvKeyNames lists the names held in a scope, without touching a value. It is
 // what a dry run and the UI use when they only need to say what exists.
 func (s *Store) EnvKeyNames(ctx context.Context, scope, scopeName string) ([]string, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.query(ctx,
 		`SELECT key FROM env_vars WHERE scope=$1 AND scope_name=$2 ORDER BY key`, scope, scopeName)
 	if err != nil {
 		return nil, err
@@ -138,5 +137,3 @@ func (s *Store) EnvKeyNames(ctx context.Context, scope, scopeName string) ([]str
 	}
 	return out, rows.Err()
 }
-
-var _ = pgx.ErrNoRows

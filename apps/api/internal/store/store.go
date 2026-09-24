@@ -1,20 +1,27 @@
-// Package store is the Postgres persistence layer (pgx + golang-migrate).
+// Package store is the persistence layer. It speaks one set of Postgres-dialect
+// queries to either Postgres (pgx through database/sql) or SQLite (the cgo-free
+// modernc driver), chosen by the configured storage driver; db.go holds the
+// small dialect that rewrites the difference.
 package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "modernc.org/sqlite"
 
 	"github.com/muthuishere/wfnexus/apps/api/migrations"
 )
@@ -75,24 +82,90 @@ type Artifact struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	db *sql.DB
+	d  dialect
+}
 
-func Open(ctx context.Context, url string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+// rowScanner is what *sql.Row and *sql.Rows have in common, so one scan
+// function serves both the single-row and the listing path.
+type rowScanner interface{ Scan(dest ...any) error }
+
+// Open connects with the named driver. "sqlite" takes a FILE PATH as its dsn,
+// not a URL — that is what a local config writes and what a user can delete.
+func Open(ctx context.Context, driver, dsn string) (*Store, error) {
+	d := dialect{name: normalizeDriver(driver)}
+	name, conn := d.name, dsn
+	if d.isSQLite() {
+		name = "sqlite"
+		if err := os.MkdirAll(filepath.Dir(dsn), 0o755); err != nil {
+			return nil, fmt.Errorf("sqlite dir: %w", err)
+		}
+		// Busy timeout and WAL: the engine writes from several goroutines at
+		// once, and without them a concurrent run fails with SQLITE_BUSY
+		// instead of waiting a few milliseconds.
+		conn = dsn + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	} else {
+		name = "pgx"
+	}
+	db, err := sql.Open(name, conn)
 	if err != nil {
 		return nil, err
 	}
-	if err := pool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("postgres ping: %w", err)
+	if d.isSQLite() {
+		// One writer. SQLite serialises writes anyway; a pool of them only
+		// converts the serialisation into lock errors.
+		db.SetMaxOpenConns(1)
 	}
-	return &Store{pool: pool}, nil
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("%s ping: %w", d.name, err)
+	}
+	return &Store{db: db, d: d}, nil
 }
 
-func (s *Store) Close() { s.pool.Close() }
+func (s *Store) Close() { s.db.Close() }
 
-// Migrate applies the embedded SQL tree. Idempotent.
-func Migrate(url string) error {
-	src, err := iofs.New(migrations.FS, ".")
+// DB exposes the handle for tests that need to assert on what is actually
+// stored — that a secret is ciphertext in the table, for instance.
+func (s *Store) DB() *sql.DB { return s.db }
+
+func (s *Store) qrow(ctx context.Context, q string, args ...any) *sql.Row {
+	return s.db.QueryRowContext(ctx, s.d.q(q), args...)
+}
+
+func (s *Store) query(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+	return s.db.QueryContext(ctx, s.d.q(q), args...)
+}
+
+func (s *Store) exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return s.db.ExecContext(ctx, s.d.q(q), args...)
+}
+
+func normalizeDriver(driver string) string {
+	if strings.EqualFold(driver, driverSQLite) || strings.EqualFold(driver, "sqlite3") {
+		return driverSQLite
+	}
+	return driverPostgres
+}
+
+// Migrate applies the embedded SQL tree for this driver. Idempotent.
+//
+// The two dialects have SEPARATE migration sets, because the applied Postgres
+// files use uuid, jsonb, text[] and bigserial, none of which SQLite has. The
+// Postgres set stays exactly where it was and is never edited; the SQLite set
+// lives under migrations/sqlite/ with its own version line and its own
+// schema_migrations table inside the SQLite file.
+func Migrate(driver, dsn string) error {
+	dir, url := ".", dsn
+	if normalizeDriver(driver) == driverSQLite {
+		dir = "sqlite"
+		if err := os.MkdirAll(filepath.Dir(dsn), 0o755); err != nil {
+			return fmt.Errorf("sqlite dir: %w", err)
+		}
+		url = "sqlite://" + dsn + "?_pragma=busy_timeout(5000)"
+	}
+	src, err := iofs.New(migrations.FS, dir)
 	if err != nil {
 		return err
 	}
@@ -118,22 +191,22 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 		project = "local"
 	}
 	r := &Run{ID: uuid.New(), Project: project, Workflow: workflow, Status: "queued", Input: input}
-	err := s.pool.QueryRow(ctx,
+	err := s.qrow(ctx,
 		`INSERT INTO workflow_runs (id, project, workflow, status, input) VALUES ($1,$2,$3,$4,$5) RETURNING created_at, updated_at`,
-		r.ID, r.Project, r.Workflow, r.Status, r.Input).Scan(&r.CreatedAt, &r.UpdatedAt)
+		r.ID, r.Project, r.Workflow, r.Status, jsonArg(r.Input)).Scan(&r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
 const runCols = `id, project, workflow, status, input, current_step, base_ref, error, created_at, updated_at`
 
-func scanRun(row pgx.Row) (*Run, error) {
+func scanRun(row rowScanner) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, &r.Input, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
 func (s *Store) GetRun(ctx context.Context, id uuid.UUID) (*Run, error) {
-	return scanRun(s.pool.QueryRow(ctx, `SELECT `+runCols+` FROM workflow_runs WHERE id=$1`, id))
+	return scanRun(s.qrow(ctx, `SELECT `+runCols+` FROM workflow_runs WHERE id=$1`, id))
 }
 
 // ProjectActivity is the per-project run summary a dashboard needs: how many,
@@ -150,13 +223,25 @@ type ProjectActivity struct {
 
 // ProjectRunActivity returns one entry per project that has ever run anything.
 func (s *Store) ProjectRunActivity(ctx context.Context) (map[string]ProjectActivity, error) {
-	rows, err := s.pool.Query(ctx, `
+	q := `
 		SELECT r.project, r.n, l.status, l.created_at
 		FROM (SELECT project, count(*) AS n FROM workflow_runs GROUP BY project) r
 		JOIN LATERAL (
 			SELECT status, created_at FROM workflow_runs
 			WHERE project = r.project ORDER BY created_at DESC LIMIT 1
-		) l ON true`)
+		) l ON true`
+	if s.d.isSQLite() {
+		// No LATERAL. Correlated scalar subqueries say the same thing, and the
+		// counting still happens in SQL — which is the point of this query.
+		q = `
+		SELECT project, count(*),
+		       (SELECT status FROM workflow_runs i
+		        WHERE i.project = o.project ORDER BY created_at DESC LIMIT 1),
+		       (SELECT created_at FROM workflow_runs i
+		        WHERE i.project = o.project ORDER BY created_at DESC LIMIT 1)
+		FROM workflow_runs o GROUP BY project`
+	}
+	rows, err := s.query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +292,7 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 	args = append(args, f.Limit)
 	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", len(args))
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := s.query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -224,21 +309,21 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 }
 
 func (s *Store) UpdateRun(ctx context.Context, id uuid.UUID, status, currentStep, errMsg string) error {
-	_, err := s.pool.Exec(ctx,
+	_, err := s.exec(ctx,
 		`UPDATE workflow_runs SET status=$2, current_step=$3, error=$4, updated_at=now() WHERE id=$1`,
 		id, status, currentStep, errMsg)
 	return err
 }
 
 func (s *Store) UpdateRunInput(ctx context.Context, id uuid.UUID, input json.RawMessage) error {
-	_, err := s.pool.Exec(ctx, `UPDATE workflow_runs SET input=$2, updated_at=now() WHERE id=$1`, id, input)
+	_, err := s.exec(ctx, `UPDATE workflow_runs SET input=$2, updated_at=now() WHERE id=$1`, id, jsonArg(input))
 	return err
 }
 
 // SetBaseRef records the commit a run started from, once. Later resumes read it
 // back so every step's diff is measured from the same point.
 func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE workflow_runs SET base_ref=$2 WHERE id=$1 AND base_ref=''`, id, ref)
+	_, err := s.exec(ctx, `UPDATE workflow_runs SET base_ref=$2 WHERE id=$1 AND base_ref=''`, id, ref)
 	return err
 }
 
@@ -246,27 +331,28 @@ func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error 
 
 const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at`
 
-func scanStep(row pgx.Row) (*StepRun, error) {
+func scanStep(row rowScanner) (*StepRun, error) {
 	st := &StepRun{}
 	err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Position, &st.Status, &st.Attempts, &st.Turns,
-		&st.Prompt, &st.Output, &st.RawText, &st.Error, &st.Usage, &st.Pending, &st.Decision, &st.StartedAt, &st.FinishedAt)
+		&st.Prompt, rawJSON{&st.Output}, &st.RawText, &st.Error, rawJSON{&st.Usage},
+		rawJSON{&st.Pending}, rawJSON{&st.Decision}, &st.StartedAt, &st.FinishedAt)
 	return st, err
 }
 
 // EnsureStep creates the pending row for (run, step) if it does not exist yet.
 func (s *Store) EnsureStep(ctx context.Context, runID uuid.UUID, stepID string, position int) error {
-	_, err := s.pool.Exec(ctx,
+	_, err := s.exec(ctx,
 		`INSERT INTO step_runs (id, run_id, step_id, position, status) VALUES ($1,$2,$3,$4,'pending')
 		 ON CONFLICT (run_id, step_id) DO NOTHING`, uuid.New(), runID, stepID, position)
 	return err
 }
 
 func (s *Store) GetStep(ctx context.Context, runID uuid.UUID, stepID string) (*StepRun, error) {
-	return scanStep(s.pool.QueryRow(ctx, `SELECT `+stepCols+` FROM step_runs WHERE run_id=$1 AND step_id=$2`, runID, stepID))
+	return scanStep(s.qrow(ctx, `SELECT `+stepCols+` FROM step_runs WHERE run_id=$1 AND step_id=$2`, runID, stepID))
 }
 
 func (s *Store) ListSteps(ctx context.Context, runID uuid.UUID) ([]*StepRun, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+stepCols+` FROM step_runs WHERE run_id=$1 ORDER BY position`, runID)
+	rows, err := s.query(ctx, `SELECT `+stepCols+` FROM step_runs WHERE run_id=$1 ORDER BY position`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +386,7 @@ type StepPatch struct {
 }
 
 func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p StepPatch) error {
-	_, err := s.pool.Exec(ctx, `UPDATE step_runs SET
+	_, err := s.exec(ctx, `UPDATE step_runs SET
 		status      = COALESCE($3, status),
 		attempts    = COALESCE($4, attempts),
 		turns       = COALESCE($5, turns),
@@ -321,7 +407,7 @@ func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p
 
 // ResetStepsFrom marks the given step and everything after it pending again (used by retry / re-run).
 func (s *Store) ResetStepsFrom(ctx context.Context, runID uuid.UUID, position int) error {
-	_, err := s.pool.Exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
+	_, err := s.exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
 		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL WHERE run_id=$1 AND position>=$2`, runID, position)
 	return err
 }
@@ -335,12 +421,7 @@ func pendingOp(p StepPatch) string {
 	return ""
 }
 
-func nullableJSON(j json.RawMessage) any {
-	if len(j) == 0 {
-		return nil
-	}
-	return j
-}
+func nullableJSON(j json.RawMessage) any { return jsonArg(j) }
 
 // ---- events ----
 
@@ -350,14 +431,14 @@ func (s *Store) AppendEvent(ctx context.Context, runID uuid.UUID, stepID, kind s
 		return nil, err
 	}
 	ev := &Event{RunID: runID, StepID: stepID, Kind: kind, Payload: raw}
-	err = s.pool.QueryRow(ctx,
+	err = s.qrow(ctx,
 		`INSERT INTO run_events (run_id, step_id, kind, payload) VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-		runID, stepID, kind, raw).Scan(&ev.ID, &ev.CreatedAt)
+		runID, stepID, kind, jsonArg(raw)).Scan(&ev.ID, &ev.CreatedAt)
 	return ev, err
 }
 
 func (s *Store) ListEvents(ctx context.Context, runID uuid.UUID, afterID int64, limit int) ([]*Event, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, run_id, step_id, kind, payload, created_at FROM run_events WHERE run_id=$1 AND id>$2 ORDER BY id LIMIT $3`,
 		runID, afterID, limit)
 	if err != nil {
@@ -367,7 +448,7 @@ func (s *Store) ListEvents(ctx context.Context, runID uuid.UUID, afterID int64, 
 	var out []*Event
 	for rows.Next() {
 		ev := &Event{}
-		if err := rows.Scan(&ev.ID, &ev.RunID, &ev.StepID, &ev.Kind, &ev.Payload, &ev.CreatedAt); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.RunID, &ev.StepID, &ev.Kind, rawJSON{&ev.Payload}, &ev.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, ev)
@@ -379,13 +460,13 @@ func (s *Store) ListEvents(ctx context.Context, runID uuid.UUID, afterID int64, 
 
 func (s *Store) CreateArtifact(ctx context.Context, a *Artifact) error {
 	a.ID = uuid.New()
-	return s.pool.QueryRow(ctx,
+	return s.qrow(ctx,
 		`INSERT INTO artifacts (id, run_id, step_id, name, object_key, content_type, size_bytes) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING created_at`,
 		a.ID, a.RunID, a.StepID, a.Name, a.ObjectKey, a.ContentType, a.SizeBytes).Scan(&a.CreatedAt)
 }
 
 func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact, error) {
-	rows, err := s.pool.Query(ctx,
+	rows, err := s.query(ctx,
 		`SELECT id, run_id, step_id, name, object_key, content_type, size_bytes, created_at FROM artifacts WHERE run_id=$1 ORDER BY created_at`, runID)
 	if err != nil {
 		return nil, err
@@ -402,6 +483,3 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 	return out, rows.Err()
 }
 
-// Pool exposes the connection pool for tests that need to assert on what is
-// actually stored — that a secret is ciphertext in the table, for instance.
-func (s *Store) Pool() *pgxpool.Pool { return s.pool }
