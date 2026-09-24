@@ -1,0 +1,4 @@
+# Staged build inputs — copied in by `task assets:stage`, never committed.
+*
+!.gitignore
+!PLACEHOLDER.md

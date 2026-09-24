@@ -3,11 +3,15 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/api"
+	"github.com/muthuishere/wfnexus/apps/api/internal/assets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
@@ -43,9 +47,77 @@ func logDoctor(d engine.Doctor) {
 	}
 }
 
+// resolveAssets settles where the defaults come from, before anything reads
+// them. Disk wins wherever it exists; the copy compiled into this binary is the
+// fallback that makes a downloaded `wfx-server` work in an empty directory.
+// Every decision is printed, because "which templates is it running?" should be
+// readable in the boot log rather than inferred.
+func resolveAssets(cfg *config.Config) {
+	for _, it := range []struct {
+		name     string
+		target   *string
+		explicit bool
+	}{
+		{assets.TemplatesName, &cfg.TemplatesDir, cfg.Explicit.Templates},
+		{assets.SkillsName, &cfg.SkillsDir, cfg.Explicit.Skills},
+		{assets.RegistriesName, &cfg.RegistriesPath, cfg.Explicit.Registries},
+	} {
+		path, origin, warn, err := assets.Resolve(it.name, *it.target, it.explicit)
+		if warn != "" {
+			log.Printf("  WARNING %s", warn)
+		}
+		if err != nil {
+			log.Fatalf("%s: %v", it.name, err)
+		}
+		if origin == assets.Missing {
+			log.Printf("  %-10s MISSING — nothing at %s and nothing embedded", it.name, *it.target)
+			continue
+		}
+		*it.target = path
+		log.Printf("  %-10s %-8s %s", it.name, origin, path)
+	}
+
+	// Workflows are USER DATA and stay on disk — never served from the binary.
+	// They only have to exist, so an empty install starts instead of dying on
+	// `open ./workflows: no such file or directory`.
+	dir, warn, err := assets.EnsureWorkflowsDir(cfg.WorkflowsDir, cfg.Explicit.Workflows)
+	if err != nil {
+		log.Fatalf("workflows: %v", err)
+	}
+	if warn != "" {
+		// Creating the directory is normal on a fresh install and is reported
+		// as a note; a configured path that could NOT be used says so in the
+		// same line, because that one is a mistake, not a first boot.
+		log.Printf("  %s", warn)
+	}
+	cfg.WorkflowsDir = dir
+	log.Printf("  %-10s %-8s %s", "workflows", "disk", dir)
+}
+
+// uiSource picks the bundle to serve: the configured directory if it really
+// holds a build, otherwise the one embedded at release time.
+func uiSource(cfg config.Config) (string, fs.FS) {
+	if cfg.UIDir != "" {
+		if _, err := os.Stat(filepath.Join(cfg.UIDir, "index.html")); err == nil {
+			log.Printf("  %-10s %-8s %s", "ui", assets.FromDisk, cfg.UIDir)
+			return cfg.UIDir, nil
+		}
+		if cfg.Explicit.UI {
+			log.Printf("  WARNING ui: configured %s has no index.html", cfg.UIDir)
+		}
+	}
+	if f, ok := assets.UI(); ok {
+		log.Printf("  %-10s %-8s compiled into this binary", "ui", assets.FromEmbedded)
+		return "", f
+	}
+	log.Printf("  %-10s %-8s no bundle on disk and none embedded — / will 404", "ui", assets.Missing)
+	return "", nil
+}
+
 func main() {
 	cfg := config.Load()
 	ctx := context.Background()
+	resolveAssets(&cfg)
 
 	// Which database runs is one line of config, exactly like the artifact
 	// store below: a laptop gets a SQLite file it can delete, a deployment gets
@@ -131,7 +203,8 @@ func main() {
 			log.Printf("  schedule   %-16s %q", d.Name, sched.Cron)
 		}
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.UIDir), ReadHeaderTimeout: 10 * time.Second}
+	uiDir, uiFS := uiSource(cfg)
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, uiDir, uiFS), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())
 }

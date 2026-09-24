@@ -85,6 +85,26 @@ type Config struct {
 	ClassifierBaseURL   string
 	ClassifierModel     string
 	ClassifierAPIKeyEnv string
+	// Explicit records which paths the operator actually STATED (env var or
+	// config file) rather than inheriting from the built-in default. It only
+	// matters for the embedded defaults: a stated path that does not exist is
+	// a mistake worth shouting about, while an unstated one that does not
+	// exist is just a fresh install with nothing beside the binary.
+	Explicit Explicit
+}
+
+// Explicit is the set of path settings that were stated rather than defaulted.
+type Explicit struct {
+	Workflows  bool
+	Templates  bool
+	Skills     bool
+	Registries bool
+	UI         bool
+}
+
+// stated reports whether a setting was given by the environment or the file.
+func stated(envKey, fromFile string) bool {
+	return os.Getenv(envKey) != "" || fromFile != ""
 }
 
 func env(k, def string) string {
@@ -168,6 +188,14 @@ func LoadWithFile(path string) (Config, error) {
 		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", or(f.Classifier.BaseURL, "https://openrouter.ai/api/v1")),
 		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", or(f.Classifier.Model, "typesafe/jev-1.13")),
 		ClassifierAPIKeyEnv: env("WFX_CLASSIFIER_API_KEY_ENV", or(f.Classifier.APIKeyEnv, "OPENROUTER_API_KEY")),
+
+		Explicit: Explicit{
+			Workflows:  stated("WFX_WORKFLOWS_DIR", f.Paths.Workflows),
+			Templates:  stated("WFX_TEMPLATES_DIR", f.Paths.Templates),
+			Skills:     stated("WFX_SKILLS_DIR", f.Paths.Skills),
+			Registries: stated("WFX_REGISTRIES", f.Paths.Registries),
+			UI:         stated("WFX_UI_DIR", f.Paths.UI),
+		},
 	}
 	return cfg, ferr
 }
