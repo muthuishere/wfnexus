@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -119,5 +120,35 @@ func TestCompactorHookNilWhenDisabled(t *testing.T) {
 	var e Engine
 	if h := e.compactorHook(context.Background(), uuid.New(), "s", &workflow.Step{}, resolved{}, nil, nil); h != nil {
 		t.Fatal("want nil hook when compaction is off")
+	}
+}
+
+// The summarizer must fit in the same context the step just overflowed. A
+// 117 KB tool result is what overflows first, and summarizing it means sending
+// it — so its input is bounded by the step's own threshold, middle-elided.
+func TestElideMiddleBoundsTheSummarizerInput(t *testing.T) {
+	big := make([]byte, 100_000)
+	for i := range big {
+		big[i] = 'x'
+	}
+	out := elideMiddle(big, 8000)
+	if len(out) > 8000+400 {
+		t.Fatalf("want ~8000 bytes, got %d", len(out))
+	}
+	if !bytes.Contains(out, []byte("were dropped before summarizing")) {
+		t.Fatal("the elision must say it happened, or the summary claims completeness")
+	}
+	if !bytes.HasPrefix(out, []byte("xxxx")) || !bytes.HasSuffix(out, []byte("xxxx")) {
+		t.Fatal("head and tail must both survive")
+	}
+}
+
+func TestElideMiddleLeavesSmallInputAlone(t *testing.T) {
+	in := []byte("short transcript")
+	if got := elideMiddle(in, 8000); !bytes.Equal(got, in) {
+		t.Fatalf("under the bound must be byte-identical, got %q", got)
+	}
+	if got := elideMiddle(in, 0); !bytes.Equal(got, in) {
+		t.Fatalf("no bound must be byte-identical, got %q", got)
 	}
 }

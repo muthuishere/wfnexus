@@ -62,7 +62,7 @@ func (e *Engine) compactorHook(ctx context.Context, runID uuid.UUID, stepID stri
 	if max <= 0 {
 		return nil
 	}
-	summarize := e.summarizer(ctx, runID, stepID, prov, transport, onMetric)
+	summarize := e.summarizer(ctx, runID, stepID, max, prov, transport, onMetric)
 	inner := agents.Compactor(agents.CompactorOptions{
 		MaxTokens: max,
 		Summarize: summarize,
@@ -97,7 +97,7 @@ func (e *Engine) compactorHook(ctx context.Context, runID uuid.UUID, stepID stri
 // summarizer is the Summarize function agents.Compactor requires. toolnexus makes
 // no model call on the host's behalf, so the host supplies one; this is a plain
 // single-turn completion with no toolkit.
-func (e *Engine) summarizer(ctx context.Context, runID uuid.UUID, stepID string,
+func (e *Engine) summarizer(ctx context.Context, runID uuid.UUID, stepID string, max int,
 	prov resolved, transport http.RoundTripper, onMetric func(tn.MetricEvent)) func([]any) (string, error) {
 
 	return func(older []any) (string, error) {
@@ -105,6 +105,15 @@ func (e *Engine) summarizer(ctx context.Context, runID uuid.UUID, stepID string,
 		if err != nil {
 			return "", fmt.Errorf("compaction: marshal transcript: %w", err)
 		}
+		// THE SUMMARIZER MUST FIT TOO. Measured 2026-09-25: the first thing that
+		// overflows a step is usually ONE oversized tool result — a 117 KB `git
+		// diff` — and summarizing it means SENDING it, so the summary call blew
+		// the same 200k ceiling the step had just hit and compaction rescued
+		// nothing. The transcript handed to the summarizer is therefore bounded
+		// by the step's own threshold, middle-elided: the head says what the
+		// agent was asked and what it ran, the tail says what came back last,
+		// and the elision is stated so the model does not claim completeness.
+		blob = elideMiddle(blob, max*4)
 		opts := tn.ClientOptions{
 			SystemPrompt: compactSummarySoul,
 			MaxTurns:     1,
@@ -128,6 +137,22 @@ func (e *Engine) summarizer(ctx context.Context, runID uuid.UUID, stepID string,
 		}
 		return res.Text, nil
 	}
+}
+
+// elideMiddle bounds a blob to n bytes by keeping its head and its tail and
+// saying, in the gap, how much was dropped. Whole bytes rather than whole
+// messages because the overflow is routinely INSIDE one message.
+func elideMiddle(b []byte, n int) []byte {
+	if n <= 0 || len(b) <= n {
+		return b
+	}
+	half := n / 2
+	note := fmt.Sprintf("\n\n… [%d bytes of the middle of this transcript were dropped before summarizing; "+
+		"say plainly in the summary that the middle is missing] …\n\n", len(b)-2*half)
+	out := make([]byte, 0, n+len(note))
+	out = append(out, b[:half]...)
+	out = append(out, note...)
+	return append(out, b[len(b)-half:]...)
 }
 
 // compactAtTokens is the step's compaction threshold: `budget.compact_at_tokens`.

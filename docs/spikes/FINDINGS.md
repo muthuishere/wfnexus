@@ -1307,3 +1307,117 @@ this machine; roots searched: [skills ~/.claude/skills ~/.agents/skills]
 
 None of the three echoes the offending value, and after all three the index held
 exactly one bundle and the blob store exactly one directory.
+
+## 11 — context compaction (2026-09-25)
+
+The ROADMAP named `agents.Compactor` and a `BeforeLLM` hook. Both are real in the
+pinned v0.19.0, with those exact names:
+
+- `agents/compaction.go` — `func Compactor(CompactorOptions) func(context.Context, tn.BeforeLLMEvent) (*tn.LLMOverride, error)`.
+  `CompactorOptions{MaxTokens, KeepTail, Summarize, CountTokens, FlushToMemory}`.
+  `Summarize func(older []any) (string, error)` is **required**: the library makes
+  no model call on the host's behalf, so the host supplies the summarizer.
+- `client.go:259` — `Hooks.BeforeLLM`; returning `*tn.LLMOverride{Messages: …}`
+  REPLACES the working transcript, and the loop sets `messages = ov.Messages`.
+  Also `agents.EstimateTokens([]any) int` — ceil(chars/4) over the JSON.
+
+So it is on toolnexus's side of ADR 0001 and we call it; nothing is reimplemented
+here. It does not touch ADR 0005 either: the rewrite is in memory, for the next
+model call **inside the same step**. No `resume`, no durability boundary moved.
+
+### What we wired
+
+`budget: { compact_at_tokens: N }` on a step — the existing budget surface
+(`workflow.Budget`), not a new one. **0 is the default and means off.** Off by
+default because compaction rewrites the transcript the typed contract lives in; a
+step that does not name it is byte-identical to before. `engine/compaction.go`
+composes the compactor onto the SAME `BeforeLLM` seam the turn-budget warning
+already uses (`chainBeforeLLM`, compaction first so the warning is not summarized
+away moments after being added), and emits a `log` event on the run each time it
+fires. Its summarizer runs on the step's own provider, and its usage lands in the
+step accumulator like every other call.
+
+### Observed: the same workload, before and after
+
+`code-review` against this repo, `--base_branch main~3`, provider `haiku`
+(anthropic/claude-haiku-4.5 via OpenRouter, 200k context). Identical workflow in
+both arms except `compact_at_tokens: 8000`.
+
+**Before** — the step dies at the context limit, exactly as the ROADMAP said:
+
+```
+survey  step → failed  LLM 400: This endpoint's maximum context length is 200000
+        tokens. However, you requested about 253267 tokens (252383 of text input,
+        884 of tool input).
+```
+
+**After** — it compacts and keeps going:
+
+```
+survey  compacted context at turn 2:  6 messages ~276509 tokens → 2 messages ~1043 tokens
+survey  compacted context at turn 9:  20 messages  ~8290 tokens → 2 messages  ~880 tokens
+survey  compacted context at turn 13: 24 messages  ~8317 tokens → 2 messages ~1484 tokens
+review  compacted context at turn 18: 20 messages  ~8218 tokens → 2 messages ~1787 tokens
+review  compacted context at turn 27: 22 messages  ~8372 tokens → 8 messages ~2996 tokens
+```
+
+`step_runs.usage` is the accumulator, so the comparison is a query:
+
+```sql
+select r.workflow, s.step_id, s.status, s.turns,
+       json_extract(s.usage,'$.llmCalls')         calls,
+       json_extract(s.usage,'$.promptTokens')     prompt,
+       json_extract(s.usage,'$.completionTokens') completion,
+       round(json_extract(s.usage,'$.costUsd'),4) cost,
+       (s.output is not null)                     submitted
+from step_runs s join workflow_runs r on r.id = s.run_id
+where r.workflow like 'cr-%' order by r.created_at, s.position;
+```
+
+```
+arm        step_id  status   turns  calls  prompt  completion  cost    submitted
+---------  -------  -------  -----  -----  ------  ----------  ------  ---------
+baseline   survey   failed   4      4      6281    344         0.008   0
+baseline   review   pending  0                                         0
+compacted  survey   done     21     21     161860  7221        0.198   1
+compacted  review   done     31     31     211073  7890        0.2505  1
+```
+
+The run that compacts costs more *because it does not die*. That is the point:
+the baseline's $0.008 buys a failed run and no output, and the $0.45 buys two
+typed, schema-validated submissions and a verdict. Per call, compaction is what
+holds the transcript flat — the compacted `survey` averages 7.7k prompt tokens
+across 21 calls where the baseline's 4th call alone asked for 253k.
+
+The typed contract survived: both steps' `submit_output` was accepted and both
+rows have an `output`, across five transcript rewrites. That is the thing worth
+checking — the Completion gate and the schema are carried in the messages
+compaction rewrites.
+
+### What did not work, and what it cost
+
+**The summarizer has to fit in the same context the step just overflowed.** The
+first run with compaction on failed anyway:
+
+```
+survey  compaction failed at turn 1 (~276010 tokens), continuing uncompacted:
+        LLM 400: … you requested about 280224 tokens …
+```
+
+The thing that overflows a step is usually ONE oversized tool result — a 117 KB
+`git diff` — and summarizing it means *sending* it, so the summary call blew the
+same 200k ceiling and compaction rescued nothing. Fixed by bounding the
+transcript handed to the summarizer to the step's own threshold, middle-elided
+and saying so in the gap (`elideMiddle`). A failed summary is also non-fatal now:
+the turn proceeds uncompacted and the run says so, rather than a rescue mechanism
+becoming a new way to die.
+
+A threshold of 40,000 never fired on this workload — per-call context peaked
+around 19k when the agent happened not to read the whole diff at once — and the
+run completed normally, which is the no-op path behaving as documented. The
+demonstration above uses 8,000 to make it fire deterministically.
+
+`ollama-http` (qwen3:4b) was tried first for a zero-cost loop and abandoned: one
+turn on the 117 KB diff took 434 seconds, so a 37-turn workload was hours.
+
+**Spent: $1.19** across all arms (sum of `step_runs.usage->costUsd` for `cr-%`).
