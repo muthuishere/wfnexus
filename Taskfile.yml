@@ -20,9 +20,14 @@ tasks:
     cmds: [docker exec -it bfp-postgres psql -U bfp -d bfp]
 
   api:
-    desc: Run the server (applies migrations on boot)
+    desc: Run the server against infra:up's Postgres (migrations on boot)
     dir: apps/api
-    env: { WFX_ROOT: "{{.ROOT_DIR}}" }
+    # WFX_MODE=server is STATED here. The binary's no-config default is `local`
+    # — sqlite in a file, artifacts in a folder — which is right for someone who
+    # just downloaded it and wrong for a session that has just run
+    # `task infra:up`. `server`'s defaults ARE that stack: postgres on 5460,
+    # MinIO on 9030. A .env (see .env.example) still overrides both.
+    env: { WFX_ROOT: "{{.ROOT_DIR}}", WFX_MODE: server }
     cmds: [go run .]
   ui:
     desc: Vite dev server on :5173, proxying /api to :8090

@@ -14,9 +14,9 @@ templates/          starting points to copy
 skills/             the agent skills a step may load
 registries.json     providers, classifiers, MCP servers
 Dockerfile          copies bin/ — no build step
-docker-compose.yml  postgres + minio + the server + one worker
+docker-compose.yml  postgres + minio + the server (WFX_MODE=server) + one worker
 k8s/                plain manifests, no chart and no operator
-config.example.yaml every setting, commented
+config.example.yaml every setting, commented — and entirely optional
 ```
 
 ## The whole thing in containers
@@ -34,12 +34,23 @@ a fresh install with nothing else done.
 ```sh
 cp bin/wfx-server-linux-amd64 /usr/local/bin/wfx-server
 cp bin/wfx-linux-amd64        /usr/local/bin/wfx
-cp config.example.yaml ~/.config/wfx/config.yaml    # edit it
 wfx-server
 ```
 
-With `mode: local` that is sqlite and a folder — no Postgres, no MinIO, nothing
-else running.
+That is the whole thing. With **no config file at all** the defaults are
+`mode: local` — SQLite at `~/.local/share/wfnexus/wfnexus.db` and artifacts in
+a folder beside it. No Postgres, no MinIO, nothing else running.
+
+`config.example.yaml` is there for when you want to change something:
+
+```sh
+cp config.example.yaml ~/.config/wfx/config.yaml    # edit it
+```
+
+Write `mode: server` in it (or set `WFX_MODE=server`) to take the Postgres and
+S3 defaults instead. Either way, anything you state explicitly — a driver, a
+DSN, an endpoint — beats the mode, and a stated value that is wrong stops the
+server rather than quietly falling back.
 
 ## Kubernetes
 

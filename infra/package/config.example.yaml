@@ -13,7 +13,12 @@
 
 # `local` picks the defaults a laptop wants — sqlite and a folder for artifacts.
 # `server` picks postgres and s3. It is a shorthand: anything set explicitly
-# below still wins over it.
+# below still wins over it, and a mode that is neither is an error rather than
+# a silent fallback.
+#
+# UNSET means `local`. So this line, and indeed this whole file, is optional:
+# `./wfx-server` in an empty directory already boots on sqlite. Write `server`
+# here when you have a Postgres and a bucket for it to use.
 mode: local
 
 addr: ":8090"

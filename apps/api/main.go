@@ -115,7 +115,12 @@ func uiSource(cfg config.Config) (string, fs.FS) {
 }
 
 func main() {
-	cfg := config.Load()
+	cfg, cerr := config.LoadWithFile(config.DefaultPath())
+	if cerr != nil {
+		// A stated-but-wrong setting stops the process. Falling back to the
+		// default would run something the operator did not ask for.
+		log.Fatalf("config: %v", cerr)
+	}
 	ctx := context.Background()
 	resolveAssets(&cfg)
 
@@ -143,7 +148,7 @@ func main() {
 			log.Fatalf("artifacts: %v", err)
 		}
 		log.Printf("artifacts: folder %s", cfg.ArtifactDir)
-	default:
+	case "s3":
 		bl, err = blob.Open(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
 		if err != nil {
 			log.Fatalf("s3: %v", err)

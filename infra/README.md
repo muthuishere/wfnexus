@@ -2,13 +2,16 @@
 
 Two things live here, and they are the same story from both ends:
 
-- **the platform** — one Go binary, a Postgres, an S3 bucket. Run it with Docker,
-  Compose, or Kubernetes.
+- **the platform** — one Go binary. Run by hand with no configuration it uses
+  SQLite and a folder and needs nothing else; everything here is the *other*
+  setting, `mode: server` — a Postgres and an S3 bucket — under Docker, Compose
+  or Kubernetes.
 - **the workers** — machines that have joined it and take the steps whose
   `runs-on:` label they hold. A worker is one binary and one command.
 
 Nothing here is enterprise machinery. There is no operator, no chart, no
-control plane. If you can run a container and a Postgres, you can run this.
+control plane. If you can run a container and a Postgres, you can run this — and
+if you can't, run the binary and it will use a SQLite file instead.
 
 ## One machine
 
@@ -20,6 +23,14 @@ open http://localhost:8090
 That brings up Postgres, MinIO, the platform, and one worker container holding
 the labels `self-hosted,linux,docker` — so a workflow that says `runs-on: linux`
 works on a fresh install with nothing else done.
+
+The compose file and the image both set **`WFX_MODE=server`** explicitly. The
+binary's own no-config default is `local` (SQLite and a folder), so that a
+downloaded binary boots on its own; a deployment gets Postgres because it says
+so, not because of where a default happens to sit. Anything you set yourself —
+`DATABASE_URL`, `WFX_STORAGE_DRIVER`, `S3_ENDPOINT` — still wins over the mode,
+and a value you state and get wrong stops the process instead of silently
+falling back to SQLite.
 
 ## Kubernetes
 

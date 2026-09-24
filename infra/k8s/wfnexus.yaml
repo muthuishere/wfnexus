@@ -44,6 +44,10 @@ spec:
           ports: [{ containerPort: 8090, name: http }]
           envFrom: [{ secretRef: { name: wfnexus } }]
           env:
+            # Stated, never inherited: the binary's no-config default is
+            # `local` (sqlite + a folder) so a laptop needs nothing running. A
+            # cluster has postgres and a bucket, so it says so.
+            - { name: WFX_MODE, value: "server" }
             - { name: S3_ENDPOINT, value: "minio:9000" }
             - { name: WFX_WORKDIR, value: "/data/runs" }
             # The address workers are told to reach, shown in the join command.

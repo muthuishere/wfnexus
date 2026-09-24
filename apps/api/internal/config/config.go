@@ -4,6 +4,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -142,24 +143,46 @@ func LoadWithFile(path string) (Config, error) {
 	if f == nil {
 		f = &File{}
 	}
+	// merr collects a stated-but-wrong value. It is returned rather than
+	// silently repaired: a value the operator wrote and got wrong must fail
+	// loudly, never fall back to the laptop default.
+	var merr error
 	home, _ := os.UserHomeDir()
 	root := env("WFX_ROOT", ".")
 
 	// `mode` is a shorthand for a set of defaults, never a separate code path.
 	// Anything stated explicitly still wins over it.
-	local := strings.EqualFold(f.Mode, "local")
-	defStorage, defArtifacts := "postgres", "s3"
+	//
+	// The UNSET mode is `local`. A binary someone just downloaded, with nothing
+	// beside it, must boot — so the no-config default is the one that needs
+	// nothing running: sqlite in a file and artifacts in a folder. A deployment
+	// says `mode: server` (or sets the drivers itself), which is one line in the
+	// file a deployment already has, whereas a laptop has no file at all.
+	mode := strings.ToLower(strings.TrimSpace(env("WFX_MODE", f.Mode)))
+	defStorage, defArtifacts := "sqlite", "folder"
+	switch mode {
+	case "", "local":
+	case "server":
+		defStorage, defArtifacts = "postgres", "s3"
+	default:
+		// A misspelled mode must not quietly select a set of defaults.
+		merr = fmt.Errorf("mode %q is not one of local, server", mode)
+	}
+
+	// The DSN default follows the EFFECTIVE driver, not the mode, so
+	// `mode: server` with `storage.driver: sqlite` still gets a file path.
+	storageDriver := env("WFX_STORAGE_DRIVER", or(f.Storage.Driver, defStorage))
 	defDSN := "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"
-	if local {
-		defStorage, defArtifacts = "sqlite", "folder"
+	if strings.EqualFold(storageDriver, "sqlite") || strings.EqualFold(storageDriver, "sqlite3") {
 		defDSN = filepath.Join(home, ".local", "share", "wfnexus", "wfnexus.db")
 	}
+	artifactDriver := env("WFX_ARTIFACT_DRIVER", or(f.Artifacts.Driver, defArtifacts))
 
 	cfg := Config{
 		Addr:           env("WFX_ADDR", or(f.Addr, ":8090")),
-		StorageDriver:  env("WFX_STORAGE_DRIVER", or(f.Storage.Driver, defStorage)),
+		StorageDriver:  storageDriver,
 		DatabaseURL:    env("DATABASE_URL", or(f.Storage.DSN, defDSN)),
-		ArtifactDriver: env("WFX_ARTIFACT_DRIVER", or(f.Artifacts.Driver, defArtifacts)),
+		ArtifactDriver: artifactDriver,
 		ArtifactDir:    env("WFX_ARTIFACT_DIR", or(f.Artifacts.Dir, filepath.Join(home, ".local", "share", "wfnexus", "artifacts"))),
 		S3Endpoint:     env("S3_ENDPOINT", or(f.Artifacts.Endpoint, "127.0.0.1:9030")),
 		S3AccessKey:    env("S3_ACCESS_KEY", or(f.Artifacts.AccessKey, "bfp")),
@@ -197,7 +220,31 @@ func LoadWithFile(path string) (Config, error) {
 			UI:         stated("WFX_UI_DIR", f.Paths.UI),
 		},
 	}
+	if ferr == nil {
+		ferr = merr
+	}
+	if ferr == nil {
+		ferr = cfg.validate()
+	}
 	return cfg, ferr
+}
+
+// validate refuses a driver nobody implements. Without it a typo in
+// `storage.driver` lands on postgres and an artifacts typo lands on s3 — the
+// operator asked for one thing, got another, and the only symptom is a
+// connection error to something they never named.
+func (c Config) validate() error {
+	switch strings.ToLower(c.StorageDriver) {
+	case "sqlite", "sqlite3", "postgres", "postgresql", "pgx":
+	default:
+		return fmt.Errorf("storage driver %q is not one of sqlite, postgres", c.StorageDriver)
+	}
+	switch strings.ToLower(c.ArtifactDriver) {
+	case "folder", "s3":
+	default:
+		return fmt.Errorf("artifact driver %q is not one of folder, s3", c.ArtifactDriver)
+	}
+	return nil
 }
 
 // or is the file's value, or the built-in default when the file said nothing.
