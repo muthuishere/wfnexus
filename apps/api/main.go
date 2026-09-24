@@ -208,3 +208,14 @@ func main() {
 	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
 	log.Fatal(srv.ListenAndServe())
 }
+
+// The engine names what it needs of persistence and artifact storage as its
+// own interfaces, so that wfx-runner — which opens neither — does not compile
+// a Postgres driver and an S3 client into itself. The server is where the two
+// halves meet, so this is where the fit is checked: add a method to
+// engine.Store without adding it to *store.Store and the SERVER stops
+// building, rather than the mismatch surviving to a run.
+var (
+	_ engine.Store     = (*store.Store)(nil)
+	_ engine.Artifacts = (blob.Store)(nil)
+)

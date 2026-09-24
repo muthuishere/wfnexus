@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -158,7 +158,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	if step.RequiresApproval && st.Status != "approved" {
-		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("awaiting_approval")})
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 		e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 		return nil, stepHalted
 	}
@@ -170,7 +170,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	if rec != nil {
-		e.setStep(ctx, runID, step.ID, store.StepPatch{Decision: mustJSON(rec)})
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Decision: mustJSON(rec)})
 		data.Decide = vals
 		if halted := e.applyDecideGatesLinear(ctx, runID, step, vals, data); halted {
 			return nil, stepHalted
@@ -185,7 +185,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 			e.failStep(ctx, runID, step.ID, err)
 			return nil, stepHalted
 		}
-		e.setStep(ctx, runID, step.ID, store.StepPatch{
+		e.setStep(ctx, runID, step.ID, model.StepPatch{
 			Status: str("done"), Output: mustJSON(out), FinishedAt: now(),
 		})
 		if halted := e.applyOutputGates(ctx, runID, step, out, data); halted {
@@ -200,13 +200,13 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	if res.Pending != nil {
-		e.setStep(ctx, runID, step.ID, store.StepPatch{
+		e.setStep(ctx, runID, step.ID, model.StepPatch{
 			Status: str("needs_input"), Pending: mustJSON(res.Pending), Error: str(res.Pending.Prompt),
 		})
 		e.setRun(ctx, runID, "needs_input", step.ID, res.Pending.Prompt)
 		return nil, stepHalted
 	}
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("done"), Output: mustJSON(res.Output), FinishedAt: now(),
 	})
 
@@ -239,7 +239,7 @@ func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflo
 		if attempt == attempts || ctx.Err() != nil {
 			break
 		}
-		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("retrying"), Error: str(scrub(err.Error()))})
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("retrying"), Error: str(scrub(err.Error()))})
 	}
 	return nil, lastErr
 }
@@ -255,7 +255,7 @@ func (e *Engine) applyOutputGates(ctx context.Context, runID uuid.UUID, step *wo
 		msg, _ := workflow.Render(g.Message, data)
 		switch g.Action {
 		case "needs_input":
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
 			return true
 		case "fail":
@@ -293,7 +293,7 @@ func (e *Engine) executeWithRetry(ctx context.Context, runID uuid.UUID, def *wor
 			"text": fmt.Sprintf("attempt %d/%d failed (%s) — retrying in %s",
 				attempt, attempts, scrub(err.Error()), backoff),
 		})
-		e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("retrying"), Error: str(scrub(err.Error()))})
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("retrying"), Error: str(scrub(err.Error()))})
 		select {
 		case <-ctx.Done():
 			return stepResult{}, ctx.Err()
@@ -305,7 +305,7 @@ func (e *Engine) executeWithRetry(ctx context.Context, runID uuid.UUID, def *wor
 
 func (e *Engine) failStep(ctx context.Context, runID uuid.UUID, stepID string, err error) {
 	msg := scrub(err.Error())
-	e.setStep(ctx, runID, stepID, store.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
+	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
 	e.setRun(ctx, runID, "failed", stepID, msg)
 }
 
@@ -322,11 +322,11 @@ func (e *Engine) applyDecideGatesLinear(ctx context.Context, runID uuid.UUID, st
 		msg, _ := workflow.Render(g.Message, data)
 		switch g.Action {
 		case "needs_input":
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("needs_input"), Error: str(msg)})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("needs_input"), Error: str(msg)})
 			e.setRun(ctx, runID, "needs_input", step.ID, msg)
 			return true
 		case "fail":
-			e.setStep(ctx, runID, step.ID, store.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
 			e.setRun(ctx, runID, "failed", step.ID, msg)
 			return true
 		}

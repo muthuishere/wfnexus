@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -23,64 +22,30 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/migrations"
 )
 
-type Run struct {
-	ID uuid.UUID `json:"id"`
-	// Project is the repository this run belongs to — "local" for the
-	// platform's own workflows directory.
-	Project     string          `json:"project"`
-	Workflow    string          `json:"workflow"`
-	Status      string          `json:"status"`
-	Input       json.RawMessage `json:"input"`
-	CurrentStep string          `json:"currentStep"`
-	BaseRef     string          `json:"baseRef"`
-	Error       string          `json:"error"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
-}
+// The persisted records live in internal/model, as plain data with no SQL
+// driver behind them; these aliases keep every existing `store.Run`,
+// `store.StepRun`, `store.StepPatch` … reading exactly as it did.
+type (
+	Run             = model.Run
+	StepRun         = model.StepRun
+	StepPatch       = model.StepPatch
+	Event           = model.Event
+	Artifact        = model.Artifact
+	ProjectActivity = model.ProjectActivity
+	EnvVar          = model.EnvVar
+	Sealer          = model.Sealer
+	Worker          = model.Worker
+	Job             = model.Job
+)
 
-type StepRun struct {
-	ID       uuid.UUID       `json:"id"`
-	RunID    uuid.UUID       `json:"runId"`
-	StepID   string          `json:"stepId"`
-	Position int             `json:"position"`
-	Status   string          `json:"status"`
-	Attempts int             `json:"attempts"`
-	Turns    int             `json:"turns"`
-	Prompt   string          `json:"prompt"`
-	Output   json.RawMessage `json:"output"`
-	RawText  string          `json:"rawText"`
-	Error    string          `json:"error"`
-	Usage    json.RawMessage `json:"usage"`
-	// Pending is the toolnexus suspension Request this step parked on, if any.
-	Pending json.RawMessage `json:"pending"`
-	// Decision is the classifier answer set for this step, if it declared one.
-	Decision   json.RawMessage `json:"decision"`
-	StartedAt  *time.Time      `json:"startedAt"`
-	FinishedAt *time.Time      `json:"finishedAt"`
-}
-
-type Event struct {
-	ID        int64           `json:"id"`
-	RunID     uuid.UUID       `json:"runId"`
-	StepID    string          `json:"stepId"`
-	Kind      string          `json:"kind"`
-	Payload   json.RawMessage `json:"payload"`
-	CreatedAt time.Time       `json:"createdAt"`
-}
-
-type Artifact struct {
-	ID          uuid.UUID `json:"id"`
-	RunID       uuid.UUID `json:"runId"`
-	StepID      string    `json:"stepId"`
-	Name        string    `json:"name"`
-	ObjectKey   string    `json:"objectKey"`
-	ContentType string    `json:"contentType"`
-	SizeBytes   int64     `json:"sizeBytes"`
-	CreatedAt   time.Time `json:"createdAt"`
-}
+const (
+	ScopeSystem  = model.ScopeSystem
+	ScopeProject = model.ScopeProject
+)
 
 type Store struct {
 	db *sql.DB
@@ -215,11 +180,6 @@ func (s *Store) GetRun(ctx context.Context, id uuid.UUID) (*Run, error) {
 // Computed in SQL rather than by listing runs and counting them — the listing
 // is capped, so counting it reported the cap as the number of runs and a
 // project with 900 runs and one with 500 looked identical.
-type ProjectActivity struct {
-	Runs        int
-	LastStatus  string
-	LastCreated time.Time
-}
 
 // ProjectRunActivity returns one entry per project that has ever run anything.
 func (s *Store) ProjectRunActivity(ctx context.Context) (map[string]ProjectActivity, error) {
@@ -368,23 +328,6 @@ func (s *Store) ListSteps(ctx context.Context, runID uuid.UUID) ([]*StepRun, err
 	return out, rows.Err()
 }
 
-type StepPatch struct {
-	Status   *string
-	Attempts *int
-	Turns    *int
-	Prompt   *string
-	Output   json.RawMessage
-	RawText  *string
-	Error    *string
-	Usage    json.RawMessage
-	Pending  json.RawMessage
-	Decision json.RawMessage
-	// ClearPending wipes a stored suspension (set when the step re-runs).
-	ClearPending bool
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
-}
-
 func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p StepPatch) error {
 	_, err := s.exec(ctx, `UPDATE step_runs SET
 		status      = COALESCE($3, status),
@@ -482,4 +425,3 @@ func (s *Store) ListArtifacts(ctx context.Context, runID uuid.UUID) ([]*Artifact
 	}
 	return out, rows.Err()
 }
-

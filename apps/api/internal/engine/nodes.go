@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -47,7 +47,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if !e.servesLocally(step.RunsOn) {
 		return e.runRemote(ctx, runID, step, cmd, step.RunsOn, data)
 	}
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(cmd), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
 	e.emit(ctx, runID, step.ID, "tool_call", map[string]any{"name": "run", "args": map[string]any{"command": cmd}})
@@ -111,7 +111,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 
 // runJudge executes a `judge` node: typed questions, no agent, no tools.
 func (e *Engine) runJudge(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
 	judge := *step.Judge
@@ -125,7 +125,7 @@ func (e *Engine) runJudge(ctx context.Context, runID uuid.UUID, step *workflow.S
 	if rec == nil {
 		return nil, fmt.Errorf("step %s: the judge produced no decision", step.ID)
 	}
-	e.setStep(ctx, runID, step.ID, store.StepPatch{Decision: mustJSON(rec)})
+	e.setStep(ctx, runID, step.ID, model.StepPatch{Decision: mustJSON(rec)})
 	return vals, nil
 }
 

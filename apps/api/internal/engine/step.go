@@ -13,8 +13,8 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -57,7 +57,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	if !e.servesLocally(step.RunsOn) {
 		return e.runAgentRemotely(ctx, runID, def, step, prompt, data)
 	}
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(prompt), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
 	return e.runAgent(ctx, runID, def.Name, step, prompt, data.WorkDir, data.BaseRef)
@@ -152,7 +152,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 			totalTokens = tree
 		}
 	}
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Turns: intp(res.Turns), RawText: str(res.Text),
 		Usage: mustJSON(map[string]any{"totalTokens": totalTokens}),
 	})
@@ -401,7 +401,7 @@ func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, wor
 			e.emit(ctx, runID, stepID, "error", map[string]any{"text": "artifact upload failed: " + scrub(err.Error())})
 			return
 		}
-		a := &store.Artifact{RunID: runID, StepID: stepID, Name: name, ObjectKey: key, ContentType: ctype, SizeBytes: int64(len(body))}
+		a := &model.Artifact{RunID: runID, StepID: stepID, Name: name, ObjectKey: key, ContentType: ctype, SizeBytes: int64(len(body))}
 		if err := e.store.CreateArtifact(ctx, a); err == nil {
 			e.emit(ctx, runID, stepID, "artifact", a)
 		}

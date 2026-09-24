@@ -10,49 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// A worker is a machine that joined the pool. It is identified by its LABELS,
-// never by its address: the platform never connects to a worker, the worker
-// connects to the platform and asks for work. That direction is what lets a
-// laptop behind NAT, a Windows VM on someone's desk and a Kubernetes pod all be
-// the same kind of thing, and it is why joining is one command with a token.
-type Worker struct {
-	ID       uuid.UUID `json:"id"`
-	Name     string    `json:"name"`
-	Labels   []string  `json:"labels"`
-	OS       string    `json:"os"`
-	Arch     string    `json:"arch"`
-	Version  string    `json:"version"`
-	LastSeen time.Time `json:"lastSeen"`
-	Created  time.Time `json:"createdAt"`
-}
-
-// Online reports whether this worker has been heard from recently enough to
-// send work to. A worker does not log out; it stops polling.
-func (w *Worker) Online() bool { return time.Since(w.LastSeen) < 90*time.Second }
-
-// Status is what a listing shows.
-func (w *Worker) Status() string {
-	if w.Online() {
-		return "online"
-	}
-	return "offline"
-}
-
-// A Job is one step's work waiting for whoever holds its label.
-type Job struct {
-	ID         uuid.UUID       `json:"id"`
-	RunID      uuid.UUID       `json:"runId"`
-	StepID     string          `json:"stepId"`
-	Label      string          `json:"label"`
-	WorkerID   *uuid.UUID      `json:"workerId,omitempty"`
-	Status     string          `json:"status"`
-	Payload    json.RawMessage `json:"payload"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	LeasedAt   *time.Time      `json:"leasedAt,omitempty"`
-	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
-}
-
 // ---- settings ----
 
 // Setting reads a stored value, "" when absent.

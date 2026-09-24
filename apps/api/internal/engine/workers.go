@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -103,7 +103,7 @@ type JoinRequest struct {
 
 // JoinResult is what it gets back: who it is, and the token it polls with.
 type JoinResult struct {
-	Worker *store.Worker `json:"worker"`
+	Worker *model.Worker `json:"worker"`
 	Token  string        `json:"token"`
 	// Shadowed are labels this worker offers that the platform already serves
 	// in-process, so nothing carrying them will ever be queued to it.
@@ -138,7 +138,7 @@ func (e *Engine) Join(ctx context.Context, req JoinRequest) (*JoinResult, error)
 			shadowed = append(shadowed, l)
 		}
 	}
-	w := &store.Worker{Name: req.Name, Labels: labels, OS: req.OS, Arch: req.Arch, Version: req.Version}
+	w := &model.Worker{Name: req.Name, Labels: labels, OS: req.OS, Arch: req.Arch, Version: req.Version}
 	tok := newToken()
 	if err := e.store.RegisterWorker(ctx, w, HashToken(tok)); err != nil {
 		return nil, err
@@ -150,7 +150,7 @@ func (e *Engine) Join(ctx context.Context, req JoinRequest) (*JoinResult, error)
 var ErrBadToken = fmt.Errorf("invalid token")
 
 // AuthWorker resolves a polling worker from its own token.
-func (e *Engine) AuthWorker(ctx context.Context, token string) (*store.Worker, error) {
+func (e *Engine) AuthWorker(ctx context.Context, token string) (*model.Worker, error) {
 	if token == "" {
 		return nil, ErrBadToken
 	}
@@ -165,7 +165,7 @@ func (e *Engine) AuthWorker(ctx context.Context, token string) (*store.Worker, e
 // Claim long-polls for work. Holding the request open is what keeps a worker's
 // latency low without it hammering the server: one connection, no queue
 // middleware, nothing to install on the worker's side.
-func (e *Engine) Claim(ctx context.Context, w *store.Worker, wait time.Duration) (*store.Job, error) {
+func (e *Engine) Claim(ctx context.Context, w *model.Worker, wait time.Duration) (*model.Job, error) {
 	deadline := time.Now().Add(wait)
 	for {
 		job, err := e.store.ClaimJob(ctx, w)
@@ -259,7 +259,7 @@ func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.
 		return nil, err
 	}
 
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(cmd), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
 	e.emit(ctx, runID, step.ID, "tool_call", map[string]any{
@@ -362,7 +362,7 @@ func (e *Engine) runAgentRemotely(ctx context.Context, runID uuid.UUID, def *wor
 		return stepResult{}, err
 	}
 
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(prompt), StartedAt: now(), Error: str(""), ClearPending: true,
 	})
 	e.emit(ctx, runID, step.ID, "log", map[string]any{
@@ -388,7 +388,7 @@ func (e *Engine) runAgentRemotely(ctx context.Context, runID uuid.UUID, def *wor
 
 	// What the step cost is recorded here, because the step row is the
 	// platform's. The worker only reports.
-	e.setStep(ctx, runID, step.ID, store.StepPatch{
+	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Turns: intp(ag.Turns), RawText: str(ag.RawText),
 		Usage: mustJSON(map[string]any{"totalTokens": ag.TotalTokens, "runsOn": step.RunsOn}),
 	})
@@ -414,7 +414,7 @@ func (e *Engine) saveRemoteArtifacts(ctx context.Context, runID uuid.UUID, stepI
 		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
 			return
 		}
-		a := &store.Artifact{RunID: runID, StepID: stepID, Name: name, ObjectKey: key, ContentType: ctype, SizeBytes: int64(len(body))}
+		a := &model.Artifact{RunID: runID, StepID: stepID, Name: name, ObjectKey: key, ContentType: ctype, SizeBytes: int64(len(body))}
 		if err := e.store.CreateArtifact(ctx, a); err == nil {
 			e.emit(ctx, runID, stepID, "artifact", a)
 		}
