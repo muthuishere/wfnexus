@@ -74,14 +74,57 @@ func (e *Engine) platformEnv(ctx context.Context, project string) (map[string]st
 	return workflow.MergeEnv(sys, proj), nil
 }
 
-// stepEnv is the whole cascade for one step: the platform's two levels, then
-// everything the file cascaded into the step already.
-func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.Step) (map[string]string, error) {
+// PRECEDENCE, WRITTEN DOWN ONCE — later wins, and only for the names it
+// mentions. This is the table env_test.go asserts, line for line:
+//
+//	1 system        stored, sealed    every run on this machine
+//	2 project       stored, sealed    every run of one repository
+//	3 run           WFX_RUN_ID, WFX_STEP_ID, WFX_WORKSPACE, WFX_PROJECT, and
+//	                WFX_MOUNT_<AT> for each mounted folder — facts about THIS
+//	                run, which is why they sit below the file: a workflow that
+//	                sets one of these names meant it
+//	4 workflow      `env:` at the top of the file
+//	5 step          `env:` on the step
+//
+// Workflow-level `env:` is merged into each step at LOAD time (workflow.go's
+// normalize, and jobs.go for the job form), so by the time a step is executed
+// levels 4 and 5 have already become one map: step.Env. That is deliberate —
+// it means exactly one place decides the file's cascade, and the engine layers
+// the platform's levels under whatever that produced.
+//
+// Both kinds of step see the same result. A `run:` step gets it as the
+// process environment (nodes.go); an agent step's `bash` tool gets it as
+// assignments in front of the command and its CLI provider gets it in the
+// child's environment (step.go, provider.go). The identical map, so a workflow
+// cannot mean two things depending on which kind of step reads it.
+
+// stepEnv is the whole cascade for one step: the platform's two levels, the
+// run's own facts, then everything the file cascaded into the step already.
+// workdir may be empty when the step is being PACKED for another machine: the
+// workspace is that machine's, so it fills those names in itself.
+func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.Step, workdir string) (map[string]string, error) {
 	base, err := e.platformEnv(ctx, e.projectOfRun(ctx, runID))
 	if err != nil {
 		return nil, err
 	}
-	return workflow.MergeEnv(base, step.Env), nil
+	run := e.mountEnv(runID)
+	if workdir != "" {
+		run = workflow.MergeEnv(run, RunEnv(runID.String(), step.ID, e.projectOfRun(ctx, runID), workdir))
+	}
+	return workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env), nil
+}
+
+// RunEnv are the facts about this run that a step can read without being told
+// them. The worker already exported exactly these names for a `run:` step; a
+// local step did not, which meant a script that worked on a worker read an
+// empty WFX_WORKSPACE here. One definition now, used in both places.
+func RunEnv(runID, stepID, project, workdir string) map[string]string {
+	return map[string]string{
+		"WFX_RUN_ID":    runID,
+		"WFX_STEP_ID":   stepID,
+		"WFX_PROJECT":   project,
+		"WFX_WORKSPACE": workdir,
+	}
 }
 
 // projectOfRun is which repository this run belongs to, for the project scope.

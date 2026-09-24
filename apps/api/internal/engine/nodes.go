@@ -74,7 +74,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	// The whole cascade — system, project, then the file — resolved against
 	// THIS machine. A reference to a variable nobody set is an error naming the
 	// variable, rather than an empty string and a 401 somewhere far away.
-	env, err := e.stepEnv(ctx, runID, step)
+	env, err := e.stepEnv(ctx, runID, step, data.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
 	}

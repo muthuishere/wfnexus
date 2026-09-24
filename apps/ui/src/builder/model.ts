@@ -80,6 +80,15 @@ export function forSave(d: WorkflowDraft): WorkflowDraft {
     name: d.name.trim(),
     description: d.description?.trim() || '',
     inputSchema: d.inputSchema,
+    // Workflow-level env, mounts and the workflow's own files are round-
+    // tripped rather than rebuilt. The builder used to send neither, so
+    // opening a workflow with `env:` or `mount:` and pressing Save silently
+    // deleted them — a save must never lose what it did not edit.
+    env: cleanEnv(d.env),
+    mount: (d.mount || []).map(m => m.trim()).filter(Boolean).length
+      ? (d.mount || []).map(m => m.trim()).filter(Boolean)
+      : undefined,
+    files: d.files?.length ? d.files : undefined,
     steps: d.steps.map(s => ({
       ...s,
       id: s.id.trim(),

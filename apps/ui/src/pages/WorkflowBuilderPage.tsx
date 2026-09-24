@@ -4,7 +4,7 @@ import { blankStep, forSave, moveItem, removeAt, replaceAt, templateDraft } from
 import { errorsOnly, validateDraft, type Issue } from '../builder/validate'
 import { toYaml } from '../builder/yaml'
 import SchemaEditor from '../components/builder/SchemaEditor'
-import StepEditor from '../components/builder/StepEditor'
+import StepEditor, { EnvEditor } from '../components/builder/StepEditor'
 import WorkflowCanvas from '../components/WorkflowCanvas'
 import { Field, IssueList, Section } from '../components/builder/Bits'
 
@@ -38,7 +38,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
     if (!name) return
     let live = true
     api.workflow(name)
-      .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [] }) })
+      .then(w => { if (live) setDraft({ name: w.name, description: w.description, inputSchema: w.inputSchema || { type: 'object' }, steps: w.steps || [], env: w.env, mount: w.mount, files: w.files }) })
       .catch(e => live && setLoadErr(e instanceof Error ? e.message : String(e)))
     return () => { live = false }
   }, [name])
@@ -122,6 +122,22 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
               hint="Each property becomes a field on the New run page. `format: textarea` renders a big box; `default` pre-fills it.">
               <SchemaEditor label="input_schema" schema={draft.inputSchema} onChange={s => set({ inputSchema: s })} />
             </Section>
+            <Section title="Environment — every step gets these" defaultOpen={false}
+              count={Object.keys(draft.env || {}).length}
+              hint="Workflow-level env cascades into every step; a step's own env overrides it by name. Under both sit the stored system and project variables.">
+              <EnvEditor env={draft.env || {}} onChange={env => set({ env: Object.keys(env).length ? env : undefined })} />
+            </Section>
+            <Section title="Mounted folders" defaultOpen={false} count={draft.mount?.length || 0}
+              hint="One folder per line: HOST[:AT][:ro]. Read-only is the default and means the folder is COPIED in, so nothing the run does reaches it.">
+              <MountEditor mount={draft.mount || []} onChange={mount => set({ mount: mount.length ? mount : undefined })} />
+            </Section>
+            {!!draft.files?.length && (
+              <Section title="Files shipped with this workflow" defaultOpen={false} count={draft.files.length}
+                hint="These sit beside the workflow on disk and are staged into the run's workspace, so a step can say `node run.js`. Putting a file there IS the declaration — there is nothing to add here.">
+                <ul className="mono" style={{ fontSize: 12, margin: 0, paddingLeft: 18 }}>
+                  {draft.files.map(f => <li key={f.path}>{f.path}</li>)}
+                </ul>
+              </Section>)}
           </div>
 
           <div className="card">
@@ -169,6 +185,28 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
             </div>
           </div>)}
       </div>
+    </>
+  )
+}
+
+/** Attached folders, one per line, exactly as the file spells them.
+ *
+ *  A textarea rather than a row-per-field table on purpose: the file's form IS
+ *  one line, and a three-column editor would teach a shape the YAML does not
+ *  have. What the box holds is what the file holds. */
+function MountEditor({ mount, onChange }: { mount: string[]; onChange: (m: string[]) => void }) {
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        <span className="mono">HOST[:AT][:ro]</span> — the folder on the machine that runs the step, where the
+        step sees it, and whether it is read-only. A relative HOST resolves under the platform's data dir, which is
+        the spelling that also works on a worker. Read-only is the default: the folder is copied in, so the run
+        cannot change it.
+      </p>
+      <textarea className="mono" style={{ minHeight: 80, width: '100%' }}
+        value={mount.join('\n')}
+        placeholder={'/Users/me/datasets:data:ro\nreports:out:rw'}
+        onChange={e => onChange(e.target.value.split('\n').map(l => l.trim()).filter(Boolean))} />
     </>
   )
 }

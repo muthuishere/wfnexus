@@ -29,7 +29,13 @@ import (
 
 // containmentGuardrail denies any shell command that steps outside workdir.
 // An empty workdir disables it — there is nothing to contain.
-func containmentGuardrail(workdir string) agents.Guardrail {
+//
+// mounts are the WRITABLE folders this run attached (`mount:` with `:rw`). They
+// widen containment by exactly what the workflow FILE declared and nothing
+// else — a folder a human wrote down and a reviewer saw, never a path the
+// agent chose or the run's input supplied. A read-only mount is not here
+// because it is a copy INSIDE the workspace, so it needs no widening at all.
+func containmentGuardrail(workdir string, mounts ...string) agents.Guardrail {
 	// Resolve ONCE and use the resolved form as both the comparison root and the
 	// base for relative targets. Resolving only the root while joining against
 	// the raw path made every relative `cd` look like an escape on macOS, where
@@ -37,6 +43,17 @@ func containmentGuardrail(workdir string) agents.Guardrail {
 	root := workdir
 	if resolved, err := filepath.EvalSymlinks(workdir); err == nil {
 		root = resolved
+	}
+	// A target is inside if it is inside ANY of these. The workspace is first
+	// so the common case is one comparison.
+	roots := append([]string{root}, mounts...)
+	outside := func(_ string, target string) bool {
+		for _, r := range roots {
+			if !outsideRoot(r, target) {
+				return false
+			}
+		}
+		return true
 	}
 	deny := func(name, path string) string {
 		return fmt.Sprintf(
@@ -232,10 +249,14 @@ func shellTokens(cmd string) []string {
 	return out
 }
 
-// outside reports whether target escapes the workspace. Relative targets resolve
+// outside reports whether target escapes a single root — the package-level
+// form, for callers with exactly one.
+func outside(root, target string) bool { return outsideRoot(root, target) }
+
+// outsideRoot reports whether target escapes root. Relative targets resolve
 // against it; `-`, `~` and unexpanded variables are refused because none of them
 // can be shown to stay inside.
-func outside(root, target string) bool {
+func outsideRoot(root, target string) bool {
 	switch {
 	case target == "-", target == "~", strings.HasPrefix(target, "~/"):
 		return true

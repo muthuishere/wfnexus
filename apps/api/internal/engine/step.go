@@ -98,14 +98,14 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 
 	// The whole cascade, resolved once for this step: the agent's bash tool and
 	// its CLI provider must see the same environment a `run:` step would.
-	env, err := e.stepEnv(ctx, runID, step)
+	env, err := e.stepEnv(ctx, runID, step, workdir)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
 	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), env)
 	onMetric := func(m tn.MetricEvent) { e.emit(ctx, runID, step.ID, "metric", m) }
 
-	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, extra, hooks, onMetric)
+	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
 	if err != nil {
 		return stepResult{}, err
 	}

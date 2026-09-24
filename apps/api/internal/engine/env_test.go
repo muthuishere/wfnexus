@@ -103,7 +103,7 @@ func TestEnvCascadesSystemThenProjectThenStep(t *testing.T) {
 	})
 	run := r.ID
 	step := &workflow.Step{ID: "s", Env: map[string]string{"TIER": "step"}}
-	got, err := h.eng.stepEnv(ctx, run, step)
+	got, err := h.eng.stepEnv(ctx, run, step, "")
 	if err != nil {
 		t.Fatal(err)
 	}

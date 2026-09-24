@@ -57,6 +57,12 @@ type Engine struct {
 
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
+	// attached is what each live run's `mount:` turned into on this machine:
+	// the extra roots its agents may reach, and the WFX_MOUNT_* variables its
+	// steps get. Held per run rather than threaded through every execution
+	// path, because a mount belongs to the RUN's workspace and every step of
+	// that run sees the same one.
+	attached map[uuid.UUID]mountState
 	// slots bounds concurrently EXECUTING runs. A run beyond the limit holds its
 	// goroutine and stays queued, so the cap is on machine load, not on
 	// accepting work.
@@ -74,7 +80,8 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 	e := &Engine{
 		cfg: cfg, store: st, blob: bl, defs: defs, skills: reg, catalog: cat,
 		broker: newBroker(), running: map[uuid.UUID]context.CancelFunc{},
-		slots: make(chan struct{}, limit),
+		attached: map[uuid.UUID]mountState{},
+		slots:    make(chan struct{}, limit),
 	}
 	// The key is loaded once, at boot. A failure is not fatal — a platform with
 	// no stored secrets works perfectly well — but it is reported, because a
@@ -178,6 +185,15 @@ func (e *Engine) Models() []string {
 // the new version is live without a restart. Validation happens on a temporary
 // copy, so a rejected definition never lands on disk.
 func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
+	// The host half of the mount rule, applied HERE rather than only when the
+	// run starts. workflow.CheckMounts cannot do it — `~/.ssh` means a
+	// different folder on every machine — but a save happens on the platform,
+	// so the platform can and should answer for its own disk. Without this, a
+	// workflow mounting /etc saved cleanly and failed at the first run, which
+	// teaches the author nothing at the moment they could act on it.
+	if err := e.checkMountHosts(d.Mount); err != nil {
+		return "", err
+	}
 	path, err := workflow.Save(e.cfg.WorkflowsDir, d, e.validator())
 	if err != nil {
 		return "", err
@@ -455,6 +471,14 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
+	// The workspace is only half of what a run may need. `mount:` attaches the
+	// folders the workflow declared, and the files beside the workflow on disk
+	// are staged in — both BEFORE the first step, so step one can already say
+	// `node run.js` or read from the mount.
+	if err := e.prepareAttachments(ctx, runID, def, workdir); err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	defer e.releaseAttachments(runID)
 	// the base is recorded once per run, so a resume does not re-anchor diffs
 	baseRef := run.BaseRef
 	if baseRef == "" {

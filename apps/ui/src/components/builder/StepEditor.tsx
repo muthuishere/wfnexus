@@ -295,7 +295,7 @@ export default function StepEditor({ step, index, stepIds, skills, tools, doctor
  *  the run log, or the job sent to a worker. Anything that looks like a
  *  credential is refused on save, so it is worth saying which one you are
  *  writing before you save it. */
-function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (e: Record<string, string>) => void }) {
+export function EnvEditor({ env, onChange }: { env: Record<string, string>; onChange: (e: Record<string, string>) => void }) {
   const rows = Object.entries(env)
   const setRow = (i: number, k: string, v: string) => {
     const next: Record<string, string> = {}
