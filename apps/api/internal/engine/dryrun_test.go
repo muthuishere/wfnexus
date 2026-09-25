@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -330,6 +332,45 @@ func TestADryRunRefusesAWorkflowWhoseConfigurationIsAbsent(t *testing.T) {
 	for _, p := range d2.Problems {
 		if p.Field == "env" {
 			t.Errorf("a variable that resolves was still reported: %s", p.Message)
+		}
+	}
+}
+
+// The pre-install check covers a `./` mount: a fixtures folder that is not beside
+// the workflow is reported before the run, not when the step opens it.
+func TestADryRunReportsAMissingFolderBesideTheWorkflow(t *testing.T) {
+	def := &workflow.Definition{
+		Name:  "needs-fixtures",
+		Mount: []workflow.Mount{mustMount(t, "./fixtures:data:ro")},
+		Steps: []workflow.Step{nextStep("one")},
+	}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+
+	// Path is what SourceDir is derived from; a temp dir with no fixtures in it.
+	def.Path = filepath.Join(t.TempDir(), "needs-fixtures.yaml")
+
+	d := h.eng.DryRunDefinition(def, nil)
+	var found *DryProblem
+	for i := range d.Problems {
+		if d.Problems[i].Field == "volume" {
+			found = &d.Problems[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("a missing ./ folder was not reported:\n%+v", d.Problems)
+	}
+	if !strings.Contains(found.Message, "fixtures") {
+		t.Errorf("the problem does not name the folder:\n%s", found.Message)
+	}
+
+	// With the folder present, silence.
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(def.Path), "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range h.eng.DryRunDefinition(def, nil).Problems {
+		if p.Field == "volume" {
+			t.Errorf("a folder that exists was still reported: %s", p.Message)
 		}
 	}
 }

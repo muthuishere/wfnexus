@@ -396,6 +396,18 @@ func (h *DoctorHost) EnvResolves(name string) (bool, string) {
 // read-only filesystem, an ACL, a container's bind mount and a full disk all
 // present as writable-looking permissions.
 func (h *DoctorHost) VolumeState(host string, writable bool) bundle.VolumeReadiness {
+	return h.volumeState(host, "", writable)
+}
+
+// VolumeStateFrom is the same question for a `./` mount, which resolves against
+// the directory the workflow was loaded from. The pre-install check has the
+// definition, so it can answer for a folder beside the workflow; the pull-time
+// check does not, and asks the plain question.
+func (h *DoctorHost) VolumeStateFrom(host, sourceDir string, writable bool) bundle.VolumeReadiness {
+	return h.volumeState(host, sourceDir, writable)
+}
+
+func (h *DoctorHost) volumeState(host, sourceDir string, writable bool) bundle.VolumeReadiness {
 	dataDir := ""
 	if h.e != nil {
 		// The SAME value mounts.go:484 passes when it really attaches a mount.
@@ -403,7 +415,11 @@ func (h *DoctorHost) VolumeState(host string, writable bool) bundle.VolumeReadin
 		// elsewhere.
 		dataDir = h.e.cfg.WorkDir
 	}
-	resolved, err := resolveMountHost(dataDir, workflow.Mount{Host: host, ReadOnly: !writable})
+	m := workflow.Mount{Host: host, ReadOnly: !writable}
+	if rest, ok := strings.CutPrefix(host, "./"); ok {
+		m.Host, m.FromSource = rest, true
+	}
+	resolved, err := resolveMountHostFrom(dataDir, sourceDir, m)
 	if err != nil {
 		return bundle.VolumeReadiness{Resolved: host, Problem: err.Error()}
 	}

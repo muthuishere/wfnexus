@@ -73,7 +73,7 @@ type attached struct {
 //
 // It is the SAME function on the server and on a worker, which is the only way
 // a mount can be guaranteed to mean the same thing in both places.
-func attachMounts(workspace, dataDir string, mounts []workflow.Mount) ([]attached, []string, map[string]string, error) {
+func attachMounts(workspace, dataDir, sourceDir string, mounts []workflow.Mount) ([]attached, []string, map[string]string, error) {
 	if len(mounts) == 0 {
 		return nil, nil, nil, nil
 	}
@@ -84,7 +84,7 @@ func attachMounts(workspace, dataDir string, mounts []workflow.Mount) ([]attache
 	var roots []string
 	env := map[string]string{}
 	for _, m := range mounts {
-		host, err := resolveMountHost(dataDir, m)
+		host, err := resolveMountHostFrom(dataDir, sourceDir, m)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -150,6 +150,44 @@ func mountEnvName(at string) string {
 // directory, their keys or the system tree, and if the operator has set
 // WFX_MOUNT_ROOTS then it is under one of those roots or it is refused.
 func resolveMountHost(dataDir string, m workflow.Mount) (string, error) {
+	return resolveMountHostFrom(dataDir, "", m)
+}
+
+// resolveMountHostFrom resolves a mount, with sourceDir being the directory the
+// workflow was loaded from — needed only by a `./` mount.
+//
+// A `./` mount is refused when sourceDir is empty rather than falling back to
+// the data dir. The fallback would be the dangerous kind of convenient: on a
+// WORKER there is no source directory, and silently reading `<data>/mounts/x`
+// instead of the folder beside the workflow would attach the wrong data, or
+// empty data, and the run would carry on as if it had the right thing.
+func resolveMountHostFrom(dataDir, sourceDir string, m workflow.Mount) (string, error) {
+	if m.FromSource {
+		if sourceDir == "" {
+			return "", fmt.Errorf("mount %q: a `./` folder is beside the workflow file, and this process does not have the workflow's own directory — "+
+				"a step with `runs-on:` runs on a machine that has no copy of it, so mount an absolute path or the relative form instead", m.String())
+		}
+		host := filepath.Join(sourceDir, filepath.FromSlash(m.Host))
+		root := resolveRoot(sourceDir)
+		// The escape rule again, on the RESOLVED path. ParseMount refused the
+		// spelling; this refuses a symlink inside the source that points out of
+		// it, which the spelling cannot see.
+		resolved := resolveRoot(host)
+		if outside(root, resolved) {
+			return "", fmt.Errorf("mount %q: it resolves to %s, outside the workflow's own directory", m.String(), resolved)
+		}
+		st, err := os.Stat(host)
+		if err != nil {
+			return "", fmt.Errorf("mount %q: %s is not beside the workflow file", m.String(), host)
+		}
+		if !st.IsDir() {
+			return "", fmt.Errorf("mount %q: %s is a file, not a folder", m.String(), host)
+		}
+		if err := forbiddenMount(resolved); err != nil {
+			return "", fmt.Errorf("mount %q: %w", m.String(), err)
+		}
+		return resolved, nil
+	}
 	host := filepath.FromSlash(m.Host)
 	if !filepath.IsAbs(host) {
 		if dataDir == "" {
@@ -423,8 +461,11 @@ func stageFiles(workspace string, files []workflow.File, mounts []workflow.Mount
 // function so that a mount cannot mean one thing on the server and another on
 // a build box — the failure mode every "and also implement it on the worker"
 // eventually produces.
-func Attach(workspace, dataDir string, mounts []workflow.Mount, files []workflow.File) (roots []string, env map[string]string, err error) {
-	_, roots, env, err = attachMounts(workspace, dataDir, mounts)
+// Attach takes sourceDir for a `./` mount. A worker passes "" — it has no copy
+// of the workflow's own directory — and a `./` mount is then refused by name
+// rather than resolved into something else.
+func Attach(workspace, dataDir, sourceDir string, mounts []workflow.Mount, files []workflow.File) (roots []string, env map[string]string, err error) {
+	_, roots, env, err = attachMounts(workspace, dataDir, sourceDir, mounts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -481,7 +522,7 @@ func (e *Engine) prepareAttachments(ctx context.Context, runID uuid.UUID, def *w
 	// Mounts go in FIRST and the workflow's own files second, so the ordering
 	// matches the rule: a sidecar may never land inside a mount, and if one
 	// ever did it is refused rather than quietly written over somebody's data.
-	list, roots, env, err := attachMounts(workdir, e.cfg.WorkDir, def.Mount)
+	list, roots, env, err := attachMounts(workdir, e.cfg.WorkDir, def.SourceDir(), def.Mount)
 	if err != nil {
 		return err
 	}

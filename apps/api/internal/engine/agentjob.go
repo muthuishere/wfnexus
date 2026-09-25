@@ -284,7 +284,10 @@ func (e *Engine) RunAgentJob(ctx context.Context, job *AgentJob, workdir string)
 	// was copied over the wire but the workflow's own files; a `mount:` line
 	// names a folder that must exist on this box, and says so by name if it
 	// does not.
-	roots, mountEnv, err := Attach(workdir, e.cfg.WorkDir, job.Mount, job.Files)
+	// No source dir, deliberately: this machine has no copy of the workflow's own
+	// directory, so a `./` mount is refused BY NAME here rather than resolved
+	// into some other folder that happens to exist.
+	roots, mountEnv, err := Attach(workdir, e.cfg.WorkDir, "", job.Mount, job.Files)
 	if err != nil {
 		return here(err)
 	}

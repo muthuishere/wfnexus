@@ -38,7 +38,7 @@ func TestReadOnlyMountIsVisibleInTheWorkspace(t *testing.T) {
 	host := hostFolder(t, "fixtures", "hello from the host")
 	ws := t.TempDir()
 
-	_, roots, env, err := attachMounts(ws, t.TempDir(), []workflow.Mount{mustMount(t, host+":in:ro")})
+	_, roots, env, err := attachMounts(ws, t.TempDir(), "", []workflow.Mount{mustMount(t, host+":in:ro")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestReadOnlyMountIsVisibleInTheWorkspace(t *testing.T) {
 func TestReadOnlyMountIsActuallyReadOnly(t *testing.T) {
 	host := hostFolder(t, "fixtures", "original")
 	ws := t.TempDir()
-	if _, _, _, err := attachMounts(ws, t.TempDir(), []workflow.Mount{mustMount(t, host+":in:ro")}); err != nil {
+	if _, _, _, err := attachMounts(ws, t.TempDir(), "", []workflow.Mount{mustMount(t, host+":in:ro")}); err != nil {
 		t.Fatal(err)
 	}
 	// Exactly what a `run:` step could do: no guardrail, no agent, a plain write.
@@ -93,7 +93,7 @@ func TestReadOnlyMountIsActuallyReadOnly(t *testing.T) {
 func TestWritableMountReachesTheHostAndWidensContainment(t *testing.T) {
 	host := hostFolder(t, "out", "before")
 	ws := t.TempDir()
-	_, roots, _, err := attachMounts(ws, t.TempDir(), []workflow.Mount{mustMount(t, host+":out:rw")})
+	_, roots, _, err := attachMounts(ws, t.TempDir(), "", []workflow.Mount{mustMount(t, host+":out:rw")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestSidecarCannotOverwriteAMountedFolder(t *testing.T) {
 	host := hostFolder(t, "data", "precious")
 	ws := t.TempDir()
 	mounts := []workflow.Mount{mustMount(t, host+":data:rw")}
-	if _, _, _, err := attachMounts(ws, t.TempDir(), mounts); err != nil {
+	if _, _, _, err := attachMounts(ws, t.TempDir(), "", mounts); err != nil {
 		t.Fatal(err)
 	}
 	err := stageFiles(ws, []workflow.File{{Path: "data/note.txt", Body: []byte("from the repo")}}, mounts)
@@ -258,5 +258,61 @@ func TestSidecarCannotOverwriteAMountedFolder(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(host, "note.txt"))
 	if string(got) != "precious" {
 		t.Fatalf("the mounted folder was written through: %q", got)
+	}
+}
+
+// A `./` mount attaches the folder beside the WORKFLOW FILE, which is how a
+// workflow's own fixtures travel with it — versioned in the same local folder or
+// git working copy the workflow came from.
+func TestASourceRelativeMountAttachesTheFolderBesideTheWorkflow(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "fixtures", "case.json"), []byte(`{"ok":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+
+	_, _, _, err := attachMounts(ws, t.TempDir(), source, []workflow.Mount{mustMount(t, "./fixtures:data:ro")})
+	if err != nil {
+		t.Fatalf("a folder beside the workflow did not attach: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "data", "case.json")); err != nil {
+		t.Fatalf("the fixture is not in the workspace: %v", err)
+	}
+}
+
+// And on a WORKER it is refused BY NAME rather than resolved into something else.
+// The silent fallback is the dangerous one: a worker has no copy of the
+// workflow's directory, so resolving `./fixtures` under its data dir would
+// attach empty or unrelated data and the run would carry on as though it had the
+// right thing.
+func TestASourceRelativeMountIsRefusedWhereTheWorkflowIsNotPresent(t *testing.T) {
+	_, _, _, err := attachMounts(t.TempDir(), t.TempDir(), "", []workflow.Mount{mustMount(t, "./fixtures:data:ro")})
+	if err == nil {
+		t.Fatal("a ./ mount resolved on a machine with no copy of the workflow; it would have attached the wrong folder")
+	}
+	for _, want := range []string{"./fixtures", "runs-on"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q, so it does not say what to do:\n%v", want, err)
+		}
+	}
+}
+
+// [SEC-TEST] ParseMount refuses the SPELLING `./../x`. This refuses what the
+// spelling cannot see: a symlink inside the source that points out of it.
+func TestASourceRelativeMountCannotEscapeBySymlink(t *testing.T) {
+	source := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(source, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, _, _, err := attachMounts(t.TempDir(), t.TempDir(), source, []workflow.Mount{mustMount(t, "./escape:data:ro")})
+	if err == nil {
+		t.Fatal("a symlink out of the source was attached; the spelling check cannot see this and must not be the only one")
 	}
 }

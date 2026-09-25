@@ -376,7 +376,11 @@ func (e *Engine) dryRequirements(def *workflow.Definition) []DryProblem {
 		return nil
 	}
 	var out []DryProblem
-	for _, u := range bundle.CheckRequirements(want, e.RequirementHost()).Unmet {
+	// sourceHost answers a `./` volume against the workflow's own directory, which
+	// only this side knows. A pull-time check has no definition and asks the plain
+	// question; here the folder beside the workflow is exactly the thing to check.
+	host := &dryHost{DoctorHost: e.RequirementHost(), sourceDir: def.SourceDir()}
+	for _, u := range bundle.CheckRequirements(want, host).Unmet {
 		step := ""
 		if len(u.Requirement.Steps) > 0 {
 			step = u.Requirement.Steps[0]
@@ -392,6 +396,17 @@ func (e *Engine) dryRequirements(def *workflow.Definition) []DryProblem {
 		})
 	}
 	return out
+}
+
+// dryHost is the requirement host for a dry run: the machine's own answers, plus
+// the workflow's directory so a `./` mount is checked where it actually lives.
+type dryHost struct {
+	*DoctorHost
+	sourceDir string
+}
+
+func (d *dryHost) VolumeState(host string, writable bool) bundle.VolumeReadiness {
+	return d.VolumeStateFrom(host, d.sourceDir, writable)
 }
 
 func (e *Engine) dryCatalog(def *workflow.Definition) []DryProblem {

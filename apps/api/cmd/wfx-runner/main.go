@@ -452,7 +452,9 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	// The workflow's folders and files, attached here by the same code the
 	// server runs (engine.Attach). A mount line naming a folder this machine
 	// does not have fails by name, rather than running against the wrong one.
-	_, mountEnv, err := engine.Attach(dir, cfg.WorkDir, p.Mount, p.Files)
+	// No source dir: a worker holds no copy of the workflow's own directory, so a
+	// `./` mount is refused by name instead of silently resolving elsewhere.
+	_, mountEnv, err := engine.Attach(dir, cfg.WorkDir, "", p.Mount, p.Files)
 	if err != nil {
 		return result{Error: err.Error()}
 	}

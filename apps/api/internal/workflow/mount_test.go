@@ -121,3 +121,90 @@ func TestCheckMountsAcceptsTheOrdinaryCase(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// `./x` is beside the WORKFLOW FILE, which is the one place a workflow's own
+// fixtures can live and still travel with it. The source is either a local
+// directory or a git working copy, and one spelling covers both — a source is a
+// source. It is spelled the way docker-compose spells file-relative, because
+// that is what anyone will guess it means.
+func TestASourceRelativeMountIsParsedAsSuch(t *testing.T) {
+	for _, line := range []string{"./fixtures", ".\\fixtures"} {
+		m, err := ParseMount(line)
+		if err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		if !m.FromSource {
+			t.Errorf("%q was not recorded as source-relative", line)
+		}
+		if m.Host != "fixtures" {
+			t.Errorf("%q → host %q, want the prefix stripped", line, m.Host)
+		}
+		if m.At != "fixtures" {
+			t.Errorf("%q → at %q, want the base name", line, m.At)
+		}
+		if !m.ReadOnly {
+			t.Errorf("%q is writable; read-only is the default and must stay it", line)
+		}
+	}
+
+	// A bare relative host is UNCHANGED: still the data dir, as before. Redefining
+	// it would change what every existing workflow means.
+	m, err := ParseMount("reports:out:rw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.FromSource {
+		t.Error("a bare relative host was treated as source-relative; that would silently move every existing mount")
+	}
+	if m.Host != "reports" || m.At != "out" || m.ReadOnly {
+		t.Errorf("the existing spelling changed meaning: %+v", m)
+	}
+}
+
+// [SEC-TEST] A source-relative mount may not climb out of the source. The whole
+// value of the spelling is meaning the same thing wherever the workflow travels;
+// `./../../etc` would mean something different on every machine and something
+// dangerous on some.
+func TestASourceRelativeMountCannotEscapeTheSource(t *testing.T) {
+	for _, bad := range []string{
+		"./../secrets",
+		"./a/../../etc",
+		"./..",
+		"./.",
+		`.\..\secrets`,
+		"./",
+	} {
+		if m, err := ParseMount(bad); err == nil {
+			t.Errorf("%q was accepted as %+v — it reaches outside the workflow's own directory", bad, m)
+		}
+	}
+	// A folder honestly named with leading dots is not an escape: the check is on
+	// segments, not on whether the string contains "..".
+	for _, ok := range []string{"./..data", "./data..", "./a/..b/c"} {
+		if _, err := ParseMount(ok); err != nil {
+			t.Errorf("%q was refused: %v", ok, err)
+		}
+	}
+}
+
+// A source-relative mount ROUND-TRIPS. String() is what a save writes, so losing
+// the `./` would rewrite a folder beside the workflow as a folder under the data
+// dir — the same line quietly meaning a different directory after one save.
+func TestASourceRelativeMountRoundTrips(t *testing.T) {
+	for _, line := range []string{"./fixtures", "./fixtures:data", "./fixtures:data:rw", "./a/b:at"} {
+		m, err := ParseMount(line)
+		if err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		again, err := ParseMount(m.String())
+		if err != nil {
+			t.Fatalf("%q → %q did not parse back: %v", line, m.String(), err)
+		}
+		if again != m {
+			t.Errorf("%q → %q → %+v, want %+v", line, m.String(), again, m)
+		}
+		if !strings.HasPrefix(m.String(), "./") {
+			t.Errorf("%q printed as %q — the ./ was lost, so a save would change which folder it means", line, m.String())
+		}
+	}
+}

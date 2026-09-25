@@ -358,6 +358,17 @@ type Definition struct {
 	RepoDir string `yaml:"-" json:"repoDir,omitempty"`
 }
 
+// SourceDir is the directory this workflow was loaded from — what a `./` mount
+// is relative to. Derived from Path in ONE place, because a second derivation
+// would eventually disagree with this one about which folder a workflow's own
+// fixtures live in.
+func (d *Definition) SourceDir() string {
+	if d.Path == "" {
+		return ""
+	}
+	return filepath.Dir(d.Path)
+}
+
 func (d *Definition) Step(id string) (int, *Step) {
 	for i := range d.Steps {
 		if d.Steps[i].ID == id {

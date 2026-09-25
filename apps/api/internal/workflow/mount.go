@@ -21,7 +21,14 @@ import (
 // `source`/`target`/`readonly` triple and no `type`. A person can read that
 // line and be right about what it does.
 //
-//	HOST  the folder on the machine that runs the step. ABSOLUTE, or relative —
+//	HOST  `./something` is BESIDE THE WORKFLOW FILE — in the folder the workflow
+//	      was loaded from, which is either a local directory or a git working
+//	      copy. One spelling covers both, because a source is a source: the
+//	      fixtures a workflow needs live with it, get versioned with it and get
+//	      published with it, and `./` is what anyone who has written a
+//	      docker-compose file already expects it to mean.
+//
+//	      Otherwise: the folder on the machine that runs the step. ABSOLUTE, or relative —
 //	      and a relative one resolves against the PLATFORM'S DATA DIR
 //	      (<work dir>/mounts/<host>), never against the workspace and never
 //	      against whatever directory the server process happens to be in.
@@ -35,12 +42,24 @@ import (
 //	      read-only. Write `:rw` to get a writable one, which is a thing you
 //	      have to type on purpose.
 //
+// A `./` MOUNT DOES NOT REACH A WORKER. A step with `runs-on:` runs on a machine
+// that holds no copy of the workflow's directory, so `./fixtures` is REFUSED
+// there by name rather than resolved into some other folder that happens to
+// exist. Sidecar `files:` do travel, by value, which is the mechanism a carried
+// folder would use if this is ever wanted for a placed step.
+//
 // Workflow level only. A per-step variant was deliberately not added: a folder
 // the workflow needs is a property of the workflow, and nobody has yet shown a
 // step that cannot work with that.
 type Mount struct {
-	// Host is the folder as written — absolute, or relative to the data dir.
+	// Host is the folder as written — absolute, relative to the data dir, or
+	// `./`-prefixed for beside the workflow file.
 	Host string `json:"host"`
+	// FromSource marks a `./` host: it resolves against the directory the
+	// workflow was loaded from, not against the data dir. Kept as a parsed FACT
+	// rather than re-detected from the string, so every consumer agrees about
+	// which kind of mount it is holding.
+	FromSource bool `json:"fromSource,omitempty"`
 	// At is where it appears, relative to the workspace root.
 	At string `json:"at"`
 	// ReadOnly is the default. See engine/mounts.go for what it means in
@@ -50,7 +69,15 @@ type Mount struct {
 
 // String writes the mount back as the line it was parsed from.
 func (m Mount) String() string {
+	// The `./` goes back on. String() is what a SAVE writes, so dropping the
+	// prefix here would rewrite a folder beside the workflow as a folder under
+	// the data dir — the same line meaning a different directory, silently, on
+	// the next save. It is also what every refusal quotes, and a refusal that
+	// does not echo what the author typed is one they cannot find in their file.
 	s := m.Host
+	if m.FromSource {
+		s = "./" + s
+	}
 	if m.At != "" && m.At != defaultAt(m.Host) {
 		s += ":" + m.At
 	}
@@ -131,6 +158,29 @@ func ParseMount(line string) (Mount, error) {
 	if m.Host == "" {
 		return Mount{}, fmt.Errorf("mount %q: no folder named", line)
 	}
+	// `./x` and `.\x` are beside the workflow file. Recorded as a fact here so
+	// nothing downstream has to re-inspect the string and reach a different
+	// conclusion.
+	if rest, ok := cutSourcePrefix(m.Host); ok {
+		m.FromSource = true
+		m.Host = rest
+		if m.Host == "" || m.Host == "." {
+			return Mount{}, fmt.Errorf("mount %q: name a folder beside the workflow, not the workflow's own directory", line)
+		}
+		// A source-relative mount may not climb out of the source. The whole
+		// value of the spelling is that it means the same thing wherever the
+		// workflow travels, and `./../../etc` would mean something different on
+		// every machine — and something dangerous on some.
+		if escapes(m.Host) {
+			return Mount{}, fmt.Errorf("mount %q: a `./` folder must stay inside the workflow's own directory", line)
+		}
+		if filepath.IsAbs(filepath.FromSlash(m.Host)) {
+			return Mount{}, fmt.Errorf("mount %q: `./` is relative by definition — drop it or drop the absolute path", line)
+		}
+		if m.At == "" {
+			m.At = defaultAt(m.Host)
+		}
+	}
 	if m.At == "" {
 		m.At = defaultAt(m.Host)
 	}
@@ -152,6 +202,36 @@ func defaultAt(host string) string {
 		return ""
 	}
 	return filepath.ToSlash(base)
+}
+
+// cutSourcePrefix strips a leading `./` or `.\`, reporting whether it was there.
+func cutSourcePrefix(host string) (string, bool) {
+	for _, p := range []string{"./", `.\`} {
+		if rest, ok := strings.CutPrefix(host, p); ok {
+			return rest, true
+		}
+	}
+	return host, false
+}
+
+// escapes reports whether a slash-or-backslash path climbs above its root.
+// Checked on the SEGMENTS rather than with a substring match, so a folder
+// honestly named `..data` is allowed and `a/../..` is not.
+func escapes(host string) bool {
+	depth := 0
+	for _, seg := range strings.FieldsFunc(filepath.ToSlash(host), func(r rune) bool { return r == '/' || r == '\\' }) {
+		switch seg {
+		case "", ".":
+		case "..":
+			depth--
+			if depth < 0 {
+				return true
+			}
+		default:
+			depth++
+		}
+	}
+	return false
 }
 
 // splitMount splits on ':' and rejoins a Windows drive letter with what

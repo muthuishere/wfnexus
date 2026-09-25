@@ -248,7 +248,14 @@ func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement 
 	}
 	mountReq := func(mounts []workflow.Mount, step string) {
 		for _, m := range mounts {
-			key := ReqVolume + "\x00" + m.Host
+			// As WRITTEN, `./` included: the check has to be able to tell a folder
+			// beside the workflow from a folder under the data dir, because they
+			// are different folders and only one of them exists on a worker.
+			name := m.Host
+			if m.FromSource {
+				name = "./" + name
+			}
+			key := ReqVolume + "\x00" + name
 			if r, ok := seen[key]; ok {
 				// Two steps mounting the same folder, one rw: the requirement is
 				// the stricter of the two, because satisfying the looser one
@@ -261,7 +268,7 @@ func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement 
 				}
 				continue
 			}
-			add(ReqVolume, m.Host, "", "", step)
+			add(ReqVolume, name, "", "", step)
 			seen[key].Writable = !m.ReadOnly
 		}
 	}
