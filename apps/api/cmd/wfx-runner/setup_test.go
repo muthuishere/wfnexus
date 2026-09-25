@@ -61,6 +61,14 @@ func TestSetupListsTheThreeKindsFromThePlatform(t *testing.T) {
 		}
 	}
 
+	// The http provider's readiness is "is this variable set", read from the
+	// real environment — so the TEST has to own that environment. Without this
+	// the test passes on a machine that happens to export OPENROUTER_API_KEY and
+	// fails everywhere else, which is precisely what it did: green on a laptop
+	// that had been measuring OpenRouter costs, red on all three CI runners.
+	// An obvious fake, never a real key: only its presence is ever read.
+	t.Setenv("OPENROUTER_API_KEY", "NOT_A_REAL_KEY")
+
 	var buf strings.Builder
 	setupOut = &buf
 	lookPath = func(string) (string, error) { return "/fake", nil }
