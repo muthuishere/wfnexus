@@ -11,7 +11,7 @@
       "path": "spikes"
     },
     {
-      "path": "tests/devinagent"
+      "path": "tests/e2e"
     }
   ],
   "wiki": false
