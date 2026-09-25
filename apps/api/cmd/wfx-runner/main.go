@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/buildinfo"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -53,6 +54,12 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		// Answered here, before loadConfig is reachable, so a machine that has
+		// not joined anything can still say which binary it is. That is the
+		// first question asked of a worker whose steps behave oddly.
+		fmt.Println("wfx-runner " + buildinfo.Get().String())
+		return
 	case "join":
 		err = cmdJoin(os.Args[2:])
 	case "run":

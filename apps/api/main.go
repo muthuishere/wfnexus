@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/api"
 	"github.com/muthuishere/wfnexus/apps/api/internal/assets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/buildinfo"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
@@ -116,6 +118,18 @@ func uiSource(cfg config.Config) (string, fs.FS) {
 }
 
 func main() {
+	// Before ANY config load, because loading has side effects: it resolves the
+	// asset roots and materialises the embedded defaults into the data directory.
+	// Asking a binary what version it is must not write anything, and it must
+	// answer on a machine with nothing configured — which is exactly the machine
+	// somebody runs it on first.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			fmt.Println("wfx-server " + buildinfo.Get().String())
+			return
+		}
+	}
 	cfg, cerr := config.LoadWithFile(config.DefaultPath())
 	if cerr != nil {
 		// A stated-but-wrong setting stops the process. Falling back to the

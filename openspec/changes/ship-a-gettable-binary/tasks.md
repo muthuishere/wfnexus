@@ -52,8 +52,18 @@ step runs, or what the API returns beyond one additive field.
 
 - [ ] 3.1 Add a `version` case to the verb switch in `apps/api/cmd/wfx/main.go:51-105` and list
       it in `usage()`. It SHALL contact no server and exit zero.
-- [ ] 3.2 Add `--version` to all three binaries, handled before any config load, so it answers on
+- [x] 3.2 Add `--version` to all three binaries, handled before any config load, so it answers on
       a machine where the config is broken.
+      **Done 2026-09-25, and TWO of the three binaries were wrong — the second worse than
+      the first.** `wfx` already answered. `wfx-runner --version` was `unknown command`.
+      The server fell THROUGH to `config.LoadWithFile`, which resolves the asset roots and
+      MATERIALISES the embedded defaults into the data directory — so asking it what
+      version it was created files under `~/.local/share/wfnexus` and then started a
+      server. That is why this task says "before any config load": the load has side
+      effects, and the first question anyone asks a new binary must not have any.
+      Both now answer before anything is loaded, and `version_cli_test.go` asserts all
+      three against a HOME that does not exist yet, failing if asking for a version
+      creates a single entry in it.
 - [ ] 3.3 Print the version on one line at server boot. Note `docs/research/the-pivot-2026-09-24.md`
       §4 records that boot already prints ~40 duplicate-skill warnings twice; do not add to the
       noise — one line, before them.
