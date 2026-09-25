@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
@@ -353,4 +354,79 @@ func knownPreset(preset string) bool {
 		return true
 	}
 	return false
+}
+
+// EnvResolves answers whether a configuration variable can be READ on this
+// machine, and from where. It never returns the value — `bundle.Requirement`
+// has no field that could hold one, and neither does this signature.
+//
+// Two stores, in the order a step would see them: the platform's ENCRYPTED env
+// store (system scope, then the project's), then this machine's own
+// environment. Which one answers is the host's business; the bundle only asked
+// that the name resolve somewhere. A step on a worker reads that worker's
+// environment, which is how a credential belonging to a build box is usable
+// there without the platform ever knowing it.
+func (h *DoctorHost) EnvResolves(name string) (bool, string) {
+	if name == "" {
+		return false, ""
+	}
+	if h.e != nil {
+		if env, err := h.e.platformEnv(context.Background(), ""); err == nil {
+			if _, ok := env[name]; ok {
+				return true, "the platform's encrypted env store"
+			}
+		}
+	}
+	if _, ok := os.LookupEnv(name); ok {
+		return true, "this machine's environment"
+	}
+	return false, ""
+}
+
+// VolumeState answers whether a `mount:` line's folder can be used here.
+//
+// It resolves the host path through resolveMountHost — the SAME function the
+// engine uses when it actually attaches the mount — so the answer is about the
+// folder that would really be used. A relative host resolves under the data
+// dir, and a check that guessed differently would clear a mount that then
+// failed, which is worse than not checking.
+//
+// Writability is probed by CREATING AND REMOVING a temp entry rather than by
+// reading the mode bits. Mode bits are wrong often enough to matter: a
+// read-only filesystem, an ACL, a container's bind mount and a full disk all
+// present as writable-looking permissions.
+func (h *DoctorHost) VolumeState(host string, writable bool) bundle.VolumeReadiness {
+	dataDir := ""
+	if h.e != nil {
+		// The SAME value mounts.go:484 passes when it really attaches a mount.
+		// A different one here would clear a path the run then resolved
+		// elsewhere.
+		dataDir = h.e.cfg.WorkDir
+	}
+	resolved, err := resolveMountHost(dataDir, workflow.Mount{Host: host, ReadOnly: !writable})
+	if err != nil {
+		return bundle.VolumeReadiness{Resolved: host, Problem: err.Error()}
+	}
+	out := bundle.VolumeReadiness{Resolved: resolved}
+	info, err := os.Stat(resolved)
+	switch {
+	case err != nil:
+		return out
+	case !info.IsDir():
+		out.Problem = resolved + " exists and is not a folder"
+		return out
+	}
+	out.Exists = true
+	if !writable {
+		return out
+	}
+	probe, err := os.CreateTemp(resolved, ".wfx-writable-")
+	if err != nil {
+		out.Problem = "cannot write in " + resolved + ": " + err.Error()
+		return out
+	}
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
+	out.Writable = true
+	return out
 }

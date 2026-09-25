@@ -14,6 +14,8 @@ type fakeHost struct {
 	providers map[string]ProviderReadiness
 	mcp       map[string]bool
 	labels    map[string]int
+	env       map[string]string // name → which store answered; a VALUE is never here
+	volumes   map[string]VolumeReadiness
 	asked     []string
 }
 
@@ -25,6 +27,24 @@ func (h *fakeHost) Provider(name string) ProviderReadiness {
 func (h *fakeHost) HasMcp(name string) bool {
 	h.asked = append(h.asked, "mcp:"+name)
 	return h.mcp[name]
+}
+
+func (h *fakeHost) EnvResolves(name string) (bool, string) {
+	h.asked = append(h.asked, "env:"+name)
+	from, ok := h.env[name]
+	return ok, from
+}
+
+func (h *fakeHost) VolumeState(host string, writable bool) VolumeReadiness {
+	h.asked = append(h.asked, "volume:"+host)
+	st, ok := h.volumes[host]
+	if !ok {
+		return VolumeReadiness{Resolved: "/resolved" + host}
+	}
+	if st.Resolved == "" {
+		st.Resolved = "/resolved" + host
+	}
+	return st
 }
 
 func (h *fakeHost) LabelHolders(label string) int {
@@ -236,5 +256,109 @@ func TestAnUnknownRequirementKindIsRefusedRatherThanIgnored(t *testing.T) {
 	rep := CheckRequirements([]Requirement{{Kind: "gpu", Name: "h100"}}, &fakeHost{})
 	if rep.OK() || !strings.Contains(rep.Err().Error(), "newer version") {
 		t.Fatalf("an unknown kind was not refused: %+v", rep)
+	}
+}
+
+// Configuration is recorded as the NAME the workflow reads, and either store may
+// answer it. `${GITHUB_PAT}` needs GITHUB_PAT to resolve somewhere on the machine
+// that runs the step; whether that is the platform's encrypted store or the
+// machine's own environment is the host's business and not the bundle's.
+func TestAConfigVariableIsSatisfiedByEitherStore(t *testing.T) {
+	reqs := []Requirement{{Kind: ReqEnv, Name: "GITHUB_PAT", Steps: []string{"push"}}}
+
+	for _, from := range []string{"the platform's encrypted env store", "this machine's environment"} {
+		host := &fakeHost{env: map[string]string{"GITHUB_PAT": from}}
+		if rep := CheckRequirements(reqs, host); !rep.OK() {
+			t.Errorf("satisfied from %s was still refused: %v", from, rep.Err())
+		}
+	}
+
+	bare := &fakeHost{}
+	rep := CheckRequirements(reqs, bare)
+	if rep.OK() {
+		t.Fatal("a variable nothing provides was accepted; the run would fail on the missing value")
+	}
+	msg := rep.Err().Error()
+	if !strings.Contains(msg, "GITHUB_PAT") {
+		t.Errorf("the refusal does not name the variable:\n%s", msg)
+	}
+	if !strings.Contains(msg, "wfx env set GITHUB_PAT") {
+		t.Errorf("the refusal is not actionable — it does not say how to provide it:\n%s", msg)
+	}
+}
+
+// [SEC-TEST] The check asks whether a variable RESOLVES and can never receive
+// what it holds. A requirement carries the name; the host answers with a boolean
+// and the name of a store. If a value could reach this path it would reach a
+// refusal message, and refusals are printed and logged.
+func TestAConfigCheckCannotReceiveAValue(t *testing.T) {
+	const secret = "ghp_notarealtokenatall"
+	host := &fakeHost{env: map[string]string{"GITHUB_PAT": "this machine's environment"}}
+	rep := CheckRequirements([]Requirement{
+		{Kind: ReqEnv, Name: "GITHUB_PAT", Steps: []string{"push"}},
+		{Kind: ReqEnv, Name: "ABSENT_TOKEN", Steps: []string{"push"}},
+	}, host)
+	out := rep.Err().Error()
+	if strings.Contains(out, secret) {
+		t.Fatal("a value reached the refusal")
+	}
+	// The signature is the guarantee: (bool, string) where the string is the
+	// STORE. A test that only checked the message would pass on a signature that
+	// returned the value and happened not to print it today.
+	ok, whence := host.EnvResolves("GITHUB_PAT")
+	if !ok || whence == "" {
+		t.Fatal("the host could not say whether it resolves")
+	}
+	if strings.Contains(whence, "ghp_") {
+		t.Fatalf("the host returned something that looks like a value: %q", whence)
+	}
+}
+
+// A read-write mount is NOT satisfied by a folder that exists and cannot be
+// written, and that is the whole reason `Writable` is recorded at publish time.
+// Without the distinction the run starts, the step works, and the write fails
+// partway through — the most expensive moment to find out.
+func TestAWritableMountIsNotSatisfiedByAReadOnlyFolder(t *testing.T) {
+	host := &fakeHost{volumes: map[string]VolumeReadiness{
+		"reports": {Exists: true, Writable: false, Resolved: "/data/mounts/reports"},
+	}}
+
+	// Read-only asks the looser question and is satisfied.
+	if rep := CheckRequirements([]Requirement{
+		{Kind: ReqVolume, Name: "reports", Steps: []string{"write"}},
+	}, host); !rep.OK() {
+		t.Errorf("a read-only mount was refused by a folder that exists: %v", rep.Err())
+	}
+
+	// Read-write is not.
+	rep := CheckRequirements([]Requirement{
+		{Kind: ReqVolume, Name: "reports", Writable: true, Steps: []string{"write"}},
+	}, host)
+	if rep.OK() {
+		t.Fatal("a read-write mount was cleared by a folder that cannot be written")
+	}
+	msg := rep.Err().Error()
+	for _, want := range []string{"reports", "/data/mounts/reports", "read-only"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, msg)
+		}
+	}
+}
+
+// A missing mount names the path it LOOKED FOR, not the path as written. A
+// relative mount host resolves under the platform's data dir, so "reports is
+// missing" is unactionable — the operator cannot tell which reports.
+func TestAMissingMountNamesTheResolvedPath(t *testing.T) {
+	host := &fakeHost{volumes: map[string]VolumeReadiness{
+		"reports": {Exists: false, Resolved: "/var/lib/wfnexus/mounts/reports"},
+	}}
+	rep := CheckRequirements([]Requirement{
+		{Kind: ReqVolume, Name: "reports", Steps: []string{"write"}},
+	}, host)
+	if rep.OK() {
+		t.Fatal("a mount whose folder does not exist was accepted")
+	}
+	if !strings.Contains(rep.Err().Error(), "/var/lib/wfnexus/mounts/reports") {
+		t.Errorf("the refusal does not say which folder was looked for:\n%s", rep.Err())
 	}
 }

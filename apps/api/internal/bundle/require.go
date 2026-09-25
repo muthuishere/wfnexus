@@ -69,6 +69,26 @@ type Host interface {
 	// counting the labels the platform serves itself — the same count
 	// `wfx dryrun` reports locally.
 	LabelHolders(label string) int
+	// EnvResolves reports whether a configuration variable can be READ here,
+	// from the platform's encrypted store or from this machine's environment.
+	// It returns whether, and from where — never the value, which nothing in
+	// this package is able to receive.
+	EnvResolves(name string) (ok bool, from string)
+	// VolumeState reports whether a `mount:` line's folder can be used here.
+	// writable asks the stricter question, because a read-write mount is not
+	// satisfied by a folder that exists and cannot be written.
+	VolumeState(host string, writable bool) VolumeReadiness
+}
+
+// VolumeReadiness is what a machine can say about a folder a mount names. The
+// resolved path is carried because a RELATIVE mount host resolves against the
+// platform's data dir, so "reports/ is missing" is unactionable without saying
+// which reports/ was looked for.
+type VolumeReadiness struct {
+	Exists   bool
+	Writable bool
+	Resolved string
+	Problem  string
 }
 
 // Unmet is one requirement the host cannot satisfy: what is absent, where it
@@ -142,6 +162,42 @@ func CheckRequirements(reqs []Requirement, h Host) Report {
 					Requirement: req,
 					Because:     fmt.Sprintf("no worker online holds the label %q, so the step would wait", req.Name),
 					Fix:         fmt.Sprintf("bring a worker online holding it (`wfx-runner join --labels %s`), or add it to this process's WFX_RUNNER_LABELS", req.Name),
+				})
+			}
+		case ReqEnv:
+			// Presence, never the value — the same rule `apiKeyEnv` follows. A
+			// workflow that reads `${GITHUB_PAT}` needs that name to resolve
+			// SOMEWHERE on this machine; which store answers it is the host's
+			// business and not the bundle's.
+			if ok, _ := h.EnvResolves(req.Name); !ok {
+				rep.Unmet = append(rep.Unmet, Unmet{
+					Requirement: req,
+					Because:     fmt.Sprintf("the workflow reads %s and nothing here provides it", req.Name),
+					Fix:         fmt.Sprintf("store it encrypted with `wfx env set %s`, or export it in the environment of the machine that runs the step", req.Name),
+				})
+			}
+		case ReqVolume:
+			st := h.VolumeState(req.Name, req.Writable)
+			switch {
+			case !st.Exists:
+				rep.Unmet = append(rep.Unmet, Unmet{
+					Requirement: req,
+					Because:     fmt.Sprintf("the mount %q is not a folder here (looked for %s)", req.Name, st.Resolved),
+					Fix:         fmt.Sprintf("create %s, or change the mount to a path this machine has", st.Resolved),
+				})
+			case req.Writable && !st.Writable:
+				// The failure this catches is late and confusing otherwise: the
+				// run starts, the step works, and the write fails partway.
+				rep.Unmet = append(rep.Unmet, Unmet{
+					Requirement: req,
+					Because:     fmt.Sprintf("the mount %q is read-write and %s cannot be written here", req.Name, st.Resolved),
+					Fix:         fmt.Sprintf("make %s writable by the user running this, or mount it read-only", st.Resolved),
+				})
+			case st.Problem != "":
+				rep.Unmet = append(rep.Unmet, Unmet{
+					Requirement: req,
+					Because:     st.Problem,
+					Fix:         fmt.Sprintf("check %s on this machine", st.Resolved),
 				})
 			}
 		case ReqMcp:

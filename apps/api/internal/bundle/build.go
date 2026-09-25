@@ -188,7 +188,11 @@ func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement 
 			r = &Requirement{Kind: kind, Name: name, ProviderKind: providerKind, APIKeyEnv: apiKeyEnv}
 			seen[key] = r
 		}
-		r.Steps = append(r.Steps, step)
+		// A workflow-level `env:` or `mount:` belongs to no single step, and an
+		// empty string in this list would read as a step whose id is blank.
+		if step != "" {
+			r.Steps = append(r.Steps, step)
+		}
 	}
 	// provider returns the kind and the apiKeyEnv NAME together, because they
 	// come from the same catalog entry and a caller that had to ask twice would
@@ -230,6 +234,48 @@ func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement 
 			}
 		}
 	}
+	// Configuration and volumes, from the same steps. Both are recorded as the
+	// workflow WROTE them — a variable NAME and a mount path — because both are
+	// answered by the receiving machine and neither can be answered here.
+	//
+	// `workflow.EnvKeys` is the one place that knows which parts of an `env:`
+	// block are references rather than literals. A literal (`NODE_ENV: test`)
+	// requires nothing of the host; `${GITHUB_PAT}` requires everything.
+	envReq := func(env map[string]string, step string) {
+		for _, name := range workflow.EnvKeys(env) {
+			add(ReqEnv, name, "", "", step)
+		}
+	}
+	mountReq := func(mounts []workflow.Mount, step string) {
+		for _, m := range mounts {
+			key := ReqVolume + "\x00" + m.Host
+			if r, ok := seen[key]; ok {
+				// Two steps mounting the same folder, one rw: the requirement is
+				// the stricter of the two, because satisfying the looser one
+				// would still fail the run.
+				if !m.ReadOnly {
+					r.Writable = true
+				}
+				if step != "" {
+					r.Steps = append(r.Steps, step)
+				}
+				continue
+			}
+			add(ReqVolume, m.Host, "", "", step)
+			seen[key].Writable = !m.ReadOnly
+		}
+	}
+	envReq(def.Env, "")
+	mountReq(def.Mount, "")
+	for _, st := range def.Steps {
+		envReq(st.Env, st.ID)
+	}
+	for _, id := range sortedJobKeys(def.Jobs) {
+		for _, st := range def.Jobs[id].Steps {
+			envReq(st.Env, st.ID)
+		}
+	}
+
 	walk(def.Steps, def.RunsOn)
 	for _, id := range sortedJobKeys(def.Jobs) {
 		job := def.Jobs[id]

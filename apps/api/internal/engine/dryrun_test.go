@@ -286,3 +286,50 @@ func TestDryRunReportsAnUnresolvableRemoteReference(t *testing.T) {
 		t.Fatal("an unknown workflow must stay an error")
 	}
 }
+
+// THE PRE-INSTALL CHECK. A workflow that reads a variable nothing here provides,
+// or mounts a folder that is not here, is refused by a dry run — before a
+// checkout, a worktree or a token is spent.
+//
+// This is the same gather and the same check that refuses a pull, pointed at the
+// machine about to run the workflow instead of the machine receiving a bundle.
+func TestADryRunRefusesAWorkflowWhoseConfigurationIsAbsent(t *testing.T) {
+	def := &workflow.Definition{
+		Name: "needs-config",
+		Env:  map[string]string{"GH_TOKEN": "${A_VARIABLE_NOBODY_HAS}"},
+		Steps: []workflow.Step{
+			nextStep("one"),
+		},
+	}
+	normalizeForTest(def)
+	// A dry run calls no model, but the harness builds its config from one.
+	h := newHarness(t, def, newFakeLLM(t), "")
+
+	d := h.eng.DryRunDefinition(def, nil)
+	var found *DryProblem
+	for i := range d.Problems {
+		if d.Problems[i].Field == "env" {
+			found = &d.Problems[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("a missing configuration variable was not reported:\n%+v", d.Problems)
+	}
+	if !found.Fatal {
+		t.Error("a missing variable does not degrade a run, it fails it — so the problem is fatal")
+	}
+	for _, want := range []string{"A_VARIABLE_NOBODY_HAS", "wfx env set"} {
+		if !strings.Contains(found.Message, want) {
+			t.Errorf("the problem does not mention %q, so it is not actionable:\n%s", want, found.Message)
+		}
+	}
+
+	// And the counter-proof: with the variable present, the check is silent.
+	t.Setenv("A_VARIABLE_NOBODY_HAS", "NOT_A_REAL_VALUE")
+	d2 := h.eng.DryRunDefinition(def, nil)
+	for _, p := range d2.Problems {
+		if p.Field == "env" {
+			t.Errorf("a variable that resolves was still reported: %s", p.Message)
+		}
+	}
+}

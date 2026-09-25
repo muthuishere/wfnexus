@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/planner"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
@@ -334,6 +335,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 	}
 
 	out.Problems = append(out.Problems, e.dryCatalog(def)...)
+	out.Problems = append(out.Problems, e.dryRequirements(def)...)
 	for _, p := range out.Problems {
 		if p.Fatal {
 			out.OK = false
@@ -346,6 +348,52 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 // already refuses an unknown name, so what is left is the subtler case: a name
 // that exists but could not actually run — a provider whose key is unset, a
 // CLI that is not installed.
+// dryRequirements is the PRE-INSTALL CHECK: the configuration and the folders a
+// workflow needs, asked of this machine before anything runs.
+//
+// It gathers with bundle.Requirements and asks with bundle.CheckRequirements —
+// the same pair that refuses a pull the host cannot serve. One gather and one
+// check, surfaced in three places: here before a run, at pull before a bundle is
+// installed, and in `wfx-runner setup` on the machine being prepared. A second
+// implementation of "is this machine ready" would drift from the first, and it
+// would drift towards optimism, because the copy is the one nobody tests.
+//
+// Only `env` and `volume` are reported here. A provider, a label and an MCP
+// server are already checked by dryCatalog and by the cost and placement passes,
+// and reporting them twice would make the same problem look like two.
+func (e *Engine) dryRequirements(def *workflow.Definition) []DryProblem {
+	reqs := bundle.Requirements(def, e.catalog)
+	if len(reqs) == 0 {
+		return nil
+	}
+	var want []bundle.Requirement
+	for _, r := range reqs {
+		if r.Kind == bundle.ReqEnv || r.Kind == bundle.ReqVolume {
+			want = append(want, r)
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	var out []DryProblem
+	for _, u := range bundle.CheckRequirements(want, e.RequirementHost()).Unmet {
+		step := ""
+		if len(u.Requirement.Steps) > 0 {
+			step = u.Requirement.Steps[0]
+		}
+		// Fatal: a missing variable or an unwritable folder does not degrade the
+		// run, it fails it — and failing here costs nothing while failing later
+		// costs a checkout, a worktree and the first tokens.
+		out = append(out, DryProblem{
+			Step:    step,
+			Field:   u.Requirement.Kind,
+			Fatal:   true,
+			Message: u.Because + " — " + u.Fix,
+		})
+	}
+	return out
+}
+
 func (e *Engine) dryCatalog(def *workflow.Definition) []DryProblem {
 	var out []DryProblem
 	seen := map[string]bool{}

@@ -99,8 +99,6 @@ func run(args []string) error {
 		return logout(rest)
 	case "context", "contexts":
 		return contextCmd(rest)
-	case "repl":
-		return repl(rest)
 	case "version", "--version", "-v":
 		return printVersion(rest)
 	case "publish":
@@ -143,7 +141,6 @@ func usage() {
   wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)
   wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
-  wfx repl [--url host]            a session against one host: verbs without the wfx
   wfx version [--json]             which binary this is, and where it came from
   wfx install --list               what this platform ships
   wfx env [--project p]            the platform's env store (values are never shown)

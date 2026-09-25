@@ -71,6 +71,11 @@ type Requirement struct {
 	// refusal — "a key is needed, and where this was published it was called
 	// ANTHROPIC_API_KEY" — instead of one that is merely true.
 	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
+	// Writable is set on a `volume` requirement whose mount is read-write. A
+	// folder that exists but cannot be written satisfies a read-only mount and
+	// does not satisfy this one, and the difference is only discoverable before
+	// the run if it is recorded here.
+	Writable bool `json:"writable,omitempty"`
 	// Steps are the step IDs that ask for it, so a refusal can say where.
 	Steps []string `json:"steps,omitempty"`
 }
@@ -80,6 +85,16 @@ const (
 	ReqProvider = "provider"
 	ReqLabel    = "label"
 	ReqMcp      = "mcp"
+	// ReqEnv is a configuration variable the workflow READS on the machine that
+	// runs the step — the name inside `${GITHUB_PAT}`, never the value. It is
+	// satisfied by the platform's encrypted env store or by that machine's own
+	// environment; which one is the host's business, not the bundle's.
+	ReqEnv = "env"
+	// ReqVolume is a folder a `mount:` line attaches. A path, and whether the
+	// step needs to WRITE to it — a read-only mount is satisfied by a folder
+	// that exists, and a writable one is not satisfied by a folder that cannot
+	// be written.
+	ReqVolume = "volume"
 )
 
 // Manifest names every entry, so the manifest's own digest covers the whole

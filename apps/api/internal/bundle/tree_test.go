@@ -3,6 +3,7 @@ package bundle
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -306,5 +307,56 @@ func TestTheManifestCarriesTheKeysNameAndNeverItsValue(t *testing.T) {
 	}
 	if strings.Contains(string(canon), secret) {
 		t.Fatal("the key's VALUE is in the manifest")
+	}
+}
+
+// Configuration and volumes are gathered at publish time like every other
+// requirement, so the receiving machine can be asked BEFORE anything installs.
+//
+// The two rules that matter: a LITERAL env value requires nothing of the host
+// (`NODE_ENV: test` is committed, so it is not a secret and not a question),
+// and two steps mounting the same folder take the STRICTER of the two — a
+// read-write need is not satisfied by clearing the read-only one.
+func TestEnvReferencesAndMountsBecomeRequirements(t *testing.T) {
+	def := &workflow.Definition{
+		Name: "w",
+		Env:  map[string]string{"NODE_ENV": "test", "GH_TOKEN": "${GITHUB_PAT}"},
+		Mount: []workflow.Mount{
+			{Host: "datasets", At: "data", ReadOnly: true},
+		},
+		Steps: []workflow.Step{
+			{ID: "read", Env: map[string]string{"KEY": "${SHARED_KEY}"}},
+			{ID: "write", Env: map[string]string{"KEY": "${SHARED_KEY}"}},
+		},
+	}
+	// The same folder again, read-write this time.
+	def.Mount = append(def.Mount, workflow.Mount{Host: "datasets", At: "data", ReadOnly: false})
+
+	byKind := map[string][]Requirement{}
+	for _, r := range Requirements(def, testCatalog()) {
+		byKind[r.Kind] = append(byKind[r.Kind], r)
+	}
+
+	var names []string
+	for _, r := range byKind[ReqEnv] {
+		names = append(names, r.Name)
+	}
+	sort.Strings(names)
+	want := []string{"GITHUB_PAT", "SHARED_KEY"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Errorf("env requirements are %v, want %v — a literal must require nothing and a reference must require its NAME", names, want)
+	}
+	// One name, both steps that read it.
+	for _, r := range byKind[ReqEnv] {
+		if r.Name == "SHARED_KEY" && len(r.Steps) != 2 {
+			t.Errorf("SHARED_KEY is read by two steps, recorded %v", r.Steps)
+		}
+	}
+
+	if n := len(byKind[ReqVolume]); n != 1 {
+		t.Fatalf("the same folder twice is one requirement, got %d", n)
+	}
+	if !byKind[ReqVolume][0].Writable {
+		t.Error("a folder mounted both ro and rw must record the STRICTER need; clearing the ro one would let the write fail mid-run")
 	}
 }
