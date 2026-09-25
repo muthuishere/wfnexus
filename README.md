@@ -351,7 +351,8 @@ Two observed runs, both real, neither estimated:
 - **`code-review` on this repo, sonnet-4.5 via OpenRouter: $4.37.** It completed — `survey` 4 turns,
   `review` 27 turns, both with validated typed output, 31 LLM calls, 30 tool calls. It also spent
   **1,424,154 prompt tokens against 6,541 completion tokens**, because there is **no context
-  compaction**: the 117 KB diff was re-sent every turn. That ratio is the bill.
+  compaction**: the 117 KB diff was re-sent every turn. That ratio is the bill — and
+  `compact_at_tokens` is the switch, at the price of a summarising call per firing.
 - **One step on local `qwen3:4b` via `ollama-http`: a true `$0.00`.** 2 turns, 740 prompt + 907
   completion, `"costUsd":0` — and the typed contract still held on a 4B model: `submit_output`
   validated and the step could not finish without it.
@@ -591,8 +592,13 @@ flatters is worse than none:
   That makes "runs anywhere" an unproven claim, which is why
   [ADR 0019](docs/adr/0019-evals-are-the-proof-of-portability.md) promotes evals from a skipped gap
   to the proof of the core claim.
-- **No context compaction.** The $4.37 above is what that costs. toolnexus ships `agents.Compactor`
-  and we do not use it; we cap turns instead, which stops work rather than continuing it.
+- **Context compaction is opt-in and off by default.** `budget: { compact_at_tokens: N }` turns it
+  on; a step that does not name it is byte-identical to before, because compaction rewrites the
+  transcript the typed contract lives in. Measured on this repo with a 200k context: without it the
+  step **fails** — `maximum context length is 200000, you requested about 253267` — and with it both
+  steps finish and submit valid output. Note what that means: the compacted run costs **more**
+  ($0.45 against $0.008) precisely because it does not die. It buys a finished run, not a cheaper
+  one; the per-call average falls from a 253k request to about 7.7k.
 - **No Prometheus or OTEL export.** Usage and cost are aggregated live per step and stored on
   `step_runs.usage` — that part is done — but there is no metrics endpoint and no trace export, and
   nothing rolls the per-step figures up to the run.
