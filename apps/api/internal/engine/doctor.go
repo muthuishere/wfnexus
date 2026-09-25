@@ -203,6 +203,12 @@ func InspectProvider(p catalog.Provider) DoctorProvider { return checkProvider(p
 func checkProvider(p catalog.Provider) DoctorProvider {
 	out := DoctorProvider{Name: p.Name, Kind: string(p.Kind), Model: p.Model, Ready: true, State: bundle.StateReady}
 	switch p.Kind {
+	case catalog.KindMock:
+		// Always ready, because it needs nothing — and labelled so nobody reads
+		// this line as a working model. A row that said only "ready" next to a
+		// real provider's row would be the most misleading line in the report.
+		out.State, out.Detail = "ready", "in-process; calls no model and proves no answer"
+		return out
 	case catalog.KindHTTP:
 		out.Detail = p.BaseURL
 		// An entry with no apiKeyEnv needs no key — the self-hosted case, the

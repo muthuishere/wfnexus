@@ -72,6 +72,21 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 	}
 
 	switch p.Kind {
+	case catalog.KindMock:
+		// An in-process endpoint on loopback. It speaks the openai wire shape
+		// because that is what the agent loop already sends, so the mock exercises
+		// the SAME code path a paid provider does — including the tool-call
+		// plumbing that submit_output rides on. A mock wired in further up would
+		// skip exactly the part worth testing.
+		url, err := e.mock.URL()
+		if err != nil {
+			return resolved{}, err
+		}
+		return resolved{LLM: &agents.LLMOptions{
+			BaseURL: url,
+			Style:   tn.ClientStyle("openai"),
+			Model:   "mock",
+		}, Label: "mock", Close: noClose}, nil
 	case catalog.KindHTTP:
 		model := p.Model
 		// `model:` beside a provider selects a model WITHIN that provider — a

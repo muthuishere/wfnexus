@@ -49,6 +49,9 @@ type Engine struct {
 	// The resolution rule is used, not bypassed: it is WHY bundling works.
 	bundleRoots []string
 	broker      *broker
+	// mock is the in-process endpoint a `mock` provider points at, started on
+	// first use. One per engine, on loopback.
+	mock mockServer
 	// classifierOpts overrides the judge backend; tests set the static one.
 	classifierOpts *tn.ClassifierOptions
 	// transport overrides the LLM HTTP transport (tests script it).

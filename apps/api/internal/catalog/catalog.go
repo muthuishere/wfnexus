@@ -29,6 +29,14 @@ const (
 	KindCLI ProviderKind = "cli"
 	// KindACP speaks the Agent Client Protocol to an agent process.
 	KindACP ProviderKind = "acp"
+	// KindMock produces turns without a model: it reads the step's
+	// `submit_output` schema and submits a value that satisfies it. It needs no
+	// key, no binary and no network, so a workflow can be RUN — gates, facts,
+	// budgets, the typed contract — by somebody who has configured nothing.
+	//
+	// It proves the wiring and never the answer. Every string it produces says
+	// "mock" for that reason.
+	KindMock ProviderKind = "mock"
 )
 
 // Provider is a source of model turns.
@@ -261,6 +269,14 @@ func HTTPStyles() []string {
 
 func validateProvider(p Provider) error {
 	switch p.Kind {
+	case KindMock:
+		// Nothing is required, and that is the whole point: a provider somebody
+		// can use before they have configured anything. A baseUrl or a key on a
+		// mock entry is a sign the author meant `http`, so it is refused rather
+		// than ignored.
+		if p.BaseURL != "" || p.APIKeyEnv != "" || p.Preset != "" || len(p.Command) > 0 {
+			return fmt.Errorf("a mock provider takes no baseUrl, apiKeyEnv, preset or command — it calls nothing")
+		}
 	case KindHTTP:
 		if p.BaseURL == "" || p.Model == "" {
 			return fmt.Errorf("an http provider needs baseUrl and model")
