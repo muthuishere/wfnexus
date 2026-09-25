@@ -201,6 +201,44 @@ tasks:
   test:
     dir: apps/api
     cmds: [go test ./internal/... ./cmd/...]
+  test:hostile:
+    desc: The suite with this machine's ambient config and provider keys stripped
+    # WHY THIS EXISTS: three separate failures on 2026-09-25 were tests reading
+    # the developer's machine rather than owning their own inputs — a bare repo
+    # borrowing `init.defaultBranch`, and a provider readiness check borrowing an
+    # exported OPENROUTER_API_KEY. Each was green on a laptop and red on all
+    # three CI runners, and one of them was hiding a real bug in `publish --to`.
+    #
+    # A clean runner catches these by accident. This catches them on purpose, in
+    # the one place a contributor can run before pushing. It is the same `go
+    # test` as `test`, with the machine taken away:
+    #   - GIT_CONFIG_GLOBAL/SYSTEM at /dev/null, so git's defaults are git's
+    #     rather than this user's
+    #   - every provider key variable unset, so a readiness check that reads one
+    #     must set it itself
+    #   - the test cache cleared, because a cached PASS from the ambient run is
+    #     exactly what this target is trying not to trust
+    #
+    # `env -u` and not Taskfile's own `env:`. Setting a variable to "" in `env:`
+    # does NOT override it — the parent's value passes straight through, which
+    # was verified here and is the sort of thing that leaves a guard looking like
+    # it works while doing nothing at all. The whole target would have been
+    # decoration.
+    #
+    # POSIX `env` only, so this target is linux/darwin. The suite itself runs
+    # everywhere; this is the extra pass that takes the machine away.
+    platforms: [linux, darwin]
+    dir: apps/api
+    env:
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_SYSTEM: /dev/null
+    cmds:
+      - go clean -testcache
+      - >-
+        env -u OPENROUTER_API_KEY -u ANTHROPIC_API_KEY -u OPENAI_API_KEY
+        -u GEMINI_API_KEY -u GROQ_API_KEY -u DEEPSEEK_API_KEY -u MISTRAL_API_KEY
+        go test ./internal/... ./cmd/...
+
   test:race:
     desc: The concurrency paths — the planner and the scheduler run steps in parallel
     dir: apps/api

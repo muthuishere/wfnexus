@@ -74,6 +74,17 @@ jobs:
         # No bare `go build` of the server package appears anywhere in this file.
         run: task check
 
+      - name: task test:hostile
+        # The suite again with this machine's ambient config and provider keys
+        # taken away. A clean runner catches a test that reads its developer's
+        # machine by accident; this catches it on purpose, and a contributor can
+        # run the identical target before pushing.
+        #
+        # It earned its place on 2026-09-25: three failures that day were tests
+        # borrowing ambient state, all green locally and red on every runner, and
+        # one was hiding a real bug in `publish --to`.
+        run: task test:hostile
+
       - name: task test:race
         run: task test:race
 
