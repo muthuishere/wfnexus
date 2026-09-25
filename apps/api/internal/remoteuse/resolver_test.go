@@ -89,8 +89,13 @@ func publishToBareRepo(t *testing.T) (remote, tag string) {
 	git(t, work, "commit", "-q", "-m", "publish bug-fix 1.0.0")
 	git(t, work, "tag", "bug-fix/v1.0.0")
 
+	// `-b main` so the bare repository's HEAD names the branch that is actually
+	// pushed. Without it HEAD comes from the machine's `init.defaultBranch`, the
+	// clone in TestTamperedTreeIsRefused can come back EMPTY, and the fixture
+	// means something different on CI than on a laptop — which is what it did:
+	// green on git 2.50, red on 2.55.
 	remote = filepath.Join(root, "acme-workflows.git")
-	out, err := exec.Command("git", "init", "--bare", "-q", remote).CombinedOutput()
+	out, err := exec.Command("git", "init", "--bare", "-q", "-b", "main", remote).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git init --bare: %v: %s", err, out)
 	}

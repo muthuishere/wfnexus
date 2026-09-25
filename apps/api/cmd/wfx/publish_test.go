@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 )
 
 // task 10.7 — `wfx publish` with no configured host is an ERROR, not a
@@ -49,10 +51,16 @@ func TestPublishRequiresAVersion(t *testing.T) {
 
 // A bare repository in a temp dir: the whole `--to` path is verified against a
 // real remote, with no github.com and no network.
+//
+// `-b main` is not decoration. Without it the repository's HEAD comes from
+// whatever `init.defaultBranch` the machine happens to set, so the fixture means
+// something different on a developer's laptop than on CI — which is exactly how
+// the empty-clone bug below stayed hidden: it passed on git 2.50 locally and
+// failed on 2.55 in CI. A fixture has to be the same repository everywhere.
 func bareRepo(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "registry.git")
-	git(t, "", "git", "init", "--quiet", "--bare", dir)
+	git(t, "", "git", "init", "--quiet", "--bare", "-b", "main", dir)
 	return dir
 }
 
@@ -246,5 +254,58 @@ func TestAPastedCredentialNeverReachesACommit(t *testing.T) {
 	}
 	if err := exec.Command("git", "--git-dir", remote, "rev-parse", "--verify", "HEAD").Run(); err == nil {
 		t.Fatal("a refused publish left a commit on the remote")
+	}
+}
+
+// A remote whose HEAD names a branch that does not exist there gives an EMPTY
+// clone. Publishing into it would succeed at every step and produce a divergent
+// branch holding only the new bundle, orphaning every bundle already published —
+// so it is refused, and the refusal names the branch to point HEAD at.
+//
+// This is not a hypothetical shape. A bare repository created with one default
+// branch name and pushed to with another is in exactly this state, which is how
+// it was found: the same mismatch made a test pass on git 2.50 and fail on 2.55.
+func TestAnEmptyCloneFromAMismatchedHeadIsRefusedRatherThanPublished(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "org.git")
+	git(t, "", "git", "init", "--bare", "--quiet", "-b", "main", remote)
+
+	// A bundle already published there, on main.
+	work := filepath.Join(root, "work")
+	git(t, "", "git", "clone", "--quiet", remote, work)
+	seed := bundle.New("workflow", "", "already-here", "1.0.0")
+	seed.AddWorkflow([]byte("name: already-here\n"))
+	seedDir := filepath.Join(work, filepath.FromSlash(bundle.TreeDir("already-here", "1.0.0")))
+	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.WriteTree(seedDir); err != nil {
+		t.Fatal(err)
+	}
+	git(t, work, "git", "add", "-A")
+	git(t, work, "git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "--quiet", "-m", "seed")
+	git(t, work, "git", "push", "--quiet", "origin", "HEAD:main")
+
+	// Now point the remote's HEAD at a branch that does not exist.
+	git(t, "", "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/trunk")
+
+	b := bundle.New("workflow", "", "newcomer", "1.0.0")
+	b.AddWorkflow([]byte("name: newcomer\n"))
+	err := publishToGit(remote, "newcomer", "1.0.0", b, "sha256:whatever")
+	if err == nil {
+		t.Fatal("publishing into an empty clone was allowed; the already-published bundle would be orphaned")
+	}
+	for _, want := range []string{"orphan", "main", "symbolic-ref"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q, so it is not actionable:\n%v", want, err)
+		}
+	}
+	// And nothing was pushed: the remote still has main, and no trunk.
+	out := git(t, "", "git", "--git-dir", remote, "for-each-ref", "--format=%(refname)", "refs/heads")
+	if strings.Contains(out, "trunk") {
+		t.Fatalf("a refused publish created a branch anyway: %s", out)
+	}
+	if !strings.Contains(out, "refs/heads/main") {
+		t.Fatalf("main went missing: %s", out)
 	}
 }

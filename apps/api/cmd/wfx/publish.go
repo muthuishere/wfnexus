@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -153,6 +154,27 @@ func publishToGit(remote, name, version string, b *bundle.Bundle, digest string)
 	if out, e := exec.CommandContext(ctx, "git", "clone", "--quiet", "--no-tags", remote, dir).CombinedOutput(); e != nil {
 		return fail("clone", out, e)
 	}
+	// A clone can come back EMPTY even though the remote has branches: that
+	// happens when the remote's HEAD names a branch that does not exist there,
+	// which a bare repository created with one default branch name and pushed to
+	// with another does routinely.
+	//
+	// Publishing into that empty checkout is the dangerous outcome, not the
+	// obvious one. The commit below would succeed, the push would succeed, and
+	// the result would be a DIVERGENT branch holding this bundle and nothing
+	// else — every bundle already published to that repository orphaned on the
+	// branch nobody is now looking at. So this refuses instead, and names the
+	// branches it can see, because the operator is one `git symbolic-ref` from
+	// fixing it and has no way to guess that from a successful publish.
+	if _, e := git("rev-parse", "--verify", "--quiet", "HEAD"); e != nil {
+		heads, _ := exec.CommandContext(ctx, "git", "ls-remote", "--heads", remote).CombinedOutput()
+		if names := branchNames(heads); len(names) > 0 {
+			return fmt.Errorf("cannot publish to %s: it has branches (%s) but its HEAD points at none of them, so the clone is empty — publishing now would commit this bundle to a new branch and orphan everything already there.\n  fix it on the remote with: git symbolic-ref HEAD refs/heads/%s",
+				remote, strings.Join(names, ", "), names[0])
+		}
+		// No branches at all: a genuinely empty repository, which is the
+		// ordinary first publish. An initial commit is exactly right.
+	}
 	treeDir := filepath.Join(dir, filepath.FromSlash(bundle.TreeDir(name, version)))
 	if err := os.MkdirAll(treeDir, 0o755); err != nil {
 		return err
@@ -185,6 +207,24 @@ func publishToGit(remote, name, version string, b *bundle.Bundle, digest string)
 		fmt.Printf("  needs    %-8s %s %s\n", rq.Kind, rq.Name, rq.ProviderKind)
 	}
 	return nil
+}
+
+// branchNames reads the branch names out of `git ls-remote --heads` output.
+// Used only to make a refusal specific — a refusal that cannot name what it saw
+// is one the operator has to reproduce by hand before they can act on it.
+func branchNames(out []byte) []string {
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		_, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok {
+			continue
+		}
+		if b, ok := strings.CutPrefix(ref, "refs/heads/"); ok && b != "" {
+			names = append(names, b)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // duplicateVersion turns git's rejection into the refusal the server path gives
