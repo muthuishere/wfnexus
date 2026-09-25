@@ -1,6 +1,8 @@
 # ADR 0018 — The registry has a publish direction
 
-- **Status:** proposed
+- **Status:** proposed — **the storage half superseded 2026-09-25**, see
+  [Superseded in part](#superseded-in-part-2026-09-25) at the end. The decision text
+  below is left as it was written.
 - **Date:** 2026-09-24
 
 ## Context
@@ -104,3 +106,63 @@ object store, or the existing DB); **garbage collection** of unreferenced blobs;
 publisher; and **dependency resolution between assets** — what happens when two
 bundles carry different versions of the same skill. Each wants its own ADR, and
 none of them changes the shape of the verb.
+
+## Superseded in part (2026-09-25)
+
+**What is superseded: WHERE a bundle lands, and nothing about what a bundle is.**
+The decision above is kept verbatim rather than edited, because the reasoning for a
+blob store is still the reasoning a reader needs — it is what makes the replacement
+legible as a change of mind rather than a change of text.
+
+The replacement is *a git remote is the registry* (`openspec/changes/a-git-remote-is-the-registry/`).
+`wfx publish --to <git remote>` writes the bundle as a **committed tree** under
+`workflows/<name>/<version>/` — the same manifest, the same fixed paths — commits it,
+tags `<name>/v<version>` and pushes. Actions, Go modules and Terraform all resolve a
+repository plus a ref and none of them runs an artifact server; the repo's own rule is
+ADOPT, NEVER INVENT.
+
+Stands, unchanged:
+
+- **A published workflow is a bundle, not a set of references.** Skills and MCP
+  declarations still resolve at publish time and travel, addressed by digest.
+- **Publishing is immutable.** Now enforced by git: a tag that already exists is a push
+  that fails, which is the same refusal `unique (project, kind, name, version)` gives.
+- **A credential is never published.** `looksLikeSecret` and the step-env rule run
+  before a commit is made, not after.
+- **One verb, and it says what it moved and where.**
+
+Superseded:
+
+- **The storage layout, which this ADR left open, is answered — and answered differently.**
+  Not "filesystem, object store, or the existing DB" but *a git repository*, because a
+  committed **tree** is reviewable in a PR and a committed tarball is one binary blob
+  changed. The pivot's whole argument for the YAML is that it is a receipt: readable,
+  diffable, reviewable by someone who never touched the generator. A tar defeats every
+  word of that. The tarball survives as a **derived** artifact — `bundle.Pack` over the
+  tree reproduces it, because entry digests are over canonical content and not over tar
+  ordering.
+- **The premise that a publish targets *our* server.** It no longer has to. `wfx login`
+  stays for the host sink and for running; it stops being a precondition of sharing a
+  workflow. The host path is retained as a mirror — dropping a working feature to make a
+  point about registries would be the worse trade — but `internal/blob` is demoted from
+  *where bundles live* to *where fetched bundles are kept*, which is safe only because
+  the content is addressed by digest. The test for the demotion is literal: `rm -rf` the
+  cache, rerun, get the same digests.
+- **"A small org: one server."** A small org needs a repository they already have, with
+  the access control they already administer and the PR review they already require. No
+  wfnexus server is required to share a workflow. A server is where runs happen.
+- **`published_by` as *the* provenance mechanism.** This ADR wanted provenance "in git's
+  sense of an author"; a commit **is** that, with an author, a committer, a date, a
+  message and a parent, and a signed tag is the tamper-evidence this ADR said it could
+  not claim. The column is kept and demoted to a cached local attribution, and the index
+  row now also records the remote and the resolved **commit** it was read from
+  (`git_remote`, `git_commit`, migration `000013`) so the two views reconcile. Nothing
+  is deleted: a bundle uploaded straight to a host has no commit, and the recorded
+  publisher is all there is for it.
+- **Garbage collection of unreferenced blobs**, named open here, stops being a
+  correctness problem. Evicting from a cache is always safe, so it is an eviction
+  policy.
+
+Still open, and not closed by the replacement: **signing and verification** (git can
+sign a commit and a tag; whether we *verify* one is not decided — see
+`docs/not-now.md`), and **dependency resolution between assets**.

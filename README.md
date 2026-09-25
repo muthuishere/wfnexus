@@ -116,6 +116,70 @@ you want" is a context, not a rebuild.
 needs no browser and no callback on the machine running it, so it works over SSH, in a container,
 and **inside another agent's session** — which is exactly where the authoring happens.
 
+### Or publish to a git remote, with no host and no account
+
+A workflow can also be shared without a server at all. `--to` writes the bundle into a git
+repository instead of uploading it:
+
+```bash
+wfx publish my-workflow.yaml --version 1.2.0 --to /srv/git/workflows.git    # a bare repo, offline
+wfx publish my-workflow.yaml --version 1.2.0 --to git@github.com:acme/workflows.git
+```
+
+The offline one first, for the same reason the install section puts the tarball before the registry:
+a bare repo on a mounted path is the path a site without egress actually uses, and it needs nothing
+this project runs.
+
+It writes `workflows/<name>/<version>/` — `manifest.json`, `workflow.yaml`, `mcp.json` and each
+skill directory, the same paths the tarball uses — commits, tags `<name>/v<version>` and pushes. A
+**tree**, not a tarball, so a PR bumping a workflow shows the prompt that changed and the skill that
+was added rather than one binary blob. Immutability is git's: a tag that already exists is a push
+that fails, which is the same refusal the host gives for a version that exists. Every refusal runs
+**before** the commit — a credential in the file, an unresolvable skill, a digest mismatch — so a
+refused publish leaves no commit, no tag and no push.
+
+Auth is git's: the SSH agent, the credential helper, the PAT already in `~/.git-credentials`.
+`wfx` never reads, stores, prompts for or transports a git credential; it shells out to `git`. So
+`--to` needs no `wfx login` and asks for no token, and who may publish to `acme/workflows` is a repo
+permission the org already administers. Provenance is the commit author — a commit has an author, a
+date and a parent, which is more than a row in our database ever had.
+
+Then another workflow uses it by name and ref:
+
+```yaml
+uses:
+  - use: reproduce-bug                              # a task file next to me — unchanged
+  - use: acme/bug-fix@v1.2.0                        # github.com, Actions' form
+  - use: git.acme.internal/team/wf@v1.2.0           # any host: a dot in the first segment IS the host
+  - use: ssh://git@nas.lan/srv/wf.git@a1b2c3d       # an explicit URL and a ref
+  - use: acme/workflows@v1.2.0#bug-fix              # which bundle, when the repo holds several
+```
+
+`uses:` expands a task's steps into the workflow at **load** time, so everything downstream sees
+ordinary steps. A value with no `@` is a local task name and touches none of this — no git call, no
+network, no cache. The host rules are borrowed rather than coined: no dot in the first segment means
+`github.com` (Actions' rule), a dot means the first segment *is* the host (Go's module-path rule).
+There is no configurable default host, because a configurable default host is how a tool ends up
+meaning github.com.
+
+The ref is resolved once and the **commit** is recorded on the run, not the tag, so a tag that moves
+later cannot change what a past run did. A cache hit makes no network call; a cold cache with no
+network is a load error naming the reference and the cache it looked in, never a quiet fall back to a
+local task of the same name.
+
+**Only these schemes are accepted: `https`, `http`, `ssh`, `git`, `file`, and scp-style
+(`git@host:org/repo`).** Anything else is refused by name. This is an allowlist because
+`git clone 'ext::sh -c <command>'` **runs that command**, and a `use:` arrives in a workflow file
+somebody else published — so it is untrusted input, and an escape list that enumerated `..`,
+absolute paths and `file://` missed `ext::` entirely. An allowlist refuses `ext::` and every
+transport helper git gains later without us learning their names. A bare path, a `~` and a `..` are
+still refused: they are a local path smuggled in as a remote.
+
+`file://` is **deliberately allowed**. A bare repo on a mounted share is how an air-gapped site
+distributes a workflow, and an explicit `file://` URL is an operator naming a remote on purpose,
+exactly like `ssh://`. For retargeting a whole set of references at a mirror, git already has
+`insteadOf` — there is no wfnexus-side mirror setting to get wrong.
+
 ## Run it
 
 Downloaded the binary? There is no step two:
@@ -585,9 +649,14 @@ flatters is worse than none:
   verifying installer, per-arch tarballs — but there is no git tag, so there is nothing at those
   URLs until the first one. The workflows have also never executed: their YAML and the scripts they
   call are verified, a real Actions run is not.
-- **No publish direction.** Everything the server knows it read off a disk at boot. There is no
-  `wfx publish` and no registry to publish to — [ADR 0018](docs/adr/0018-the-registry-has-a-publish-direction.md)
-  is the decision, not the code.
+- **No signature verification on a published bundle.** `wfx publish` and the git sink are built —
+  git is the registry, and the storage half of
+  [ADR 0018](docs/adr/0018-the-registry-has-a-publish-direction.md) is superseded in that ADR's own
+  text. What is recorded is what git reports: a commit author, a date, and the resolved commit for
+  every run. Nothing *verifies* a signature, no trust root is consulted, and an unsigned bundle is
+  accepted — see [docs/not-now.md](docs/not-now.md) for the trigger that would change that. A pulled
+  bundle's `cli` provider check is also a PATH lookup, so it says the binary is **present**, not that
+  anyone is logged into it.
 - **No evals.** Nothing here can show that a workflow passing on sonnet still passes on `qwen3:4b`.
   That makes "runs anywhere" an unproven claim, which is why
   [ADR 0019](docs/adr/0019-evals-are-the-proof-of-portability.md) promotes evals from a skipped gap

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -14,7 +15,18 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
-// The publish direction (ADR 0018).
+// The publish direction (ADR 0018) — and the INDEX side of it.
+//
+// Since "a git remote is the registry" (design §4), these routes are not the
+// registry. Git is. What they maintain is a LOCAL INDEX of the bundles this
+// host has seen, so a host can answer *what is present here right now* — and
+// serve a run out of its own blob cache — with no remote reachable. Where a
+// bundle lives and who approved it is a question for git, answered by the
+// remote and commit an indexed row carries (`gitRemote`/`gitCommit`).
+//
+// That is a demotion, not a removal: nothing here stopped working, and a
+// direct upload to a host is still a whole publish for an operator who has no
+// git remote to push to.
 //
 // PUBLISHING IS ABSENT, NOT DEGRADED, where there is no subject to record. A
 // loopback install has no users by construction (ADR 0017), so there is nobody
@@ -30,8 +42,14 @@ func (s *Server) publishingEnabled() bool { return s.blob != nil && !s.loopbackO
 // publishBody is what `wfx publish` sends. The bundle is the tar; the digest is
 // the client's CLAIM about it, which the server recomputes and never trusts.
 //
-// Nothing here names the publisher. Provenance comes from the authenticated
-// subject, so a body cannot attribute a publish to somebody else.
+// Nothing here names the publisher. The recorded publisher comes from the
+// authenticated subject, so a body cannot attribute a publish to somebody else
+// — and since design §5 it is a cached attribution rather than the provenance
+// record, which is the commit author.
+//
+// GitRemote/GitCommit are how a bundle that came from a git remote gets indexed
+// with its origin, so the git view and this one reconcile. They are OPTIONAL
+// and they travel TOGETHER: a direct upload sends neither.
 type publishBody struct {
 	Kind    string `json:"kind"`
 	Project string `json:"project"`
@@ -40,6 +58,25 @@ type publishBody struct {
 	Digest  string `json:"digest"`
 	TarGz   []byte `json:"tarGz"`
 	Tag     string `json:"tag,omitempty"`
+	// The remote as git was given it, and the RESOLVED COMMIT — never the tag,
+	// because a tag moves (design §3). Absent for a bundle that did not come
+	// from git; an empty string is read as absent and never stored as a value.
+	GitRemote string `json:"gitRemote,omitempty"`
+	GitCommit string `json:"gitCommit,omitempty"`
+}
+
+// gitOrigin reads the two optional fields as ABSENT or WHOLE. "" is not a
+// remote, so it becomes nil rather than a row that names the empty remote.
+func (b publishBody) gitOrigin() (remote, commit *string, err error) {
+	r, c := strings.TrimSpace(b.GitRemote), strings.TrimSpace(b.GitCommit)
+	if r == "" && c == "" {
+		return nil, nil, nil
+	}
+	if r == "" || c == "" {
+		return nil, nil, errors.New("refused: `gitRemote` and `gitCommit` travel together — " +
+			"a remote with no resolved commit names a place without naming what was read from it")
+	}
+	return &r, &c, nil
 }
 
 func (s *Server) publishBundle(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +96,11 @@ func (s *Server) publishBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Kind == "" {
 		b.Kind = "workflow"
+	}
+	gitRemote, gitCommit, err := b.gitOrigin()
+	if err != nil {
+		writeErr(w, 400, err)
+		return
 	}
 	if sub.Project != "" && b.Project != sub.Project {
 		writeErr(w, http.StatusForbidden, fmt.Errorf("refused: this subject is scoped to project %q", sub.Project))
@@ -124,6 +166,7 @@ func (s *Server) publishBundle(w http.ResponseWriter, r *http.Request) {
 	row := &store.PublishedBundle{
 		Kind: b.Kind, Project: b.Project, Name: b.Name, Version: b.Version,
 		Digest: digest, Manifest: manifest,
+		GitRemote: gitRemote, GitCommit: gitCommit,
 		PublishedBy: &sub.User.ID, PublishedByName: sub.Name,
 	}
 	if err := s.store.CreateBundle(r.Context(), row); err != nil {
@@ -172,7 +215,10 @@ func (s *Server) bundleInScope(w http.ResponseWriter, r *http.Request) (*store.P
 	return row, true
 }
 
-// getBundle is `inspect`: the manifest and the provenance, as queryable fields.
+// getBundle is `inspect`: the manifest, the git origin if there is one, and the
+// recorded publisher — as queryable fields. A row with a `gitCommit` is one
+// whose provenance can be read out of git; a row without one was uploaded here
+// and the recorded publisher is all there is.
 func (s *Server) getBundle(w http.ResponseWriter, r *http.Request) {
 	row, ok := s.bundleInScope(w, r)
 	if !ok {
@@ -226,6 +272,18 @@ func (s *Server) installBundle(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	// Requirement checking comes BEFORE anything is written (design §7). This
+	// server is the machine that will run the steps, so it is the one that can
+	// answer whether a recorded provider, `runs-on:` label or MCP server exists
+	// here — and a bundle that can never run should not first become a skill
+	// root and a saved workflow. A bundle that records nothing is checked
+	// against nothing.
+	req := s.eng.CheckBundleRequirements(bun.Manifest.Requires)
+	if !req.OK() {
+		writeErr(w, 409, req.Err())
+		return
+	}
+
 	root := filepath.Join(s.eng.BundleRootDir(), bundle.Hex(row.Digest))
 	if err := bun.Materialise(root); err != nil {
 		writeErr(w, 500, err)
@@ -246,9 +304,20 @@ func (s *Server) installBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Which carried skills SHADOW a same-named local one, named with both
 	// digests, so a pull never silently prefers either.
+	// Notes are what is satisfied and still cannot certify a run — a `cli`
+	// provider found on PATH with nobody's login checked. Printing that as a
+	// plain success is the claim design §7 refuses to make.
+	notes := []string{}
+	for _, c := range req.Caveats {
+		note := c.Kind + " " + c.Name + ": " + c.Note
+		if c.Fix != "" {
+			note += " — to authenticate, run `" + c.Fix + "` yourself"
+		}
+		notes = append(notes, note)
+	}
 	writeJSON(w, 200, map[string]any{
 		"ok": true, "workflow": def.Name, "skillRoot": root,
-		"skills": bun.Manifest.Skills,
+		"skills": bun.Manifest.Skills, "notes": notes,
 	})
 }
 
