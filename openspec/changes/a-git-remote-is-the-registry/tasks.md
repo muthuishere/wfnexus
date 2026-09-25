@@ -9,49 +9,62 @@ This change extends that working code; it does not replace it.
 
 ## 1. The reference grammar
 
-- [ ] 1.1 Add remote parsing to the `Use` struct in `apps/api/internal/workflow/task.go` (~line 31):
+- [x] 1.1 Add remote parsing to the `Use` struct in `apps/api/internal/workflow/task.go` (~line 31):
       a value containing `@` is a remote reference, everything else stays a local task name.
-- [ ] 1.2 Implement the host rules from design §2: a first segment with no dot resolves to
+- [x] 1.2 Implement the host rules from design §2: a first segment with no dot resolves to
       `github.com`; a first segment containing a dot is the host itself. Table test both, plus an
       SSH-style URL and a bare path.
-- [ ] 1.3 [SEC-TEST] A reference must not be able to name a local path or traverse out of a
-      checkout. Assert `../`, absolute paths and `file://` are refused with a reason.
-- [ ] 1.4 Verification: `go test ./internal/workflow/...` and a parse table covering every form in
+- [x] 1.3 [SEC-TEST] A reference must not be able to name a local path or traverse out of a
+      checkout. Assert `../`, absolute paths, `~` and a drive letter are refused with a reason.
+      **DECIDED 2026-09-25, reversing this task's original wording**, which said `file://` was
+      refused and contradicted `specs/remote-use`'s "an explicit URL is used as given":
+      `file://` IS ALLOWED. A bare repo on a mounted path is how an air-gapped site works and
+      task 9.3 requires a non-GitHub remote; an explicit URL is an operator naming a remote, not a
+      path smuggled in. The danger this task was reaching for is a BARE path or a traversal being
+      read as a remote, and that is still refused.
+- [x] 1.3a [SEC-TEST] **Added after the fact, and it is why the escape list had to go.** The rule
+      now ENUMERATES ALLOWED SCHEMES (`https`, `http`, `ssh`, `git`, `file`, plus scp-style)
+      instead of listing bad shapes, because the escape list missed `ext::` — and
+      `git clone 'ext::sh -c <command>'` RUNS that command. A `use:` comes from a workflow
+      somebody else published, so that is the untrusted input path. An allowlist refuses `ext::`
+      and every transport helper git gains later without us learning their names. This is
+      docs/not-now.md's own rule: a mechanism that works enumerates inclusions.
+- [x] 1.4 Verification: `go test ./internal/workflow/...` and a parse table covering every form in
       the `remote-use` spec, including the two that must stay LOCAL.
 
 ## 2. Fetch and cache
 
-- [ ] 2.1 Fetch a reference into the existing `apps/api/internal/blob` store — read it first; do not
+- [x] 2.1 Fetch a reference into the existing `apps/api/internal/blob` store — read it first; do not
       add a second storage mechanism. Key by resolved commit, never by tag.
-- [ ] 2.2 Record the resolved COMMIT for every run, so a moved tag cannot change what a past run
+- [x] 2.2 Record the resolved COMMIT for every run, so a moved tag cannot change what a past run
       did. This is the reproducibility rule from design §3.
-- [ ] 2.3 A cache hit makes no network call. Assert it by fetching twice with the remote made
+- [x] 2.3 A cache hit makes no network call. Assert it by fetching twice with the remote made
       unreachable on the second attempt.
-- [ ] 2.4 The offline path: a host with no network and a warm cache resolves; a host with no network
+- [x] 2.4 The offline path: a host with no network and a warm cache resolves; a host with no network
       and a cold cache fails naming the reference and the cache it looked in.
-- [ ] 2.5 Verification: the three scenarios above, observed, plus `wfx dryrun` on a workflow with a
+- [x] 2.5 Verification: the three scenarios above, observed, plus `wfx dryrun` on a workflow with a
       remote `use:` reporting whether it would resolve — WITHOUT fetching if the cache is warm.
 
 ## 3. Expansion
 
-- [ ] 3.1 Expand a fetched bundle's task through the SAME path a local task takes
+- [x] 3.1 Expand a fetched bundle's task through the SAME path a local task takes
       (`task.go:123`), so `with:`, `as:`, `consumes:`/`produces:` and the ADD-only `Override`
       semantics are unchanged. A remote task that behaves differently from a local one is a bug.
-- [ ] 3.2 [SEC-TEST] A remote task may not loosen policy. `Override` is ADD-only and
+- [x] 3.2 [SEC-TEST] A remote task may not loosen policy. `Override` is ADD-only and
       first-deny-wins for guardrails; assert a fetched task cannot remove a guardrail or widen a
       tool allowlist.
-- [ ] 3.3 Skills carried by a fetched bundle resolve by prepending a bundle-scoped root, exactly as
+- [x] 3.3 Skills carried by a fetched bundle resolve by prepending a bundle-scoped root, exactly as
       `wfx pull` already does — reuse `PrependSkillRoot`, do not add a second resolution order.
-- [ ] 3.4 Verification: a workflow using a remote task runs, and its step loads a skill that exists
+- [x] 3.4 Verification: a workflow using a remote task runs, and its step loads a skill that exists
       ONLY inside the fetched bundle.
 
 ## 4. `[SHIP]` — consuming a published bundle works
 
-- [ ] 4.1 End to end, observed: publish a bundle to a local bare repo, `use:` it from a second
+- [x] 4.1 End to end, observed: publish a bundle to a local bare repo, `use:` it from a second
       workflow on a host holding none of its skills, run it, paste the output.
-- [ ] 4.2 `wfx dryrun` reports an unresolvable remote reference as a dry-run failure, not a runtime
+- [x] 4.2 `wfx dryrun` reports an unresolvable remote reference as a dry-run failure, not a runtime
       one — the repo's whole static-pass claim depends on this.
-- [ ] 4.3 Update `skills/workflow-author/` so the authoring skill knows the remote form. It teaches
+- [x] 4.3 Update `skills/workflow-author/` so the authoring skill knows the remote form. It teaches
       the local `use:` today and nothing else.
 
 ## 5. The published tree, and the manifest

@@ -53,6 +53,11 @@ type Engine struct {
 	classifierOpts *tn.ClassifierOptions
 	// transport overrides the LLM HTTP transport (tests script it).
 	transport http.RoundTripper
+	// remote resolves a REMOTE `use:` — a git repository and a ref — into the
+	// task a workflow expands. Nil ⇒ remote references are unavailable, which
+	// is the one-person path: a workflow whose every `use:` is a bare task
+	// name never reaches any of this.
+	remote workflow.RemoteResolver
 
 	// secrets seals and opens the platform's env store. Nil when no key could
 	// be loaded, which makes the store unavailable rather than plaintext.
@@ -102,6 +107,12 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 	return e
 }
 
+// UseRemoteResolver wires remote `use:` resolution. The resolver materialises
+// each fetched bundle's skills as a bundle-scoped skill root, which
+// ReloadDefinitions then PREPENDS — the same first-root-wins arrangement
+// `wfx pull` uses, not a second resolution order.
+func (e *Engine) UseRemoteResolver(r workflow.RemoteResolver) { e.remote = r }
+
 // UseTransport overrides the LLM HTTP transport (tests script the wire).
 func (e *Engine) UseTransport(rt http.RoundTripper) { e.transport = rt }
 
@@ -142,7 +153,21 @@ func (e *Engine) ReloadDefinitions() error {
 	}
 	// Every source, not just our own: a repository imported with ImportRepo
 	// contributes the workflows in its `.wfx/workflows/`.
-	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat))
+	//
+	// A remote `use:` is resolved HERE, at load time, and the bundle it fetches
+	// carries skills a step will name. Those roots do not exist until the fetch
+	// has happened, so the load runs again once with the registry rebuilt over
+	// them. The second pass is a cache hit by construction: it makes no network
+	// call, and a load with no remote `use:` never takes it.
+	var opts []workflow.LoadOption
+	if e.remote != nil {
+		opts = append(opts, workflow.WithRemoteResolver(e.remote))
+	}
+	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+	if e.adoptBundleRoots() {
+		reg = skills.Load(e.skillRoots()...)
+		defs, skips, err = workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+	}
 	if err != nil {
 		return err
 	}
@@ -150,6 +175,32 @@ func (e *Engine) ReloadDefinitions() error {
 	e.defs, e.skills, e.catalog, e.sourceSkips = defs, reg, cat, skips
 	e.mu.Unlock()
 	return nil
+}
+
+// adoptBundleRoots takes on any skill root the remote resolver materialised
+// during the load just finished, and reports whether anything is new.
+func (e *Engine) adoptBundleRoots() bool {
+	type rooter interface{ Roots() []string }
+	r, ok := e.remote.(rooter)
+	if !ok {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	added := false
+	have := map[string]bool{}
+	for _, d := range e.bundleRoots {
+		have[d] = true
+	}
+	for _, d := range r.Roots() {
+		if have[d] {
+			continue
+		}
+		e.bundleRoots = append([]string{d}, e.bundleRoots...)
+		have[d] = true
+		added = true
+	}
+	return added
 }
 
 // skillRoots is every root the registry is built from, bundle roots first.
@@ -160,12 +211,16 @@ func (e *Engine) skillRoots() []string {
 	return append(roots, skills.DefaultRoots(e.cfg.SkillsDir)...)
 }
 
+// BundleRootDirFor is where a machine keeps its pulled bundles, derivable
+// before an Engine exists — boot resolves remote references too.
+func BundleRootDirFor(cfg config.Config) string {
+	return filepath.Join(filepath.Dir(cfg.SkillsDir), "bundles")
+}
+
 // BundleRootDir is where pulled bundles are materialised: one directory per
 // bundle, beside the platform's own skills rather than inside them, so a
 // bundle's copy is never mistaken for a machine-wide install.
-func (e *Engine) BundleRootDir() string {
-	return filepath.Join(filepath.Dir(e.cfg.SkillsDir), "bundles")
-}
+func (e *Engine) BundleRootDir() string { return BundleRootDirFor(e.cfg) }
 
 // PrependSkillRoot registers a bundle-scoped skill root and rebuilds the
 // registry. Called by the SERVER on a CLI-initiated publish or pull, never by
@@ -609,6 +664,15 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	def := e.defs[run.Workflow]
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
+	}
+	// What every remote `use:` RESOLVED to, on this run's own event stream. The
+	// COMMIT is recorded and the tag is not, because a tag can move and a
+	// commit cannot — a rerun reads this, never the reference's ref.
+	for _, pin := range def.RemotePins {
+		e.emit(ctx, runID, "", "use.pinned", map[string]any{
+			"reference": pin.Reference, "remote": pin.Remote,
+			"commit": pin.Commit, "digest": pin.Digest,
+		})
 	}
 	for i, s := range def.Steps {
 		if err := e.store.EnsureStep(ctx, runID, s.ID, i); err != nil {

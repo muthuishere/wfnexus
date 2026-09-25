@@ -89,9 +89,37 @@ type DryRunCost struct {
 func (e *Engine) DryRunWorkflow(name string, input map[string]any) (*DryRun, error) {
 	def := e.Definitions()[name]
 	if def == nil {
+		// A workflow that did not LOAD is not an unknown workflow — it is a
+		// workflow with a problem, and a dry run is where a problem is
+		// supposed to surface. An unresolvable remote `use:` is the case this
+		// exists for: the whole static-pass claim is that it fails HERE and
+		// not an hour into a run.
+		if why, ok := e.loadFailure(name); ok {
+			return &DryRun{
+				Workflow: name,
+				OK:       false,
+				Problems: []DryProblem{{Message: why, Fatal: true}},
+			}, nil
+		}
 		return nil, fmt.Errorf("workflow %q is not loaded", name)
 	}
 	return e.DryRunDefinition(def, input), nil
+}
+
+// loadFailure finds the recorded reason a named workflow is not loaded. The
+// loader reports `"<workflow>: ..."`, and a source's skip carries that text
+// verbatim.
+func (e *Engine) loadFailure(name string) (string, bool) {
+	short := name
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		short = name[i+1:]
+	}
+	for _, sk := range e.SourceSkips() {
+		if strings.HasPrefix(sk.Reason, short+":") || strings.Contains(sk.Reason, " "+short+":") {
+			return sk.Reason, true
+		}
+	}
+	return "", false
 }
 
 // DryRunDefinition checks a definition that may not be saved anywhere — which

@@ -42,6 +42,10 @@ func OpenFolder(dir string) (*Folder, error) {
 	return &Folder{dir: dir}, nil
 }
 
+// Dir is where this store keeps its files. A refusal that cannot say where it
+// looked is a refusal nobody can act on.
+func (f *Folder) Dir() string { return f.dir }
+
 // pathFor maps an object key to a file, refusing anything that would climb out
 // of the directory. Keys are built by this codebase, not by a user — but a
 // store that can be made to write anywhere is worth closing whether or not the

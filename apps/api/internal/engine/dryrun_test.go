@@ -256,3 +256,33 @@ func TestAuthoringToolsRejectGuessedFieldNames(t *testing.T) {
 		t.Fatalf("real fields reported as unknown: %s", got)
 	}
 }
+
+// 4.2 — a workflow that did not LOAD because a remote `use:` could not be
+// resolved is a DRY-RUN failure, not a runtime one. The repo's whole
+// static-pass claim depends on a dry run being where this surfaces.
+func TestDryRunReportsAnUnresolvableRemoteReference(t *testing.T) {
+	e := &Engine{sourceSkips: []workflow.Skip{{
+		Source:   "local",
+		Location: "/w/consumer.yaml",
+		Reason:   `consumer: use "acme/bug-fix@v1.2.0": cannot resolve ref "v1.2.0" from https://github.com/acme/bug-fix.git: unreachable`,
+	}}}
+	out, err := e.DryRunWorkflow("consumer", nil)
+	if err != nil {
+		t.Fatalf("an unresolvable reference must be a dry-run RESULT, not a transport error: %v", err)
+	}
+	if out.OK {
+		t.Fatal("the dry run must fail")
+	}
+	if len(out.Problems) != 1 || !out.Problems[0].Fatal {
+		t.Fatalf("want one fatal problem, got %+v", out.Problems)
+	}
+	for _, want := range []string{"acme/bug-fix@v1.2.0", "https://github.com/acme/bug-fix.git"} {
+		if !strings.Contains(out.Problems[0].Message, want) {
+			t.Fatalf("the problem must name %q, got %q", want, out.Problems[0].Message)
+		}
+	}
+	// A workflow nobody ever wrote is still an unknown workflow.
+	if _, err := e.DryRunWorkflow("never-existed", nil); err == nil {
+		t.Fatal("an unknown workflow must stay an error")
+	}
+}

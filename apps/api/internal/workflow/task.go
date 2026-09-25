@@ -114,20 +114,34 @@ func SortedTasks(m map[string]*Task) []*Task {
 // expandUses replaces every `use:` entry with the task's steps, applying the
 // prefix, the overrides and the fact renames. Called before validation, so a
 // task's steps are checked exactly like hand-written ones.
-func (d *Definition) expandUses(tasks map[string]*Task) error {
+func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 	if len(d.Uses) == 0 {
 		return nil
 	}
 	var expanded []Step
 	for _, u := range d.Uses {
-		t, ok := tasks[u.Task]
-		if !ok {
-			known := make([]string, 0, len(tasks))
-			for n := range tasks {
-				known = append(known, n)
+		var t *Task
+		if IsRemoteUse(u.Task) {
+			// A REMOTE use resolves here, at load time, and then walks the
+			// same path a local task does — the prefix, the overrides, the
+			// fact renames, the validation that follows. A remote task that
+			// behaved differently from a local one would be a bug.
+			rt, err := d.resolveRemote(u.Task, opt)
+			if err != nil {
+				return err
 			}
-			sort.Strings(known)
-			return fmt.Errorf("%s: unknown task %q — known: %v", d.Name, u.Task, known)
+			t = rt
+		} else {
+			local, ok := tasks[u.Task]
+			if !ok {
+				known := make([]string, 0, len(tasks))
+				for n := range tasks {
+					known = append(known, n)
+				}
+				sort.Strings(known)
+				return fmt.Errorf("%s: unknown task %q — known: %v", d.Name, u.Task, known)
+			}
+			t = local
 		}
 		prefix := u.As
 		if prefix == "" {
@@ -148,6 +162,27 @@ func (d *Definition) expandUses(tasks map[string]*Task) error {
 	// here is cosmetic because the planner and the DAG both derive it.
 	d.Steps = append(expanded, d.Steps...)
 	return nil
+}
+
+// resolveRemote fetches the bundle a remote reference names and records the
+// pin. Every failure names the reference and the remote: an unresolvable
+// reference is a LOAD error, never a degraded run and never a local task of
+// the same trailing name.
+func (d *Definition) resolveRemote(raw string, opt loadOptions) (*Task, error) {
+	ref, err := ParseRef(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: use: %w", d.Name, err)
+	}
+	if opt.remote == nil {
+		return nil, fmt.Errorf("%s: use %q names the git remote %s, and remote references are not available in this loader",
+			d.Name, raw, ref.Remote)
+	}
+	t, pin, err := opt.remote.ResolveRemoteUse(ref)
+	if err != nil {
+		return nil, fmt.Errorf("%s: use %q: cannot resolve ref %q from %s: %w", d.Name, raw, ref.Ref, ref.Remote, err)
+	}
+	d.RemotePins = append(d.RemotePins, pin)
+	return t, nil
 }
 
 func prefixAll(prefix string, ids []string) []string {

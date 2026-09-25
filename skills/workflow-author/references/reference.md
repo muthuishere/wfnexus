@@ -262,3 +262,48 @@ on:
   repository_dispatch:
     types: [push, issue_opened]         # another system POSTs
 ```
+
+## Reuse — `uses:`
+
+A `use:` expands a reusable TASK's steps into the workflow at load time, so
+everything downstream sees ordinary steps. Two forms, one vocabulary:
+
+```yaml
+uses:
+  - use: reproduce-bug                       # LOCAL: a task file in .wfx/tasks/
+  - use: acme/bug-fix@v1.2.0                 # REMOTE: github.com/acme/bug-fix at v1.2.0
+  - use: git.acme.internal/team/wf@v1.2.0    # a dot in the first segment IS the host
+  - use: ssh://git@nas.lan/srv/wf.git@a1b2c3d   # an explicit URL goes to git as given
+  - use: acme/workflows@v1.2.0#bug-fix       # one bundle out of a repo holding several
+    as: fix                                  # prefixes the expanded step ids
+    with:
+      "*":
+        add_skills: [fix-author]             # ADD-only: a use GRANTS, never removes
+    consumes: {triage: classification}       # rename facts at the boundary
+    produces: {fix: patch}
+```
+
+The `@` is the whole difference: no `@` is a local task name and resolves
+against `.wfx/tasks/` exactly as it always has — no git, no network, no cache.
+
+The host rules are Actions' and Go's, not ours: no dot in the first segment
+means `github.com`; a dot means that segment IS the host. There is no
+default-host setting. A reference may **not** name a local path — `../`, an
+absolute path and `file://` are refused.
+
+`@ref` is a tag, a branch or a commit. A tag can move, so the **commit** is what
+is recorded against the run; a rerun resolves from that commit, never from the
+tag. Pin third-party references by commit SHA when it matters.
+
+`with:` is ADD-only by construction (`add_skills`, `add_tools`, `add_mcp`,
+`add_guardrails`) and guardrails are first-deny-wins, so a use can tighten
+policy and never loosen it. That holds identically for a remote task: a fetched
+task cannot remove a guardrail or widen an allowlist.
+
+Everything a remote reference carries — its skills, its MCP declarations —
+travels in the bundle. A fetched bundle whose own workflow declares a further
+remote `use:` is refused: transitive references are not supported.
+
+If the reference cannot be resolved — remote unreachable, ref absent, no bundle
+in the repository — the workflow does not LOAD, and `wfx dryrun` says so. It
+never falls back to a local task of the same name and never runs degraded.

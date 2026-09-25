@@ -16,6 +16,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/remoteuse"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -172,7 +173,21 @@ func main() {
 	// Boot loads the platform's own workflows only; the engine re-loads from
 	// every imported source as soon as it exists, because the imported list
 	// lives in the runtime directory the engine owns.
-	defs, err := workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat))
+	//
+	// A remote `use:` — a git repository and a ref — resolves HERE, at load
+	// time, through git, and is kept in the blob store already in hand. The
+	// bundle it fetches carries skills a step will name, and those roots do
+	// not exist until the fetch has happened, so the load runs again once with
+	// the registry rebuilt over them. The second pass is a cache hit by
+	// construction. A workflow whose every `use:` is a bare task name never
+	// reaches any of this: no git process, no network, no cache.
+	remote := remoteuse.New(bl, engine.BundleRootDirFor(cfg))
+	loadOpt := workflow.WithRemoteResolver(remote)
+	defs, err := workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
+	if roots := remote.Roots(); len(roots) > 0 {
+		reg = skills.Load(append(roots, skills.DefaultRoots(cfg.SkillsDir)...)...)
+		defs, err = workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
+	}
 	if err != nil {
 		log.Fatalf("workflows: %v", err)
 	}
@@ -181,6 +196,7 @@ func main() {
 	}
 
 	eng := engine.New(cfg, st, bl, defs, reg, cat)
+	eng.UseRemoteResolver(remote)
 
 	// Say what is actually wired before serving, not when a run fails on it.
 	// Every registry entry is a NAME and a name resolves against THIS machine

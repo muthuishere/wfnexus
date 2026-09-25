@@ -327,6 +327,12 @@ type Definition struct {
 	Jobs map[string]*Job `yaml:"jobs,omitempty" json:"jobs,omitempty"`
 	// Uses expand reusable TASKS into steps at load time (see task.go).
 	Uses []Use `yaml:"uses,omitempty" json:"uses,omitempty"`
+	// RemotePins is what every REMOTE `use:` resolved to — the reference as
+	// authored, the remote, the commit and the bundle digest. Filled at load
+	// time and recorded on each run, so a moved tag cannot change what a past
+	// run did. Never written back into the YAML: the reference is what was
+	// authored, the commit is what ran.
+	RemotePins []RemotePin `yaml:"-" json:"remotePins,omitempty"`
 	// Template marks a workflow as a starting point to copy rather than run.
 	// `template: true` is enough; a mapping adds what the gallery shows and
 	// what the author still has to supply.
@@ -650,14 +656,15 @@ func (d *Definition) Ready(done map[string]bool, started map[string]bool) []*Ste
 }
 
 // LoadDir reads every *.yaml / *.yml in dir.
-func LoadDir(dir string, cat Catalog) (map[string]*Definition, error) {
-	return LoadDirWithTasks(dir, "", cat)
+func LoadDir(dir string, cat Catalog, opts ...LoadOption) (map[string]*Definition, error) {
+	return LoadDirWithTasks(dir, "", cat, opts...)
 }
 
 // LoadDirWithTasks loads workflows, expanding any reusable tasks found in
 // tasksDir before validation — so a task's steps are checked exactly like
 // hand-written ones.
-func LoadDirWithTasks(dir, tasksDir string, cat Catalog) (map[string]*Definition, error) {
+func LoadDirWithTasks(dir, tasksDir string, cat Catalog, opts ...LoadOption) (map[string]*Definition, error) {
+	opt := newLoadOptions(opts)
 	tasks, err := LoadTasks(tasksDir)
 	if err != nil {
 		return nil, err
@@ -707,10 +714,10 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog) (map[string]*Definition
 				d.authoredNeeds = true
 			}
 		}
-		if err := d.expandUses(tasks); err != nil {
+		if err := d.expandUses(tasks, opt); err != nil {
 			return nil, err
 		}
-		if err := d.expandJobs(tasks); err != nil {
+		if err := d.expandJobs(tasks, opt); err != nil {
 			return nil, err
 		}
 		normalize(d)

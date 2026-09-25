@@ -72,7 +72,7 @@ type Job struct {
 //     in the graph while being several underneath;
 //   - the job's `if` guard is applied to every step in it, because a job that
 //     is skipped must skip whole.
-func (d *Definition) expandJobs(tasks map[string]*Task) error {
+func (d *Definition) expandJobs(tasks map[string]*Task, opt loadOptions) error {
 	if len(d.Jobs) == 0 {
 		return nil
 	}
@@ -102,7 +102,7 @@ func (d *Definition) expandJobs(tasks map[string]*Task) error {
 		job.Env = MergeEnv(d.Env, job.Env)
 		steps := job.Steps
 		if len(job.Uses) > 0 {
-			expanded, err := expandInto(d.Name, id, job.Uses, tasks)
+			expanded, err := expandInto(d, id, job.Uses, tasks, opt)
 			if err != nil {
 				return err
 			}
@@ -257,11 +257,14 @@ func applyDefaults(s *Step, o Override) {
 }
 
 // expandInto is expandUses for a job, prefixing with the job id.
-func expandInto(wf, jobID string, uses []Use, tasks map[string]*Task) ([]Step, error) {
-	tmp := &Definition{Name: wf, Uses: uses}
-	if err := tmp.expandUses(tasks); err != nil {
+func expandInto(d *Definition, jobID string, uses []Use, tasks map[string]*Task, opt loadOptions) ([]Step, error) {
+	tmp := &Definition{Name: d.Name, Uses: uses}
+	if err := tmp.expandUses(tasks, opt); err != nil {
 		return nil, err
 	}
+	// The pins belong to the WORKFLOW, not to the scratch definition the job
+	// expanded through: a run records what every reference resolved to.
+	d.RemotePins = append(d.RemotePins, tmp.RemotePins...)
 	_ = jobID
 	return tmp.Steps, nil
 }

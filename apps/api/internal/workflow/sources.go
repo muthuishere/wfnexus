@@ -59,7 +59,7 @@ func RepoSource(name, repoDir, url string) Source {
 // something nobody asked for — so a collision is reported and both names stay
 // reachable as `<source>/<name>`, which is also how the fully-qualified name is
 // always spelled.
-func LoadSources(sources []Source, cat Catalog) (map[string]*Definition, []Skip, error) {
+func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]*Definition, []Skip, error) {
 	out := map[string]*Definition{}
 	var skips []Skip
 	seen := map[string]string{} // workflow name → the source that claimed it
@@ -69,7 +69,7 @@ func LoadSources(sources []Source, cat Catalog) (map[string]*Definition, []Skip,
 		if src.Repo != "" {
 			tasksDir = filepath.Join(src.Repo, filepath.FromSlash(RepoTaskDir))
 		}
-		defs, err := loadDirIfPresent(src.Dir, tasksDir, cat)
+		defs, err := loadDirIfPresent(src.Dir, tasksDir, cat, opts...)
 		if err != nil {
 			// One repository's broken file must not stop the platform booting,
 			// or importing a repository becomes a way to take the server down.
@@ -109,14 +109,14 @@ type Skip struct {
 
 // loadDirIfPresent treats an absent directory as empty. A repository without
 // workflows is the normal case, not an error.
-func loadDirIfPresent(dir, tasksDir string, cat Catalog) (map[string]*Definition, error) {
+func loadDirIfPresent(dir, tasksDir string, cat Catalog, opts ...LoadOption) (map[string]*Definition, error) {
 	if dir == "" {
 		return nil, nil
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil, nil
 	}
-	return LoadDirWithTasks(dir, tasksDir, cat)
+	return LoadDirWithTasks(dir, tasksDir, cat, opts...)
 }
 
 // SortedSources returns sources in a stable order for display.
