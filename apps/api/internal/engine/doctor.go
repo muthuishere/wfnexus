@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // Doctor is what is actually wired up, as opposed to what is declared.
@@ -47,6 +49,11 @@ type Doctor struct {
 	// NOTHING wrong crashed the System page, while a broken one rendered fine.
 	// The healthy case is the one nobody tests.
 	Problems []string `json:"problems"`
+	// Notes is what is satisfied and still cannot promise a run. A `cli`/`acp`
+	// provider is ready on a PATH lookup alone, so its tick means the binary is
+	// installed and NOT that anyone is logged into it — a distinction a
+	// Problems entry would overstate and a bare tick understates.
+	Notes []string `json:"notes"`
 }
 
 // DoctorShell is what a `run:` step will actually execute through on this
@@ -80,6 +87,14 @@ type DoctorProvider struct {
 	Detail  string `json:"detail,omitempty"`
 	Ready   bool   `json:"ready"`
 	Problem string `json:"problem,omitempty"`
+	// AuthUnknown marks the third state between missing and ready: the program
+	// is on PATH, and whether anybody is authenticated to it was never checked.
+	// Ready alone would read as "this will run", which a `cli` provider's PATH
+	// lookup cannot support.
+	AuthUnknown bool `json:"authUnknown,omitempty"`
+	// Login is the command the OPERATOR runs to authenticate, where the vendor
+	// is one we know. We never run it and never hold what it produces.
+	Login string `json:"login,omitempty"`
 }
 
 type DoctorCount struct {
@@ -93,6 +108,7 @@ type DoctorCount struct {
 func (e *Engine) Doctor() Doctor {
 	d := Doctor{
 		Problems: []string{},
+		Notes:    []string{},
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "",
@@ -146,6 +162,14 @@ func (e *Engine) Doctor() Doctor {
 	for _, p := range d.Providers {
 		if !p.Ready {
 			d.Problems = append(d.Problems, "provider "+p.Name+": "+p.Problem)
+			continue
+		}
+		if p.AuthUnknown {
+			note := "provider " + p.Name + ": present; authentication not checked"
+			if p.Login != "" {
+				note += " — to authenticate, run `" + p.Login + "` yourself"
+			}
+			d.Notes = append(d.Notes, note)
 		}
 	}
 	for _, c := range d.Classifiers {
@@ -186,6 +210,15 @@ func checkProvider(p catalog.Provider) DoctorProvider {
 			out.Ready = false
 			out.Problem = "no preset named " + p.Preset + " and no explicit command"
 		}
+		if out.Ready {
+			// PRESENCE IS NOT AUTHENTICATION. The lookup above proves the
+			// program exists; the credential lives inside it, owned by whoever
+			// owns the seat, and this process has no way to ask. So the entry
+			// says so instead of implying a run will succeed. Probing a vendor's
+			// login state is not decided (design §7) and is not attempted here.
+			out.AuthUnknown = true
+			out.Login = presetLogin(p)
+		}
 		return out
 	}
 	out.Ready, out.Problem = false, "unknown kind "+string(p.Kind)
@@ -201,6 +234,82 @@ func providerBinary(p catalog.Provider) string {
 		return p.Preset
 	}
 	return "devin"
+}
+
+// presetLogin is the command the OPERATOR runs to authenticate a local agent
+// CLI, for the vendors the catalog names by preset. It is a POINTER, not an
+// action: we never run it, never prompt for what it asks, and never see what it
+// stores — the seat is theirs (design §7).
+//
+// A vendor we have no confident command for gets no guess. A wrong login
+// command is worse than none, because it reads as a checked fact.
+func presetLogin(p catalog.Provider) string {
+	switch providerBinary(p) {
+	case "claude":
+		return "claude"
+	case "copilot":
+		return "gh auth login"
+	case "codex":
+		return "codex login"
+	case "opencode":
+		return "opencode auth login"
+	}
+	return ""
+}
+
+// DoctorHost answers a pulled bundle's requirements (bundle.Host) from this
+// engine: the SAME checkProvider the System page reports, the same mcp catalog,
+// and the same worker-label count `wfx dryrun` uses. A second readiness path
+// would drift from the one an operator actually reads.
+type DoctorHost struct{ e *Engine }
+
+// CheckBundleRequirements is the pull-time gate: a bundle's recorded
+// requirements against this machine, refusing with every unmet one at once. A
+// bundle that records none asks this machine nothing.
+func (e *Engine) CheckBundleRequirements(reqs []bundle.Requirement) bundle.Report {
+	return bundle.CheckRequirements(reqs, e.RequirementHost())
+}
+
+// RequirementHost is how a caller gets one. It takes no bundle and no
+// credential: it answers questions about THIS machine and nothing else.
+func (e *Engine) RequirementHost() *DoctorHost { return &DoctorHost{e: e} }
+
+func (h *DoctorHost) Provider(name string) bundle.ProviderReadiness {
+	if h.e.catalog == nil {
+		return bundle.ProviderReadiness{}
+	}
+	p, ok := h.e.catalog.Providers.Get(name)
+	if !ok {
+		return bundle.ProviderReadiness{}
+	}
+	got := checkProvider(p)
+	out := bundle.ProviderReadiness{
+		Found: true, Kind: got.Kind, Ready: got.Ready, Problem: got.Problem,
+		AuthUnknown: got.AuthUnknown, Login: got.Login,
+	}
+	if !got.Ready {
+		switch p.Kind {
+		case catalog.KindHTTP:
+			// The variable's NAME, which is all a provider ever holds.
+			out.Fix = "set " + p.APIKeyEnv + " in this machine's environment"
+		case catalog.KindCLI, catalog.KindACP:
+			out.Fix = "install " + providerBinary(p) + " on this machine's PATH"
+		}
+	}
+	return out
+}
+
+func (h *DoctorHost) HasMcp(name string) bool {
+	return h.e.catalog != nil && h.e.catalog.Mcp.Has(name)
+}
+
+func (h *DoctorHost) LabelHolders(label string) int {
+	// A label this process serves itself needs no worker at all, and the pool
+	// count alone would report it as unheld.
+	if h.e.servesLocally(label) {
+		return 1
+	}
+	return h.e.labelHolders(&workflow.Step{RunsOn: label})
 }
 
 func knownPreset(preset string) bool {
