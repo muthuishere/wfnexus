@@ -615,7 +615,24 @@ infra/               Dockerfile, compose, k8s manifests — the whole deploy sto
 workflows/*.yaml     the workflows
 skills/*/SKILL.md    the agent skills each step may load
 mcp.json             MCP servers steps may be granted
+go.work.example      copy to go.work if you need one; the real one is gitignored
 ```
+
+`go.work` is **not in the repository** (`.gitignore:8`): it wires up whatever modules are
+checked out on one machine, and a machine path in a committed file breaks the build for
+everyone else. Nothing requires it — `apps/api` builds on its own and CI sets `GOWORK=off`
+deliberately, so a green run proves which toolnexus version the code ran against
+([ADR 0007](docs/adr/0007-pin-the-dependency-while-building.md)).
+
+If Go says this:
+
+```
+go: cannot load module ../../spikes listed in go.work file: open ../../spikes/go.mod: no such file or directory
+```
+
+your `go.work` names a module that is no longer in the tree — `spikes/` is the usual one,
+because it comes and goes. Delete that `use` line. No commit can fix it for you, which is
+why `go.work.example` exists and says so.
 
 Placement: `workers` (a machine and its labels) → `worker_jobs` (one step's work, queued for
 whoever holds the label). `FOR UPDATE SKIP LOCKED` is what makes two machines on the same label

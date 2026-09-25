@@ -1,0 +1,30 @@
+// A REFERENCE COPY. The real `go.work` is gitignored (.gitignore:8), because it
+// wires up whatever modules happen to be checked out on one machine — and a
+// machine path in a committed file breaks the build for everyone else.
+//
+// Copy this to `go.work` if you do not have one. Nothing requires it: the API
+// module builds on its own, and CI sets GOWORK=off on purpose (ADR 0007), so a
+// green CI run proves which toolnexus version the code ran against.
+//
+// IF GO SAYS THIS:
+//
+//	go: cannot load module ../../spikes listed in go.work file:
+//	    open ../../spikes/go.mod: no such file or directory
+//
+// then your `go.work` names a module that is no longer in the tree — `spikes/`
+// is the usual one, since it comes and goes. Delete that `use` line. No commit
+// can fix it for you, because the file is not in the repository.
+
+go 1.26.3
+
+use ./apps/api
+
+// Add this ONLY while spikes/ is present in your checkout. It verifies
+// UNRELEASED toolnexus behaviour, so it builds against a local checkout while
+// apps/api stays on the published version (ADR 0007) — do not add a `replace`
+// for apps/api here, or a green run stops proving which code it ran against.
+//
+// use ./spikes
+//
+// And to point spikes/ at a local toolnexus working tree:
+// replace github.com/muthuishere/toolnexus/golang => ../nexus-workspace/toolnexus/golang
