@@ -26,23 +26,35 @@ import (
 // engine/doctor.go's checkProvider already computes — this type exists so the
 // check can be pure, not so readiness can be decided twice.
 //
-// AuthUnknown is the third state design §7 insists on. A `cli`/`acp` provider
-// is Ready on a PATH lookup alone, so Ready means THE BINARY EXISTS and says
-// nothing about whether anyone is logged into it: a pull that passes can still
-// fail on turn one with an auth error. Reporting that as a bare tick is the lie
-// this field exists to prevent. Probing a vendor's login state is deliberately
-// not attempted (design "Not decided here").
+// State is missing, present or ready. A `cli`/`acp` provider used to be Ready
+// on a PATH lookup alone, which reported a green tick for a binary nobody had
+// logged into. present is that tick, retired: the binary is there, a login
+// was not established, and a pull that passes can still fail on turn one.
+// ready is reserved for a vendor whose own status command said it is
+// authenticated. Where no such command exists, the state stays present.
 type ProviderReadiness struct {
-	Found       bool
-	Kind        string
-	Ready       bool
-	Problem     string
-	Fix         string
+	Found   bool
+	Kind    string
+	Ready   bool
+	Problem string
+	Fix     string
+	// State is missing, present or ready. present is not a refusal: the host
+	// has the binary and cannot certify a login. ready is the only state that
+	// means a step will not fail for want of one.
+	State       string
 	AuthUnknown bool
 	// Login is the command the operator runs themselves, where the catalog
 	// knows one for that vendor. Never run for them, and never captured.
 	Login string
 }
+
+// The three readiness states. missing is unmet. present is a caveat. ready
+// is silence — there is nothing to warn about.
+const (
+	StateMissing = "missing"
+	StatePresent = "present"
+	StateReady   = "ready"
+)
 
 // Host is what the receiving machine can answer. An interface because the
 // answers come from the engine — its catalog, its worker pool — and this
@@ -170,20 +182,27 @@ func checkProviderReq(rep *Report, req Requirement, h Host) {
 		})
 		return
 	}
+	// present is not a refusal, and it is not readiness. Ready+AuthUnknown is
+	// the older shape of the same fact, kept so a host that has not grown a
+	// State still caveats instead of ticking.
+	if st.State == StatePresent || (st.AuthUnknown && st.Ready) {
+		note := "present; authentication not checked"
+		if st.State == StatePresent && !st.AuthUnknown {
+			note = "present; not authenticated"
+		}
+		rep.Caveats = append(rep.Caveats, Caveat{
+			Requirement: req,
+			Note:        note,
+			Fix:         st.Login,
+		})
+		return
+	}
 	if !st.Ready {
 		fix := st.Fix
 		if fix == "" {
 			fix = providerFix(req.ProviderKind, req.Name, req.APIKeyEnv)
 		}
 		rep.Unmet = append(rep.Unmet, Unmet{Requirement: req, Because: st.Problem, Fix: fix})
-		return
-	}
-	if st.AuthUnknown {
-		rep.Caveats = append(rep.Caveats, Caveat{
-			Requirement: req,
-			Note:        "present; authentication not checked",
-			Fix:         st.Login,
-		})
 	}
 }
 

@@ -435,9 +435,12 @@ GitHub Actions, and the same thing a Jenkins node label means.
 A machine joins by running one command, which the **Workers** page (or `wfx workers`) hands you:
 
 ```bash
-wfx-runner join --url https://wfx.example.com --token wfx_… --labels windows,devin
+wfx-runner setup --url https://wfx.example.com --token wfx_… --dry-run
+wfx-runner setup --url https://wfx.example.com --token wfx_… --login --join --labels windows,devin
 wfx-runner run
 ```
+
+`setup` runs **on the machine being prepared**. It asks the platform which providers it has, installs only from an allowlist, and says which logins are still needed. `--login` runs that vendor's own login command in your terminal. The platform never holds a provider's credential, so a login is never collected. `--dry-run` prints what would be installed and installs nothing. A machine prepared by hand still joins exactly as before.
 
 From then on that machine takes the steps whose label it holds, and runs them with the toolchain
 installed **there** — the Devin CLI, a JDK, a signing certificate, a licence dongle. The platform
@@ -630,7 +633,8 @@ POST /api/workflows/{name}/runs        GET  /api/runs            GET /api/runs/{
 GET  /api/runs/{id}/events             SSE, ?after=<id> replays the backlog
 POST /api/runs/{id}/approve|reject|input|retry|cancel
 GET  /api/workers                      the pool + the join command
-POST /api/workers/join|claim|heartbeat|jobs/{id}/result   the whole worker protocol
+POST /api/workers/join|claim|heartbeat|jobs/{id}/result   the worker protocol
+GET  /api/workers/providers            names and kinds, for `wfx-runner setup`
 GET  /api/runs/{id}/artifacts/{id}     302 → presigned S3 (or ?inline=1)
 ```
 

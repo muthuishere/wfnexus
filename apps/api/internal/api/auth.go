@@ -78,6 +78,12 @@ var publicAPIPaths = map[string]bool{
 	// that burns a code being guessed at. A 401 from the middleware would
 	// count nothing and teach an attacker the same thing for free.
 	"/api/device/verify": true,
+	// How a machine learns what to prepare for, before it has a worker
+	// token. The handler authenticates the registration token or a worker
+	// token itself; the middleware cannot, because a registration token is
+	// not a subject yet — it is how one is obtained, the same reason join
+	// carries its token in the body.
+	"/api/workers/providers": true,
 }
 
 // requireSubject resolves the bearer to a user or a worker.

@@ -78,6 +78,27 @@ func TestABundleThatRecordsNothingAsksTheHostNothing(t *testing.T) {
 	}
 }
 
+// present is not a refusal and not a tick. ready is silence.
+func TestPresentIsACaveatAndReadyIsNot(t *testing.T) {
+	host := &fakeHost{providers: map[string]ProviderReadiness{
+		"claude-cli": {Found: true, Kind: "cli", State: StatePresent, AuthUnknown: true, Login: "claude"},
+		"codex":      {Found: true, Kind: "cli", State: StateReady, Ready: true},
+	}}
+	rep := CheckRequirements([]Requirement{
+		{Kind: ReqProvider, Name: "claude-cli", ProviderKind: "cli"},
+		{Kind: ReqProvider, Name: "codex", ProviderKind: "cli"},
+	}, host)
+	if !rep.OK() {
+		t.Fatalf("present was refused: %v", rep.Err())
+	}
+	if len(rep.Caveats) != 1 || rep.Caveats[0].Name != "claude-cli" {
+		t.Fatalf("want one caveat, got %+v", rep.Caveats)
+	}
+	if rep.Caveats[0].Note != "present; authentication not checked" {
+		t.Fatalf("note: %q", rep.Caveats[0].Note)
+	}
+}
+
 // task 8.3 — a `runs-on:` label no worker holds is an unmet requirement, and a
 // label somebody does hold is not.
 func TestALabelNobodyHoldsIsUnmet(t *testing.T) {

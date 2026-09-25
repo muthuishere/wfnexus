@@ -87,10 +87,14 @@ type DoctorProvider struct {
 	Detail  string `json:"detail,omitempty"`
 	Ready   bool   `json:"ready"`
 	Problem string `json:"problem,omitempty"`
-	// AuthUnknown marks the third state between missing and ready: the program
-	// is on PATH, and whether anybody is authenticated to it was never checked.
-	// Ready alone would read as "this will run", which a `cli` provider's PATH
-	// lookup cannot support.
+	// State is missing, present or ready. present means the binary was found
+	// and authentication was not established — either nobody checked, or a
+	// vendor's own status command said it was not logged in. Ready is true
+	// only for ready: a PATH hit is not a login.
+	State string `json:"state,omitempty"`
+	// AuthUnknown marks present-and-unchecked: the program is on PATH, and
+	// whether anybody is authenticated to it was never checked. A logged-out
+	// answer is present with AuthUnknown false — the check ran, and it said no.
 	AuthUnknown bool `json:"authUnknown,omitempty"`
 	// Login is the command the OPERATOR runs to authenticate, where the vendor
 	// is one we know. We never run it and never hold what it produces.
@@ -160,16 +164,25 @@ func (e *Engine) Doctor() Doctor {
 	d.Workflows = DoctorCount{Count: len(e.Definitions())}
 
 	for _, p := range d.Providers {
-		if !p.Ready {
-			d.Problems = append(d.Problems, "provider "+p.Name+": "+p.Problem)
-			continue
-		}
-		if p.AuthUnknown {
-			note := "provider " + p.Name + ": present; authentication not checked"
+		// present does not block a run. It is a note, and it stays a note
+		// when the vendor said "not logged in" — the failure that prevents
+		// is one loud auth error, and blocking on it is the false refusal
+		// an operator works around within a week.
+		if p.State == bundle.StatePresent {
+			note := "provider " + p.Name + ": present"
+			if p.AuthUnknown {
+				note += "; authentication not checked"
+			} else {
+				note += "; not authenticated"
+			}
 			if p.Login != "" {
 				note += " — to authenticate, run `" + p.Login + "` yourself"
 			}
 			d.Notes = append(d.Notes, note)
+			continue
+		}
+		if !p.Ready {
+			d.Problems = append(d.Problems, "provider "+p.Name+": "+p.Problem)
 		}
 	}
 	for _, c := range d.Classifiers {
@@ -182,46 +195,55 @@ func (e *Engine) Doctor() Doctor {
 
 // checkProvider answers the only question that matters about an entry: if a
 // step named it right now, would it run?
+// InspectProvider is checkProvider for a caller outside this package — the
+// runner, which must not grow a second readiness path.
+func InspectProvider(p catalog.Provider) DoctorProvider { return checkProvider(p) }
+
 func checkProvider(p catalog.Provider) DoctorProvider {
-	out := DoctorProvider{Name: p.Name, Kind: string(p.Kind), Model: p.Model, Ready: true}
+	out := DoctorProvider{Name: p.Name, Kind: string(p.Kind), Model: p.Model, Ready: true, State: bundle.StateReady}
 	switch p.Kind {
 	case catalog.KindHTTP:
 		out.Detail = p.BaseURL
 		// An entry with no apiKeyEnv needs no key — the self-hosted case, the
 		// same rule the runtime path applies. Without this, a provider that is
 		// correctly configured reports `NOT READY:  is not set`, naming no
-		// variable because there is none to name.
+		// variable because there is none to name. The value is never read.
 		if p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) == "" {
-			out.Ready, out.Problem = false, p.APIKeyEnv+" is not set"
+			out.Ready, out.State, out.Problem = false, bundle.StateMissing, p.APIKeyEnv+" is not set"
 		}
 		return out
 	case catalog.KindCLI, catalog.KindACP:
-		// The model is a program on this machine, so readiness is a PATH lookup
-		// and nothing else: no key, because the CLI holds its own credential.
+		// The model is a program on this machine. A PATH hit proves the
+		// program exists and nothing else: the credential lives inside it.
 		bin := providerBinary(p)
 		out.Detail = bin
-		if path, err := exec.LookPath(bin); err != nil {
-			out.Ready = false
+		path, lookErr := exec.LookPath(bin)
+		if lookErr != nil {
+			out.Ready, out.State = false, bundle.StateMissing
 			out.Problem = bin + " is not on PATH"
 		} else {
 			out.Detail = path
 		}
 		if len(p.Command) == 0 && p.Kind == catalog.KindCLI && !knownPreset(p.Preset) {
-			out.Ready = false
+			out.Ready, out.State = false, bundle.StateMissing
 			out.Problem = "no preset named " + p.Preset + " and no explicit command"
 		}
-		if out.Ready {
-			// PRESENCE IS NOT AUTHENTICATION. The lookup above proves the
-			// program exists; the credential lives inside it, owned by whoever
-			// owns the seat, and this process has no way to ask. So the entry
-			// says so instead of implying a run will succeed. Probing a vendor's
-			// login state is not decided (design §7) and is not attempted here.
-			out.AuthUnknown = true
+		if lookErr == nil && out.State != bundle.StateMissing {
 			out.Login = presetLogin(p)
+			switch probeAuth(bin, path) {
+			case authReady:
+				out.Ready, out.State = true, bundle.StateReady
+			case authLoggedOut:
+				// Checked, and the vendor said no. present, not missing:
+				// the binary is there. Not ready: nobody is logged in.
+				out.Ready, out.State = false, bundle.StatePresent
+			default:
+				out.Ready, out.State, out.AuthUnknown = false, bundle.StatePresent, true
+			}
 		}
 		return out
 	}
-	out.Ready, out.Problem = false, "unknown kind "+string(p.Kind)
+	out.Ready, out.State, out.Problem = false, bundle.StateMissing, "unknown kind "+string(p.Kind)
 	return out
 }
 
@@ -285,7 +307,13 @@ func (h *DoctorHost) Provider(name string) bundle.ProviderReadiness {
 	got := checkProvider(p)
 	out := bundle.ProviderReadiness{
 		Found: true, Kind: got.Kind, Ready: got.Ready, Problem: got.Problem,
-		AuthUnknown: got.AuthUnknown, Login: got.Login,
+		State: got.State, AuthUnknown: got.AuthUnknown, Login: got.Login,
+	}
+	if got.State == bundle.StatePresent {
+		// The binary is there. The fix is a login, not an install, and only
+		// where we know the vendor's command. An invented one would hang.
+		out.Fix = got.Login
+		return out
 	}
 	if !got.Ready {
 		switch p.Kind {
@@ -293,7 +321,14 @@ func (h *DoctorHost) Provider(name string) bundle.ProviderReadiness {
 			// The variable's NAME, which is all a provider ever holds.
 			out.Fix = "set " + p.APIKeyEnv + " in this machine's environment"
 		case catalog.KindCLI, catalog.KindACP:
-			out.Fix = "install " + providerBinary(p) + " on this machine's PATH"
+			bin := providerBinary(p)
+			if ins, ok := LookupInstaller(p.Preset); ok && ins.Instruction != "" {
+				out.Fix = ins.Instruction
+			} else if ins, ok := LookupInstaller(bin); ok && ins.Instruction != "" {
+				out.Fix = ins.Instruction
+			} else {
+				out.Fix = "install " + bin + " on this machine's PATH"
+			}
 		}
 	}
 	return out

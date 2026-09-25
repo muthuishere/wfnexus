@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,11 +15,12 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
-// The worker surface is four calls, on purpose. A machine joins, asks for work,
-// reports a result, and says it is still there. Everything else about placing
-// work — labels, queueing, requeueing a lost job — is the platform's business,
-// so the thing you install on somebody's Windows box stays small enough to
-// read in one sitting.
+// The worker surface is small on purpose. A machine joins, asks for work,
+// reports a result, and says it is still there. setup asks one more question
+// — which providers exist, and of what kind — and that is a list of names,
+// not a command to run. Everything else about placing work is the platform's
+// business, so the thing you install on somebody's Windows box stays small
+// enough to read in one sitting.
 
 // bearer pulls the worker's own token off the request.
 func bearer(r *http.Request) string {
@@ -143,6 +145,27 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if wk := s.authWorker(w, r); wk != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": wk.ID})
 	}
+}
+
+// workerProviders is what `wfx-runner setup` asks: which providers this
+// platform has, and their kinds. A worker token or the registration token
+// answers it. The body is names and kinds — the catalog's command argv is
+// not copied, because that array is how published content would otherwise
+// become a command the runner executes.
+func (s *Server) workerProviders(w http.ResponseWriter, r *http.Request) {
+	tok := bearer(r)
+	if tok == "" {
+		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
+		return
+	}
+	if _, err := s.eng.AuthWorker(r.Context(), tok); err != nil {
+		want, werr := s.eng.RegistrationToken(r.Context())
+		if werr != nil || tok != want {
+			writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"providers": s.eng.SetupNeeds()})
 }
 
 // ---- the admin side ----

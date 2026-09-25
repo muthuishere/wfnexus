@@ -12,11 +12,11 @@ import (
 // CLI, owned by whoever owns the seat.
 func TestACliProviderIsPresentNotAuthenticated(t *testing.T) {
 	got := checkProvider(catalog.Provider{Name: "shell-agent", Kind: catalog.KindCLI, Command: []string{"sh"}})
-	if !got.Ready {
-		t.Fatalf("sh is on PATH and the entry was not ready: %q", got.Problem)
+	if got.Ready || got.State != "present" {
+		t.Fatalf("a PATH hit was reported ready=%v state=%q, which claims a login nobody checked", got.Ready, got.State)
 	}
 	if !got.AuthUnknown {
-		t.Fatal("a PATH hit was reported as a plain tick, which claims a login nobody checked")
+		t.Fatal("a vendor with no check was reported as a decided login state")
 	}
 }
 
@@ -29,8 +29,8 @@ func TestAKeyedHttpProviderGetsNoAuthenticationCaveat(t *testing.T) {
 		Name: "openrouter", Kind: catalog.KindHTTP,
 		BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "DOCTOR_TEST_KEY",
 	})
-	if !got.Ready || got.AuthUnknown {
-		t.Fatalf("a keyed http provider reported ready=%v authUnknown=%v", got.Ready, got.AuthUnknown)
+	if !got.Ready || got.AuthUnknown || got.State != "ready" {
+		t.Fatalf("a keyed http provider reported ready=%v authUnknown=%v state=%q", got.Ready, got.AuthUnknown, got.State)
 	}
 	if got.Login != "" {
 		t.Fatalf("an http provider was given a login command: %q", got.Login)

@@ -93,6 +93,12 @@ var resourcePerms = map[string][2]string{
 // permission is defined for that route, which the route table test treats as a
 // failure — a route nobody named is a route nobody guarded.
 func PermissionFor(method, path string) string {
+	// Public because the caller may hold only a registration token, which
+	// is not a subject. The handler refuses a missing or wrong token; this
+	// line only stops the middleware refusing it first.
+	if method == http.MethodGet && path == "/api/workers/providers" {
+		return PermPublic
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]

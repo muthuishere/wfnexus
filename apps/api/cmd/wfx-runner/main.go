@@ -61,6 +61,11 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "leave":
 		err = cmdLeave(os.Args[2:])
+	case "setup":
+		// Checked against this switch before it was added. `import` is a
+		// wfx command (a source repository), not a runner verb, and it is
+		// not in this dispatch — the collision that name has bitten once.
+		err = cmdSetup(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -81,6 +86,14 @@ func usage() {
 
   wfx-runner run [--once]
       Ask for work and do it, forever. This is what a service runs.
+
+  wfx-runner setup [--url URL --token TOKEN] [--dry-run] [--login]
+                       [--require-authenticated] [--join --labels a,b]
+      Prepare THIS machine for the platform's providers. Installs only from
+      an allowlist, prints a login command, and with --login runs that
+      vendor's own command in this terminal. The platform never holds a
+      provider's credential, so a login is never collected.
+      --dry-run prints what would be installed and installs nothing.
 
   wfx-runner status      What this machine joined, and whether it is reachable.
   wfx-runner leave       Forget the registration on this machine.
