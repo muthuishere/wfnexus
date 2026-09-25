@@ -44,27 +44,20 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// writeTree lays a built bundle out as the committed tree of design §1.
+// writeTree lays a built bundle out as the committed tree of design §1, through
+// the SAME writer `wfx publish --to` uses.
+//
+// This was a hand-rolled copy while the reading half shipped ahead of the
+// writing half. Two writers meant these tests could keep passing while publish
+// committed something subtly different — and proving the tree round-trips is
+// most of what they are for, so the copy had to go.
 func writeTree(t *testing.T, dir string, b *bundle.Bundle) {
 	t.Helper()
-	canon, err := b.Manifest.Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, bundle.ManifestPath), canon, 0o644); err != nil {
+	if err := b.WriteTree(dir); err != nil {
 		t.Fatal(err)
-	}
-	for p, raw := range b.Files {
-		dst := filepath.Join(dir, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, raw, 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 

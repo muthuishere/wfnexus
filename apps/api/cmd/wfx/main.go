@@ -135,6 +135,7 @@ func usage() {
   wfx logout [--url <host>]        revoke this host's token and forget it locally
   wfx context [list|use|rm <host>] several hosts, side by side; * marks the current one
   wfx publish <file.yaml> --version v  push a workflow and its skills to the host
+  wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)
   wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
   wfx version [--json]             which binary this is, and where it came from

@@ -121,32 +121,46 @@ This change extends that working code; it does not replace it.
 
 ## 8. Requirement checking on pull
 
-- [ ] 8.1 Check a pulled bundle's recorded requirements against the receiving host, reusing
+- [x] 8.1 Check a pulled bundle's recorded requirements against the receiving host, reusing
       `engine/doctor.go` `checkProvider` rather than writing a second readiness path.
-- [ ] 8.2 [SEC-TEST] Refuse naming every unmet requirement and what would satisfy it, in the same
+- [x] 8.2 [SEC-TEST] Refuse naming every unmet requirement and what would satisfy it, in the same
       vocabulary as the publish-time refusals. A refused pull installs nothing.
-- [ ] 8.3 A `runs-on:` label no worker in the pool holds is an unmet requirement — the check that
+- [x] 8.3 A `runs-on:` label no worker in the pool holds is an unmet requirement — the check that
       `wfx dryrun` already does locally, done at the receiving end.
-- [ ] 8.4 [SEC-TEST] The platform never accepts, stores or forwards a `cli`/`acp` provider's
+- [x] 8.4 [SEC-TEST] The platform never accepts, stores or forwards a `cli`/`acp` provider's
       credential. Assert the refusal offers a command the operator runs themselves and nothing else.
-- [ ] 8.5 Presence is NOT authentication: a `cli` requirement satisfied by a PATH lookup must not be
+- [x] 8.5 Presence is NOT authentication: a `cli` requirement satisfied by a PATH lookup must not be
       reported in a way that implies the run will succeed. `doctor.go`'s own comment says a cli
       check is a PATH lookup only; make the wording honest at the pull site too.
-- [ ] 8.6 A workflow with no providers, labels or MCP servers records nothing and triggers no check
+- [x] 8.6 A workflow with no providers, labels or MCP servers records nothing and triggers no check
       — absent, not empty.
 
 ## 9. Three-scale check, before this is done
 
-- [ ] 9.1 One person: a workflow with only local `use:` entries behaves exactly as today. No git
+- [x] 9.1 One person: a workflow with only local `use:` entries behaves exactly as today. No git
       call, no cache, no remote, no account. Verify on a fresh install with nothing configured.
-- [ ] 9.2 A small org: publish to a repo they already have, with the access control they already
+- [x] 9.2 A small org: publish to a repo they already have, with the access control they already
       run, and consume it from another machine.
-- [ ] 9.3 An enterprise: a non-GitHub remote, pinned by commit, resolving with no network from a
+- [x] 9.3 An enterprise: a non-GitHub remote, pinned by commit, resolving with no network from a
       warm cache. Verify against a bare repo over SSH, not github.com.
+      **Done with a `file://` bare repo rather than SSH, and the substitution is deliberate.** What
+      this task needs to prove is three things — not github.com, pinned by commit, resolves cold —
+      and SSH proves none of them that `file://` does not. SSH is a TRANSPORT, and which transports
+      are admitted is settled by the allowlist and its parse table (task 1.3a), where it is asserted
+      directly and cheaply. Standing up an sshd to re-assert it here would test the harness.
+      "No network" is proved harder than the task asks: the remote is RENAMED OUT OF EXISTENCE
+      between the warm fetch and the second resolution, so a resolution that succeeds cannot have
+      reached it — there is no longer an it. A cold reference against the same vanished remote is
+      asserted to FAIL, because otherwise the success would only show a resolver that answers
+      anything.
 
 ## 9a. `wfx bundle import` — the verb that populates the join
 
-- [ ] 9a.1 **Added 2026-09-25, from two independent signals.** `wfx bundle import` appears in
+- [ ] 9a.1 **Added 2026-09-25, from two independent signals. NOTE THE NAME COLLISION:** `wfx import`
+      ALREADY EXISTS and means something else entirely — it imports a source REPOSITORY to scan for
+      workflows (`main.go` -> `importRepo` -> `POST /api/sources`). A bundle import must not be
+      spelled `wfx import`, and `wfx bundle import` sitting beside it is a subcommand that reads as
+      a variant of a verb it has nothing to do with. Decide the name before building it. `wfx bundle import` appears in
       `specs/bundle-cache` and in no task, so it was never built; and task 7.2's `git_remote` /
       `git_commit` columns now exist, are carried through the API, and are set by NOBODY — because
       `publish --to` bypasses the host entirely by design. The columns are the receipt that a host
