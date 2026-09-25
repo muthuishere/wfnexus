@@ -1,0 +1,66 @@
+name: prepare-worker
+description: >-
+  Prepare an ALREADY-JOINED worker, as a workflow rather than as bespoke code.
+  Every step is a deterministic `run` on the target machine — no model is called,
+  so this costs nothing and needs no provider to be working yet, which is the
+  point: it runs on a machine that is not ready yet.
+
+  WHY THIS IS A WORKFLOW AND NOT A NEW TRANSPORT. A `run:` step with `runs-on:`
+  already means "execute this command on that machine": the worker protocol
+  authenticates it, the queue delivers it, and the run row and the logs are the
+  audit trail. An SSH channel was designed for this and then deleted, because
+  the product already had one. What this workflow adds over `wfx-runner setup`
+  is FLEET reach — one run prepares the machines holding a label, from here,
+  with a record of what each one answered.
+
+  WHAT IT DELIBERATELY CANNOT DO, and what to run instead:
+
+    * install wfx-runner — the bootstrap floor. A step can only reach a machine
+      that has already joined, so the thing that joins it can never be a step.
+      `wfx-runner setup --join …` on the box, once.
+    * log a vendor CLI in — needs a TTY and a human, and a step's output is
+      CAPTURED. `gh auth status` prints a token when logged in, which is why
+      that probe discards stdout; running a LOGIN inside a step would put the
+      credential in a run log. `wfx-runner setup --login` in the operator's own
+      terminal.
+
+  So this reports authentication and never performs it. Presence is not
+  authentication, and a step that pretended otherwise would be the same lie the
+  readiness states exist to remove.
+input_schema:
+  type: object
+  properties:
+    label:
+      type: string
+      description: The runs-on label naming the machines to prepare.
+      default: self-hosted
+  required: [label]
+runs_on: "{{ .input.label }}"
+steps:
+  - id: identify
+    name: Which machine is this, and which runner
+    run: |
+      echo "host=$(hostname)"
+      wfx-runner --version || echo "wfx-runner: NOT ON PATH"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: report
+    name: What this machine has, and what it is only PRESENT for
+    needs: [identify]
+    # --dry-run installs nothing: the fleet-wide question is "what is missing
+    # where", and a run that changed ten machines while answering it would be
+    # the wrong default for a command people try first.
+    run: wfx-runner setup --dry-run
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
