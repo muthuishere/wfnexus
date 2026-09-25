@@ -69,39 +69,54 @@ This change extends that working code; it does not replace it.
 
 ## 5. The published tree, and the manifest
 
-- [ ] 5.1 Add a tree writer beside the tar writer in `internal/bundle/pack.go`, same manifest
+- [x] 5.1 Add a tree writer beside the tar writer in `internal/bundle/pack.go`, same manifest
       (design §1). The committed tree is what a reviewer reads in a PR; the tarball is derived.
-- [ ] 5.2 Extend the manifest with the execution requirements from design §7: each step's
+- [x] 5.2 Extend the manifest with the execution requirements from design §7: each step's
       `provider:` and its KIND, every `runs-on:` label, every MCP server named.
-- [ ] 5.3 [SEC-TEST] The manifest records a requirement and NEVER a credential. Assert an `http`
+- [x] 5.3 [SEC-TEST] The manifest records a requirement and NEVER a credential. Assert an `http`
       provider contributes only its `apiKeyEnv` NAME, and that no env value appears anywhere in a
       written manifest.
-- [ ] 5.4 Verification: publish a workflow with a `cli` provider, an `http` provider and a
+      **The NAME half was missed and is now done (2026-09-25).** The `Requirement` type was written
+      from design §7's table, which lists the provider and its KIND and not the variable — so the
+      first implementation could record no name and said so rather than guessing. `apiKeyEnv` is a
+      NAME, the same thing `catalog.Provider` already carries and `LooksLikeSecret` already refuses
+      a value in, so it travels. It is a HINT and not a rule: the receiving host reads its OWN
+      variable for its own provider entry. Naming the publisher's variable only answers "a key is
+      needed, and over there it was called this", which is what makes the refusal actionable
+      instead of merely true.
+- [x] 5.4 Verification: publish a workflow with a `cli` provider, an `http` provider and a
       `runs-on:` label; read the manifest back and assert all three recorded, no values.
 
 ## 6. `wfx publish --to <git remote>`
 
-- [ ] 6.1 Add the `--to` sink. Without it, behaviour is exactly as today (the host path).
-- [ ] 6.2 Run every existing refusal BEFORE a commit is made: `looksLikeSecret`
+- [x] 6.1 Add the `--to` sink. Without it, behaviour is exactly as today (the host path).
+- [x] 6.2 Run every existing refusal BEFORE a commit is made: `looksLikeSecret`
       (`catalog/save.go:85`), unresolvable reference, digest mismatch. A refused publish must leave
       no commit, no tag and no push.
-- [ ] 6.3 Write under `workflows/<name>/<version>/`, commit, tag `<name>/v<version>`, push.
-- [ ] 6.4 Immutability is git's: a tag that already exists is a push that fails. Assert the failure
+- [x] 6.3 Write under `workflows/<name>/<version>/`, commit, tag `<name>/v<version>`, push.
+- [x] 6.4 Immutability is git's: a tag that already exists is a push that fails. Assert the failure
       is reported as the same refusal the server path gives for a duplicate version — one
       vocabulary, two mechanisms.
-- [ ] 6.5 Narrow the no-token refusal at `publish.go:41-42` to the HOST sink only. With `--to`, no
+      **This task's mechanism is only half the story, and the difference is worth writing down.**
+      For an ordinary duplicate publish the version DIRECTORY is already in the clone, so the tree
+      writer refuses before a commit exists and the remote never gets asked. The push rejection is
+      what fires in the other case: the tag taken but the tree absent. Both paths are tested and
+      both give the duplicate-version wording, so the task's INTENT holds — one vocabulary — but
+      "immutability is git's" is the backstop, not the usual path. That is the right way round: a
+      local refusal is cheaper and the remote still cannot be talked out of it.
+- [x] 6.5 Narrow the no-token refusal at `publish.go:41-42` to the HOST sink only. With `--to`, no
       token is needed and none is requested — auth is git's (design §5).
-- [ ] 6.6 Verification: publish to a local bare repo, `git log`/`git tag` the result, and show the
+- [x] 6.6 Verification: publish to a local bare repo, `git log`/`git tag` the result, and show the
       refused cases leaving the repo untouched.
 
 ## 7. The server index becomes a mirror
 
-- [ ] 7.1 Keep `api/bundles.go`, `store/bundles.go` and `000011_published_bundles`, reframed: the
+- [x] 7.1 Keep `api/bundles.go`, `store/bundles.go` and `000011_published_bundles`, reframed: the
       index answers "what is running here", git answers "where does this live and who approved it".
       No migration; no working feature is removed.
-- [ ] 7.2 Record the remote and commit on an indexed bundle that came from git, so the two views
+- [x] 7.2 Record the remote and commit on an indexed bundle that came from git, so the two views
       join.
-- [ ] 7.3 Demote `published_bundles.published_by` per design §5 — git's commit author is the
+- [x] 7.3 Demote `published_bundles.published_by` per design §5 — git's commit author is the
       provenance now. Keep the column; stop treating it as the source of truth.
 
 ## 8. Requirement checking on pull
@@ -129,11 +144,27 @@ This change extends that working code; it does not replace it.
 - [ ] 9.3 An enterprise: a non-GitHub remote, pinned by commit, resolving with no network from a
       warm cache. Verify against a bare repo over SSH, not github.com.
 
+## 9a. `wfx bundle import` — the verb that populates the join
+
+- [ ] 9a.1 **Added 2026-09-25, from two independent signals.** `wfx bundle import` appears in
+      `specs/bundle-cache` and in no task, so it was never built; and task 7.2's `git_remote` /
+      `git_commit` columns now exist, are carried through the API, and are set by NOBODY — because
+      `publish --to` bypasses the host entirely by design. The columns are the receipt that a host
+      has SEEN a git-published bundle, and importing is the act that writes one. Until this exists
+      the join is possible and never populated, which is a schema that documents an intention
+      rather than a fact.
+- [ ] 9a.2 Import a bundle from a git remote into this host's index: resolve the reference the way
+      `use:` already does (reusing the resolver, not a second fetch path), verify the digest, and
+      record the remote and the resolved COMMIT. A moved tag must not change what a past import
+      recorded.
+- [ ] 9a.3 Run the group 8 requirement check as part of the import, so a bundle this host cannot
+      run is refused at import rather than at run time.
+
 ## 10. Documentation
 
-- [ ] 10.1 Supersede the storage half of ADR 0018 — write the superseding note IN 0018 rather than
+- [x] 10.1 Supersede the storage half of ADR 0018 — write the superseding note IN 0018 rather than
       editing its decision, so the reasoning stays readable. The bundle decision survives intact.
-- [ ] 10.2 README: `use: acme/bug-fix@v1.2.0` beside the existing `uses:` explanation, and the
+- [x] 10.2 README: `use: acme/bug-fix@v1.2.0` beside the existing `uses:` explanation, and the
       offline path stated before the GitHub one, as the install section already does.
-- [ ] 10.3 Record in `docs/not-now.md`: transitive `use:`, signing policy, and present-vs-
+- [x] 10.3 Record in `docs/not-now.md`: transitive `use:`, signing policy, and present-vs-
       authenticated for a CLI provider — each with the trigger that would change our mind.

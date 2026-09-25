@@ -227,13 +227,19 @@ func TestManifestRecordsARequirementAndNeverACredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Neither the key's VALUE, nor the apiKeyEnv field at all: a requirement
-	// says "this host needs a key for haiku", and the host reads its own.
+	// The key's VALUE, never. The variable's NAME, deliberately — that is the
+	// line this whole codebase draws, and a written manifest is exactly where it
+	// has to hold, because these bytes get committed and pulled by strangers.
+	//
+	// This assertion was once "no apiKey field at all", which was right while the
+	// name could not travel and became wrong the moment it could. A test that
+	// forbids the field rather than the value would forbid the actionable
+	// refusal and permit nothing extra.
 	if strings.Contains(string(written), pasted) {
 		t.Fatal("the written manifest carries the key's value")
 	}
-	if strings.Contains(string(written), "apiKey") {
-		t.Fatalf("the written manifest carries key material: %s", written)
+	if !strings.Contains(string(written), `"apiKeyEnv":"OPENROUTER_API_KEY"`) {
+		t.Fatalf("the variable's NAME did not travel: %s", written)
 	}
 	// And the same rule the publish refusals already apply: a pasted value in
 	// the field meant to hold a NAME never gets as far as a manifest.
@@ -248,5 +254,57 @@ func TestManifestRecordsARequirementAndNeverACredential(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), pasted) {
 		t.Fatalf("the refusal echoed the value: %v", err)
+	}
+}
+
+// [SEC-TEST] The manifest records the NAME of the variable an `http` provider
+// reads its key from, and can never record the key. The distinction is the whole
+// discipline of this codebase — names travel, values do not — and the attack it
+// stops is a bundle published from a machine where the key was pasted into the
+// registry instead of the variable's name, which would then ship the credential
+// to every host that pulled it.
+//
+// A `cli` provider gets no variable at all: its credential is the CLI's own,
+// held on the machine, so naming one would imply a key we neither want nor use.
+func TestTheManifestCarriesTheKeysNameAndNeverItsValue(t *testing.T) {
+	const secret = "sk-ant-not-a-real-key-0123456789abcdef"
+	t.Setenv("ANTHROPIC_API_KEY", secret)
+
+	cat := &catalog.Catalog{
+		Providers: registry.New[catalog.Provider]("provider",
+			catalog.Provider{Name: "anthropic", Kind: catalog.KindHTTP, BaseURL: "https://api.anthropic.com", APIKeyEnv: "ANTHROPIC_API_KEY"},
+			catalog.Provider{Name: "claude-cli", Kind: catalog.KindCLI, Preset: "claude"},
+		),
+		Classifiers: registry.New[catalog.Classifier]("classifier"),
+		Mcp:         registry.New[catalog.McpServer]("mcp server"),
+		Notifiers:   registry.New[catalog.Notifier]("notifier"),
+	}
+	def := &workflow.Definition{Name: "w", Steps: []workflow.Step{
+		{ID: "paid", Provider: "anthropic"},
+		{ID: "seat", Provider: "claude-cli"},
+	}}
+
+	reqs := Requirements(def, cat)
+	byName := map[string]Requirement{}
+	for _, r := range reqs {
+		byName[r.Name] = r
+	}
+	if got := byName["anthropic"].APIKeyEnv; got != "ANTHROPIC_API_KEY" {
+		t.Errorf("the http provider's apiKeyEnv NAME did not travel: %q", got)
+	}
+	if got := byName["claude-cli"].APIKeyEnv; got != "" {
+		t.Errorf("a cli provider named a variable %q; its credential is the CLI's own", got)
+	}
+
+	// The value cannot appear anywhere in the bytes that get committed.
+	b := New("workflow", "", "w", "1.0.0")
+	b.AddWorkflow([]byte("name: w\n"))
+	b.Manifest.Requires = reqs
+	canon, err := b.Manifest.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(canon), secret) {
+		t.Fatal("the key's VALUE is in the manifest")
 	}
 }

@@ -178,45 +178,55 @@ func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement 
 	// Keyed by kind+name, because one requirement asked for by three steps is
 	// one requirement and three step IDs.
 	seen := map[string]*Requirement{}
-	add := func(kind, name, providerKind, step string) {
+	add := func(kind, name, providerKind, apiKeyEnv, step string) {
 		if name == "" {
 			return
 		}
 		key := kind + "\x00" + name
 		r, ok := seen[key]
 		if !ok {
-			r = &Requirement{Kind: kind, Name: name, ProviderKind: providerKind}
+			r = &Requirement{Kind: kind, Name: name, ProviderKind: providerKind, APIKeyEnv: apiKeyEnv}
 			seen[key] = r
 		}
 		r.Steps = append(r.Steps, step)
 	}
-	providerKind := func(name string) string {
+	// provider returns the kind and the apiKeyEnv NAME together, because they
+	// come from the same catalog entry and a caller that had to ask twice would
+	// be two lookups that could disagree.
+	provider := func(name string) (kind, apiKeyEnv string) {
 		// Empty when this machine's catalog does not know the provider. The
 		// workflow's own validation refuses an unknown provider name, so the
 		// honest reading of an empty kind is "no catalog was loaded", not "a
 		// provider nobody has heard of".
 		if cat == nil {
-			return ""
+			return "", ""
 		}
 		p, ok := cat.Providers.Get(name)
 		if !ok {
-			return ""
+			return "", ""
 		}
-		return string(p.Kind)
+		// Only an `http` provider has one. A `cli`/`acp` provider's credential
+		// is the CLI's own, held on that machine, so there is no variable to
+		// name and naming one would imply a key we neither want nor can use.
+		if p.Kind != catalog.KindHTTP {
+			return string(p.Kind), ""
+		}
+		return string(p.Kind), p.APIKeyEnv
 	}
 	// `runs-on:` cascades workflow -> job -> step (jobs.go), and a bundle
 	// published from the jobs form must record the label the step will actually
 	// carry rather than the one it literally spells.
 	walk := func(steps []workflow.Step, label string) {
 		for _, st := range steps {
-			add(ReqProvider, st.Provider, providerKind(st.Provider), st.ID)
+			kind, keyEnv := provider(st.Provider)
+			add(ReqProvider, st.Provider, kind, keyEnv, st.ID)
 			runsOn := st.RunsOn
 			if runsOn == "" {
 				runsOn = label
 			}
-			add(ReqLabel, runsOn, "", st.ID)
+			add(ReqLabel, runsOn, "", "", st.ID)
 			for _, n := range st.MCP {
-				add(ReqMcp, n, "", st.ID)
+				add(ReqMcp, n, "", "", st.ID)
 			}
 		}
 	}

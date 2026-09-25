@@ -42,6 +42,46 @@ type Entry struct {
 	Files  []string `json:"files,omitempty"`
 }
 
+// Requirement is one thing the RECEIVING host must already have for this
+// bundle's steps to run. It is gathered at publish time from the steps
+// themselves, because the receiving host cannot infer it: a provider NAME says
+// nothing about whether it needs an API key or a binary installed locally, and
+// a `runs-on:` label nobody holds means a step that waits forever.
+//
+// It records a REQUIREMENT AND NEVER A CREDENTIAL. `provider: claude-cli` means
+// *that machine's* subscription; the platform can hold neither the seat nor the
+// login, so the only honest thing to carry is the name of what is needed, and
+// the receiving host's only answer is "I have it" or "I do not".
+type Requirement struct {
+	// Kind is what sort of thing this is: "provider", "label" or "mcp".
+	Kind string `json:"kind"`
+	// Name is the entry's name as the step spells it.
+	Name string `json:"name"`
+	// ProviderKind is "http", "cli" or "acp" for a provider requirement — the
+	// part that decides whether a key or a binary satisfies it. Empty otherwise.
+	ProviderKind string `json:"providerKind,omitempty"`
+	// APIKeyEnv is the NAME of the environment variable the PUBLISHER's `http`
+	// provider read its key from — never the key. It is the same NAME
+	// `catalog.Provider` already carries and `LooksLikeSecret` already refuses a
+	// value in, so it travels for the same reason it is safe to store.
+	//
+	// It is a HINT and never a rule. The receiving host reads its OWN variable
+	// for its own provider entry; a published bundle does not get to dictate the
+	// consuming machine's environment. What the name buys is an actionable
+	// refusal — "a key is needed, and where this was published it was called
+	// ANTHROPIC_API_KEY" — instead of one that is merely true.
+	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
+	// Steps are the step IDs that ask for it, so a refusal can say where.
+	Steps []string `json:"steps,omitempty"`
+}
+
+// Requirement kinds.
+const (
+	ReqProvider = "provider"
+	ReqLabel    = "label"
+	ReqMcp      = "mcp"
+)
+
 // Manifest names every entry, so the manifest's own digest covers the whole
 // bundle transitively. That is the OCI arrangement and the reason the bundle
 // digest is one hash of one small document.
@@ -54,6 +94,9 @@ type Manifest struct {
 	Workflow      Entry   `json:"workflow"`
 	Skills        []Entry `json:"skills,omitempty"`
 	Mcp           *Entry  `json:"mcp,omitempty"`
+	// Requires is what this bundle needs to RUN on the receiving host (design
+	// §7). A bundle that names no provider, label or MCP server records nothing.
+	Requires []Requirement `json:"requires,omitempty"`
 }
 
 // Canonical is the manifest's bytes for digest purposes: keys sorted, no

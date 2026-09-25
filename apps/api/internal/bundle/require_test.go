@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 )
 
 // fakeHost is a receiving machine, described. It also RECORDS every question it
@@ -145,28 +147,64 @@ func TestTheCheckNeverAsksForOrCarriesACredential(t *testing.T) {
 	if strings.Contains(msg, secret) {
 		t.Fatal("a credential reached the refusal text")
 	}
-	for _, word := range []string{"api key", "apikey", "token", "password", "paste", "enter your"} {
-		if strings.Contains(strings.ToLower(msg), word) {
-			t.Fatalf("the refusal asks the operator for a credential (%q):\n%s", word, msg)
+	// What is forbidden is ASKING for a value, not mentioning the variable that
+	// holds one. `apiKeyEnv` as a bare substring would flag the `http` refusal,
+	// whose whole job is to name the variable the operator sets themselves — so
+	// the scan is for the ask.
+	for _, phrase := range []string{"paste", "enter your", "provide your", "send us", "give us your", "upload your"} {
+		if strings.Contains(strings.ToLower(msg), phrase) {
+			t.Fatalf("the refusal asks the operator for a credential (%q):\n%s", phrase, msg)
+		}
+	}
+	for _, unmet := range CheckRequirements([]Requirement{{
+		Kind: ReqProvider, Name: "anthropic", ProviderKind: "http", APIKeyEnv: "ANTHROPIC_API_KEY", Steps: []string{"paid"},
+	}}, &fakeHost{providers: map[string]ProviderReadiness{}}).Unmet {
+		for _, phrase := range []string{"paste", "enter your", "provide your", "send us"} {
+			if strings.Contains(strings.ToLower(unmet.Fix), phrase) {
+				t.Fatalf("the http refusal asks for the key itself: %s", unmet.Fix)
+			}
 		}
 	}
 	if !strings.Contains(msg, "the login stays yours") {
 		t.Fatalf("the refusal does not say whose credential it is:\n%s", msg)
 	}
 
-	// The INPUT side: a Requirement and a ProviderReadiness have no field that
-	// could hold a secret value. A future field named like one is the thing this
-	// assertion is here to catch.
+	// The INPUT side: a future field named like a credential is what this
+	// assertion exists to catch. `APIKeyEnv` is the ONE allowed exception and it
+	// is allowed on a stated ground, not waved through: it holds the NAME of an
+	// environment variable, which is the same thing `catalog.Provider` already
+	// stores and `LooksLikeSecret` already refuses a value in. So the exception
+	// carries its own proof — a value in that field must still be recognised as
+	// one — rather than merely being spelled into the allowlist.
+	allowed := map[string]bool{"Requirement.APIKeyEnv": true}
 	for _, typ := range []any{Requirement{}, ProviderReadiness{}, Unmet{}, Caveat{}} {
 		rt := reflect.TypeOf(typ)
 		for i := 0; i < rt.NumField(); i++ {
+			field := rt.Name() + "." + rt.Field(i).Name
+			if allowed[field] {
+				continue
+			}
 			name := strings.ToLower(rt.Field(i).Name)
 			for _, bad := range []string{"key", "token", "secret", "password", "credential"} {
 				if strings.Contains(name, bad) {
-					t.Fatalf("%s.%s is a place a credential could travel", rt.Name(), rt.Field(i).Name)
+					t.Fatalf("%s is a place a credential could travel", field)
 				}
 			}
 		}
+	}
+	// The exception's proof: a pasted value in the NAME field is still a value,
+	// and the publish-time refusal is what stops it ever reaching a manifest.
+	if !catalog.LooksLikeSecret(secret) {
+		t.Fatalf("a pasted key is no longer recognised, so APIKeyEnv's exception is unguarded")
+	}
+	// And the hint quoted into an `http` refusal is the variable's NAME, with no
+	// value anywhere near it.
+	hint := providerFix("http", "anthropic", "ANTHROPIC_API_KEY")
+	if !strings.Contains(hint, "ANTHROPIC_API_KEY") {
+		t.Fatalf("the refusal is true but not actionable — it names no variable: %s", hint)
+	}
+	if strings.Contains(hint, secret) {
+		t.Fatalf("a value reached the refusal: %s", hint)
 	}
 }
 

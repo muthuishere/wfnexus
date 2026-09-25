@@ -166,14 +166,14 @@ func checkProviderReq(rep *Report, req Requirement, h Host) {
 		rep.Unmet = append(rep.Unmet, Unmet{
 			Requirement: req,
 			Because:     fmt.Sprintf("no provider named %q is configured on this machine", req.Name),
-			Fix:         providerFix(req.ProviderKind, req.Name),
+			Fix:         providerFix(req.ProviderKind, req.Name, req.APIKeyEnv),
 		})
 		return
 	}
 	if !st.Ready {
 		fix := st.Fix
 		if fix == "" {
-			fix = providerFix(req.ProviderKind, req.Name)
+			fix = providerFix(req.ProviderKind, req.Name, req.APIKeyEnv)
 		}
 		rep.Unmet = append(rep.Unmet, Unmet{Requirement: req, Because: st.Problem, Fix: fix})
 		return
@@ -191,9 +191,17 @@ func checkProviderReq(rep *Report, req Requirement, h Host) {
 // the whole reason the kind is recorded at publish time. A key satisfies an
 // `http` provider; only a binary on THIS machine, logged in by whoever owns the
 // seat, satisfies a `cli` or `acp` one.
-func providerFix(kind, name string) string {
+//
+// apiKeyEnv is the name the PUBLISHER used, quoted as a hint and never as an
+// instruction — this machine's own entry decides which variable is actually
+// read. Saying "where this was published the variable was called X" is what
+// turns a true refusal into an actionable one.
+func providerFix(kind, name, apiKeyEnv string) string {
 	switch kind {
 	case "http":
+		if apiKeyEnv != "" {
+			return fmt.Sprintf("add an `http` provider %q to this machine's registry and set the environment variable its apiKeyEnv NAMES (where this bundle was published that was %s)", name, apiKeyEnv)
+		}
 		return fmt.Sprintf("add an `http` provider %q to this machine's registry and set the environment variable its apiKeyEnv NAMES", name)
 	case "cli", "acp":
 		return fmt.Sprintf("add a %s provider %q to this machine's registry and install its command on PATH — the platform cannot hold its credential, so the login stays yours", kind, name)
