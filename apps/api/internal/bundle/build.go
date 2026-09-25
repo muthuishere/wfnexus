@@ -157,7 +157,102 @@ func Build(kind, project, name, version string, workflowYAML []byte, def *workfl
 	if err := CheckNoLiteralCredential(def, servers, providers, classifiers); err != nil {
 		return nil, err
 	}
+	b.Manifest.Requires = Requirements(def, cat)
 	return b, nil
+}
+
+// Requirements is what the RECEIVING host must already have for this bundle's
+// steps to run (design §7): every provider a step names and its KIND, every
+// `runs-on:` label asked for, and every MCP server named.
+//
+// It is gathered HERE because the receiving host cannot infer it. A provider
+// name says nothing about whether an API key or a locally installed binary
+// satisfies it, and a label nobody holds means a step that waits forever — the
+// check `wfx dryrun` does locally, which a pull can only do if the bundle says
+// what it needs.
+//
+// A workflow that names none returns nil, not an empty slice: the manifest key
+// is then ABSENT rather than present-and-empty, so nothing is checked at the
+// other end and the digest of a requirement-free bundle is what it always was.
+func Requirements(def *workflow.Definition, cat *catalog.Catalog) []Requirement {
+	// Keyed by kind+name, because one requirement asked for by three steps is
+	// one requirement and three step IDs.
+	seen := map[string]*Requirement{}
+	add := func(kind, name, providerKind, step string) {
+		if name == "" {
+			return
+		}
+		key := kind + "\x00" + name
+		r, ok := seen[key]
+		if !ok {
+			r = &Requirement{Kind: kind, Name: name, ProviderKind: providerKind}
+			seen[key] = r
+		}
+		r.Steps = append(r.Steps, step)
+	}
+	providerKind := func(name string) string {
+		// Empty when this machine's catalog does not know the provider. The
+		// workflow's own validation refuses an unknown provider name, so the
+		// honest reading of an empty kind is "no catalog was loaded", not "a
+		// provider nobody has heard of".
+		if cat == nil {
+			return ""
+		}
+		p, ok := cat.Providers.Get(name)
+		if !ok {
+			return ""
+		}
+		return string(p.Kind)
+	}
+	// `runs-on:` cascades workflow -> job -> step (jobs.go), and a bundle
+	// published from the jobs form must record the label the step will actually
+	// carry rather than the one it literally spells.
+	walk := func(steps []workflow.Step, label string) {
+		for _, st := range steps {
+			add(ReqProvider, st.Provider, providerKind(st.Provider), st.ID)
+			runsOn := st.RunsOn
+			if runsOn == "" {
+				runsOn = label
+			}
+			add(ReqLabel, runsOn, "", st.ID)
+			for _, n := range st.MCP {
+				add(ReqMcp, n, "", st.ID)
+			}
+		}
+	}
+	walk(def.Steps, def.RunsOn)
+	for _, id := range sortedJobKeys(def.Jobs) {
+		job := def.Jobs[id]
+		label := job.RunsOn
+		if label == "" {
+			label = def.RunsOn
+		}
+		walk(job.Steps, label)
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]Requirement, 0, len(keys))
+	for _, k := range keys {
+		r := seen[k]
+		sort.Strings(r.Steps)
+		out = append(out, *r)
+	}
+	return out
+}
+
+func sortedJobKeys(m map[string]*workflow.Job) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // skillDir is the directory a discovered skill occupies. Location is its

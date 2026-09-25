@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -130,4 +131,54 @@ func SelectInTree(root, selector string) (string, error) {
 	default:
 		return "", fmt.Errorf("%q matches %s; name the version too, as in #%s", selector, strings.Join(match, ", "), match[0])
 	}
+}
+
+// WriteTree writes a bundle out as the committed tree FromTree reads back: the
+// canonical manifest plus every carried file under its own fixed name. It is
+// the exact inverse of FromTree, and the manifest bytes are the CANONICAL ones
+// — the same bytes the digest was taken over, so a reviewer reading the
+// committed file is reading what was hashed.
+//
+// It refuses to write over an existing directory. A published version is
+// immutable, and overwriting a version in a clone is how a republish would
+// quietly become an amendment before git ever got the chance to refuse it.
+func (b *Bundle) WriteTree(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ManifestPath)); err == nil {
+		return fmt.Errorf("%s already holds a published bundle: a version is immutable", dir)
+	}
+	canon, err := b.Manifest.Canonical()
+	if err != nil {
+		return err
+	}
+	files := map[string][]byte{ManifestPath: canon}
+	for p, raw := range b.Files {
+		files[p] = raw
+	}
+	for _, name := range sortedFileNames(files) {
+		// The same escape rule Unpack applies to a tar member. A manifest
+		// cannot name its own members, but the Files map is written by callers
+		// and a path that climbs out of the version directory would write into
+		// somebody else's bundle — or outside the repository.
+		clean := path.Clean(name)
+		if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("bundle: entry %q escapes the bundle", name)
+		}
+		dst := filepath.Join(dir, filepath.FromSlash(clean))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, files[name], 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sortedFileNames(files map[string][]byte) []string {
+	out := make([]string, 0, len(files))
+	for p := range files {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
