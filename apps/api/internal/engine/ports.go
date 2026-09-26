@@ -46,6 +46,7 @@ type Store interface {
 	UpdateRunInput(ctx context.Context, id uuid.UUID, input json.RawMessage) error
 	SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error
 	ProjectRunActivity(ctx context.Context) (map[string]model.ProjectActivity, error)
+	RunsInStatus(ctx context.Context, statuses ...string) ([]*model.Run, error)
 
 	// steps
 	EnsureStep(ctx context.Context, runID uuid.UUID, stepID string, position int) error

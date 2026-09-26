@@ -54,6 +54,12 @@ func (e *Engine) PrepareRun(name string, trigger workflow.TriggerKind, raw json.
 			return nil, fmt.Errorf("input is not a JSON object: %w", err)
 		}
 	}
+	// `null` unmarshals into a map by making it NIL — which is what a schedule
+	// with no `input:` sends — and filling a default into a nil map panics. That
+	// panic killed the whole server every time a schedule fired.
+	if input == nil {
+		input = map[string]any{}
+	}
 	applyDefaults(def.InputSchema, input)
 
 	schema, err := compileSchema(name+".input", def.InputSchema)

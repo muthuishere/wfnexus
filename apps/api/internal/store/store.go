@@ -237,6 +237,11 @@ type RunFilter struct {
 	Limit  int
 }
 
+// RunsInStatus lists runs currently in any of these states, oldest first.
+func (s *Store) RunsInStatus(ctx context.Context, statuses ...string) ([]*Run, error) {
+	return s.FindRuns(ctx, RunFilter{Status: statuses, Limit: 1000})
+}
+
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]*Run, error) {
 	return s.FindRuns(ctx, RunFilter{Limit: limit})
 }
