@@ -10,6 +10,7 @@ import (
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -114,4 +115,30 @@ func Read(d tn.Decision, qs map[string]workflow.Question, b Bands) (map[string]A
 		}
 	}
 	return out, nil
+}
+
+// Options turns a classifier registry entry into client options, so ANY JEV
+// model someone configures — `{"backend": "typesafe", "model": "jev-2.0"}` — is
+// usable by name from a workflow step (`classifier: jev-2`) and from
+// `wfx judge --classifier jev-2`, through this one function.
+//
+// keyEnv is the NAME of the variable the key is read from, for an error that
+// says which one is missing. The value is never read here.
+func Options(c catalog.Classifier) (opts tn.ClassifierOptions, keyEnv string, err error) {
+	opts = tn.ClassifierOptions{Style: tn.StyleSystemOne, Model: c.Model, BaseURL: c.BaseURL, APIKeyEnv: c.APIKeyEnv}
+	switch c.Backend {
+	case "typesafe":
+		opts.Backend, keyEnv = tn.BackendTypeSafe, "TYPESAFE_API_KEY"
+	case "openrouter":
+		opts.Backend, keyEnv = tn.BackendOpenRouter, "OPENROUTER_API_KEY"
+	default:
+		// llm and static need a chat client or a recorded corpus handed in by
+		// the caller; refusing by name beats a judge that silently answers
+		// from the default model instead.
+		return opts, "", fmt.Errorf("classifier %q: backend %q is not callable here (want typesafe or openrouter)", c.Name, c.Backend)
+	}
+	if c.APIKeyEnv != "" {
+		keyEnv = c.APIKeyEnv
+	}
+	return opts, keyEnv, nil
 }

@@ -48,7 +48,10 @@ wfx judge -q ~/.claude/skills/usage-prover/assets/removal-questions.yaml \
   --items evidence.jsonl > verdicts.jsonl
 ```
 
-(`assets/removal-questions.yaml` beside this file.) Each line comes back with
+(`assets/removal-questions.yaml` beside this file.) Add `--classifier <name>` to
+use a specific JEV model this install has configured (`wfx registry
+classifiers`), or `--model <id>` for any model id — the band cut points assume a
+calibrated JEV model, so do not point this at a chat model and keep the table. Each line comes back with
 `unused` (a probability and a band: no / uncertain / yes) and `kind` (remove /
 keep / bug, with a confidence band). The bands are TypeSafe's self-consistency
 cut: below 0.30 no, above 0.70 yes, between is a human's call.

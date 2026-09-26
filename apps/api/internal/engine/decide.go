@@ -52,7 +52,7 @@ func (e *Engine) decide(ctx context.Context, runID uuid.UUID, step *workflow.Ste
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := e.classifier()
+	c, err := e.classifierFor(step)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -101,13 +101,31 @@ func (e *Engine) decide(ctx context.Context, runID uuid.UUID, step *workflow.Ste
 	return rec, vals, nil
 }
 
-// classifier builds the judge. systemone is reachable over OpenRouter with
-// model typesafe/jev-1.13; the library's own default base 400s ("Unknown
-// model"), so the base URL and model are always set explicitly. Verified in
-// spikes/04-classifier.
-func (e *Engine) classifier() (*tn.Classifier, error) {
+// classifierFor builds the judge a step asked for.
+//
+// A step's `classifier:` names a registry entry — any JEV model an install has
+// configured. It used to be validated at load and then IGNORED: every decide
+// ran on the global default, so a step naming another model quietly got a
+// different one. Now the entry is what runs, and only a step that names none
+// falls back to the process default.
+//
+// The default: systemone over OpenRouter with typesafe/jev-1.13; the library's
+// own default base 400s ("Unknown model"), so base URL and model are always set
+// explicitly. Verified in spikes/04-classifier.
+func (e *Engine) classifierFor(step *workflow.Step) (*tn.Classifier, error) {
 	if e.classifierOpts != nil {
 		return tn.CreateClassifier(*e.classifierOpts)
+	}
+	if step != nil && step.Classifier != "" {
+		entry, err := e.catalog.Classifiers.Require(step.Classifier)
+		if err != nil {
+			return nil, err
+		}
+		opts, _, err := judge.Options(entry)
+		if err != nil {
+			return nil, err
+		}
+		return tn.CreateClassifier(opts)
 	}
 	return tn.CreateClassifier(tn.ClassifierOptions{
 		Style:     tn.StyleSystemOne,

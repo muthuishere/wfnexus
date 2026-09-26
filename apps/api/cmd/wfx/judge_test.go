@@ -38,7 +38,7 @@ func TestJudgeItems(t *testing.T) {
 func TestJudgeNamesAMissingKey(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	_, _, err := judgeClassifier("", "")
+	_, _, err := judgeClassifier("", "", "")
 	if err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Fatalf("want a refusal naming OPENROUTER_API_KEY, got %v", err)
 	}

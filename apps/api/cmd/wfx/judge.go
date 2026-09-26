@@ -15,6 +15,8 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 	"gopkg.in/yaml.v3"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/judge"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -55,7 +57,8 @@ type judgeResult struct {
 }
 
 const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --state <text>)
-          [--backend typesafe|openrouter] [--model m] [--parallel 8] [--bands 0.30,0.70]
+          [--classifier <name> | --backend typesafe|openrouter] [--model m]
+          [--parallel 8] [--bands 0.30,0.70]
 
   questions.yaml   the shape of a workflow's decide.questions:
                      dead:
@@ -65,8 +68,12 @@ const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --st
                        false: something calls it, even via reflection or a template
   --items          JSON Lines, one {"id": "...", "state": <anything>} per line; - for stdin
   --state          one state, inline (id "state")
-  --backend        typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY);
-                   default: typesafe when TYPESAFE_API_KEY is set, else openrouter
+  --classifier     a classifier registry entry — any JEV model configured on this
+                   install (wfx registry classifiers); the same name a workflow
+                   step gives in classifier:
+  --backend        without --classifier: typesafe (TYPESAFE_API_KEY) or openrouter
+                   (OPENROUTER_API_KEY); default typesafe when its key is set
+  --model          any JEV model id, overriding the entry's or the backend's default
 
 Writes one JSON line per item to stdout, in input order, each noul with its band
 (no | uncertain | yes). A summary goes to stderr.`
@@ -101,7 +108,7 @@ func cmdJudge(args []string) error {
 		parallel = 1
 	}
 
-	c, backend, err := judgeClassifier(flagOf(args, "--backend", ""), flagOf(args, "--model", ""))
+	c, backend, err := judgeClassifier(flagOf(args, "--backend", ""), flagOf(args, "--model", ""), flagOf(args, "--classifier", ""))
 	if err != nil {
 		return err
 	}
@@ -241,34 +248,55 @@ func parseBands(s string) (judge.Bands, error) {
 	return judge.Bands{Low: l, High: h}, nil
 }
 
-// judgeClassifier picks the backend. The base URL and model travel with the
-// backend as a unit (the library's presets): one provider's model spelling
-// against another's base is the failure a hand-assembled config produces.
-// WFX_JUDGE_BASE_URL overrides the base — it is how a test points this at a
-// local server, and how an install behind a proxy reaches the API.
-func judgeClassifier(backend, model string) (*tn.Classifier, string, error) {
-	if backend == "" {
-		backend = "openrouter"
-		if os.Getenv("TYPESAFE_API_KEY") != "" {
-			backend = "typesafe"
+// judgeClassifier picks the judge: a named registry entry (`--classifier`,
+// any JEV model the install has configured — the same entry a workflow step
+// names with `classifier:`), else a bare backend. `--model` overrides the model
+// on either. The base URL, model and key variable travel with the backend as a
+// unit (judge.Options): one provider's model spelling against another's base
+// is the failure a hand-assembled config produces. WFX_JUDGE_BASE_URL
+// overrides the base — how a test points this at a local server, and how an
+// install behind a proxy reaches the API.
+func judgeClassifier(backend, model, classifier string) (*tn.Classifier, string, error) {
+	var entry catalog.Classifier
+	if classifier != "" {
+		cfg := config.Load()
+		cat, err := catalog.Load(cfg.RegistriesPath, cfg.McpConfig)
+		if err != nil {
+			return nil, "", err
 		}
+		if entry, err = cat.Classifiers.Require(classifier); err != nil {
+			return nil, "", fmt.Errorf("%w (see `wfx registry classifiers`)", err)
+		}
+		entry.Name = classifier
+	} else {
+		if backend == "" {
+			backend = "openrouter"
+			if os.Getenv("TYPESAFE_API_KEY") != "" {
+				backend = "typesafe"
+			}
+		}
+		entry = catalog.Classifier{Name: backend, Backend: backend}
 	}
-	opts := tn.ClassifierOptions{Style: tn.StyleSystemOne, Model: model, BaseURL: os.Getenv("WFX_JUDGE_BASE_URL")}
-	keyEnv := ""
-	switch backend {
-	case "typesafe":
-		opts.Backend, keyEnv = tn.BackendTypeSafe, "TYPESAFE_API_KEY"
-	case "openrouter":
-		opts.Backend, keyEnv = tn.BackendOpenRouter, "OPENROUTER_API_KEY"
-	default:
-		return nil, "", fmt.Errorf("--backend %q: want typesafe or openrouter", backend)
+	if model != "" {
+		entry.Model = model
+	}
+	opts, keyEnv, err := judge.Options(entry)
+	if err != nil {
+		return nil, "", err
+	}
+	if base := os.Getenv("WFX_JUDGE_BASE_URL"); base != "" {
+		opts.BaseURL = base
 	}
 	if os.Getenv(keyEnv) == "" {
-		return nil, "", fmt.Errorf("%s is not set — the %s backend reads its key from it (by name; the value is never printed)", keyEnv, backend)
+		return nil, "", fmt.Errorf("%s is not set — %s reads its key from it (by name; the value is never printed)", keyEnv, entry.Name)
 	}
 	c, err := tn.CreateClassifier(opts)
 	if err != nil {
 		return nil, "", err
 	}
-	return c, backend, nil
+	label := entry.Name
+	if entry.Model != "" {
+		label += " (" + entry.Model + ")"
+	}
+	return c, label, nil
 }
