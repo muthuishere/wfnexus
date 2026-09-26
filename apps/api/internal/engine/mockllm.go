@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 )
 
@@ -68,9 +67,14 @@ func (m *mockServer) URL() (string, error) {
 func mockHandle(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Messages []struct {
-			Role    string `json:"role"`
-			Name    string `json:"name"`
-			Content any    `json:"content"`
+			Role      string `json:"role"`
+			Name      string `json:"name"`
+			Content   any    `json:"content"`
+			ToolCalls []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"messages"`
 		Tools []struct {
 			Function struct {
@@ -83,10 +87,26 @@ func mockHandle(w http.ResponseWriter, r *http.Request) {
 
 	// Already submitted? Then this is the wrap-up turn the loop asks for after a
 	// tool result, and a reply with no tool calls closes the step.
+	//
+	// The signal is MY OWN PREVIOUS TOOL CALL, not the tool's reply. The first
+	// version looked for "submit_output" in the result text, and the native tool
+	// actually returns "accepted" (step.go:87) — so the check never matched, the
+	// mock submitted again every turn, and every step ran to the turn cap: 30
+	// calls instead of 1. Free, and completely wrong about what a run costs in
+	// turns.
+	//
+	// An assistant message that called submit_output is definitive and cannot
+	// drift, because it is the thing this handler itself emitted. Matching on the
+	// other side's wording was a guess about somebody else's string.
 	for _, msg := range req.Messages {
-		if msg.Role == "tool" && strings.Contains(fmt.Sprint(msg.Content), "submit_output") {
-			writeMockTurn(w, "", nil)
-			return
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			if tc.Function.Name == "submit_output" {
+				writeMockTurn(w, "", nil)
+				return
+			}
 		}
 	}
 	for _, t := range req.Tools {

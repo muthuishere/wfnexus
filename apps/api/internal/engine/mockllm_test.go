@@ -171,3 +171,44 @@ func mockCatalog() *catalog.Catalog {
 		Notifiers:   registry.New[catalog.Notifier]("notifier"),
 	}
 }
+
+// The mock must submit ONCE. The first version decided "already submitted" by
+// looking for "submit_output" in the tool result, and the native tool returns
+// "accepted" (step.go) — so the check never matched, it resubmitted every turn,
+// and every step ran to the turn cap: 30 model calls instead of 1. Free, and a
+// complete lie about what a run costs in turns.
+//
+// The signal is the handler's OWN previous tool call. Matching the other side's
+// wording was a guess about somebody else's string.
+func TestTheMockSubmitsOnceAndThenCloses(t *testing.T) {
+	def := &workflow.Definition{
+		Name: "once",
+		Steps: []workflow.Step{{
+			ID: "only", Provider: "mock", Prompt: "do it",
+			OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": map[string]any{"type": "boolean"}}),
+		}},
+	}
+	normalizeForTest(def)
+	st, bl, cfg := testDeps(t)
+	cfg.WorkDir = t.TempDir()
+	eng := New(cfg, st, bl, map[string]*workflow.Definition{def.Name: def},
+		skills.Load(t.TempDir()), mockCatalog())
+	h := &harness{eng: eng, store: st, t: t}
+	t.Cleanup(func() {
+		for _, id := range h.runs {
+			eng.Cancel(context.Background(), id)
+		}
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	run := h.run(nil)
+	if run.Status != "done" {
+		t.Fatalf("run = %s", run.Status)
+	}
+	step := h.steps(run.ID)["only"]
+	// Two turns is the honest shape: submit, then the wrap-up reply that closes
+	// the step. Anything near the cap means the mock is arguing with itself.
+	if step.Turns > 3 {
+		t.Errorf("the step took %d turns; the mock resubmitted instead of closing", step.Turns)
+	}
+}
