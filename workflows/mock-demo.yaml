@@ -1,0 +1,47 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
+name: mock-demo
+description: A workflow anybody can run with nothing configured.
+input_schema:
+    type: object
+steps:
+    - id: survey
+      name: survey
+      prompt: Look at the repository and report one finding.
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            finding:
+                type: string
+            severity:
+                enum:
+                    - low
+                    - medium
+                    - high
+                type: string
+        required:
+            - finding
+            - severity
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      provider: mock
+    - id: act
+      name: act
+      prompt: Act on {{.Steps.survey.finding}} at severity {{.Steps.survey.severity}}.
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            done:
+                type: boolean
+        required:
+            - done
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      needs:
+        - survey
+      provider: mock
+max_parallel: 4
