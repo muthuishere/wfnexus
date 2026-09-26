@@ -6,6 +6,7 @@ import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import { ago } from '../lib/time'
 import { href, shortName } from '../lib/routes'
+import { isWaiting } from '../lib/waiting'
 import { canDispatch, clip, sameWorkflow, summariseRun, triggerNames } from '../lib/workflow'
 
 type Tab = 'workflows' | 'runs' | 'settings'
@@ -145,6 +146,10 @@ export default function ProjectPage({ name }: { name: string }) {
                   <span className={`dot ${last?.status || 'never'}`} title={last ? last.status.replace(/_/g, ' ') : 'never run'} />
                   <div className="wfmain">
                     <a href={href.workflow(name, w.name)} className="wfname mono" onClick={e => e.stopPropagation()}>{w.name}</a>
+                    {wRuns.some(r => isWaiting(r.status)) && (
+                      <span className="badge awaiting_approval" style={{ marginLeft: 8 }}>
+                        {wRuns.filter(r => isWaiting(r.status)).length} waiting on you
+                      </span>)}
                     <div className="wfdesc" title={w.description}>{w.description || <span className="muted">no description</span>}</div>
                   </div>
                   <div className="wfmeta">

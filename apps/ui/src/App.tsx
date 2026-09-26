@@ -11,6 +11,7 @@ import WorkflowPage from './pages/WorkflowPage'
 import WorkersPage from './pages/WorkersPage'
 import TemplatesPage from './pages/TemplatesPage'
 import Identity from './components/Identity'
+import WaitingOnYou from './components/WaitingOnYou'
 
 // tiny hash router. The app is one drill-down — projects → a project → a
 // workflow → a run — and the addresses read the same way:
@@ -69,6 +70,7 @@ export default function App() {
         </nav>
         <div className="spacer" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span>{backend ? `toolnexus · ${backend}` : 'toolnexus'}</span>
+          <WaitingOnYou />
           {/* Nothing at all on a loopback install with no users — see Identity. */}
           <Identity />
         </div>

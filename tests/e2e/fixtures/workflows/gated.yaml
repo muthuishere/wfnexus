@@ -1,0 +1,22 @@
+name: gated
+description: >-
+  One shell step behind a human gate. It exists so the UI can be tested on a
+  run that has stopped for a person — the "waiting on you" indicator, and
+  approving from the run page — without a model.
+on:
+  workflow_dispatch:
+input_schema:
+  type: object
+  properties:
+    title: { type: string, title: "Title", default: "e2e gate" }
+steps:
+  - id: ship
+    requires_approval: true
+    run: echo shipped
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

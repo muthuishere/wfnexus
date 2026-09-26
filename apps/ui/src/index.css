@@ -485,3 +485,24 @@ pre {
   background: var(--blue-50); color: var(--blue-700); border-color: var(--blue-600); box-shadow: 0 0 0 1px var(--blue-600) inset;
 }
 @media (max-width: 640px) { .segmented { grid-template-columns: 1fr } }
+
+/* ── waiting on you ──────────────────────────────────────────────────────── */
+.waitbox { position: relative }
+.waitpill {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; font-size: 12.5px; font-weight: 600;
+  background: var(--warn-bg); color: var(--warn); border: 1px solid #f0d9a8; border-radius: 999px;
+}
+.waitpill:hover:not(:disabled) { background: #fbe8c4; color: var(--warn); border-color: #e8c67e }
+.waitmenu {
+  position: absolute; right: 0; top: calc(100% + 8px); width: 400px; max-height: 60vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 6px; z-index: 30;
+}
+.waitmenu a {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start;
+  padding: 9px 10px; border-radius: 8px; color: var(--text); text-decoration: none; font-size: 13px;
+}
+.waitmenu a:hover { background: var(--blue-50) }
+.waitwhat { min-width: 0 }
+.waitsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.waitwhen { font-size: 11.5px; white-space: nowrap }

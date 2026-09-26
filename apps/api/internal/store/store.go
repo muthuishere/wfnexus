@@ -230,7 +230,11 @@ func (s *Store) ProjectRunActivity(ctx context.Context) (map[string]ProjectActiv
 type RunFilter struct {
 	Project  string
 	Workflow string
-	Limit    int
+	// Status narrows to runs in any of these states — "what is waiting on a
+	// person" is a status question, and answering it from the newest 100 runs
+	// would lose a pause that is older than the hundredth.
+	Status []string
+	Limit  int
 }
 
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]*Run, error) {
@@ -252,6 +256,14 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 	if f.Workflow != "" {
 		args = append(args, f.Workflow)
 		where = append(where, fmt.Sprintf("workflow=$%d", len(args)))
+	}
+	if len(f.Status) > 0 {
+		marks := make([]string, len(f.Status))
+		for i, st := range f.Status {
+			args = append(args, st)
+			marks[i] = fmt.Sprintf("$%d", len(args))
+		}
+		where = append(where, "status IN ("+strings.Join(marks, ",")+")")
 	}
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")

@@ -383,10 +383,11 @@ export const api = {
     j(fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })),
 
   /** Runs, narrowed by the two axes of the hierarchy. */
-  runs: (q?: { project?: string; workflow?: string }) => {
+  runs: (q?: { project?: string; workflow?: string; status?: string[] }) => {
     const p = new URLSearchParams()
     if (q?.project) p.set('project', q.project)
     if (q?.workflow) p.set('workflow', q.workflow)
+    if (q?.status?.length) p.set('status', q.status.join(','))
     return j<Run[]>(fetch('/api/runs' + (p.toString() ? `?${p}` : '')))
   },
   run: (id: string) => j<RunDetail>(fetch(`/api/runs/${id}`)),

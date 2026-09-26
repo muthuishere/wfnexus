@@ -62,6 +62,36 @@ describe('the UI a person actually downloads', () => {
     expect(p.workflows).toContain('first-one')
   })
 
+  test('a run waiting on a person shows up on every page, and clears once approved', async () => {
+    const run = await api.createRun('gated', { title: 'needs a yes' })
+    await waitFor(async () => {
+      expect((await api.run(run.id)).run.status).toBe('awaiting_approval')
+    }, { timeout: 20_000, interval: 250 })
+
+    // On a page that has nothing to do with it — the indicator lives in the top bar.
+    go('#/system')
+    fireEvent.click(await screen.findByText(/waiting on you/))
+    const item = await screen.findByText('needs a yes', { exact: false })
+    expect(item.closest('a')?.getAttribute('href')).toBe(`#/projects/local/gated/runs/${run.id}`)
+    await waitFor(() => expect(document.title).toMatch(/^\(\d+\)/))
+    cleanup()
+
+    // And on the project, against the workflow it belongs to.
+    go('#/projects/local')
+    await screen.findByText('gated')
+    await screen.findAllByText(/waiting on you/)
+    cleanup()
+
+    // The approver is named, as the audit record requires.
+    localStorage.setItem('wfx.actor', 'e2e-test')
+    await api.approve(run.id, 'ship')
+    await waitFor(async () => {
+      expect((await api.run(run.id)).run.status).toBe('done')
+    }, { timeout: 20_000, interval: 250 })
+    const still = await api.runs({ status: ['awaiting_approval', 'needs_input'] })
+    expect(still.map(r => r.id)).not.toContain(run.id)
+  })
+
   test("a workflow's page lists its runs, and each opens under the workflow", async () => {
     const run = await api.createRun('deterministic', { title: 'drill-down placement' })
     await waitFor(async () => {

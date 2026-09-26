@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Project } from '../api'
 import { href } from '../lib/routes'
+import { useWaiting } from '../lib/waiting'
 import { ago } from '../lib/time'
 
 /** The dashboard, and the top of the hierarchy: project → workflow → runs.
@@ -15,6 +16,7 @@ export default function ProjectsPage() {
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
   const [adding, setAdding] = useState(false)
+  const waiting = useWaiting()
 
   const load = useCallback(() => {
     api.projects().then(p => { setProjects(p); setErr('') })
@@ -58,6 +60,10 @@ export default function ProjectsPage() {
                 <a href={href.project(p.name)} className="wfname" onClick={e => e.stopPropagation()}>{p.name}</a>
                 {p.local && <span className="pill" style={{ marginLeft: 8 }}>this platform</span>}
                 {!!p.problems?.length && <span className="badge failed" style={{ marginLeft: 8 }}>{p.problems.length} did not load</span>}
+                {waiting.some(r => (r.project || 'local') === p.name) && (
+                  <span className="badge awaiting_approval" style={{ marginLeft: 8 }}>
+                    {waiting.filter(r => (r.project || 'local') === p.name).length} waiting on you
+                  </span>)}
                 <div className="wfdesc mono" title={p.dir}>{p.url || p.repo || p.dir}</div>
               </div>
               <div className="wfmeta">

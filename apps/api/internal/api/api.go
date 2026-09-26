@@ -739,9 +739,16 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	if scope := s.scopeOf(r); scope != "" {
 		project = scope
 	}
+	var status []string
+	for _, st := range strings.Split(r.URL.Query().Get("status"), ",") {
+		if st = strings.TrimSpace(st); st != "" {
+			status = append(status, st)
+		}
+	}
 	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
 		Project:  project,
 		Workflow: r.URL.Query().Get("workflow"),
+		Status:   status,
 		Limit:    100,
 	})
 	if err != nil {
