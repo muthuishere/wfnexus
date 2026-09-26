@@ -213,3 +213,49 @@ func fileBody(t *testing.T, files []workflow.File, path string) []byte {
 	t.Fatalf("no file %q in %v", path, files)
 	return nil
 }
+
+// Editing a repository's workflow must change THAT repository's file. Every
+// save used to land in the platform's own directory, so the builder, opened on
+// a project's workflow, wrote a second copy into `local` and left the
+// repository exactly as it was.
+func TestSavingIntoAProjectWritesTheProjectsFile(t *testing.T) {
+	eng, local := copyEngine(t)
+	repo := t.TempDir()
+	wfDir := filepath.Join(repo, ".wfx", "workflows")
+	writeDirWorkflow(t, wfDir, "plain-shipper", sidecarWorkflowYAML)
+	if _, err := eng.ImportRepo(context.Background(), "theirs", repo, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// An existing workflow, saved with no project named: back where it lives.
+	def := *eng.Definitions()["theirs/plain-shipper"]
+	def.Description = "edited in the builder"
+	if _, err := eng.SaveWorkflowIn("", &def); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(local, "plain-shipper")); err == nil {
+		t.Fatal("the edit landed in the platform's directory as a second copy")
+	}
+	if got := eng.Definitions()["theirs/plain-shipper"].Description; got != "edited in the builder" {
+		t.Fatalf("the repository's workflow did not change: %q", got)
+	}
+
+	// A new workflow, created from the project's page: in that project.
+	fresh := def
+	fresh.Name, fresh.Files = "brand-new", nil
+	path, err := eng.SaveWorkflowIn("theirs", &fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != wfDir {
+		t.Fatalf("a workflow created in project theirs was written to %s", path)
+	}
+	if eng.ProjectFor("brand-new") != "theirs" {
+		t.Fatalf("the new workflow belongs to %q", eng.ProjectFor("brand-new"))
+	}
+
+	// A project that does not exist is refused, not quietly swapped for local.
+	if _, err := eng.SaveWorkflowIn("nobody", &fresh); err == nil {
+		t.Fatal("a save into a project that does not exist was accepted")
+	}
+}

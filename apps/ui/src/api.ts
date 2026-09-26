@@ -298,9 +298,10 @@ export const api = {
    *  builder mirrors what it can in TypeScript; this is the truth. */
   validateWorkflow: (definition: WorkflowDraft) =>
     j<{ valid: boolean; error?: string }>(post('/api/workflows/validate', { definition })),
-  /** Create or replace a workflow. The API validates and 400s with {error} on rejection. */
-  saveWorkflow: (name: string, definition: WorkflowDraft) =>
-    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}`, {
+  /** Create or replace a workflow. The API validates and 400s with {error} on
+   *  rejection. `project` is where it is saved; without it, its own project. */
+  saveWorkflow: (name: string, definition: WorkflowDraft, project?: string) =>
+    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ definition }),
     })),

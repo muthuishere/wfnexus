@@ -587,7 +587,16 @@ func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 // survives a round trip through the real loader.
 func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
-	if !s.workflowInScope(w, r, name) {
+	// `?project=` names the project the workflow is saved into
+	// (Engine.SaveWorkflowIn); without it, the workflow's own. The scope gate
+	// checks whichever of the two decides the directory.
+	project := r.URL.Query().Get("project")
+	if project == "" {
+		if !s.workflowInScope(w, r, name) {
+			return
+		}
+	} else if !s.inScope(r, project) {
+		notFound(w)
 		return
 	}
 	// Decoded in a dialect-tolerant way: a definition written as a FILE says
@@ -605,7 +614,7 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", def.Name, name))
 		return
 	}
-	path, err := s.eng.SaveWorkflow(def)
+	path, err := s.eng.SaveWorkflowIn(project, def)
 	if err != nil {
 		writeErr(w, 400, err)
 		return

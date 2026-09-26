@@ -311,6 +311,23 @@ func (e *Engine) Models() []string {
 // the new version is live without a restart. Validation happens on a temporary
 // copy, so a rejected definition never lands on disk.
 func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
+	// Always the platform's own directory: a bundle pull or a copy lands HERE,
+	// and must never overwrite a repository's file that shares its name.
+	return e.SaveWorkflowIn("local", d)
+}
+
+// SaveWorkflowIn is SaveWorkflow into a named project — the repository's own
+// `.wfx/workflows/`, which is where the builder is opened from.
+//
+// Before this, every save went to the platform's own directory: editing a
+// repository's workflow in the builder quietly wrote a second copy into
+// `local`, and the repository's file never changed.
+func (e *Engine) SaveWorkflowIn(project string, d *workflow.Definition) (string, error) {
+	dir, err := e.saveDir(project, d.Name)
+	if err != nil {
+		return "", err
+	}
+
 	// The host half of the mount rule, applied HERE rather than only when the
 	// run starts. workflow.CheckMounts cannot do it — `~/.ssh` means a
 	// different folder on every machine — but a save happens on the platform,
@@ -320,11 +337,35 @@ func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
 	if err := e.checkMountHosts(d.Mount); err != nil {
 		return "", err
 	}
-	path, err := workflow.Save(e.cfg.WorkflowsDir, d, e.validator())
+	path, err := workflow.Save(dir, d, e.validator())
 	if err != nil {
 		return "", err
 	}
 	return path, e.ReloadDefinitions()
+}
+
+// saveDir decides which directory a save writes into. See SaveWorkflowIn.
+//
+// With a project, the question is only whether that project has a directory:
+// its own copy of the name (`project/name`, how the loader always keys it) is
+// saved back in place, and a name it does not have yet is created there —
+// even when another project has the same short name, because the loader keeps
+// both reachable by their qualified names. Without one, an existing workflow
+// goes back to its own source and a new one to the platform's directory.
+func (e *Engine) saveDir(project, name string) (string, error) {
+	home := project
+	if home == "" {
+		home = "local"
+		if existing := e.Definitions()[name]; existing != nil && existing.Source != "" {
+			home = existing.Source
+		}
+	}
+	for _, src := range e.Sources() {
+		if src.Name == home && src.Name != templatesSource {
+			return src.Dir, nil
+		}
+	}
+	return "", fmt.Errorf("no project named %q", home)
 }
 
 // SaveProvider and friends write one registry entry and reload the catalog, so

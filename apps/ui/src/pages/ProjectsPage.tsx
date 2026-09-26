@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Project } from '../api'
-import DataTable, { type Column } from '../components/DataTable'
+import { href } from '../lib/routes'
 import { ago } from '../lib/time'
 
 /** The dashboard, and the top of the hierarchy: project → workflow → runs.
@@ -21,51 +21,6 @@ export default function ProjectsPage() {
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
   }, [])
   useEffect(load, [load])
-
-  const columns: Column<Project>[] = [
-    {
-      key: 'name', header: 'Project', width: 200,
-      value: p => p.name,
-      cell: p => (
-        <>
-          <a href={`#/projects/${encodeURIComponent(p.name)}`} className="mono" style={{ fontWeight: 550 }}>{p.name}</a>
-          {p.local && <span className="pill" style={{ marginLeft: 6 }}>this platform</span>}
-        </>),
-    },
-    {
-      key: 'workflows', header: 'Workflows', width: 100, align: 'right',
-      value: p => p.workflows?.length ?? 0,
-      cell: p => p.workflows?.length || <span className="muted">—</span>,
-    },
-    {
-      key: 'runs', header: 'Runs', width: 90, align: 'right',
-      value: p => p.runs,
-      cell: p => p.runs || <span className="muted">—</span>,
-    },
-    {
-      key: 'last', header: 'Last run', width: 170,
-      value: p => p.lastRunAt || '',
-      cell: p => p.lastRun
-        ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span>{' '}
-          <span className="muted" style={{ fontSize: 12 }}>{ago(p.lastRunAt)}</span></>
-        : <span className="muted">never</span>,
-    },
-    {
-      key: 'where', header: 'Where it lives',
-      value: p => p.url || p.repo || p.dir,
-      cell: p => <span className="mono muted" title={p.dir}>{p.url || p.repo || p.dir}</span>,
-    },
-    {
-      key: 'actions', header: '', width: 100, align: 'right', sortable: false,
-      cell: p => p.local ? null : (
-        <button className="ghost small danger-text" onClick={e => {
-          e.stopPropagation()
-          if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
-          api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
-            .catch(er => setErr(String(er.message || er)))
-        }}>Forget</button>),
-    },
-  ]
 
   return (
     <>
@@ -90,14 +45,41 @@ export default function ProjectsPage() {
       {note && <div className="banner ok">{note}</div>}
       {adding && <AddProject onDone={m => { setAdding(false); setNote(m); load() }} onError={setErr} />}
 
-      <div className="card">
-        {!projects ? <div className="muted">loading…</div> : (
-          <DataTable
-            rows={projects} columns={columns} getKey={p => p.name}
-            onRowClick={p => { location.hash = `#/projects/${encodeURIComponent(p.name)}` }}
-            initialSort={{ key: 'last', dir: 'desc' }}
-            searchPlaceholder="Search projects…"
-            empty="No projects yet. Add a repository that has a .wfx/workflows/ directory." />)}
+      {/* A list, not a table: a person comes here to pick one and open it.
+          Everything else about a project is on its own page. */}
+      <div className="card flush">
+        {!projects && <div className="empty">loading…</div>}
+        {projects?.length === 0 && <div className="empty">No projects yet. Add a repository that has a <span className="mono">.wfx/workflows/</span> directory.</div>}
+        <ul className="wflist projects">
+          {projects?.map(p => (
+            <li key={p.name} onClick={() => { location.hash = href.project(p.name) }}>
+              <span className={`dot ${p.lastRun || 'never'}`} />
+              <div className="wfmain">
+                <a href={href.project(p.name)} className="wfname" onClick={e => e.stopPropagation()}>{p.name}</a>
+                {p.local && <span className="pill" style={{ marginLeft: 8 }}>this platform</span>}
+                {!!p.problems?.length && <span className="badge failed" style={{ marginLeft: 8 }}>{p.problems.length} did not load</span>}
+                <div className="wfdesc mono" title={p.dir}>{p.url || p.repo || p.dir}</div>
+              </div>
+              <div className="wfmeta">
+                <span>{p.workflows?.length || 0} workflow{p.workflows?.length === 1 ? '' : 's'}</span>
+                <span>·</span>
+                <span>{p.runs || 0} run{p.runs === 1 ? '' : 's'}</span>
+              </div>
+              <div className="wflast">
+                {p.lastRun
+                  ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span><span className="muted">{ago(p.lastRunAt)}</span></>
+                  : <span className="muted">never run</span>}
+              </div>
+              <span onClick={e => e.stopPropagation()}>
+                {!p.local && (
+                  <button className="ghost small danger-text" onClick={() => {
+                    if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
+                    api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
+                      .catch(er => setErr(String(er.message || er)))
+                  }}>Forget</button>)}
+              </span>
+            </li>))}
+        </ul>
       </div>
 
       {projects?.some(p => p.problems?.length) && (

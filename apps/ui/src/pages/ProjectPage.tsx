@@ -1,29 +1,32 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import EnvStore from '../components/EnvStore'
 import StateStore from '../components/StateStore'
+import Crumbs, { Tabs } from '../components/Crumbs'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
-import FileList from '../components/FileList'
-import StepHarness from '../components/StepHarness'
-import WorkflowCanvas from '../components/WorkflowCanvas'
 import { ago } from '../lib/time'
-import { canDispatch, clip, sameWorkflow, shapeOf, summariseRun, triggerNames } from '../lib/workflow'
+import { href, shortName } from '../lib/routes'
+import { canDispatch, clip, sameWorkflow, summariseRun, triggerNames } from '../lib/workflow'
 
-/** One project: its workflows, and its runs. The middle of
- *  project → workflow → runs, and the view that answers "what happens in this
- *  repository, and did the last one work". */
-export default function ProjectPage({ name, workflow }: { name: string; workflow?: string }) {
+type Tab = 'workflows' | 'runs' | 'settings'
+
+/** One project, opened. What a person came here for is almost always one of
+ *  its workflows, so that is what the page leads with; the project-wide run
+ *  history and the project's settings are a tab away rather than stacked
+ *  underneath, where they used to push the workflows off the screen. */
+export default function ProjectPage({ name }: { name: string }) {
   const [project, setProject] = useState<Project>()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [err, setErr] = useState('')
+  const [tab, setTab] = useState<Tab>('workflows')
+  const [q, setQ] = useState('')
 
   const load = useCallback(() => {
-    Promise.all([api.project(name), api.workflows(), api.runs({ project: name, workflow })])
+    Promise.all([api.project(name), api.workflows(), api.runs({ project: name })])
       .then(([p, w, r]) => { setProject(p); setWorkflows(w); setRuns(r); setErr('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-  }, [name, workflow])
-
+  }, [name])
   useEffect(() => {
     load()
     const t = setInterval(load, 5000)
@@ -35,64 +38,17 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
   const mine = useMemo(
     () => workflows.filter(w => (w.source || 'local') === name),
     [workflows, name])
-
-  // The workflow this page is drilled into, when it is.
-  const def = useMemo(
-    () => (workflow ? mine.find(w => sameWorkflow(w.name, workflow)) : undefined),
-    [mine, workflow])
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    const hit = (w: Workflow) => !needle || w.name.includes(needle) || (w.description || '').toLowerCase().includes(needle)
+    const last = (w: Workflow) => runs.find(r => sameWorkflow(r.workflow, w.name))?.createdAt || ''
+    // Most recently run first, then the never-run ones by name: what happened
+    // lately is what a person opening a project wants to see first.
+    return mine.filter(hit).sort((a, b) => last(b).localeCompare(last(a)) || a.name.localeCompare(b.name))
+  }, [mine, runs, q])
 
   if (err) return <div className="banner err">{err}</div>
   if (!project) return <div className="muted">loading…</div>
-
-  const wfColumns: Column<Workflow>[] = [
-    {
-      key: 'name', header: 'Workflow', width: 210,
-      value: w => w.name,
-      cell: w => <span className="mono" style={{ fontWeight: 550 }}>{w.name}</span>,
-    },
-    {
-      key: 'runs', header: 'Runs', width: 80, align: 'right',
-      value: w => runs.filter(r => sameWorkflow(r.workflow, w.name)).length,
-      cell: w => {
-        const n = runs.filter(r => sameWorkflow(r.workflow, w.name)).length
-        return n ? <a href={`#/projects/${encodeURIComponent(name)}/${encodeURIComponent(w.name)}`}>{n}</a>
-          : <span className="muted">—</span>
-      },
-    },
-    {
-      key: 'last', header: 'Last run', width: 160,
-      value: w => runs.find(r => sameWorkflow(r.workflow, w.name))?.createdAt || '',
-      cell: w => {
-        const r = runs.find(x => sameWorkflow(x.workflow, w.name))
-        return r
-          ? <><span className={`badge ${r.status}`}>{r.status.replace(/_/g, ' ')}</span>{' '}
-            <span className="muted" style={{ fontSize: 12 }}>{ago(r.createdAt)}</span></>
-          : <span className="muted">never</span>
-      },
-    },
-    // THE WHOLE WORKFLOW, not just its name. A workflow is the YAML and
-    // whatever sits beside it, and a list that shows only the name is one you
-    // cannot reuse from: you copy it, and the first run fails on a script
-    // nobody told you about. Nothing is filtered — a README is listed like the
-    // run.js, because the reader is the one who knows what matters.
-    {
-      key: 'files', header: 'Files', width: 220, sortable: false,
-      cell: w => <FileList files={w.files} empty="just the YAML" />,
-    },
-    {
-      key: 'description', header: 'What it does',
-      value: w => w.description || '',
-      cell: w => <span title={w.description}>{clip(w.description || '', 90)}</span>,
-    },
-    {
-      key: 'actions', header: '', width: 120, align: 'right', sortable: false,
-      cell: w => (
-        <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', gap: 5 }}>
-          <a href={`#/workflows/${encodeURIComponent(w.name)}/edit`}><button className="ghost small">Edit</button></a>
-          <a href={`#/workflows/${encodeURIComponent(w.name)}/new`}><button className="small">Run</button></a>
-        </span>),
-    },
-  ]
 
   const runColumns: Column<Run>[] = [
     {
@@ -101,16 +57,16 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
       cell: r => <span className={`badge ${r.status}`}>{r.status.replace(/_/g, ' ')}</span>,
     },
     {
-      key: 'workflow', header: 'Workflow', width: 190,
+      key: 'workflow', header: 'Workflow', width: 180,
       value: r => r.workflow,
-      cell: r => <span className="mono">{r.workflow}</span>,
+      cell: r => <span className="mono">{shortName(r.workflow)}</span>,
     },
     {
       key: 'what', header: 'What it is about',
       value: r => summariseRun(r),
       cell: r => {
         const s = summariseRun(r)
-        return s ? <span title={s}>{clip(s, 80)}</span> : <span className="muted">—</span>
+        return s ? <span title={s}>{clip(s, 80)}</span> : <span className="muted mono">{r.id.slice(0, 8)}</span>
       },
     },
     {
@@ -119,16 +75,11 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
       cell: r => r.currentStep ? <span className="mono">{r.currentStep}</span> : <span className="muted">—</span>,
     },
     {
-      key: 'created', header: 'Started', width: 120,
+      key: 'created', header: 'Started', width: 110,
       value: r => r.createdAt,
       cell: r => <span className="muted" title={new Date(r.createdAt).toLocaleString()}>{ago(r.createdAt)}</span>,
     },
-    {
-      key: 'id', header: 'Run', value: r => r.id,
-      cell: r => <span className="mono muted">{r.id.slice(0, 8)}</span>,
-    },
   ]
-
   const runFilters: Filter<Run>[] = [
     { key: 'status', label: 'statuses', options: [...new Set(runs.map(r => r.status))].sort(), match: (r, v) => r.status === v },
     { key: 'workflow', label: 'workflows', options: [...new Set(runs.map(r => r.workflow))].sort(), match: (r, v) => r.workflow === v },
@@ -136,25 +87,13 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
 
   return (
     <>
+      <Crumbs items={[['Projects', href.projects()]]} />
       <div className="head">
         <div style={{ minWidth: 0 }}>
-          <div className="muted" style={{ fontSize: 12.5, marginBottom: 2 }}>
-            <a href="#/projects">Projects</a>
-            {workflow && <> / <a href={`#/projects/${encodeURIComponent(name)}`}>{name}</a></>}
-          </div>
-          <h1>{workflow || project.name}</h1>
-          {def?.description
-            ? <p>{def.description}</p>
-            : <p className="mono">{project.url || project.repo || project.dir}</p>}
+          <h1>{project.name}</h1>
+          <p className="mono">{project.url || project.repo || project.dir}</p>
         </div>
-        {!workflow && <a href="#/workflows/new"><button>New workflow</button></a>}
-        {def && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <a href={`#/workflows/${encodeURIComponent(def.name)}/edit`}><button className="ghost">Edit</button></a>
-            {canDispatch(def)
-              ? <a href={`#/workflows/${encodeURIComponent(def.name)}/new`}><button>Run</button></a>
-              : <button className="ghost" disabled title={`${def.name} is started by ${triggerNames(def).join(', ')}, not by hand`}>Run</button>}
-          </div>)}
+        <a href={href.newWorkflow(name)}><button>New workflow</button></a>
       </div>
 
       {!!project.problems?.length && (
@@ -165,61 +104,81 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
           </ul>
         </div>)}
 
-      {!workflow && (
-        <div className="card">
-          <div className="subhead"><h2>Workflows</h2><span className="muted" style={{ fontSize: 12.5 }}>{mine.length}</span></div>
-          <DataTable
-            rows={mine} columns={wfColumns} getKey={w => w.name}
-            onRowClick={w => { location.hash = `#/projects/${encodeURIComponent(name)}/${encodeURIComponent(w.name)}` }}
-            initialSort={{ key: 'last', dir: 'desc' }}
-            searchPlaceholder="Search workflows…"
-            empty={<>No workflows. Add YAML files to <span className="mono">.wfx/workflows/</span> in this repository.</>} />
+      <Tabs<Tab> value={tab} onChange={setTab} tabs={[
+        { key: 'workflows', label: 'Workflows', count: mine.length },
+        { key: 'runs', label: 'Runs', count: project.runs },
+        { key: 'settings', label: 'Settings' },
+      ]} />
+
+      {tab === 'workflows' && (
+        <div className="card flush">
+          {mine.length > 6 && (
+            <div className="listsearch">
+              <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search workflows…" aria-label="Search workflows" />
+            </div>)}
+          {mine.length === 0 && (
+            <div className="empty">
+              No workflows yet. <a href={href.newWorkflow(name)}>Create one</a>, or add YAML files to
+              {' '}<span className="mono">.wfx/workflows/</span> in this repository.
+            </div>)}
+          <ul className="wflist">
+            {shown.map(w => {
+              const wRuns = runs.filter(r => sameWorkflow(r.workflow, w.name))
+              const last = wRuns[0]
+              return (
+                <li key={w.name} onClick={() => { location.hash = href.workflow(name, w.name) }}>
+                  <span className={`dot ${last?.status || 'never'}`} title={last ? last.status.replace(/_/g, ' ') : 'never run'} />
+                  <div className="wfmain">
+                    <a href={href.workflow(name, w.name)} className="wfname mono" onClick={e => e.stopPropagation()}>{w.name}</a>
+                    <div className="wfdesc" title={w.description}>{w.description || <span className="muted">no description</span>}</div>
+                  </div>
+                  <div className="wfmeta">
+                    <span>{w.steps?.length || 0} step{w.steps?.length === 1 ? '' : 's'}</span>
+                    {/* A workflow is the YAML AND what sits beside it; a list
+                        that hid that would look reusable and not be. */}
+                    {!!w.files?.length && (
+                      <span title={w.files.map(f => f.path).join('\n')}>
+                        + {w.files.length} file{w.files.length === 1 ? '' : 's'}
+                      </span>)}
+                    {triggerNames(w).filter(t => t !== 'workflow_dispatch').map(t => (
+                      <span key={t} className="pill">{t.replace('workflow_', '')}</span>))}
+                  </div>
+                  <div className="wflast">
+                    {last
+                      ? <><span className={`badge ${last.status}`}>{last.status.replace(/_/g, ' ')}</span>
+                        <span className="muted">{ago(last.createdAt)}</span></>
+                      : <span className="muted">never run</span>}
+                  </div>
+                  <span onClick={e => e.stopPropagation()}>
+                    {canDispatch(w)
+                      ? <a href={href.startRun(name, w.name)}><button className="small">Run</button></a>
+                      : <button className="ghost small" disabled title={`${w.name} is started by ${triggerNames(w).join(', ')}, not by hand`}>Run</button>}
+                  </span>
+                </li>)
+            })}
+          </ul>
         </div>)}
 
-      {/* What the workflow IS: how it starts, its shape, and every step as the
-          agent it becomes. This used to sit on a separate flat Workflows page,
-          away from the runs it explains. */}
-      {def && (
+      {tab === 'runs' && (
         <div className="card">
-          <div className="subhead">
-            <h2>How it runs</h2>
-            <span style={{ display: 'inline-flex', gap: 4 }}>
-              {triggerNames(def).map(t => <span key={t} className="pill">{t.replace('workflow_', '')}</span>)}
-              <span className="pill">{shapeOf(def)}</span>
-              <span className="pill">{def.steps.length} step{def.steps.length === 1 ? '' : 's'}</span>
-            </span>
-          </div>
-          <div className="muted mono" style={{ fontSize: 12, marginBottom: 10 }}>{def.path}</div>
-          {def.steps.length > 1 && <WorkflowCanvas steps={def.steps} />}
-          <div style={{ marginTop: 14 }}>
-            {def.steps.map((s, i) => <StepHarness key={s.id} step={s} index={i} />)}
-          </div>
+          <DataTable
+            rows={runs} columns={runColumns} filters={runFilters}
+            getKey={r => r.id}
+            onRowClick={r => { location.hash = href.run(name, shortName(r.workflow), r.id) }}
+            rowClass={r => (r.status === 'failed' ? 'bad' : '')}
+            initialSort={{ key: 'created', dir: 'desc' }}
+            searchPlaceholder="Search runs…"
+            empty="Nothing has run here yet." />
         </div>)}
 
       {/* This repository's own environment — a token that can push here has no
-          business reaching a workflow from another project. Shown only on the
-          project itself, not when drilled into one of its workflows. */}
-      {!workflow && <EnvStore project={name} />}
-
-      {/* What this workflow remembers between runs — the answer to "why does
-          the scheduled run think it is already up to date?". On the project
-          itself, the project-wide namespace instead. */}
-      <StateStore workflow={workflow} project={workflow ? undefined : name} />
-
-      <div className="card">
-        <div className="subhead">
-          <h2>{workflow ? 'Runs of this workflow' : 'Recent runs'}</h2>
-          <span className="muted" style={{ fontSize: 12.5 }}>{project.runs} in total</span>
-        </div>
-        <DataTable
-          rows={runs} columns={runColumns} filters={workflow ? [runFilters[0]] : runFilters}
-          getKey={r => r.id}
-          onRowClick={r => { location.hash = `#/runs/${r.id}` }}
-          rowClass={r => (r.status === 'failed' ? 'bad' : '')}
-          initialSort={{ key: 'created', dir: 'desc' }}
-          searchPlaceholder="Search runs…"
-          empty="Nothing has run here yet." />
-      </div>
+          business reaching a workflow from another project — and what the
+          project remembers between runs. */}
+      {tab === 'settings' && (
+        <>
+          <EnvStore project={name} />
+          <StateStore project={name} />
+        </>)}
     </>
   )
 }

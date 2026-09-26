@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Template } from '../api'
 import FileList from '../components/FileList'
+import { href } from '../lib/routes'
 
 /** The gallery: workflows that exist to be copied.
  *
@@ -51,7 +52,7 @@ function TemplateCard({ t, onCopied, onError }: { t: Template; onCopied: () => v
   const copy = () => {
     setBusy(true)
     api.copyTemplate(t.name, as.trim())
-      .then(r => { location.hash = `#/workflows/${encodeURIComponent(r.name)}/edit`; onCopied() })
+      .then(r => { location.hash = href.edit('local', r.name); onCopied() })
       .catch(e => onError(String(e.message || e)))
       .finally(() => setBusy(false))
   }

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within, fireEvent } from '@testing-library/react'
 import App from './App'
 import { api, onUnauthenticated } from './api'
 import Identity from './components/Identity'
@@ -28,29 +28,34 @@ describe('the UI a person actually downloads', () => {
     await screen.findByText(/toolnexus · sqlite · folder/)
   })
 
-  test('lists the workflows on disk, in the tree under their project', async () => {
-    go('#/projects')
-    const tree = document.querySelector('.tree') as HTMLElement
-    await within(tree).findByText('deterministic')
-    await within(tree).findByText('failing')
-    // The flat lists are gone from the navigation; the tree replaced them.
-    expect(screen.queryByText('All runs')).toBeNull()
+  test("a project lists its workflows; the flat lists and the top-level builder are gone", async () => {
+    go('#/projects/local')
+    const list = await waitFor(() => { const l = document.querySelector('.wflist'); expect(l).toBeTruthy(); return l as HTMLElement })
+    await within(list).findByText('deterministic')
+    await within(list).findByText('failing')
+    const nav = document.querySelector('.top nav') as HTMLElement
+    expect(within(nav).queryByText('All runs')).toBeNull()
+    expect(within(nav).queryByText('Builder')).toBeNull()
+    expect(within(nav).queryByText('Workflows')).toBeNull()
+    // Making a workflow starts from the project it goes into.
+    expect(screen.getByText('New workflow').closest('a')?.getAttribute('href')).toBe('#/projects/local/+new')
   })
 
-  test("a run sits in the tree under its workflow, and is highlighted on its own page", async () => {
-    const run = await api.createRun('deterministic', { title: 'tree placement' })
+  test("a workflow's page lists its runs, and each opens under the workflow", async () => {
+    const run = await api.createRun('deterministic', { title: 'drill-down placement' })
     await waitFor(async () => {
       const d = await api.run(run.id)
       expect(d.run.status).toBe('done')
     }, { timeout: 20_000, interval: 250 })
 
-    go(`#/runs/${run.id}`)
-    const tree = document.querySelector('.tree') as HTMLElement
-    // The route points INTO the tree, so the workflow opens by itself and the
-    // run is the active row — named by what it is about, not by its id.
-    const row = await within(tree).findByText('tree placement')
-    await waitFor(() => expect(row.closest('.row')?.classList.contains('active')).toBe(true))
-    expect(row.closest('a')?.getAttribute('href')).toBe(`#/runs/${run.id}`)
+    go('#/projects/local/deterministic')
+    // A workflow that has run opens on its runs, named by what they are about.
+    await screen.findByText('drill-down placement')
+    expect(screen.getByRole('tab', { name: /Runs/ }).getAttribute('aria-selected')).toBe('true')
+    cleanup()
+
+    go(`#/projects/local/deterministic/runs/${run.id}`)
+    await screen.findByText('1. greet')
   })
 
   test('a run reaches done and its page renders a step with no skills or tools', async () => {
@@ -89,17 +94,26 @@ describe('the UI a person actually downloads', () => {
   // `carrier` is a directory-form workflow whose step runs a script beside it.
   // A list that showed only its name would look reusable and not be: you copy
   // it, and the first run fails on a file nobody mentioned. So the project's
-  // table names every file — including the README, which the platform has no
-  // idea about and carries anyway.
+  // list says it carries files, and the workflow's page names every one —
+  // including the README, which the platform has no idea about and carries anyway.
   test("a project's workflows list the files that travel with them", async () => {
     go('#/projects/local')
     await screen.findByText('carrier')
+    await screen.findByText('+ 3 files')
+    cleanup()
+
+    go('#/projects/local/carrier')
+    fireEvent.click(await screen.findByRole('tab', { name: /Steps/ }))
     await screen.findByText('greet.sh')
     await screen.findByText('lib/phrase.sh')
     await screen.findByText('README.md')
     // With sizes, so "is this the whole thing" is answerable from the list.
     expect(screen.getAllByText(/\d+ B$/).length).toBeGreaterThan(0)
+    cleanup()
+
     // And a flat one-file workflow says so rather than showing nothing.
+    go('#/projects/local/deterministic')
+    fireEvent.click(await screen.findByRole('tab', { name: /Steps/ }))
     await screen.findAllByText('just the YAML')
   })
 
@@ -127,6 +141,7 @@ describe('the UI a person actually downloads', () => {
     await api.setState({ scope: 'global', key: 'tier', value: 'pro' })
 
     go('#/projects/local/deterministic')
+    fireEvent.click(await screen.findByRole('tab', { name: /Memory/ }))
     await screen.findByText('last_id')
     await screen.findByText('4120')
     // The global namespace is shared, so it shows here too — labelled, because
@@ -137,7 +152,7 @@ describe('the UI a person actually downloads', () => {
   })
 
   test('every page renders without throwing', async () => {
-    for (const route of ['#/projects', '#/projects/local', '#/projects/local/deterministic', '#/runs', '#/workflows', '#/templates', '#/workflows/new', '#/skills', '#/workers', '#/system']) {
+    for (const route of ['#/projects', '#/projects/local', '#/projects/local/deterministic', '#/projects/local/+new', '#/projects/local/deterministic/edit', '#/projects/local/deterministic/run', '#/workflows/new', '#/templates', '#/skills', '#/workers', '#/system']) {
       const { container, unmount } = go(route)
       // An app that threw renders nothing; this is the cheap general detector
       // for the whole class of bug.
