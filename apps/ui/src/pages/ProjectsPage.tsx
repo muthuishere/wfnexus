@@ -78,7 +78,12 @@ export default function ProjectsPage() {
             and every run of them belong to it.
           </p>
         </div>
-        <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'Add project'}</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="ghost" onClick={() => api.reload()
+            .then(w => { setNote(`Reloaded — ${w.length} workflow(s).`); load() })
+            .catch(e => setErr(e instanceof Error ? e.message : String(e)))}>Reload from disk</button>
+          <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'Add project'}</button>
+        </div>
       </div>
 
       {err && <div className="banner err">{err}</div>}

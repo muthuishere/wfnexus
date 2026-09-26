@@ -144,7 +144,7 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
         </div>
         <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
           <button className="ghost" onClick={() => setShowYaml(!showYaml)}>{showYaml ? 'Hide' : 'Show'} YAML</button>
-          <a href="#/workflows"><button className="ghost">Back</button></a>
+          <button className="ghost" onClick={() => history.back()}>Back</button>
           <button disabled={busy || blocked > 0} onClick={save}>
             {busy ? 'saving…' : blocked ? `${blocked} problem${blocked > 1 ? 's' : ''} to fix` : editing ? 'Save workflow' : 'Create workflow'}
           </button>

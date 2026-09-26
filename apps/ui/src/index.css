@@ -431,3 +431,55 @@ pre {
 .log .ev.rejection .tag { background: var(--warn); color: #fff }
 .log .ev.delegation .tag { background: var(--blue-600); color: #fff }
 @media (max-width: 720px) { .log .ev { grid-template-columns: 1fr } }
+
+/* ── the tree: project → workflow → runs ─────────────────────────────────── */
+.shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: calc(100vh - 56px) }
+.shell > .page { max-width: 1400px; width: 100%; margin: 0; min-width: 0 }
+.tree {
+  position: sticky; top: 56px; align-self: start;
+  height: calc(100vh - 56px); overflow-y: auto;
+  background: var(--surface); border-right: 1px solid var(--border);
+  padding: 12px 8px 24px; font-size: 13px;
+}
+.tree ul { list-style: none; margin: 0; padding: 0 }
+.tree ul ul { margin-left: 11px; padding-left: 6px; border-left: 1px solid var(--border) }
+.tree-search { padding: 0 4px 10px }
+.tree-search input { padding: 6px 9px; font-size: 12.5px }
+.tree-note { color: var(--muted); font-size: 12px; padding: 4px 10px }
+.tree-note.err { color: var(--err) }
+.tree .row {
+  display: flex; align-items: center; gap: 4px; min-width: 0;
+  padding: 3px 6px 3px 2px; border-radius: 6px; color: var(--text-2);
+}
+.tree .row:hover { background: var(--blue-50) }
+.tree .row.active { background: var(--blue-100); color: var(--blue-700) }
+.tree .row.active .name { font-weight: 600 }
+.tree .chev {
+  flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: none;
+  color: var(--muted); font-size: 10px; line-height: 18px; border-radius: 4px; cursor: pointer;
+}
+.tree .chev:hover:not(:disabled) { background: var(--blue-100); color: var(--blue-600); border: 0 }
+.tree .label { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; color: inherit; text-decoration: none }
+.tree .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0 }
+.tree .row.project { margin-top: 4px }
+.tree .row.project .name { font-weight: 600; color: var(--text); font-size: 13px }
+.tree .row.workflow .name.mono { font-size: 12.5px }
+.tree .count {
+  flex: none; margin-left: auto; font-size: 11px; color: var(--muted);
+  background: var(--raised); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px;
+}
+.tree .row.run { padding-left: 8px; gap: 7px; font-size: 12.5px; text-decoration: none }
+.tree .row.run .when { flex: none; margin-left: auto; color: var(--muted); font-size: 11px }
+.tree .row.more { padding-left: 23px; font-size: 12px; color: var(--blue-600); text-decoration: none }
+.tree .indent { padding-left: 24px }
+.tree .indent2 { padding-left: 14px }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong) }
+.dot.done, .dot.approved { background: var(--ok) }
+.dot.failed, .dot.rejected, .dot.cancelled { background: var(--err) }
+.dot.running, .dot.queued { background: var(--info); box-shadow: 0 0 0 3px var(--info-bg) }
+.dot.awaiting_approval, .dot.needs_input { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg) }
+.dot.never { background: transparent; border: 1.5px solid var(--border-strong) }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr }
+  .tree { position: static; height: auto; max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border) }
+}

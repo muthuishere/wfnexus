@@ -4,7 +4,10 @@ import StateStore from '../components/StateStore'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import FileList from '../components/FileList'
+import StepHarness from '../components/StepHarness'
+import WorkflowCanvas from '../components/WorkflowCanvas'
 import { ago } from '../lib/time'
+import { canDispatch, clip, sameWorkflow, shapeOf, summariseRun, triggerNames } from '../lib/workflow'
 
 /** One project: its workflows, and its runs. The middle of
  *  project → workflow → runs, and the view that answers "what happens in this
@@ -32,6 +35,11 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
   const mine = useMemo(
     () => workflows.filter(w => (w.source || 'local') === name),
     [workflows, name])
+
+  // The workflow this page is drilled into, when it is.
+  const def = useMemo(
+    () => (workflow ? mine.find(w => sameWorkflow(w.name, workflow)) : undefined),
+    [mine, workflow])
 
   if (err) return <div className="banner err">{err}</div>
   if (!project) return <div className="muted">loading…</div>
@@ -98,6 +106,14 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
       cell: r => <span className="mono">{r.workflow}</span>,
     },
     {
+      key: 'what', header: 'What it is about',
+      value: r => summariseRun(r),
+      cell: r => {
+        const s = summariseRun(r)
+        return s ? <span title={s}>{clip(s, 80)}</span> : <span className="muted">—</span>
+      },
+    },
+    {
       key: 'step', header: 'Step', width: 150,
       value: r => r.currentStep || '',
       cell: r => r.currentStep ? <span className="mono">{r.currentStep}</span> : <span className="muted">—</span>,
@@ -127,9 +143,18 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
             {workflow && <> / <a href={`#/projects/${encodeURIComponent(name)}`}>{name}</a></>}
           </div>
           <h1>{workflow || project.name}</h1>
-          <p className="mono">{project.url || project.repo || project.dir}</p>
+          {def?.description
+            ? <p>{def.description}</p>
+            : <p className="mono">{project.url || project.repo || project.dir}</p>}
         </div>
         {!workflow && <a href="#/workflows/new"><button>New workflow</button></a>}
+        {def && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <a href={`#/workflows/${encodeURIComponent(def.name)}/edit`}><button className="ghost">Edit</button></a>
+            {canDispatch(def)
+              ? <a href={`#/workflows/${encodeURIComponent(def.name)}/new`}><button>Run</button></a>
+              : <button className="ghost" disabled title={`${def.name} is started by ${triggerNames(def).join(', ')}, not by hand`}>Run</button>}
+          </div>)}
       </div>
 
       {!!project.problems?.length && (
@@ -149,6 +174,26 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
             initialSort={{ key: 'last', dir: 'desc' }}
             searchPlaceholder="Search workflows…"
             empty={<>No workflows. Add YAML files to <span className="mono">.wfx/workflows/</span> in this repository.</>} />
+        </div>)}
+
+      {/* What the workflow IS: how it starts, its shape, and every step as the
+          agent it becomes. This used to sit on a separate flat Workflows page,
+          away from the runs it explains. */}
+      {def && (
+        <div className="card">
+          <div className="subhead">
+            <h2>How it runs</h2>
+            <span style={{ display: 'inline-flex', gap: 4 }}>
+              {triggerNames(def).map(t => <span key={t} className="pill">{t.replace('workflow_', '')}</span>)}
+              <span className="pill">{shapeOf(def)}</span>
+              <span className="pill">{def.steps.length} step{def.steps.length === 1 ? '' : 's'}</span>
+            </span>
+          </div>
+          <div className="muted mono" style={{ fontSize: 12, marginBottom: 10 }}>{def.path}</div>
+          {def.steps.length > 1 && <WorkflowCanvas steps={def.steps} />}
+          <div style={{ marginTop: 14 }}>
+            {def.steps.map((s, i) => <StepHarness key={s.id} step={s} index={i} />)}
+          </div>
         </div>)}
 
       {/* This repository's own environment — a token that can push here has no
@@ -178,13 +223,3 @@ export default function ProjectPage({ name, workflow }: { name: string; workflow
     </>
   )
 }
-
-/** A workflow is reachable by its short name and as `project/name`, so a run
- *  recorded under either spelling belongs to the same workflow. */
-function sameWorkflow(runWorkflow: string, name: string): boolean {
-  if (runWorkflow === name) return true
-  const tail = (s: string) => (s.includes('/') ? s.slice(s.indexOf('/') + 1) : s)
-  return tail(runWorkflow) === tail(name)
-}
-
-function clip(s: string, n: number) { return s.length > n ? s.slice(0, n) + '…' : s }

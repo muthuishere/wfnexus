@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
-import WorkflowsPage from './pages/WorkflowsPage'
 import NewRunPage from './pages/NewRunPage'
 import RunPage from './pages/RunPage'
-import RunsPage from './pages/RunsPage'
 import SkillsPage from './pages/SkillsPage'
 import WorkflowBuilderPage from './pages/WorkflowBuilderPage'
 import SystemPage from './pages/SystemPage'
@@ -12,12 +10,16 @@ import ProjectPage from './pages/ProjectPage'
 import WorkersPage from './pages/WorkersPage'
 import TemplatesPage from './pages/TemplatesPage'
 import Identity from './components/Identity'
+import ProjectTree from './components/ProjectTree'
 
 // tiny hash router. The hierarchy is project → workflow → runs, so the routes
 // read that way too:
 //   #/projects · #/projects/:name · #/projects/:name/:workflow
-//   #/workflows · #/workflows/new · #/workflows/:name/edit · #/workflows/:name/new
-//   #/runs · #/runs/:id · #/skills · #/workers · #/system
+//   #/workflows/new · #/workflows/:name/edit · #/workflows/:name/new
+//   #/runs/:id · #/skills · #/workers · #/system
+// There is no flat "every run" or "every workflow" page any more: the tree down
+// the left IS that list, grouped the way the question is asked. The old
+// `#/runs` and `#/workflows` addresses land on Projects rather than breaking.
 function useRoute() {
   const [h, setH] = useState(location.hash || '#/projects')
   useEffect(() => { const f = () => setH(location.hash || '#/projects'); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f) }, [])
@@ -37,24 +39,24 @@ export default function App() {
   if (r[0] === 'projects' && r[1] && r[2]) page = <ProjectPage name={decodeURIComponent(r[1])} workflow={decodeURIComponent(r[2])} />
   else if (r[0] === 'projects' && r[1]) page = <ProjectPage name={decodeURIComponent(r[1])} />
   else if (r[0] === 'projects') page = <ProjectsPage />
-  else if (r[0] === 'runs' && !r[1]) page = <RunsPage />
   else if (r[0] === 'workflows' && r[1] === 'new' && !r[2]) page = <WorkflowBuilderPage />
   else if (r[0] === 'workflows' && r[2] === 'edit') page = <WorkflowBuilderPage name={r[1]} />
   else if (r[0] === 'workflows' && r[2] === 'new') page = <NewRunPage name={r[1]} />
-  else if (r[0] === 'workflows') page = <WorkflowsPage />
   else if (r[0] === 'runs' && r[1]) page = <RunPage id={r[1]} />
   else if (r[0] === 'skills') page = <SkillsPage />
   else if (r[0] === 'templates') page = <TemplatesPage />
   else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
+  // The tree sits beside the pages that live IN the hierarchy — a project, a
+  // workflow, a run, starting a run. The builder and the settings pages get the
+  // full width; they are about the platform, not about one place in the tree.
+  const inTree = r[0] === 'projects' || r[0] === 'runs' || (r[0] === 'workflows' && (r[2] === 'new' || !r[1])) || !r[0]
   return (
     <>
       <div className="top">
         <div className="brand">wf<span>nexus</span></div>
         <nav>
-          <a href="#/projects" className={r[0] === 'projects' ? 'active' : ''}>Projects</a>
-          <a href="#/runs" className={r[0] === 'runs' ? 'active' : ''}>All runs</a>
-          <a href="#/workflows" className={r[0] === 'workflows' && r[1] !== 'new' && r[2] !== 'edit' ? 'active' : ''}>Workflows</a>
+          <a href="#/projects" className={inTree ? 'active' : ''}>Projects</a>
           <a href="#/templates" className={r[0] === 'templates' ? 'active' : ''}>Templates</a>
           <a href="#/workflows/new" className={r[0] === 'workflows' && (r[1] === 'new' || r[2] === 'edit') ? 'active' : ''}>Builder</a>
           <a href="#/skills" className={r[0] === 'skills' ? 'active' : ''}>Skills &amp; tools</a>
@@ -67,7 +69,9 @@ export default function App() {
           <Identity />
         </div>
       </div>
-      <div className="page">{page}</div>
+      {inTree
+        ? <div className="shell"><ProjectTree route={r} /><div className="page">{page}</div></div>
+        : <div className="page">{page}</div>}
     </>
   )
 }

@@ -42,7 +42,7 @@ export default function NewRunPage({ name }: { name: string }) {
           {p.description && <div className="muted" style={{ fontSize: 12 }}>{p.description}</div>}
         </div>
       ))}
-      <div className="actions"><button disabled={busy || required.some(k => !vals[k])} onClick={submit}>{busy ? 'starting…' : 'Start run'}</button><a href="#/workflows"><button className="ghost">Cancel</button></a></div>
+      <div className="actions"><button disabled={busy || required.some(k => !vals[k])} onClick={submit}>{busy ? 'starting…' : 'Start run'}</button><button className="ghost" onClick={() => history.back()}>Cancel</button></div>
     </div>
   )
 }

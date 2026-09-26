@@ -28,10 +28,29 @@ describe('the UI a person actually downloads', () => {
     await screen.findByText(/toolnexus · sqlite · folder/)
   })
 
-  test('lists the workflows on disk', async () => {
-    go('#/workflows')
-    await screen.findByText('deterministic')
-    await screen.findByText('failing')
+  test('lists the workflows on disk, in the tree under their project', async () => {
+    go('#/projects')
+    const tree = document.querySelector('.tree') as HTMLElement
+    await within(tree).findByText('deterministic')
+    await within(tree).findByText('failing')
+    // The flat lists are gone from the navigation; the tree replaced them.
+    expect(screen.queryByText('All runs')).toBeNull()
+  })
+
+  test("a run sits in the tree under its workflow, and is highlighted on its own page", async () => {
+    const run = await api.createRun('deterministic', { title: 'tree placement' })
+    await waitFor(async () => {
+      const d = await api.run(run.id)
+      expect(d.run.status).toBe('done')
+    }, { timeout: 20_000, interval: 250 })
+
+    go(`#/runs/${run.id}`)
+    const tree = document.querySelector('.tree') as HTMLElement
+    // The route points INTO the tree, so the workflow opens by itself and the
+    // run is the active row — named by what it is about, not by its id.
+    const row = await within(tree).findByText('tree placement')
+    await waitFor(() => expect(row.closest('.row')?.classList.contains('active')).toBe(true))
+    expect(row.closest('a')?.getAttribute('href')).toBe(`#/runs/${run.id}`)
   })
 
   test('a run reaches done and its page renders a step with no skills or tools', async () => {
@@ -118,7 +137,7 @@ describe('the UI a person actually downloads', () => {
   })
 
   test('every page renders without throwing', async () => {
-    for (const route of ['#/projects', '#/runs', '#/workflows', '#/templates', '#/workflows/new', '#/skills', '#/workers', '#/system']) {
+    for (const route of ['#/projects', '#/projects/local', '#/projects/local/deterministic', '#/runs', '#/workflows', '#/templates', '#/workflows/new', '#/skills', '#/workers', '#/system']) {
       const { container, unmount } = go(route)
       // An app that threw renders nothing; this is the cheap general detector
       // for the whole class of bug.
