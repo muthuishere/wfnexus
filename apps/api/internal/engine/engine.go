@@ -30,6 +30,9 @@ import (
 )
 
 type Engine struct {
+	// redactions holds each run's sensitive values so no event stores one.
+	redactions runSecrets
+
 	cfg     config.Config
 	store   Store
 	blob    Artifacts
@@ -417,6 +420,8 @@ func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *model.Event, func()) {
 }
 
 func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string, payload any) {
+	// Before ANY destination — the store, the live stream, a worker's sink.
+	payload = redactEvent(payload, e.redactions.get(runID))
 	// A worker has no event table. Its activity is posted back to the platform,
 	// which appends it to the run's log — so the live view of a step running on
 	// somebody's Windows box is the same view as one running here.
@@ -749,7 +754,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		input = map[string]any{}
 	}
 
-	workdir, err := e.prepareWorkspace(ctx, runID, input)
+	workdir, err := e.prepareWorkspace(ctx, runID, withRepoDefault(input, def.RepoDir))
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
@@ -894,6 +899,33 @@ func gateHit(g workflow.Gate, out map[string]any) bool {
 	}
 	// json numbers decode as float64; compare via JSON text to be type-lenient
 	return string(mustJSON(v)) == string(mustJSON(g.Equals))
+}
+
+// withRepoDefault makes a project's own repository the default a run acts on.
+//
+// RepoDir was documented as exactly that — "the default repo a run of it acts
+// on" — and nothing read it: a project workflow with no repo_path input ran in
+// an empty directory, so an agent asked to find a cause "in this repository"
+// found no repository (reqsume-prod-watch, first rehearsal). The run still gets
+// its own worktree unless the input opts out with isolate: false, so a project
+// checkout is never worked in directly by default. An explicit repo_path or
+// repo_url always wins.
+func withRepoDefault(input map[string]any, repoDir string) map[string]any {
+	if repoDir == "" {
+		return input
+	}
+	if p, _ := input["repo_path"].(string); p != "" {
+		return input
+	}
+	if u, _ := input["repo_url"].(string); u != "" {
+		return input
+	}
+	out := make(map[string]any, len(input)+1)
+	for k, v := range input {
+		out[k] = v
+	}
+	out["repo_path"] = repoDir
+	return out
 }
 
 // prepareWorkspace returns the repo directory for this run: input.repo_path is

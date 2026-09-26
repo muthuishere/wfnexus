@@ -124,6 +124,17 @@ func normalizeRef(ref string) string {
 
 // shellQuote makes a literal safe inside single quotes, the only quoting a
 // POSIX shell does not reinterpret.
+// ShellQuote single-quotes a value for a POSIX shell.
+func ShellQuote(s string) string { return shellQuote(s) }
+
+// IsEnvRef reports whether a value is (or contains) a ${VAR} reference, which
+// the child shell expands itself — no value is rendered.
+func IsEnvRef(v string) bool { return envRef.MatchString(v) }
+
+// SecretName reports whether a variable NAME almost certainly holds a
+// credential (the same rule CheckEnv refuses literals by).
+func SecretName(k string) bool { return secretish.MatchString(k) }
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -112,7 +112,14 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	if err != nil {
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
-	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), env)
+	// Sensitive values reach the agent's shell through a 0600 file sourced by
+	// path, never written into the command the tool call records (redact.go).
+	secretPrefix, shellEnv, dropSecrets, err := e.secretEnvFile(runID, step.ID, env, e.redactions.sealedNames(runID))
+	if err != nil {
+		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	defer dropSecrets()
+	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), shellEnv, secretPrefix)
 
 	// The provider is resolved BEFORE the metric sink because the sink needs
 	// its price: cost is computed as the tokens arrive, not reconstructed
@@ -321,14 +328,14 @@ func (e *Engine) buildToolkit(ctx context.Context, label string, skillNames, too
 // run's workspace, and warn the agent when it is running out of turns.
 //
 // turns is the step's turn ceiling (0 ⇒ none), needed for that last part.
-func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string, turns int, env map[string]string) *tn.Hooks {
+func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir string, turns int, env map[string]string, secretPrefix string) *tn.Hooks {
 	// The builtin `bash` tool has no env argument and inherits this process's
 	// environment, so a step's own env goes in front of the command. A
 	// reference is left AS a reference — GH_TOKEN="${GITHUB_PAT}" — which the
 	// child shell expands from what it already inherited. The value is
 	// therefore never rendered, never logged, and never part of the tool call
 	// the run records; only the name is, which is what the file says anyway.
-	envPrefix := workflow.ShellPrefix(env)
+	envPrefix := secretPrefix + workflow.ShellPrefix(env)
 	return &tn.Hooks{
 		// The soul states the budget once, at turn 0. That is necessary and it is
 		// not sufficient: `triage/classify` was told it had 15 turns, spent all 15

@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -438,6 +439,70 @@ func inputsFrom(args []string) (map[string]any, error) {
 	return input, nil
 }
 
+// typedInputs converts `-i key=value` strings to the type the workflow's
+// input_schema declares. A shell has only strings, and the server — rightly —
+// validates types, so without this no workflow with an integer or boolean
+// input could be started from the command line at all.
+func typedInputs(workflow string, in map[string]any) (map[string]any, error) {
+	var def struct {
+		InputSchema struct {
+			Properties map[string]struct {
+				Type any `json:"type"`
+			} `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	if err := call("GET", "/api/workflows/"+url.PathEscape(workflow), nil, &def); err != nil {
+		return in, nil // the run request will report a missing workflow itself
+	}
+	out := map[string]any{}
+	for k, v := range in {
+		s, _ := v.(string)
+		typ := ""
+		if p, ok := def.InputSchema.Properties[k]; ok {
+			switch t := p.Type.(type) {
+			case string:
+				typ = t
+			case []any:
+				for _, x := range t {
+					if xs, _ := x.(string); xs != "" && xs != "null" {
+						typ = xs
+						break
+					}
+				}
+			}
+		}
+		switch typ {
+		case "integer":
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants an integer, got %q", k, s)
+			}
+			out[k] = n
+		case "number":
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants a number, got %q", k, s)
+			}
+			out[k] = f
+		case "boolean":
+			b, err := strconv.ParseBool(s)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants true or false, got %q", k, s)
+			}
+			out[k] = b
+		case "array", "object":
+			var j any
+			if err := json.Unmarshal([]byte(s), &j); err != nil {
+				return nil, fmt.Errorf("input %s wants JSON (%s), got %q", k, typ, s)
+			}
+			out[k] = j
+		default:
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
 func startRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f]")
@@ -445,6 +510,9 @@ func startRun(args []string) error {
 	name := args[0]
 	input, err := inputsFrom(args[1:])
 	if err != nil {
+		return err
+	}
+	if input, err = typedInputs(name, input); err != nil {
 		return err
 	}
 	// POST answers with the same envelope as GET /api/runs/{id}: the run under
@@ -734,9 +802,9 @@ func projects(args []string) error {
 	var list []struct {
 		Name, Dir, Repo, URL, LastRun, LastRunAt, Category string
 		Local                                              bool
-		Workflows                                []string
-		Runs                                     int
-		Problems                                 []struct{ Location, Reason string }
+		Workflows                                          []string
+		Runs                                               int
+		Problems                                           []struct{ Location, Reason string }
 	}
 	if err := call("GET", "/api/projects", nil, &list); err != nil {
 		return err
