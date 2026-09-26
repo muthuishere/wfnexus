@@ -128,9 +128,13 @@ export type Provider = {
   baseUrl?: string; style?: string; model?: string; apiKeyEnv?: string
   preset?: string; command?: string[]; args?: string[]; repairs?: number; timeoutSec?: number
 }
+/** A classifier registry entry — toolnexus ClassifierOptions, field for field.
+ *  `backend` may be empty when `baseUrl` is given: the JEV wire at that URL. */
 export type Classifier = {
-  name: string; description?: string; backend: string
+  name: string; description?: string; backend?: string
   baseUrl?: string; model?: string; apiKeyEnv?: string
+  headers?: Record<string, string>; timeoutSec?: number; retries?: number
+  retryableStatuses?: number[]; requestParams?: Record<string, unknown>
 }
 export type McpServer = { name: string; description?: string; command?: string; args?: string[]; url?: string }
 export type Skipped = { location: string; reason: string }

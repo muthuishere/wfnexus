@@ -297,6 +297,7 @@ function ProviderForm({ models, onSave }: { models: string[]; onSave: (p: Provid
 
 function ClassifierForm({ onSave }: { onSave: (c: Classifier) => void }) {
   const [c, setC] = useState<Classifier>({ name: '', backend: 'openrouter' })
+  const [headerText, setHeaderText] = useState('')
   const set = (patch: Partial<Classifier>) => setC({ ...c, ...patch })
   return (
     <div className="card">
@@ -305,8 +306,9 @@ function ClassifierForm({ onSave }: { onSave: (c: Classifier) => void }) {
         <Field label="Name" hint="What a `judge` step writes in `classifier:`.">
           <input value={c.name} onChange={e => set({ name: e.target.value })} placeholder="jev" />
         </Field>
-        <Field label="Backend" hint="typesafe and openrouter set base, model and key variable as a unit — assembling them by hand is how you end up with one provider's model spelling against another's base.">
-          <select value={c.backend} onChange={e => set({ backend: e.target.value })}>
+        <Field label="Backend" hint="typesafe and openrouter set base, model and key variable as a unit. Or pick none and give a Base URL: any endpoint speaking the JEV wire — self-hosted, a proxy, a gateway.">
+          <select value={c.backend || ''} onChange={e => set({ backend: e.target.value || undefined })}>
+            <option value="">none — use the Base URL below</option>
             <option value="openrouter">openrouter</option>
             <option value="typesafe">typesafe</option>
             <option value="llm">llm — a chat model answering the same typed questions</option>
@@ -315,12 +317,33 @@ function ClassifierForm({ onSave }: { onSave: (c: Classifier) => void }) {
         </Field>
         <Field label="Description"><input value={c.description || ''} onChange={e => set({ description: e.target.value })} /></Field>
         <Field label="Model"><input className="mono" value={c.model || ''} onChange={e => set({ model: e.target.value })} /></Field>
-        <Field label="Base URL"><input className="mono" value={c.baseUrl || ''} onChange={e => set({ baseUrl: e.target.value })} /></Field>
-        <Field label="API key variable" hint="A variable's NAME, never a key.">
-          <input className="mono" value={c.apiKeyEnv || ''} onChange={e => set({ apiKeyEnv: e.target.value })} />
+        <Field label="Base URL"><input className="mono" value={c.baseUrl || ''} placeholder="https://jev.internal/v1" onChange={e => set({ baseUrl: e.target.value || undefined })} /></Field>
+        <Field label="API key variable" hint="A variable's NAME, never a key. Empty for an endpoint that takes none.">
+          <input className="mono" value={c.apiKeyEnv || ''} onChange={e => set({ apiKeyEnv: e.target.value || undefined })} />
+        </Field>
+        <Field label="Headers" hint="One per line, Name: value. A credential header must reference a variable — Authorization: Bearer ${JEV_KEY} — and is expanded at call time, never stored.">
+          <textarea className="mono" style={{ minHeight: 64 }} value={headerText}
+            onChange={e => { setHeaderText(e.target.value); set({ headers: parseHeaders(e.target.value) }) }}
+            placeholder={'X-Tenant: acme\nAuthorization: Bearer ${JEV_KEY}'} />
+        </Field>
+        <Field label="Timeout (seconds) · Retries" hint="Per request. Empty means the library's defaults.">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input type="number" min={1} value={c.timeoutSec ?? ''} placeholder="timeout" onChange={e => set({ timeoutSec: e.target.value ? Number(e.target.value) : undefined })} />
+            <input type="number" min={0} value={c.retries ?? ''} placeholder="retries" onChange={e => set({ retries: e.target.value ? Number(e.target.value) : undefined })} />
+          </div>
         </Field>
       </div>
-      <button disabled={!c.name} onClick={() => onSave(c)}>Save classifier</button>
+      <button disabled={!c.name || (!c.backend && !c.baseUrl)} onClick={() => onSave(c)}>Save classifier</button>
     </div>
   )
+}
+
+/** "Name: value" lines → a header map; blank and malformed lines are dropped. */
+function parseHeaders(text: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const i = line.indexOf(':')
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+  }
+  return Object.keys(out).length ? out : undefined
 }

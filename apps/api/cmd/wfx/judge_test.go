@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tn "github.com/muthuishere/toolnexus/golang"
 )
 
 func TestJudgeBandsFlag(t *testing.T) {
@@ -38,8 +44,46 @@ func TestJudgeItems(t *testing.T) {
 func TestJudgeNamesAMissingKey(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	_, _, err := judgeClassifier("", "", "")
+	_, _, err := judgeClassifier(nil)
 	if err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Fatalf("want a refusal naming OPENROUTER_API_KEY, got %v", err)
+	}
+}
+
+// A bare URL is a classifier: the flags reach the wire exactly as toolnexus
+// ClassifierOptions would send them — model in the body, a ${VAR} header
+// expanded at call time, an extra body field typed.
+func TestJudgeAtAURLCarriesEveryOption(t *testing.T) {
+	var got struct {
+		model, auth string
+		temp        any
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got.model, _ = body["model"].(string)
+		got.temp = body["seed"]
+		got.auth = r.Header.Get("X-Judge-Auth")
+		http.Error(w, "recorded", http.StatusTeapot)
+	}))
+	defer srv.Close()
+	t.Setenv("JUDGE_TEST_TOKEN", "NOT_A_REAL_TOKEN")
+
+	c, label, err := judgeClassifier([]string{"--url", srv.URL, "--model", "jev-selfhosted",
+		"--header", "X-Judge-Auth=Bearer ${JUDGE_TEST_TOKEN}", "--param", "seed=7", "--retries", "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(label, "jev-selfhosted") {
+		t.Errorf("label %q does not name the model", label)
+	}
+	_, _ = c.Evaluate(context.Background(), "s", map[string]tn.Question{"q": tn.NoulQuestion{Instructions: "?"}})
+	if got.model != "jev-selfhosted" || got.auth != "Bearer NOT_A_REAL_TOKEN" || got.temp != float64(7) {
+		t.Fatalf("the endpoint saw model=%q auth-set=%v seed=%v", got.model, got.auth != "", got.temp)
+	}
+
+	// A key written straight into a credential header is refused before any call.
+	if _, _, err := judgeClassifier([]string{"--url", srv.URL, "--header", "Authorization=Bearer abc123"}); err == nil {
+		t.Fatal("a literal credential header was accepted")
 	}
 }

@@ -7,6 +7,7 @@ package judge
 
 import (
 	"fmt"
+	"time"
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
@@ -123,14 +124,29 @@ func Read(d tn.Decision, qs map[string]workflow.Question, b Bands) (map[string]A
 // `wfx judge --classifier jev-2`, through this one function.
 //
 // keyEnv is the NAME of the variable the key is read from, for an error that
-// says which one is missing. The value is never read here.
+// says which one is missing — empty when the endpoint takes none (a bare URL
+// with no apiKeyEnv). The value is never read here.
 func Options(c catalog.Classifier) (opts tn.ClassifierOptions, keyEnv string, err error) {
-	opts = tn.ClassifierOptions{Style: tn.StyleSystemOne, Model: c.Model, BaseURL: c.BaseURL, APIKeyEnv: c.APIKeyEnv}
+	opts = tn.ClassifierOptions{
+		Style: tn.StyleSystemOne, Model: c.Model, BaseURL: c.BaseURL, APIKeyEnv: c.APIKeyEnv,
+		Headers: c.Headers, Retries: c.Retries, RetryableStatuses: c.RetryableStatuses,
+		RequestParams: c.RequestParams,
+	}
+	if c.TimeoutSec > 0 {
+		opts.Timeout = time.Duration(c.TimeoutSec) * time.Second
+	}
 	switch c.Backend {
 	case "typesafe":
 		opts.Backend, keyEnv = tn.BackendTypeSafe, "TYPESAFE_API_KEY"
 	case "openrouter":
 		opts.Backend, keyEnv = tn.BackendOpenRouter, "OPENROUTER_API_KEY"
+	case "":
+		// A bare URL: the JEV wire at that endpoint, no vendor preset. It
+		// needs no key at all when it is a self-hosted judge behind the
+		// network, or one in a header — so none is assumed.
+		if c.BaseURL == "" {
+			return opts, "", fmt.Errorf("classifier %q: no backend and no baseUrl — nothing to call", c.Name)
+		}
 	default:
 		// llm and static need a chat client or a recorded corpus handed in by
 		// the caller; refusing by name beats a judge that silently answers

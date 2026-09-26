@@ -57,8 +57,9 @@ type judgeResult struct {
 }
 
 const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --state <text>)
-          [--classifier <name> | --backend typesafe|openrouter] [--model m]
-          [--parallel 8] [--bands 0.30,0.70]
+          [--classifier <name> | --backend typesafe|openrouter | --url <base>]
+          [--model m] [--key-env VAR] [--header K=V]... [--param k=v]...
+          [--timeout sec] [--retries n] [--parallel 8] [--bands 0.30,0.70]
 
   questions.yaml   the shape of a workflow's decide.questions:
                      dead:
@@ -73,7 +74,14 @@ const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --st
                    step gives in classifier:
   --backend        without --classifier: typesafe (TYPESAFE_API_KEY) or openrouter
                    (OPENROUTER_API_KEY); default typesafe when its key is set
+  --url            any endpoint speaking the JEV (systemone) wire — self-hosted,
+                   a proxy, a gateway; alone, or overriding an entry's base
   --model          any JEV model id, overriding the entry's or the backend's default
+  --key-env        the NAME of the variable holding the key (never the key)
+  --header K=V     extra header; credential headers must reference ${VAR}
+  --param k=v      extra request-body field (JSON values typed)
+  --timeout/--retries  per request, as toolnexus ClassifierOptions
+  Every option maps one-to-one onto toolnexus ClassifierOptions.
 
 Writes one JSON line per item to stdout, in input order, each noul with its band
 (no | uncertain | yes). A summary goes to stderr.`
@@ -108,7 +116,7 @@ func cmdJudge(args []string) error {
 		parallel = 1
 	}
 
-	c, backend, err := judgeClassifier(flagOf(args, "--backend", ""), flagOf(args, "--model", ""), flagOf(args, "--classifier", ""))
+	c, backend, err := judgeClassifier(args)
 	if err != nil {
 		return err
 	}
@@ -248,46 +256,104 @@ func parseBands(s string) (judge.Bands, error) {
 	return judge.Bands{Low: l, High: h}, nil
 }
 
-// judgeClassifier picks the judge: a named registry entry (`--classifier`,
-// any JEV model the install has configured — the same entry a workflow step
-// names with `classifier:`), else a bare backend. `--model` overrides the model
-// on either. The base URL, model and key variable travel with the backend as a
-// unit (judge.Options): one provider's model spelling against another's base
-// is the failure a hand-assembled config produces. WFX_JUDGE_BASE_URL
-// overrides the base — how a test points this at a local server, and how an
-// install behind a proxy reaches the API.
-func judgeClassifier(backend, model, classifier string) (*tn.Classifier, string, error) {
+// judgeClassifier builds the judge from, in order: a registry entry
+// (`--classifier`), else a vendor preset (`--backend`), else a bare endpoint
+// (`--url`) — and then the flags on top, each one a toolnexus
+// ClassifierOptions field under its own name, so anything the library can be
+// told, this command can be told:
+//
+//	--url, --model, --key-env, --header K=V (repeatable, ${VAR} expanded at
+//	call time), --timeout <sec>, --retries <n>, --param k=v (repeatable,
+//	merged into the request body)
+//
+// The base URL, model and key variable of a preset travel as a unit
+// (judge.Options), and an explicit flag still wins over the preset — the
+// library's own rule. WFX_JUDGE_BASE_URL is the environment spelling of --url.
+func judgeClassifier(args []string) (*tn.Classifier, string, error) {
 	var entry catalog.Classifier
-	if classifier != "" {
+	switch name := flagOf(args, "--classifier", ""); {
+	case name != "":
 		cfg := config.Load()
 		cat, err := catalog.Load(cfg.RegistriesPath, cfg.McpConfig)
 		if err != nil {
 			return nil, "", err
 		}
-		if entry, err = cat.Classifiers.Require(classifier); err != nil {
+		if entry, err = cat.Classifiers.Require(name); err != nil {
 			return nil, "", fmt.Errorf("%w (see `wfx registry classifiers`)", err)
 		}
-		entry.Name = classifier
-	} else {
-		if backend == "" {
-			backend = "openrouter"
-			if os.Getenv("TYPESAFE_API_KEY") != "" {
-				backend = "typesafe"
-			}
+		entry.Name = name
+	case flagOf(args, "--backend", "") != "":
+		b := flagOf(args, "--backend", "")
+		entry = catalog.Classifier{Name: b, Backend: b}
+	case flagOf(args, "--url", os.Getenv("WFX_JUDGE_BASE_URL")) != "":
+		entry = catalog.Classifier{Name: "url"}
+	default:
+		b := "openrouter"
+		if os.Getenv("TYPESAFE_API_KEY") != "" {
+			b = "typesafe"
 		}
-		entry = catalog.Classifier{Name: backend, Backend: backend}
+		entry = catalog.Classifier{Name: b, Backend: b}
 	}
-	if model != "" {
-		entry.Model = model
+
+	if v := flagOf(args, "--url", os.Getenv("WFX_JUDGE_BASE_URL")); v != "" {
+		entry.BaseURL = v
+		if entry.Name == "url" {
+			entry.Name = v
+		}
 	}
+	if v := flagOf(args, "--model", ""); v != "" {
+		entry.Model = v
+	}
+	if v := flagOf(args, "--key-env", ""); v != "" {
+		entry.APIKeyEnv = v
+	}
+	if v := flagOf(args, "--timeout", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, "", fmt.Errorf("--timeout wants whole seconds > 0, got %q", v)
+		}
+		entry.TimeoutSec = n
+	}
+	if v := flagOf(args, "--retries", ""); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, "", fmt.Errorf("--retries wants a whole number >= 0, got %q", v)
+		}
+		entry.Retries = n
+	}
+	for _, kv := range flagsOf(args, "--header") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return nil, "", fmt.Errorf("--header wants K=V, got %q", kv)
+		}
+		if entry.Headers == nil {
+			entry.Headers = map[string]string{}
+		}
+		entry.Headers[k] = v
+	}
+	for _, kv := range flagsOf(args, "--param") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return nil, "", fmt.Errorf("--param wants k=v, got %q", kv)
+		}
+		if entry.RequestParams == nil {
+			entry.RequestParams = map[string]any{}
+		}
+		var val any = v
+		_ = json.Unmarshal([]byte(v), &val) // numbers, booleans and JSON go through typed
+		entry.RequestParams[k] = val
+	}
+	// The same validation a saved registry entry passes — a literal key in a
+	// credential header is refused here exactly as it is in registries.json.
+	if err := catalog.ValidateClassifier(entry); err != nil {
+		return nil, "", err
+	}
+
 	opts, keyEnv, err := judge.Options(entry)
 	if err != nil {
 		return nil, "", err
 	}
-	if base := os.Getenv("WFX_JUDGE_BASE_URL"); base != "" {
-		opts.BaseURL = base
-	}
-	if os.Getenv(keyEnv) == "" {
+	if keyEnv != "" && os.Getenv(keyEnv) == "" {
 		return nil, "", fmt.Errorf("%s is not set — %s reads its key from it (by name; the value is never printed)", keyEnv, entry.Name)
 	}
 	c, err := tn.CreateClassifier(opts)
@@ -299,4 +365,15 @@ func judgeClassifier(backend, model, classifier string) (*tn.Classifier, string,
 		label += " (" + entry.Model + ")"
 	}
 	return c, label, nil
+}
+
+// flagsOf collects every value of a repeatable flag.
+func flagsOf(a []string, flag string) []string {
+	var out []string
+	for i, s := range a {
+		if s == flag && i+1 < len(a) {
+			out = append(out, a[i+1])
+		}
+	}
+	return out
 }

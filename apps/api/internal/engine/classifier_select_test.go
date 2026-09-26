@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -70,5 +71,43 @@ func TestAStepsClassifierIsTheOneThatRuns(t *testing.T) {
 	// A backend that cannot be called here is refused by name, not swapped for the default.
 	if _, err := eng.classifierFor(&workflow.Step{ID: "x", Classifier: "nope"}); err == nil {
 		t.Fatal("an unknown classifier was accepted")
+	}
+}
+
+// doctor's ✓ on a classifier means it could be called. A preset that implies a
+// key (jev → OPENROUTER_API_KEY) used to show ready without one, and a URL
+// entry whose header references an unset variable would have sent an empty
+// credential.
+func TestDoctorKnowsWhatAClassifierNeeds(t *testing.T) {
+	dir := t.TempDir()
+	reg := filepath.Join(dir, "registries.json")
+	raw := `{"classifiers": {
+	  "jev": {"backend": "openrouter", "model": "typesafe/jev-1.13"},
+	  "mine": {"baseUrl": "https://jev.example.internal/v1", "headers": {"Authorization": "Bearer ${WFX_TEST_UNSET_JUDGE}"}}
+	}}`
+	if err := os.WriteFile(reg, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("WFX_TEST_UNSET_JUDGE", "")
+	cat, err := catalog.Load(reg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := New(config.Config{WorkDir: dir}, nil, nil, map[string]*workflow.Definition{}, skills.Load(dir), cat)
+	got := map[string]string{}
+	for _, c := range eng.Doctor().Classifiers {
+		if !c.Ready {
+			got[c.Name] = c.Problem
+		}
+		if c.Name == "mine" && c.Kind != "url" {
+			t.Errorf("a URL entry reports kind %q", c.Kind)
+		}
+	}
+	if !strings.Contains(got["jev"], "OPENROUTER_API_KEY") {
+		t.Errorf("jev without its implied key: %q", got["jev"])
+	}
+	if !strings.Contains(got["mine"], "WFX_TEST_UNSET_JUDGE") {
+		t.Errorf("a header naming an unset variable: %q", got["mine"])
 	}
 }
