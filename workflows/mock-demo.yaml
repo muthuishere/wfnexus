@@ -1,7 +1,7 @@
 # Managed by the wfnexus workflow builder.
 # Hand edits are fine; the builder round-trips through the same loader.
 name: mock-demo
-description: A workflow anybody can run with nothing configured.
+description: A workflow anybody can run with nothing configured. It stops before `act` for a human, so the approval path can be tried for free too.
 input_schema:
     type: object
 steps:
@@ -41,6 +41,7 @@ steps:
         type: object
       max_turns: 30
       max_attempts: 3
+      requires_approval: true
       needs:
         - survey
       provider: mock
