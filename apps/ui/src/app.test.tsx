@@ -92,6 +92,31 @@ describe('the UI a person actually downloads', () => {
     expect(still.map(r => r.id)).not.toContain(run.id)
   })
 
+  test('a project carries a category: set at creation, changeable, and it leads its template list', async () => {
+    go('#/projects')
+    fireEvent.click(await screen.findByText('New project'))
+    fireEvent.change(screen.getByPlaceholderText('my-project'), { target: { value: 'the-books' } })
+    const pick = await screen.findByLabelText('Category')
+    await waitFor(() => expect(within(pick).getAllByRole('option').length).toBeGreaterThan(5))
+    fireEvent.change(pick, { target: { value: 'finance' } })
+    fireEvent.click(screen.getByText('Create project'))
+    await waitFor(() => expect(window.location.hash).toBe('#/projects/the-books'))
+    expect((await api.project('the-books')).category).toBe('finance')
+    cleanup()
+
+    // Projects are grouped by category once there is more than one group.
+    go('#/projects')
+    await screen.findByText('Finance & Accounting')
+    cleanup()
+
+    // Changeable in place on the project's own page.
+    go('#/projects/the-books')
+    const chip = await screen.findByLabelText('Project category') as HTMLSelectElement
+    await waitFor(() => expect(chip.value).toBe('finance'))
+    fireEvent.change(chip, { target: { value: 'legal' } })
+    await waitFor(async () => expect((await api.project('the-books')).category).toBe('legal'))
+  })
+
   test("a workflow's page lists its runs, and each opens under the workflow", async () => {
     const run = await api.createRun('deterministic', { title: 'drill-down placement' })
     await waitFor(async () => {

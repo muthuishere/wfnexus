@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Project } from '../api'
 import { href } from '../lib/routes'
 import { useWaiting } from '../lib/waiting'
+import { labelOf, useCategories } from '../lib/categories'
 import { ago } from '../lib/time'
 
 /** The dashboard, and the top of the hierarchy: project → workflow → runs.
@@ -17,6 +18,16 @@ export default function ProjectsPage() {
   const [note, setNote] = useState('')
   const [adding, setAdding] = useState(false)
   const waiting = useWaiting()
+  const cats = useCategories()
+  const groups = useMemo(() => {
+    const order = [...cats.map(c => c.id), '']
+    const by = new Map<string, Project[]>()
+    for (const p of projects || []) {
+      const k = p.category && order.includes(p.category) ? p.category : ''
+      by.set(k, [...(by.get(k) || []), p])
+    }
+    return order.filter(id => by.has(id)).map(id => ({ id, label: labelOf(cats, id), projects: by.get(id)! }))
+  }, [projects, cats])
 
   const load = useCallback(() => {
     api.projects().then(p => { setProjects(p); setErr('') })
@@ -52,40 +63,49 @@ export default function ProjectsPage() {
       <div className="card flush">
         {!projects && <div className="empty">loading…</div>}
         {projects?.length === 0 && <div className="empty">No projects yet. Add a repository that has a <span className="mono">.wfx/workflows/</span> directory.</div>}
-        <ul className="wflist projects">
-          {projects?.map(p => (
-            <li key={p.name} onClick={() => { location.hash = href.project(p.name) }}>
-              <span className={`dot ${p.lastRun || 'never'}`} />
-              <div className="wfmain">
-                <a href={href.project(p.name)} className="wfname" onClick={e => e.stopPropagation()}>{p.name}</a>
-                {p.local && <span className="pill" style={{ marginLeft: 8 }}>this platform</span>}
-                {!!p.problems?.length && <span className="badge failed" style={{ marginLeft: 8 }}>{p.problems.length} did not load</span>}
-                {waiting.some(r => (r.project || 'local') === p.name) && (
-                  <span className="badge awaiting_approval" style={{ marginLeft: 8 }}>
-                    {waiting.filter(r => (r.project || 'local') === p.name).length} waiting on you
-                  </span>)}
-                <div className="wfdesc mono" title={p.dir}>{p.url || p.repo || p.dir}</div>
-              </div>
-              <div className="wfmeta">
-                <span>{p.workflows?.length || 0} workflow{p.workflows?.length === 1 ? '' : 's'}</span>
-                <span>·</span>
-                <span>{p.runs || 0} run{p.runs === 1 ? '' : 's'}</span>
-              </div>
-              <div className="wflast">
-                {p.lastRun
-                  ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span><span className="muted">{ago(p.lastRunAt)}</span></>
-                  : <span className="muted">never run</span>}
-              </div>
-              <span onClick={e => e.stopPropagation()}>
-                {!p.local && (
-                  <button className="ghost small danger-text" onClick={() => {
-                    if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
-                    api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
-                      .catch(er => setErr(String(er.message || er)))
-                  }}>Forget</button>)}
-              </span>
-            </li>))}
-        </ul>
+        {/* Grouped by the kind of work each project does, in the category
+            list's own order, unset last — the list a person scans for "my
+            finance project" rather than one alphabet of names. One group,
+            and the heading would be noise, so it is left out. */}
+        {groups.map(g => (
+          <section key={g.id || '_none'}>
+            {groups.length > 1 && (
+              <div className="grouphead"><span>{g.label}</span><span className="muted">{g.projects.length}</span></div>)}
+            <ul className="wflist projects">
+              {g.projects.map(p => (
+              <li key={p.name} onClick={() => { location.hash = href.project(p.name) }}>
+                <span className={`dot ${p.lastRun || 'never'}`} />
+                <div className="wfmain">
+                  <a href={href.project(p.name)} className="wfname" onClick={e => e.stopPropagation()}>{p.name}</a>
+                  {p.local && <span className="pill" style={{ marginLeft: 8 }}>this platform</span>}
+                  {!!p.problems?.length && <span className="badge failed" style={{ marginLeft: 8 }}>{p.problems.length} did not load</span>}
+                  {waiting.some(r => (r.project || 'local') === p.name) && (
+                    <span className="badge awaiting_approval" style={{ marginLeft: 8 }}>
+                      {waiting.filter(r => (r.project || 'local') === p.name).length} waiting on you
+                    </span>)}
+                  <div className="wfdesc mono" title={p.dir}>{p.url || p.repo || p.dir}</div>
+                </div>
+                <div className="wfmeta">
+                  <span>{p.workflows?.length || 0} workflow{p.workflows?.length === 1 ? '' : 's'}</span>
+                  <span>·</span>
+                  <span>{p.runs || 0} run{p.runs === 1 ? '' : 's'}</span>
+                </div>
+                <div className="wflast">
+                  {p.lastRun
+                    ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span><span className="muted">{ago(p.lastRunAt)}</span></>
+                    : <span className="muted">never run</span>}
+                </div>
+                <span onClick={e => e.stopPropagation()}>
+                  {!p.local && (
+                    <button className="ghost small danger-text" onClick={() => {
+                      if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
+                      api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
+                        .catch(er => setErr(String(er.message || er)))
+                    }}>Forget</button>)}
+                </span>
+              </li>))}
+            </ul>
+          </section>))}
       </div>
 
       {projects?.some(p => p.problems?.length) && (
@@ -119,14 +139,16 @@ function NewProject({ onError }: { onError: (e: string) => void }) {
   const [repo, setRepo] = useState('')
   const [name, setName] = useState('')
   const [branch, setBranch] = useState('')
+  const [category, setCategory] = useState('')
   const [busy, setBusy] = useState(false)
+  const cats = useCategories()
 
   const ready = mode === 'start' ? !!(name.trim() || repo.trim()) : !!repo.trim()
   const submit = () => {
     setBusy(true); onError('')
     api.addProject(mode === 'start'
-      ? { create: true, name: name.trim() || undefined, repo: repo.trim() || undefined }
-      : { repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined })
+      ? { create: true, name: name.trim() || undefined, repo: repo.trim() || undefined, category: category || undefined }
+      : { repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined, category: category || undefined })
       .then(p => { location.hash = href.project(p.name) })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -182,6 +204,14 @@ function NewProject({ onError }: { onError: (e: string) => void }) {
           </div>
         </div>
       )}
+      <div className="bfield" style={{ maxWidth: 420 }}>
+        <label>What kind of work is it?</label>
+        <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Category">
+          <option value="">Not sure yet</option>
+          {cats.map(c => <option key={c.id} value={c.id}>{c.label} — {c.description}</option>)}
+        </select>
+        <div className="hint">Its templates are offered first when you add a workflow. Changeable later.</div>
+      </div>
       <div className="actions">
         <button disabled={!ready || busy} onClick={submit}>
           {busy ? 'Working…' : mode === 'start' ? 'Create project' : 'Add project'}

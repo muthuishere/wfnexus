@@ -1,6 +1,7 @@
 name: bug-fixer
 template:
   title: Bug fixer — five phases
+  category: development
   summary: >-
     Validate a report, reproduce it, draft the fix, review it, publish it. The
     shape, the typed hand-off between phases and the human gate are already

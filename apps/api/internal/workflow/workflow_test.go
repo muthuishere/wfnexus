@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRenderHyphenatedStepIDs(t *testing.T) {
@@ -291,5 +293,25 @@ func TestAFlattenedIDBeatsAFieldOfTheSameName(t *testing.T) {
 	}
 	if got != "the flattened step" {
 		t.Errorf("got %q, want the flattened step", got)
+	}
+}
+
+// A template names its category from the closed list; anything else is a
+// load error, and the category survives a save.
+func TestTemplateCategory(t *testing.T) {
+	var ti TemplateInfo
+	if err := yaml.Unmarshal([]byte("title: x\ncategory: finance\n"), &ti); err != nil || ti.Category != "finance" || !ti.Is {
+		t.Fatalf("parse: %+v %v", ti, err)
+	}
+	if err := yaml.Unmarshal([]byte("title: x\ncategory: accountancy\n"), &ti); err == nil {
+		t.Fatal("an unknown category loaded")
+	}
+	out, err := yaml.Marshal(TemplateInfo{Is: true, Category: "legal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back TemplateInfo
+	if err := yaml.Unmarshal(out, &back); err != nil || back.Category != "legal" {
+		t.Fatalf("round trip lost the category: %s -> %+v", out, back)
 	}
 }

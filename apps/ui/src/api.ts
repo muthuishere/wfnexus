@@ -167,7 +167,12 @@ export type Project = {
   lastRun?: string
   lastRunAt?: string
   problems?: Skipped[]
+  /** The kind of work it does — one of the categories list; absent when unset. */
+  category?: string
 }
+
+/** The closed list a project and a template choose from (GET /api/categories). */
+export type Category = { id: string; label: string; description: string }
 
 /** What is actually wired on THIS machine, as opposed to what is declared. */
 export type Doctor = {
@@ -244,6 +249,8 @@ export type TemplatePhase = {
 export type Template = {
   name: string; title: string; summary: string; description?: string
   fill?: string[]; source?: string; phases: TemplatePhase[]
+  /** The kind of work it serves; a project of the same category sees it first. */
+  category?: string
   /** true when a phase has no skills yet — the normal state of a template. */
   needsSkills: boolean
   /** Everything that comes with it — a run.js, a fixture, a README. Shown
@@ -381,7 +388,12 @@ export const api = {
   project: (name: string) => j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`)),
   /** `create: true` STARTS a project (empty; `repo` is then an optional
    *  existing folder). Without it, ADDS one that already has workflows. */
-  addProject: (body: { repo?: string; name?: string; branch?: string; create?: boolean }) =>
+  categories: () => j<Category[]>(fetch('/api/categories')),
+  setProjectCategory: (name: string, category: string) =>
+    j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ category }),
+    })),
+  addProject: (body: { repo?: string; name?: string; branch?: string; create?: boolean; category?: string }) =>
     j<Project>(post('/api/projects', body)),
   removeProject: (name: string) =>
     j(fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })),

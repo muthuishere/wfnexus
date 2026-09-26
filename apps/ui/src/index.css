@@ -506,3 +506,23 @@ pre {
 .waitwhat { min-width: 0 }
 .waitsub { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .waitwhen { font-size: 11.5px; white-space: nowrap }
+
+/* ── categories ──────────────────────────────────────────────────────────── */
+.grouphead {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 18px 6px; font-size: 11.5px; font-weight: 650; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-2); background: var(--raised); border-top: 1px solid var(--border);
+}
+section:first-child > .grouphead { border-top: 0 }
+.catpick {
+  width: auto; margin-left: 12px; vertical-align: middle; padding: 3px 26px 3px 10px;
+  font-size: 12px; font-weight: 550; border-radius: 999px; color: var(--blue-700); background-color: var(--blue-50);
+  border-color: var(--blue-200);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px }
+.chips button {
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-weight: 500;
+}
+.chips button:hover:not(:disabled) { background: var(--blue-50); color: var(--blue-600); border-color: var(--blue-200) }
+.chips button.active, .chips button.active:hover:not(:disabled) { background: var(--blue-600); color: #fff; border-color: var(--blue-600) }

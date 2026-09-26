@@ -7,6 +7,7 @@ import DataTable, { type Column, type Filter } from '../components/DataTable'
 import { ago } from '../lib/time'
 import { href, shortName } from '../lib/routes'
 import { isWaiting } from '../lib/waiting'
+import { useCategories } from '../lib/categories'
 import { canDispatch, clip, sameWorkflow, summariseRun, triggerNames } from '../lib/workflow'
 
 type Tab = 'workflows' | 'runs' | 'settings'
@@ -22,6 +23,7 @@ export default function ProjectPage({ name }: { name: string }) {
   const [err, setErr] = useState('')
   const [tab, setTab] = useState<Tab>('workflows')
   const [q, setQ] = useState('')
+  const cats = useCategories()
 
   const load = useCallback(() => {
     Promise.all([api.project(name), api.workflows(), api.runs({ project: name })])
@@ -91,7 +93,17 @@ export default function ProjectPage({ name }: { name: string }) {
       <Crumbs items={[['Projects', href.projects()]]} />
       <div className="head">
         <div style={{ minWidth: 0 }}>
-          <h1>{project.name}</h1>
+          <h1>
+            {project.name}
+            {/* The kind of work it does, changeable in place: it decides which
+                templates this project is offered first. */}
+            <select className="catpick" aria-label="Project category" value={project.category || ''}
+              onChange={e => api.setProjectCategory(name, e.target.value).then(setProject)
+                .catch(er => setErr(er instanceof Error ? er.message : String(er)))}>
+              <option value="">No category</option>
+              {cats.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </h1>
           <p className="mono">{project.url || project.repo || project.dir}</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

@@ -163,7 +163,9 @@ func usage() {
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
   wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes
   wfx projects                     every project: workflows and run activity
-  wfx project add <repo> [--as n]  add a project — a repo whose .wfx/workflows/ we run
+  wfx project add <repo> [--as n] [--category c]  add a repo that has .wfx/workflows/
+  wfx project new <name> [--dir path] [--category c]  start an empty project
+  wfx project set <name> --category c  what kind of work it does (wfx project categories)
   wfx project rm <name>            forget one (the clone stays on disk)
   wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
@@ -698,7 +700,29 @@ func act(id, verb string, body map[string]any) error {
 func projects(args []string) error {
 	switch {
 	case len(args) >= 2 && (args[0] == "add" || args[0] == "import"):
-		return importRepo(args[1:])
+		return addProject(args[1:], false)
+	case len(args) >= 2 && args[0] == "new":
+		return addProject(args[1:], true)
+	case len(args) >= 2 && args[0] == "set":
+		cat := flagOf(args, "--category", "\x00")
+		if cat == "\x00" {
+			return fmt.Errorf("usage: wfx project set <name> --category <id>   (wfx project categories)")
+		}
+		var p struct{ Name, Category string }
+		if err := call("PATCH", "/api/projects/"+url.PathEscape(args[1]), map[string]any{"category": cat}, &p); err != nil {
+			return err
+		}
+		fmt.Printf("%s: category %s\n", p.Name, orDash(p.Category))
+		return nil
+	case len(args) >= 1 && args[0] == "categories":
+		var cats []struct{ ID, Label, Description string }
+		if err := call("GET", "/api/categories", nil, &cats); err != nil {
+			return err
+		}
+		for _, c := range cats {
+			fmt.Printf("%-15s %-28s %s\n", c.ID, c.Label, c.Description)
+		}
+		return nil
 	case len(args) >= 2 && (args[0] == "rm" || args[0] == "remove" || args[0] == "forget"):
 		if err := call("DELETE", "/api/projects/"+url.PathEscape(args[1]), nil, nil); err != nil {
 			return err
@@ -708,8 +732,8 @@ func projects(args []string) error {
 	}
 
 	var list []struct {
-		Name, Dir, Repo, URL, LastRun, LastRunAt string
-		Local                                    bool
+		Name, Dir, Repo, URL, LastRun, LastRunAt, Category string
+		Local                                              bool
 		Workflows                                []string
 		Runs                                     int
 		Problems                                 []struct{ Location, Reason string }
@@ -717,7 +741,7 @@ func projects(args []string) error {
 	if err := call("GET", "/api/projects", nil, &list); err != nil {
 		return err
 	}
-	fmt.Printf("%-16s %-9s %-6s %-12s %s\n", "PROJECT", "WORKFLOWS", "RUNS", "LAST RUN", "WHERE")
+	fmt.Printf("%-16s %-15s %-9s %-6s %-12s %s\n", "PROJECT", "CATEGORY", "WORKFLOWS", "RUNS", "LAST RUN", "WHERE")
 	for _, p := range list {
 		where := p.Repo
 		if p.URL != "" {
@@ -730,7 +754,7 @@ func projects(args []string) error {
 		if last == "" {
 			last = "—"
 		}
-		fmt.Printf("%-16s %-9d %-6d %-12s %s\n", p.Name, len(p.Workflows), p.Runs, last, where)
+		fmt.Printf("%-16s %-15s %-9d %-6d %-12s %s\n", p.Name, orDash(p.Category), len(p.Workflows), p.Runs, last, where)
 		for _, pr := range p.Problems {
 			fmt.Printf("  ✗ %s: %s\n", pr.Location, pr.Reason)
 		}
@@ -829,6 +853,42 @@ func dryRun(args []string) error {
 // importRepo registers a repository as a workflow source. A workflow lives in
 // the repository it acts on — the same arrangement as .github/workflows — so
 // this is how one arrives from outside.
+// addProject ADDS a repository that already has workflows (create=false), or
+// STARTS a new, empty project (create=true: a fresh folder, or --dir, an
+// existing checkout given .wfx/workflows/). --category files it under the kind
+// of work it does, so it is offered that category's templates first.
+func addProject(args []string, create bool) error {
+	body := map[string]any{
+		"name":     flagOf(args, "--as", ""),
+		"branch":   flagOf(args, "--branch", ""),
+		"category": flagOf(args, "--category", ""),
+		"create":   create,
+	}
+	if create {
+		body["name"] = args[0]
+		body["repo"] = flagOf(args, "--dir", "")
+	} else {
+		body["repo"] = args[0]
+	}
+	var p struct{ Name, Dir, Category string }
+	if err := call("POST", "/api/projects", body, &p); err != nil {
+		return err
+	}
+	verb := "added"
+	if create {
+		verb = "created"
+	}
+	fmt.Printf("%s %s (%s) at %s\n", verb, p.Name, orDash(p.Category), p.Dir)
+	return nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 func importRepo(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: wfx import <repo-url-or-path> [--as name] [--branch b]")

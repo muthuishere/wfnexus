@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Template } from '../api'
 import FileList from '../components/FileList'
 import { href } from '../lib/routes'
 import Crumbs from '../components/Crumbs'
+import { labelOf, useCategories } from '../lib/categories'
 
 /** The gallery: workflows that exist to be copied.
  *
@@ -14,12 +15,36 @@ import Crumbs from '../components/Crumbs'
 export default function TemplatesPage({ project }: { project?: string }) {
   const [templates, setTemplates] = useState<Template[]>()
   const [err, setErr] = useState('')
+  const [category, setCategory] = useState<string>()
+  const [filter, setFilter] = useState('')
+  const cats = useCategories()
 
   const load = useCallback(() => {
     api.templates().then(t => { setTemplates(t); setErr('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
   }, [])
   useEffect(load, [load])
+  // Opened from a project: that project's category leads, so a finance team
+  // sees finance templates before anyone else's.
+  useEffect(() => {
+    if (!project) return
+    api.project(project).then(p => setCategory(p.category)).catch(() => {})
+  }, [project])
+
+  // Sections in the category list's order, the project's own first, then
+  // uncategorised; a filter chip narrows to one.
+  const sections = useMemo(() => {
+    const order = [...cats.map(c => c.id), '']
+    if (category) order.splice(order.indexOf(category), 1), order.unshift(category)
+    const by = new Map<string, Template[]>()
+    for (const t of templates || []) {
+      const k = t.category && order.includes(t.category) ? t.category : ''
+      by.set(k, [...(by.get(k) || []), t])
+    }
+    return order.filter(id => by.has(id) && (!filter || id === filter))
+      .map(id => ({ id, label: labelOf(cats, id), items: by.get(id)! }))
+  }, [templates, cats, category, filter])
+  const present = useMemo(() => new Set((templates || []).map(t => t.category || '')), [templates])
 
   return (
     <>
@@ -42,7 +67,25 @@ export default function TemplatesPage({ project }: { project?: string }) {
             No templates. A workflow becomes one by carrying <span className="mono">template:</span> and
             living in the templates directory.
           </div>
-          : templates.map(t => <TemplateCard key={t.name} t={t} project={project} onCopied={load} onError={setErr} />)}
+          : <>
+            {present.size > 1 && (
+              <div className="chips">
+                <button className={!filter ? 'active' : ''} onClick={() => setFilter('')}>All</button>
+                {cats.filter(c => present.has(c.id)).map(c => (
+                  <button key={c.id} className={filter === c.id ? 'active' : ''} onClick={() => setFilter(c.id)}>
+                    {c.label}{c.id === category && ' · this project'}
+                  </button>))}
+              </div>)}
+            {sections.map(sec => (
+              <section key={sec.id || '_none'}>
+                {(sections.length > 1 || sec.id) && (
+                  <div className="grouphead">
+                    <span>{sec.label}{sec.id && sec.id === category && <span className="pill" style={{ marginLeft: 8 }}>this project's kind of work</span>}</span>
+                    <span className="muted">{sec.items.length}</span>
+                  </div>)}
+                {sec.items.map(t => <TemplateCard key={t.name} t={t} project={project} onCopied={load} onError={setErr} />)}
+              </section>))}
+          </>}
     </>
   )
 }
