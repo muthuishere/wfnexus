@@ -72,6 +72,28 @@ func publish(args []string) error {
 	if def.Name == "" {
 		return fmt.Errorf("%s: the workflow has no name", path)
 	}
+	// A `uses:` workflow cannot be published, and publish is where that has to be
+	// said. ParseYAML does NOT expand uses — expansion happens in the loader — so
+	// at this point a uses-only workflow has NO steps, which means Named() finds
+	// no skills to carry, Requirements() records nothing for the receiving host to
+	// check, and the carried workflow.yaml names a task the bundle does not
+	// include. The result is a bundle that publishes cleanly and cannot possibly
+	// run.
+	//
+	// It surfaces today as "carries no steps to expand" when somebody else
+	// consumes it — a confusing message, on another machine, long after the
+	// mistake. ADR 0018's whole argument for this verb is that failing here beats
+	// failing there.
+	if len(def.Uses) > 0 {
+		names := make([]string, 0, len(def.Uses))
+		for _, u := range def.Uses {
+			names = append(names, u.Task)
+		}
+		return fmt.Errorf("cannot publish %s: it is built from `uses:` (%s), and a bundle carries the workflow's own steps — "+
+			"the task those names refer to would not travel with it. Publish a workflow with its own `steps:`, "+
+			"or publish the task itself and reference it remotely with `use: owner/repo@tag`",
+			def.Name, strings.Join(names, ", "))
+	}
 
 	cfg := config.Load()
 	reg := skills.Load(skills.DefaultRoots(cfg.SkillsDir)...)

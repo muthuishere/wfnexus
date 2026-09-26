@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // task 10.7 — `wfx publish` with no configured host is an ERROR, not a
@@ -337,5 +338,47 @@ func TestResolveVerbsSayWhetherAPersonNamedTheActor(t *testing.T) {
 	body = resolveBody([]string{"run-1"}, map[string]any{"reason": "no down migration"})
 	if body["reason"] != "no down migration" || body["actorInferred"] != true {
 		t.Errorf("a verb's fields and the actor claim do not coexist: %#v", body)
+	}
+}
+
+// A `uses:` workflow publishes a bundle that CANNOT RUN, so publish refuses it.
+//
+// ParseYAML does not expand uses — the loader does — so at publish time such a
+// workflow has no steps: no skills are carried, no requirements are recorded for
+// the receiving host, and the carried workflow.yaml names a task the bundle does
+// not include. Verified against the real functions rather than assumed: Named()
+// returns nothing and Requirements() returns nothing for it.
+func TestPublishRefusesAUsesOnlyWorkflowBecauseTheTaskWouldNotTravel(t *testing.T) {
+	def, err := workflow.ParseYAML([]byte("name: uses-only\nuses:\n  - use: reviewer-task\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def.Steps) != 0 {
+		t.Fatalf("this test's premise is gone: uses are now expanded at parse time (%d steps)", len(def.Steps))
+	}
+	if sk, mc := bundle.Named(def); len(sk) != 0 || len(mc) != 0 {
+		t.Errorf("a uses-only workflow carried skills=%v mcp=%v — the premise changed", sk, mc)
+	}
+
+	tempContexts(t)
+	dir := t.TempDir()
+	wf := filepath.Join(dir, "uses-only.yaml")
+	if err := os.WriteFile(wf, []byte("name: uses-only\nuses:\n  - use: reviewer-task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remote := bareRepo(t)
+	err = publish([]string{wf, "--version", "1.0.0", "--to", remote})
+	if err == nil {
+		t.Fatal("a uses-only workflow published; the bundle could never have run")
+	}
+	for _, want := range []string{"uses:", "reviewer-task", "use: owner/repo@tag"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q, so it does not say what to do instead:\n%v", want, err)
+		}
+	}
+	// And nothing was written: refused before any commit, like every other
+	// publish-time refusal.
+	if out := git(t, "", "git", "--git-dir", remote, "tag"); strings.TrimSpace(out) != "" {
+		t.Errorf("a refused publish left a tag: %q", out)
 	}
 }
