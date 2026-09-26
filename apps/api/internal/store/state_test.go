@@ -3,11 +3,11 @@ package store
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store/pgtest"
 )
 
 // The state store, against a real database — SQLite always, Postgres when one
@@ -24,29 +24,32 @@ func eachStore(t *testing.T, fn func(t *testing.T, st *Store)) {
 	t.Run("postgres", func(t *testing.T) {
 		st := openPostgres(t)
 		if st == nil {
-			t.Skip("no postgres reachable — set WFX_TEST_POSTGRES or run `task infra:up`")
+			t.Skip("no postgres reachable — run `task infra:up`, or point TEST_DATABASE_URL at a server")
 		}
 		fn(t, st)
 	})
 }
 
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 // openPostgres returns nil when there is nothing to talk to, so the suite still
 // runs on a laptop with no infrastructure.
 func openPostgres(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("WFX_TEST_POSTGRES")
-	if dsn == "" {
-		dsn = "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"
+	// This package's own throwaway database (pgtest), never the shared one.
+	dsn, err := pgtest.DSN()
+	if err != nil {
+		return nil
 	}
 	if err := Migrate(driverPostgres, dsn); err != nil {
-		return nil
+		t.Fatalf("migrating a fresh database failed: %v", err)
 	}
 	st, err := Open(context.Background(), driverPostgres, dsn)
 	if err != nil {
 		return nil
 	}
 	t.Cleanup(func() {
-		// Leave the shared database as it was found.
+		// Other tests in this package share the database, so leave it as found.
 		_, _ = st.db.Exec(`DELETE FROM state_vars WHERE scope_name LIKE 'test-%' OR key LIKE 'test-%'`)
 		st.Close()
 	})

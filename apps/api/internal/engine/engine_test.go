@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,8 +16,11 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store/pgtest"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
+
+func TestMain(m *testing.M) { pgtest.Main(m) }
 
 // These tests run the real engine against a scripted LLM. They need the local
 // Postgres + MinIO (task infra:up); without them the suite skips rather than
@@ -26,20 +28,18 @@ import (
 func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 	t.Helper()
 	cfg := config.Load()
-	// These are the POSTGRES path. The no-config default is now `local`
-	// (sqlite in a file), so postgres is STATED here rather than inherited from
-	// a default that has moved — otherwise this would quietly exercise a
-	// different database and skip the one it means to test.
-	if cfg.StorageDriver != "postgres" {
-		cfg.StorageDriver = "postgres"
-		cfg.DatabaseURL = "postgres://bfp:bfp@127.0.0.1:5460/bfp?sslmode=disable"
+	// These are the POSTGRES path, on a database this package created for
+	// itself (pgtest) — never the shared development database, and never
+	// whatever the local config happens to point at.
+	dsn, err := pgtest.DSN()
+	if err != nil {
+		t.Skipf("%v", err)
 	}
-	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
-		cfg.DatabaseURL = v
-	}
+	cfg.StorageDriver = "postgres"
+	cfg.DatabaseURL = dsn
 	ctx := context.Background()
 	if err := store.Migrate(cfg.StorageDriver, cfg.DatabaseURL); err != nil {
-		t.Skipf("no postgres (task infra:up): %v", err)
+		t.Fatalf("migrating a fresh database failed: %v", err)
 	}
 	st, err := store.Open(ctx, cfg.StorageDriver, cfg.DatabaseURL)
 	if err != nil {
