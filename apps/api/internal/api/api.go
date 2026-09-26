@@ -167,6 +167,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/projects", s.listProjects)
 		r.Post("/projects", s.createProject)
 		r.Get("/projects/{name}", s.getProject)
+		r.Patch("/projects/{name}", s.patchProject)
+		r.Get("/categories", s.listCategories)
 		// The env store: system-wide, and per project.
 		r.Get("/env", s.listSystemEnv)
 		r.Put("/env", s.setSystemEnv)
@@ -500,10 +502,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
 		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
-		Create bool   `json:"create"`
+		Branch   string `json:"branch"`
+		Create   bool   `json:"create"`
+		Category string `json:"category"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// Checked BEFORE anything is cloned or created: a bad category must not
+	// leave a project behind that the request then reports as failed.
+	if err := workflow.ValidCategory(body.Category); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -522,12 +531,52 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if body.Category != "" {
+		if err := s.eng.SetProjectCategory(src.Name, body.Category); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+	}
 	p, err := s.eng.Project(r.Context(), src.Name)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
 	}
 	writeJSON(w, 201, p)
+}
+
+// patchProject changes what can be changed about a project after the fact —
+// its category.
+func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
+	name := urlName(r, "name")
+	if !s.inScope(r, name) {
+		notFound(w)
+		return
+	}
+	var body struct {
+		Category *string `json:"category"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Category != nil {
+		if err := s.eng.SetProjectCategory(name, *body.Category); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
+	p, err := s.eng.Project(r.Context(), name)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
+// listCategories is the closed list a project and a template choose from.
+func (s *Server) listCategories(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, workflow.Categories)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {

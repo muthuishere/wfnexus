@@ -31,6 +31,9 @@ type Project struct {
 	URL string `json:"url,omitempty"`
 	// Local marks the platform's own directory, which is not removable.
 	Local bool `json:"local"`
+	// Category is the kind of work it does (workflow.Categories); empty when
+	// nobody has said.
+	Category string `json:"category,omitempty"`
 
 	Workflows []string `json:"workflows"`
 	// Contents is the SAME list, with what each workflow actually consists of:
@@ -154,9 +157,12 @@ func (e *Engine) Projects(ctx context.Context) ([]Project, error) {
 		p.LastRunAt = a.LastCreated.Format("2006-01-02T15:04:05Z07:00")
 	}
 
+	meta := e.readProjectMeta()
 	out := make([]Project, 0, len(order))
 	for _, name := range order {
-		out = append(out, *byName[name])
+		p := *byName[name]
+		p.Category = meta[name].Category
+		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		// `local` first — it is where a new install starts — then by name.

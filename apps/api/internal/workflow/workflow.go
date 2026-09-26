@@ -255,6 +255,9 @@ type TemplateInfo struct {
 	// each step, usually. Shown beside the copy so the work is visible before
 	// it is started rather than found step by step.
 	Fill []string `json:"fill,omitempty"`
+	// Category is the kind of work it serves (categories.go) — what lets a
+	// Finance project be offered Finance templates first.
+	Category string `json:"category,omitempty"`
 }
 
 // UnmarshalYAML accepts both `template: true` and the mapping form. The bool
@@ -270,14 +273,18 @@ func (t *TemplateInfo) UnmarshalYAML(n *yaml.Node) error {
 		return nil
 	}
 	var raw struct {
-		Title   string   `yaml:"title"`
-		Summary string   `yaml:"summary"`
-		Fill    []string `yaml:"fill"`
+		Title    string   `yaml:"title"`
+		Summary  string   `yaml:"summary"`
+		Fill     []string `yaml:"fill"`
+		Category string   `yaml:"category"`
 	}
 	if err := n.Decode(&raw); err != nil {
 		return fmt.Errorf("template: %w", err)
 	}
-	t.Is, t.Title, t.Summary, t.Fill = true, raw.Title, raw.Summary, raw.Fill
+	if err := ValidCategory(raw.Category); err != nil {
+		return fmt.Errorf("template: %w", err)
+	}
+	t.Is, t.Title, t.Summary, t.Fill, t.Category = true, raw.Title, raw.Summary, raw.Fill, raw.Category
 	return nil
 }
 
@@ -286,10 +293,14 @@ func (t TemplateInfo) MarshalYAML() (any, error) {
 	if !t.Is {
 		return nil, nil
 	}
-	if t.Title == "" && t.Summary == "" && len(t.Fill) == 0 {
+	if t.Title == "" && t.Summary == "" && len(t.Fill) == 0 && t.Category == "" {
 		return true, nil
 	}
-	return map[string]any{"title": t.Title, "summary": t.Summary, "fill": t.Fill}, nil
+	out := map[string]any{"title": t.Title, "summary": t.Summary, "fill": t.Fill}
+	if t.Category != "" {
+		out["category"] = t.Category
+	}
+	return out, nil
 }
 
 type Definition struct {
