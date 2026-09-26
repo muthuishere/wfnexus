@@ -474,3 +474,14 @@ pre {
   .wflist li { grid-template-columns: 10px minmax(0, 1fr) auto; }
   .wflist .wfmeta, .wflist .wflast { display: none }
 }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px }
+.segmented button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-strong); padding: 10px 14px;
+}
+.segmented button span { font-size: 12px; color: var(--muted); font-weight: 400 }
+.segmented button:hover:not(:disabled) { background: var(--blue-50); color: var(--text); border-color: var(--blue-200) }
+.segmented button.active, .segmented button.active:hover:not(:disabled) {
+  background: var(--blue-50); color: var(--blue-700); border-color: var(--blue-600); box-shadow: 0 0 0 1px var(--blue-600) inset;
+}
+@media (max-width: 640px) { .segmented { grid-template-columns: 1fr } }

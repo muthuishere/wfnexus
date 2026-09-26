@@ -47,6 +47,9 @@ type copyFn func(ctx context.Context, name, as string) (*workflow.Definition, er
 func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 	var body struct {
 		As string `json:"as"`
+		// The project the copy goes into — the one the gallery was opened
+		// from. Empty means the platform's own directory, as before.
+		Project string `json:"project"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -57,7 +60,15 @@ func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	path, err := s.eng.SaveWorkflow(def)
+	into := body.Project
+	if into == "" {
+		into = "local"
+	}
+	if !s.inScope(r, into) {
+		notFound(w)
+		return
+	}
+	path, err := s.eng.SaveWorkflowIn(into, def)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("the copy does not load here: %w", err))
 		return

@@ -9,6 +9,7 @@ export const href = {
   projects: () => '#/projects',
   project: (p: string) => `#/projects/${e(p)}`,
   newWorkflow: (p: string) => `#/projects/${e(p)}/+new`,
+  fromTemplate: (p: string) => `#/projects/${e(p)}/+template`,
   workflow: (p: string, w: string) => `#/projects/${e(p)}/${e(w)}`,
   edit: (p: string, w: string) => `#/projects/${e(p)}/${e(w)}/edit`,
   startRun: (p: string, w: string) => `#/projects/${e(p)}/${e(w)}/run`,

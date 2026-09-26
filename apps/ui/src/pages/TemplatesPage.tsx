@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type Template } from '../api'
 import FileList from '../components/FileList'
 import { href } from '../lib/routes'
+import Crumbs from '../components/Crumbs'
 
 /** The gallery: workflows that exist to be copied.
  *
@@ -10,7 +11,7 @@ import { href } from '../lib/routes'
  *  That is why most ship with no skills on any step: the five phases of a bug
  *  fix are the same everywhere, and what a good report looks like in your shop
  *  is not. */
-export default function TemplatesPage() {
+export default function TemplatesPage({ project }: { project?: string }) {
   const [templates, setTemplates] = useState<Template[]>()
   const [err, setErr] = useState('')
 
@@ -22,9 +23,10 @@ export default function TemplatesPage() {
 
   return (
     <>
+      {project && <Crumbs items={[['Projects', href.projects()], [project, href.project(project)]]} />}
       <div className="head">
         <div>
-          <h1>Templates</h1>
+          <h1>{project ? `Start from a template in ${project}` : 'Templates'}</h1>
           <p>
             A starting point, not a black box. Copying one gives you an ordinary workflow file you
             own and can edit — the shape and the contracts are already wired, and the skills on each
@@ -40,19 +42,21 @@ export default function TemplatesPage() {
             No templates. A workflow becomes one by carrying <span className="mono">template:</span> and
             living in the templates directory.
           </div>
-          : templates.map(t => <TemplateCard key={t.name} t={t} onCopied={load} onError={setErr} />)}
+          : templates.map(t => <TemplateCard key={t.name} t={t} project={project} onCopied={load} onError={setErr} />)}
     </>
   )
 }
 
-function TemplateCard({ t, onCopied, onError }: { t: Template; onCopied: () => void; onError: (s: string) => void }) {
+function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?: string; onCopied: () => void; onError: (s: string) => void }) {
   const [as, setAs] = useState(t.name)
   const [busy, setBusy] = useState(false)
 
   const copy = () => {
     setBusy(true)
-    api.copyTemplate(t.name, as.trim())
-      .then(r => { location.hash = href.edit('local', r.name); onCopied() })
+    // Into the project the gallery was opened from; from the top-level
+    // gallery, the platform's own.
+    api.copyTemplate(t.name, as.trim(), project)
+      .then(r => { location.hash = href.edit(project || 'local', r.name); onCopied() })
       .catch(e => onError(String(e.message || e)))
       .finally(() => setBusy(false))
   }
@@ -112,7 +116,7 @@ function TemplateCard({ t, onCopied, onError }: { t: Template; onCopied: () => v
           {busy ? 'Copying…' : 'Copy and edit'}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
-          writes a workflow you own, then opens it in the builder
+          {project ? <>writes it into <b>{project}</b>, then opens it in the builder</> : 'writes a workflow you own into local, then opens it in the builder'}
         </span>
       </div>
     </div>

@@ -41,6 +41,27 @@ describe('the UI a person actually downloads', () => {
     expect(screen.getByText('New workflow').closest('a')?.getAttribute('href')).toBe('#/projects/local/+new')
   })
 
+  test('a project can be STARTED from the UI, and a template copied into it', async () => {
+    go('#/projects')
+    fireEvent.click(await screen.findByText('New project'))
+    fireEvent.change(screen.getByPlaceholderText('my-project'), { target: { value: 'started-here' } })
+    fireEvent.click(screen.getByText('Create project'))
+    // It lands on the new project, empty, with the two ways to begin.
+    await waitFor(() => expect(window.location.hash).toBe('#/projects/started-here'))
+    cleanup()
+    go('#/projects/started-here')
+    await screen.findByText('No workflows yet')
+    expect(screen.getByText('Start from a template').closest('a')?.getAttribute('href')).toBe('#/projects/started-here/+template')
+
+    // A template copied from inside the project belongs to the project.
+    const templates = await api.templates()
+    expect(templates.length).toBeGreaterThan(0)
+    const r = await api.copyTemplate(templates[0].name, 'first-one', 'started-here')
+    expect(r.path).toContain('started-here')
+    const p = await api.project('started-here')
+    expect(p.workflows).toContain('first-one')
+  })
+
   test("a workflow's page lists its runs, and each opens under the workflow", async () => {
     const run = await api.createRun('deterministic', { title: 'drill-down placement' })
     await waitFor(async () => {
@@ -152,7 +173,7 @@ describe('the UI a person actually downloads', () => {
   })
 
   test('every page renders without throwing', async () => {
-    for (const route of ['#/projects', '#/projects/local', '#/projects/local/deterministic', '#/projects/local/+new', '#/projects/local/deterministic/edit', '#/projects/local/deterministic/run', '#/workflows/new', '#/templates', '#/skills', '#/workers', '#/system']) {
+    for (const route of ['#/projects', '#/projects/local', '#/projects/local/deterministic', '#/projects/local/+new', '#/projects/local/+template', '#/projects/local/deterministic/edit', '#/projects/local/deterministic/run', '#/workflows/new', '#/templates', '#/skills', '#/workers', '#/system']) {
       const { container, unmount } = go(route)
       // An app that threw renders nothing; this is the cheap general detector
       // for the whole class of bug.

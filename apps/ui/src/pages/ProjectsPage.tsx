@@ -37,13 +37,13 @@ export default function ProjectsPage() {
           <button className="ghost" onClick={() => api.reload()
             .then(w => { setNote(`Reloaded — ${w.length} workflow(s).`); load() })
             .catch(e => setErr(e instanceof Error ? e.message : String(e)))}>Reload from disk</button>
-          <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'Add project'}</button>
+          <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'New project'}</button>
         </div>
       </div>
 
       {err && <div className="banner err">{err}</div>}
       {note && <div className="banner ok">{note}</div>}
-      {adding && <AddProject onDone={m => { setAdding(false); setNote(m); load() }} onError={setErr} />}
+      {adding && <NewProject onError={setErr} />}
 
       {/* A list, not a table: a person comes here to pick one and open it.
           Everything else about a project is on its own page. */}
@@ -101,47 +101,85 @@ export default function ProjectsPage() {
   )
 }
 
-function AddProject({ onDone, onError }: { onDone: (msg: string) => void; onError: (e: string) => void }) {
+type Mode = 'start' | 'add'
+
+/** Two ways a project comes to exist, side by side, because a person knows
+ *  which one they mean before they have typed anything: STARTING one (nothing
+ *  exists yet, or a folder exists with no workflows in it) or ADDING one (a
+ *  repository that already has `.wfx/workflows/`). Either way the next page is
+ *  the project itself, where the first workflow gets made. */
+function NewProject({ onError }: { onError: (e: string) => void }) {
+  const [mode, setMode] = useState<Mode>('start')
   const [repo, setRepo] = useState('')
   const [name, setName] = useState('')
   const [branch, setBranch] = useState('')
   const [busy, setBusy] = useState(false)
 
+  const ready = mode === 'start' ? !!(name.trim() || repo.trim()) : !!repo.trim()
   const submit = () => {
-    setBusy(true)
-    api.addProject({ repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined })
-      .then(p => onDone(`Added ${p.name} — ${p.workflows?.length ?? 0} workflow(s).`))
+    setBusy(true); onError('')
+    api.addProject(mode === 'start'
+      ? { create: true, name: name.trim() || undefined, repo: repo.trim() || undefined }
+      : { repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined })
+      .then(p => { location.hash = href.project(p.name) })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
 
   return (
     <div className="card">
-      <div className="subhead"><h2>Add a project</h2></div>
-      <div className="grid2">
-        <div className="bfield">
-          <label>Repository</label>
-          <input className="mono" value={repo} onChange={e => setRepo(e.target.value)}
-            placeholder="https://github.com/you/repo  ·  or  /path/to/checkout" />
-          <div className="hint">
-            A URL is cloned once. A local path is used <b>in place</b>, so you can edit a workflow
-            and run it again without pushing.
+      <div className="segmented" role="radiogroup" aria-label="How to create the project">
+        <button role="radio" aria-checked={mode === 'start'} className={mode === 'start' ? 'active' : ''}
+          onClick={() => setMode('start')}>
+          <b>Start a new project</b><span>empty, ready for its first workflow</span>
+        </button>
+        <button role="radio" aria-checked={mode === 'add'} className={mode === 'add' ? 'active' : ''}
+          onClick={() => setMode('add')}>
+          <b>Add an existing repository</b><span>that already has .wfx/workflows/</span>
+        </button>
+      </div>
+
+      {mode === 'start' ? (
+        <div className="grid2">
+          <div className="bfield">
+            <label>Name</label>
+            <input className="mono" value={name} autoFocus onChange={e => setName(e.target.value)} placeholder="my-project" />
+            <div className="hint">Letters, digits, dot, dash, underscore. It is half of <span className="mono">name/workflow</span>.</div>
+          </div>
+          <div className="bfield">
+            <label>Folder <span className="muted">(optional)</span></label>
+            <input className="mono" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/path/to/an/existing/checkout" />
+            <div className="hint">
+              Leave empty and the platform makes a new folder for it. Name an existing folder and it is
+              used <b>in place</b>: <span className="mono">.wfx/workflows/</span> is added and nothing else in it is touched.
+            </div>
           </div>
         </div>
-        <div className="bfield">
-          <label>Name</label>
-          <input className="mono" value={name} onChange={e => setName(e.target.value)} placeholder="taken from the repository" />
-          <div className="hint">Half of a qualified workflow name, as in <span className="mono">name/workflow</span>.</div>
+      ) : (
+        <div className="grid2">
+          <div className="bfield">
+            <label>Repository</label>
+            <input className="mono" value={repo} autoFocus onChange={e => setRepo(e.target.value)}
+              placeholder="https://github.com/you/repo  ·  or  /path/to/checkout" />
+            <div className="hint">
+              A URL is cloned once. A local path is used <b>in place</b>, so you can edit a workflow
+              and run it again without pushing.
+            </div>
+          </div>
+          <div className="bfield">
+            <label>Name</label>
+            <input className="mono" value={name} onChange={e => setName(e.target.value)} placeholder="taken from the repository" />
+          </div>
+          <div className="bfield">
+            <label>Branch <span className="muted">(cloned repositories only)</span></label>
+            <input className="mono" value={branch} onChange={e => setBranch(e.target.value)} placeholder="default branch" />
+          </div>
         </div>
-        <div className="bfield">
-          <label>Branch <span className="muted">(cloned repositories only)</span></label>
-          <input className="mono" value={branch} onChange={e => setBranch(e.target.value)} placeholder="default branch" />
-        </div>
-      </div>
-      <button disabled={!repo.trim() || busy} onClick={submit}>{busy ? 'Adding…' : 'Add project'}</button>
-      <div className="hint">
-        The repository needs a <span className="mono">.wfx/workflows/</span> directory; one without is
-        refused rather than added as something that does nothing.
+      )}
+      <div className="actions">
+        <button disabled={!ready || busy} onClick={submit}>
+          {busy ? 'Working…' : mode === 'start' ? 'Create project' : 'Add project'}
+        </button>
       </div>
     </div>
   )

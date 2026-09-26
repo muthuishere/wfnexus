@@ -40,6 +40,7 @@ export default function App() {
   if (r[0] === 'projects' && r[1]) {
     const p = d(r[1])
     if (r[2] === '+new') page = <WorkflowBuilderPage project={p} />
+    else if (r[2] === '+template') page = <TemplatesPage project={p} />
     else if (r[2] && r[3] === 'edit') page = <WorkflowBuilderPage project={p} name={d(r[2])} />
     else if (r[2] && r[3] === 'run') page = <NewRunPage project={p} name={d(r[2])} />
     else if (r[2] && r[3] === 'runs' && r[4]) page = <RunPage id={r[4]} />

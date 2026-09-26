@@ -490,23 +490,34 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, p)
 }
 
-// createProject clones a repository (or points at a local checkout, used in
-// place) and loads the workflows in its .wfx/workflows/.
+// createProject does one of two things:
+//
+//   - `create: true` STARTS a project: a fresh directory, or `repo` as an
+//     existing folder with no workflows yet (Engine.CreateProject).
+//   - otherwise it ADDS one that already has workflows: clones a repository,
+//     or points at a local checkout used in place.
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
 		Repo   string `json:"repo"`
 		Branch string `json:"branch"`
+		Create bool   `json:"create"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if body.Repo == "" {
-		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place"))
+	var src workflow.Source
+	var err error
+	if body.Create {
+		src, err = s.eng.CreateProject(r.Context(), body.Name, body.Repo)
+	} else if body.Repo == "" {
+		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place; "+
+			"to start an empty project, send `create: true`"))
 		return
+	} else {
+		src, err = s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
 	}
-	src, err := s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
 	if err != nil {
 		writeErr(w, 400, err)
 		return

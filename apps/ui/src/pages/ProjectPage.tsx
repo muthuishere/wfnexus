@@ -93,7 +93,10 @@ export default function ProjectPage({ name }: { name: string }) {
           <h1>{project.name}</h1>
           <p className="mono">{project.url || project.repo || project.dir}</p>
         </div>
-        <a href={href.newWorkflow(name)}><button>New workflow</button></a>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <a href={href.fromTemplate(name)}><button className="ghost">From a template</button></a>
+          <a href={href.newWorkflow(name)}><button>New workflow</button></a>
+        </div>
       </div>
 
       {!!project.problems?.length && (
@@ -117,9 +120,21 @@ export default function ProjectPage({ name }: { name: string }) {
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search workflows…" aria-label="Search workflows" />
             </div>)}
           {mine.length === 0 && (
+            // An empty project is the normal state right after creating one, so
+            // this is the start of the project rather than an absence: the two
+            // ways to begin, and where the files will go.
             <div className="empty">
-              No workflows yet. <a href={href.newWorkflow(name)}>Create one</a>, or add YAML files to
-              {' '}<span className="mono">.wfx/workflows/</span> in this repository.
+              <h2 style={{ color: 'var(--text)' }}>No workflows yet</h2>
+              <p style={{ margin: '6px 0 16px' }}>
+                Start from a template that already has the phases and gates wired, or build one step by step.
+              </p>
+              <div style={{ display: 'inline-flex', gap: 8 }}>
+                <a href={href.fromTemplate(name)}><button className="ghost">Start from a template</button></a>
+                <a href={href.newWorkflow(name)}><button>Build a workflow</button></a>
+              </div>
+              <p className="mono" style={{ marginTop: 16, fontSize: 12 }}>
+                saved in {project.local ? project.dir : `${project.repo || project.dir}/.wfx/workflows/`}
+              </p>
             </div>)}
           <ul className="wflist">
             {shown.map(w => {

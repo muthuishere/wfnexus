@@ -336,8 +336,8 @@ export const api = {
   /** The template gallery, and copying one into a workflow of your own. */
   templates: () => j<Template[]>(fetch('/api/templates')),
   template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
-  copyTemplate: (name: string, as: string) =>
-    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as })),
+  copyTemplate: (name: string, as: string, project?: string) =>
+    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
   /** Copying ANY workflow — one in an imported repository, not only a
    *  template — into your own, with every file beside it. */
   copyWorkflow: (name: string, as: string) =>
@@ -375,7 +375,9 @@ export const api = {
   tools: () => j<BuiltinTool[]>(fetch('/api/tools')),
   projects: () => j<Project[]>(fetch('/api/projects')),
   project: (name: string) => j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`)),
-  addProject: (body: { repo: string; name?: string; branch?: string }) =>
+  /** `create: true` STARTS a project (empty; `repo` is then an optional
+   *  existing folder). Without it, ADDS one that already has workflows. */
+  addProject: (body: { repo?: string; name?: string; branch?: string; create?: boolean }) =>
     j<Project>(post('/api/projects', body)),
   removeProject: (name: string) =>
     j(fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })),
