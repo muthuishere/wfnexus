@@ -485,13 +485,33 @@ type Actor struct {
 	// actor so a later audit can tell an unauthenticated era from an
 	// authenticated one.
 	Via string
+	// Inferred marks an ID that NOBODY TYPED — one the client filled in from its
+	// environment because no actor was given.
+	//
+	// It exists because the convenient default is a lie waiting to happen. `wfx`
+	// falls back to `$USER@hostname`, which is right for a person at their own
+	// terminal and wrong for an agent running the same command on their machine:
+	// the approval is then recorded against a human who never saw it. The
+	// platform cannot tell those two apart — the value is asserted, not
+	// authenticated — so it records that it could not, rather than presenting a
+	// guess as a decision.
+	//
+	// Only meaningful on the UNAUTHENTICATED path. An authenticated subject wins
+	// over a claimed actor (see api.actorOf), and a subject is never inferred.
+	Inferred bool
 }
 
 func (a Actor) String() string {
-	if a.Via == "" {
-		return a.ID
+	out := a.ID
+	if a.Via != "" {
+		out += " (via " + a.Via + ")"
 	}
-	return a.ID + " (via " + a.Via + ")"
+	if a.Inferred {
+		// Said plainly in the audit record itself, because that string is what
+		// somebody reads months later when they ask who approved this.
+		out += " [inferred from the environment; nobody asserted it]"
+	}
+	return out
 }
 
 func (a Actor) validate() error {

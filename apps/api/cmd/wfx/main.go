@@ -70,11 +70,11 @@ func run(args []string) error {
 	case "logs":
 		return logs(rest)
 	case "approve":
-		return act(first(rest), "approve", map[string]any{"actor": actorOf(rest)})
+		return act(first(rest), "approve", resolveBody(rest, nil))
 	case "reject":
-		return act(first(rest), "reject", map[string]any{"reason": flagOf(rest, "-m", "rejected"), "actor": actorOf(rest)})
+		return act(first(rest), "reject", resolveBody(rest, map[string]any{"reason": flagOf(rest, "-m", "rejected")}))
 	case "answer":
-		return act(first(rest), "answer", map[string]any{"answer": flagOf(rest, "-m", ""), "actor": actorOf(rest)})
+		return act(first(rest), "answer", resolveBody(rest, map[string]any{"answer": flagOf(rest, "-m", "")}))
 	case "retry":
 		return act(first(rest), "retry", map[string]any{"stepId": flagOf(rest, "--step", "")})
 	case "cancel":
@@ -625,13 +625,38 @@ func render(stepID, kind string, p map[string]any) string {
 // machine's user. It is a claim, not an authenticated identity — there is no
 // auth yet — but it is recorded, which is the whole point.
 func actorOf(args []string) string {
+	id, _ := actorClaim(args)
+	return id
+}
+
+// actorClaim is WHO is resolving the pause (ADR 0021), and whether anybody
+// actually said so.
+//
+// The fallback to `$USER@hostname` is right for a person at their own terminal
+// and wrong for an agent running the same command on that person's machine: the
+// approval is then recorded against a human who never saw it. So the guess is
+// still made — it is usually correct and demanding `--as` every time would be
+// noise — but it is REPORTED as a guess, and the server records it as one.
+func actorClaim(args []string) (id string, inferred bool) {
 	if a := flagOf(args, "--as", ""); a != "" {
-		return a
+		return a, false
 	}
 	if u := os.Getenv("USER"); u != "" {
-		return u + "@" + hostName()
+		return u + "@" + hostName(), true
 	}
-	return "unknown"
+	return "unknown", true
+}
+
+// resolveBody is the body every resolve verb sends: the caller's own fields plus
+// the actor claim and whether a person asserted it. One place, so a new verb
+// cannot forget the second half and silently record a guess as a decision.
+func resolveBody(args []string, extra map[string]any) map[string]any {
+	id, inferred := actorClaim(args)
+	body := map[string]any{"actor": id, "actorInferred": inferred}
+	for k, v := range extra {
+		body[k] = v
+	}
+	return body
 }
 
 func hostName() string {

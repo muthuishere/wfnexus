@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"net/http/httptest"
+
 	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 )
 
 // A workflow that asks for a label this machine does not serve. The pull it
@@ -90,5 +93,50 @@ func TestABundleWithNoRequirementsPullsUnchanged(t *testing.T) {
 	}
 	if len(out.Notes) != 0 {
 		t.Fatalf("a bundle requiring nothing produced notes: %v", out.Notes)
+	}
+}
+
+// An actor NOBODY TYPED is recorded as inferred, so the audit line cannot present
+// a guess as a decision.
+//
+// The convenient default is the whole problem: `wfx` falls back to
+// `$USER@hostname`, which is right for a person at their own terminal and wrong
+// for an agent running the same command on their machine — the approval is then
+// attributed to a human who never saw it. The platform cannot tell those apart, so
+// it says so.
+func TestAnInferredActorIsRecordedAsInferred(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		inferred bool
+		wantNote bool
+	}{
+		{"a person typed --as", false, false},
+		{"the client filled it in", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := engine.Actor{ID: "muthu@laptop", Via: "cli", Inferred: tc.inferred}
+			got := a.String()
+			if !strings.Contains(got, "muthu@laptop") || !strings.Contains(got, "via cli") {
+				t.Fatalf("the audit line lost who or how: %q", got)
+			}
+			if has := strings.Contains(got, "inferred"); has != tc.wantNote {
+				t.Errorf("inferred=%v produced %q", tc.inferred, got)
+			}
+		})
+	}
+}
+
+// And an AUTHENTICATED subject is never inferred: somebody logged in as them, so
+// the name was asserted by whoever held the credential. A client claiming
+// otherwise must not be able to weaken that.
+func TestAnAuthenticatedSubjectIsNeverInferred(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", nil)
+	r = r.WithContext(withSubject(r.Context(), &Subject{Name: "muthu"}))
+	got := actorOf(r, stepBody{Actor: "somebody-else", ActorInferred: true})
+	if got.ID != "muthu" {
+		t.Errorf("a body actor overrode the authenticated subject: %+v", got)
+	}
+	if got.Inferred {
+		t.Error("an authenticated subject was marked inferred; somebody authenticated as them")
 	}
 }

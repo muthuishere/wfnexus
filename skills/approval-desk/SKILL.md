@@ -27,9 +27,11 @@ environment — `$USER@hostname` (`cmd/wfx/main.go` `actorOf`) — which is the 
 human. So an agent that simply runs `wfx approve <run-id>` signs THEIR name to it,
 silently, and the audit record then says a person approved something no person saw.
 That default is right for a human at their own terminal and wrong for everything
-else, and nothing in the platform can currently tell the two apart: the value is
-asserted, not authenticated. Which is why this is a rule you follow rather than one
-you rely on.
+else. The platform now RECORDS that it could not tell: a resolution whose actor the
+client filled in from the environment is written as
+`muthu@laptop (via cli) [inferred from the environment; nobody asserted it]`, so an
+audit line never presents a guess as a decision. That makes your omission visible
+rather than invisible — it does not make it correct. Pass `--as` naming yourself.
 
 **Approve only what the human told you to approve, in this conversation.** A list of
 things waiting is not permission to clear the list.

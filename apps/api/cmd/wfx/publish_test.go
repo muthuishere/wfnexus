@@ -309,3 +309,33 @@ func TestAnEmptyCloneFromAMismatchedHeadIsRefusedRatherThanPublished(t *testing.
 		t.Fatalf("main went missing: %s", out)
 	}
 }
+
+// The resolve verbs send whether a PERSON asserted the actor. Without this the
+// server cannot tell `wfx approve <id>` run by a human at their terminal from the
+// same command run by an agent on that human's machine — and it records the human
+// either way.
+func TestResolveVerbsSayWhetherAPersonNamedTheActor(t *testing.T) {
+	t.Setenv("USER", "muthu")
+
+	body := resolveBody([]string{"run-1"}, nil)
+	if body["actorInferred"] != true {
+		t.Errorf("no --as given and the body does not say the actor was inferred: %#v", body)
+	}
+	if id, _ := body["actor"].(string); !strings.HasPrefix(id, "muthu@") {
+		t.Errorf("actor = %#v, want the environment fallback", body["actor"])
+	}
+
+	body = resolveBody([]string{"run-1", "--as", "agent:claude (for muthu)"}, nil)
+	if body["actorInferred"] != false {
+		t.Errorf("--as was given and the body still calls it inferred: %#v", body)
+	}
+	if body["actor"] != "agent:claude (for muthu)" {
+		t.Errorf("actor = %#v", body["actor"])
+	}
+
+	// A verb's own fields survive alongside, so reject still carries its reason.
+	body = resolveBody([]string{"run-1"}, map[string]any{"reason": "no down migration"})
+	if body["reason"] != "no down migration" || body["actorInferred"] != true {
+		t.Errorf("a verb's fields and the actor claim do not coexist: %#v", body)
+	}
+}

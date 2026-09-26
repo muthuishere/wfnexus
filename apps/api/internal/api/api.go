@@ -884,6 +884,11 @@ type stepBody struct {
 	// approver. It may also arrive as the X-WFX-Actor header, which is what a
 	// curl finds easier.
 	Actor string `json:"actor"`
+	// ActorInferred says the client FILLED THE ACTOR IN ITSELF rather than being
+	// told one — `wfx` falling back to `$USER@hostname` when no `--as` was given.
+	// Recorded so the audit line can say the name was not asserted by a person,
+	// which is the difference between a decision and a guess that looks like one.
+	ActorInferred bool `json:"actorInferred"`
 	// Ok distinguishes an ANSWER from a decline; Reason says which kind of
 	// non-answer it was — declined | cancelled | expired. Absent means Ok,
 	// because the overwhelmingly common call is somebody answering.
@@ -925,9 +930,14 @@ func actorOf(r *http.Request, b stepBody) engine.Actor {
 		via = "api"
 	}
 	if sub, ok := SubjectFrom(r.Context()); ok {
+		// A subject is never inferred: somebody authenticated as them.
 		return engine.Actor{ID: sub.Name, Via: via}
 	}
-	return engine.Actor{ID: b.Actor, Via: via}
+	// Unauthenticated: the claim is the client's, and so is its honesty about
+	// whether a person typed it. Trusting the flag is fine precisely because the
+	// ID beside it is already untrusted — a client that lied here would be
+	// lowering its own credibility, not raising it.
+	return engine.Actor{ID: b.Actor, Via: via, Inferred: b.ActorInferred}
 }
 
 // requireActor refuses a resolution that would record nobody. An empty actor is
