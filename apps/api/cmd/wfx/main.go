@@ -61,6 +61,8 @@ func run(args []string) error {
 		return apply(rest, true)
 	case "validate":
 		return apply(rest, false)
+	case "judge":
+		return cmdJudge(rest)
 	case "run":
 		return startRun(rest)
 	case "runs":
@@ -159,6 +161,7 @@ func usage() {
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
+  wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes
   wfx projects                     every project: workflows and run activity
   wfx project add <repo> [--as n]  add a project — a repo whose .wfx/workflows/ we run
   wfx project rm <name>            forget one (the clone stays on disk)

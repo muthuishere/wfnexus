@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/judge"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -31,26 +32,10 @@ type answerValue struct {
 	NearUniform   bool               `json:"nearUniform,omitempty"`
 }
 
-// toQuestions converts the YAML questions into toolnexus questions.
+// toQuestions converts the YAML questions into toolnexus questions — the same
+// conversion `wfx judge` uses (package judge), so a question means one thing.
 func toQuestions(qs map[string]workflow.Question) (map[string]tn.Question, error) {
-	out := map[string]tn.Question{}
-	for key, q := range qs {
-		switch q.Type {
-		case "noul":
-			nq := tn.NoulQuestion{Instructions: q.Instructions}
-			if q.True != "" || q.False != "" {
-				nq.Criteria = &tn.NoulCriteria{True: q.True, False: q.False}
-			}
-			out[key] = nq
-		case "choice":
-			out[key] = tn.ChoiceQuestion{Instructions: q.Instructions, Criteria: q.Options}
-		case "score":
-			out[key] = tn.ScoreQuestion{Instructions: q.Instructions, Criteria: q.Levels}
-		default:
-			return nil, fmt.Errorf("question %q: unknown type %q", key, q.Type)
-		}
-	}
-	return out, nil
+	return judge.Questions(qs)
 }
 
 // decide runs the step's classifier pass before its agent starts: typed
