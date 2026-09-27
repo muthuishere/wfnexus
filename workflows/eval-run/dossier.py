@@ -33,6 +33,10 @@ if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", run_id):
     print(f"run_id {run_id!r} is not a run id")
     sys.exit(2)
 
+if run_id == "00000000-0000-0000-0000-000000000000":
+    print(f"run_id is required — the zero UUID is a placeholder, not a real run")
+    sys.exit(2)
+
 SECRET_PATTERNS = [
     re.compile(r"(sk|pk|rk|xai|gsk|ghp|gho|ghs|github_pat)[-_][A-Za-z0-9_\-]{16,}"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|authorization)(\s*[:=]\s*|\s+bearer\s+)[\"']?[^\s\"',]{8,}"),
