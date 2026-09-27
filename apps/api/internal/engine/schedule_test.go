@@ -219,3 +219,60 @@ func TestRetryGivesUpLoudly(t *testing.T) {
 }
 
 var _ = context.Background
+
+// `when:` routes on the DAG and sequential paths too. It used to validate and
+// then be ignored there, so both branches of every guard ran: a monitoring
+// check that found a gap also ran its "healthy, count a clean run" step.
+func TestWhenGuardsRouteOutsideThePlanner(t *testing.T) {
+	for _, dag := range []bool{true, false} {
+		name := map[bool]string{true: "dag", false: "sequential"}[dag]
+		t.Run(name, func(t *testing.T) {
+			needs := func(ids ...string) []string {
+				if dag {
+					return ids
+				}
+				return nil
+			}
+			guarded := func(id string, path string, equals any, after ...string) workflow.Step {
+				s := dagStep(id, needs(after...)...)
+				s.When = []workflow.Guard{{Path: path, Equals: equals}}
+				return s
+			}
+			gate := guarded("gate", "input.restart", true, "sick")
+			gate.RequiresApproval = true
+			def := &workflow.Definition{
+				Name: "routed-" + name,
+				Steps: []workflow.Step{
+					dagStep("check"),
+					guarded("healthy", "check.ok", true, "check"),
+					guarded("sick", "check.ok", false, "check"),
+					guarded("after-healthy", "healthy.ok", true, "healthy"),
+					gate,
+				},
+			}
+			normalizeForTest(def)
+			// only two steps may call the model: check, then sick
+			llm := newFakeLLM(t,
+				submit(map[string]any{"ok": false}), finish(),
+				submit(map[string]any{"ok": true}), finish(),
+			)
+			h := newHarness(t, def, llm, "")
+			run := h.run(nil)
+			if run.Status != "done" {
+				t.Fatalf("run = %s (%s)", run.Status, run.Error)
+			}
+			want := map[string]string{
+				"check": "done", "sick": "done",
+				"healthy":       "skipped", // its guard is false
+				"after-healthy": "skipped", // what it reads was never produced
+				"gate":          "skipped", // skipped BEFORE anyone is asked to approve it
+			}
+			steps := h.steps(run.ID)
+			for id, status := range want {
+				if steps[id].Status != status {
+					t.Errorf("step %s = %s, want %s", id, steps[id].Status, status)
+				}
+			}
+		})
+	}
+}

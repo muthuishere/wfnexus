@@ -812,6 +812,12 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		if err != nil {
 			return err
 		}
+		// A guard that fails skips the step before its approval is asked for:
+		// nobody should be asked to approve a branch that is not taken.
+		guard := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
+		if e.skipUnlessGuarded(ctx, runID, step, guard) {
+			continue
+		}
 		if step.RequiresApproval && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")

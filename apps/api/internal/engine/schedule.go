@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
+	"github.com/muthuishere/wfnexus/apps/api/internal/planner"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -113,6 +114,12 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 					RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef,
 					Input: input, Steps: snapshot,
 				}
+				if e.skipUnlessGuarded(ctx, runID, step, data) {
+					mu.Lock()
+					done[step.ID] = true
+					mu.Unlock()
+					return
+				}
 				out, outcome := e.runOneStep(ctx, runID, def, step, data)
 				mu.Lock()
 				defer mu.Unlock()
@@ -138,6 +145,31 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 	}
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
+}
+
+// skipUnlessGuarded honours a step's `when:` on the DAG and sequential paths,
+// where order is written down and a guard is the only thing that routes. The
+// planned path routes on its own world and never reaches here. A guard is read
+// against what earlier steps returned (`<step>.<field>`) and the run's input
+// (`input.<key>`); a path that does not resolve is not a match, so a step behind
+// a skipped one is skipped too rather than run on a guess. Without this, `when:`
+// validated and was then ignored: every guarded branch ran.
+func (e *Engine) skipUnlessGuarded(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) bool {
+	if len(step.When) == 0 {
+		return false
+	}
+	w := planner.NewWorld()
+	for id, out := range data.Steps {
+		w.Assert(id, out)
+	}
+	if _, clash := data.Steps["input"]; !clash {
+		w.Assert("input", data.Input)
+	}
+	if guardFor(step.When)(w) {
+		return false
+	}
+	e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
+	return true
 }
 
 type stepOutcome int
