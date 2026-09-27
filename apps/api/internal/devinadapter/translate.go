@@ -321,3 +321,83 @@ func normalizeToolCalls(v any) ([]toolnexus.InProcessToolCall, error) {
 	}
 	return out, nil
 }
+
+// offeredTools is the set of function names the request offers.
+func offeredTools(requestBody []byte) map[string]bool {
+	var r struct {
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	_ = json.Unmarshal(requestBody, &r)
+	out := map[string]bool{}
+	for _, t := range r.Tools {
+		out[t.Function.Name] = true
+	}
+	return out
+}
+
+// TranslateNativeCalls turns the agent's own refused tool calls into the
+// platform's equivalent calls, keeping only tools the step offers. A read,
+// grep, glob, list or shell command the agent tried becomes read, grep, glob
+// or bash here — executed by the platform, under the step's allowlist and
+// guardrails. Anything with no safe equivalent (an edit, a fetch, a sub-task)
+// is dropped: it was refused, and it stays refused.
+func TranslateNativeCalls(native []NativeCall, offered map[string]bool) []toolnexus.InProcessToolCall {
+	str := func(m map[string]any, keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k].(string); ok && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	var out []toolnexus.InProcessToolCall
+	add := func(id, name string, args map[string]any) {
+		if offered[name] {
+			out = append(out, toolnexus.InProcessToolCall{ID: "native-" + id, Name: name, Arguments: args})
+		}
+	}
+	for _, c := range native {
+		in, tool := c.Input, strings.ToLower(c.Tool)
+		if in == nil {
+			continue
+		}
+		switch {
+		case tool == "read" || c.Kind == "read":
+			if p := str(in, "filePath", "path", "file"); p != "" {
+				add(c.ID, "read", map[string]any{"path": p})
+			}
+		case tool == "glob":
+			if pat := str(in, "pattern"); pat != "" {
+				args := map[string]any{"pattern": pat}
+				if p := str(in, "path"); p != "" {
+					args["path"] = p
+				}
+				add(c.ID, "glob", args)
+			}
+		case tool == "list":
+			if p := str(in, "path"); p != "" {
+				add(c.ID, "glob", map[string]any{"pattern": "*", "path": p})
+			}
+		case tool == "grep" || c.Kind == "search":
+			if pat := str(in, "pattern"); pat != "" {
+				args := map[string]any{"pattern": pat}
+				if p := str(in, "path"); p != "" {
+					args["path"] = p
+				}
+				if inc := str(in, "include"); inc != "" {
+					args["include"] = inc
+				}
+				add(c.ID, "grep", args)
+			}
+		case c.Kind == "execute" || tool == "bash":
+			if cmd := str(in, "command"); cmd != "" {
+				add(c.ID, "bash", map[string]any{"command": cmd})
+			}
+		}
+	}
+	return out
+}

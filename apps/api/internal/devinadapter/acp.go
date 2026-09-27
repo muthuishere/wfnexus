@@ -43,6 +43,41 @@ import (
 	"time"
 )
 
+// NativeCall is one of the agent's OWN tool calls that the client refused:
+// the tool, the ACP kind, and the arguments it announced.
+type NativeCall struct {
+	ID    string
+	Tool  string
+	Kind  string
+	Input map[string]any
+}
+
+// RefusedCalls returns the agent's own tool calls refused during the last
+// turn, with the arguments each announced.
+func (a *ACPAgent) RefusedCalls() []NativeCall {
+	a.refusedMu.Lock()
+	defer a.refusedMu.Unlock()
+	out := make([]NativeCall, 0, len(a.refusedCalls))
+	for _, c := range a.refusedCalls {
+		// arguments can arrive on an update AFTER the permission request
+		if seen, ok := a.nativeSeen[c.ID]; ok {
+			in := map[string]any{}
+			for k, v := range seen.Input {
+				in[k] = v
+			}
+			for k, v := range c.Input {
+				in[k] = v
+			}
+			c.Input = in
+			if c.Tool == "" {
+				c.Tool = seen.Tool
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // ErrEmptyTurn is a turn that ended without a single word of reply. An agent
 // whose own tool requests were all refused often does exactly this — it
 // stops rather than answering — so the adapter treats it as a reply to
@@ -194,8 +229,10 @@ type ACPAgent struct {
 	models  []ACPModel
 	current string
 
-	refusedMu sync.Mutex
-	refused   []string // the agent's own tools it asked for and was refused, this turn
+	refusedMu    sync.Mutex
+	refused      []string              // the agent's own tools it asked for and was refused, this turn
+	refusedCalls []NativeCall          // the same, with what each one meant to do
+	nativeSeen   map[string]NativeCall // tool calls the agent announced, by toolCallId
 
 	cwd            string  // the session's working directory, kept for fresh sessions
 	turnsInSession int     // prompts sent into the current session
@@ -278,7 +315,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	a.chunksMu.Lock()
 	a.chunks.Reset()
 	a.refusedMu.Lock()
-	a.refused = nil
+	a.refused, a.refusedCalls, a.nativeSeen = nil, nil, map[string]NativeCall{}
 	a.refusedMu.Unlock()
 	a.chunksMu.Unlock()
 
@@ -693,23 +730,57 @@ func (a *ACPAgent) read(stdout io.Reader) {
 func (a *ACPAgent) onUpdate(params json.RawMessage) {
 	var p struct {
 		Update struct {
-			SessionUpdate string `json:"sessionUpdate"`
-			Content       struct {
-				Text string `json:"text"`
-			} `json:"content"`
+			SessionUpdate string          `json:"sessionUpdate"`
+			Content       json.RawMessage `json:"content"`
+			ToolCallID    string          `json:"toolCallId"`
+			Title         string          `json:"title"`
+			Kind          string          `json:"kind"`
+			RawInput      map[string]any  `json:"rawInput"`
 		} `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
 		return
 	}
+	if u := p.Update; (u.SessionUpdate == "tool_call" || u.SessionUpdate == "tool_call_update") && u.ToolCallID != "" {
+		// The agent announcing one of its own tools: remember what it meant
+		// to do (the arguments often arrive only on an update), in case the
+		// call is refused and has to be handed to the platform instead.
+		a.refusedMu.Lock()
+		if a.nativeSeen == nil {
+			a.nativeSeen = map[string]NativeCall{}
+		}
+		c := a.nativeSeen[u.ToolCallID]
+		if c.Tool == "" && u.SessionUpdate == "tool_call" {
+			c.Tool = u.Title // the first title is the tool's name; later ones describe the call
+		}
+		if c.Kind == "" {
+			c.Kind = u.Kind
+		}
+		if len(u.RawInput) > 0 {
+			if c.Input == nil {
+				c.Input = map[string]any{}
+			}
+			for k, v := range u.RawInput {
+				c.Input[k] = v
+			}
+		}
+		a.nativeSeen[u.ToolCallID] = c
+		a.refusedMu.Unlock()
+		return
+	}
+	var content struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(p.Update.Content, &content)
+	p2 := struct{ Text string }{content.Text}
 	// Only the assistant's own message is the reply. Thought chunks and tool
 	// traffic are the agent narrating itself, and folding those in would put
 	// prose around the JSON the contract asks for.
-	if p.Update.SessionUpdate != "agent_message_chunk" || p.Update.Content.Text == "" {
+	if p.Update.SessionUpdate != "agent_message_chunk" || p2.Text == "" {
 		return
 	}
 	a.chunksMu.Lock()
-	a.chunks.WriteString(p.Update.Content.Text)
+	a.chunks.WriteString(p2.Text)
 	a.chunksMu.Unlock()
 }
 
@@ -721,8 +792,10 @@ func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) 
 			Kind     string `json:"kind"`
 		} `json:"options"`
 		ToolCall struct {
-			Title string `json:"title"`
-			Kind  string `json:"kind"`
+			ToolCallID string         `json:"toolCallId"`
+			Title      string         `json:"title"`
+			Kind       string         `json:"kind"`
+			RawInput   map[string]any `json:"rawInput"`
 		} `json:"toolCall"`
 	}
 	_ = json.Unmarshal(params, &p)
@@ -734,13 +807,28 @@ func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) 
 		if len(what) > 80 {
 			what = what[:80] + "…"
 		}
-		if what != "" {
-			a.refusedMu.Lock()
-			if len(a.refused) < 8 {
-				a.refused = append(a.refused, what)
-			}
-			a.refusedMu.Unlock()
+		a.refusedMu.Lock()
+		if what != "" && len(a.refused) < 8 {
+			a.refused = append(a.refused, what)
 		}
+		c := a.nativeSeen[p.ToolCall.ToolCallID]
+		if c.Tool == "" {
+			c.Tool = p.ToolCall.Title
+		}
+		if c.Kind == "" {
+			c.Kind = p.ToolCall.Kind
+		}
+		if c.Input == nil {
+			c.Input = map[string]any{}
+		}
+		for k, v := range p.ToolCall.RawInput {
+			c.Input[k] = v
+		}
+		c.ID = p.ToolCall.ToolCallID
+		if len(a.refusedCalls) < 8 {
+			a.refusedCalls = append(a.refusedCalls, c)
+		}
+		a.refusedMu.Unlock()
 	}
 
 	want := "reject"
