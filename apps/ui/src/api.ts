@@ -361,6 +361,21 @@ export const api = {
   deleteWorkflow: (name: string) =>
     j(fetch(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' })),
 
+  /** Git-native workflows: a save/delete on a git-backed project answers 202
+   *  with `{proposal}` instead of writing; these list and decide them. */
+  proposals: (f: { project?: string; workflow?: string; status?: string } = {}) => {
+    const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][])
+    return j<Proposal[]>(fetch('/api/proposals' + (p.toString() ? `?${p}` : '')))
+  },
+  proposal: (id: string) => j<{ proposal: Proposal; diff: string }>(fetch(`/api/proposals/${id}`)),
+  approveProposal: (id: string) => j<{ proposal: Proposal }>(post(`/api/proposals/${id}/approve`, { actor: actor() })),
+  rejectProposal: (id: string, reason: string) =>
+    j<{ proposal: Proposal }>(post(`/api/proposals/${id}/reject`, { reason, actor: actor() })),
+  workflowDrift: (project?: string) =>
+    j<WorkflowDrift[]>(fetch('/api/proposals/drift' + (project ? `?project=${encodeURIComponent(project)}` : ''))),
+  proposeDrift: (project: string, workflow: string) =>
+    j<{ proposal: Proposal; validation: string }>(post('/api/proposals/drift', { project, workflow, actor: actor() })),
+
   /** What is wired on this machine — the default model, every provider and
    *  classifier, the shell, and whether each could run right now. */
   doctor: () => j<Doctor>(fetch('/api/doctor')),
@@ -424,3 +439,15 @@ export const api = {
     return () => es.close()
   },
 }
+
+export type Proposal = {
+  id: string; project: string; workflow: string
+  kind: 'create' | 'edit' | 'delete'
+  branch: string; base: string; commit: string; prUrl: string
+  status: 'pending' | 'approved' | 'rejected' | 'merged'
+  reviewVerdict: 'approve' | 'reject' | 'unreviewed'; reviewReason: string; reviewScore?: number
+  note?: string; reason?: string
+  createdBy: string; decidedBy?: string; createdAt: string; decidedAt?: string
+}
+
+export type WorkflowDrift = { project: string; workflow: string; kind: 'create' | 'edit' | 'delete'; files: string[] }

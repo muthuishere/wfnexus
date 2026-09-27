@@ -86,6 +86,10 @@ type Config struct {
 	ClassifierBaseURL   string
 	ClassifierModel     string
 	ClassifierAPIKeyEnv string
+	// ProposalAutoApprove is the classifier score at or above which a workflow
+	// proposal the classifier approves is merged without a person. 0 (the
+	// default) is OFF: the human decides every proposal.
+	ProposalAutoApprove float64
 	// Explicit records which paths the operator actually STATED (env var or
 	// config file) rather than inheriting from the built-in default. It only
 	// matters for the embedded defaults: a stated path that does not exist is
@@ -118,6 +122,16 @@ func env(k, def string) string {
 func envInt(k string, def int) int {
 	if v := os.Getenv(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// envFloat reads a threshold in (0, 1]; anything else is the default.
+func envFloat(k string, def float64) float64 {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 && n <= 1 {
 			return n
 		}
 	}
@@ -219,6 +233,7 @@ func LoadWithFile(path string) (Config, error) {
 		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", or(f.Classifier.BaseURL, "https://openrouter.ai/api/v1")),
 		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", or(f.Classifier.Model, "typesafe/jev-1.13")),
 		ClassifierAPIKeyEnv: env("WFX_CLASSIFIER_API_KEY_ENV", or(f.Classifier.APIKeyEnv, "OPENROUTER_API_KEY")),
+		ProposalAutoApprove: envFloat("WFX_PROPOSAL_AUTO_APPROVE", 0),
 
 		Explicit: Explicit{
 			Workflows:  stated("WFX_WORKFLOWS_DIR", f.Paths.Workflows),

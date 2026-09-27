@@ -63,6 +63,7 @@ func DefaultRoles() map[string][]string {
 var resourcePerms = map[string][2]string{
 	"workflows":   {PermWorkflowsRead, PermWorkflowsWrite},
 	"dryrun":      {PermWorkflowsRead, PermWorkflowsRead},
+	"proposals":   {PermWorkflowsRead, PermWorkflowsWrite},
 	"templates":   {PermWorkflowsRead, PermWorkflowsWrite},
 	"runs":        {PermRunsRead, PermRunsWrite},
 	"skills":      {PermRegistryRead, PermRegistryWrite},

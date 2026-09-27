@@ -204,6 +204,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Delete("/classifiers/{name}", s.deleteClassifier)
 		r.Put("/workflows/{name}", s.saveWorkflow)
 		r.Delete("/workflows/{name}", s.deleteWorkflow)
+		// Git-native workflows: a save on a git-backed project is a proposal.
+		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		r.Post("/workflows/{name}/dryrun", s.dryRun)
@@ -674,6 +676,11 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", def.Name, name))
 		return
 	}
+	// A git-backed project gets a PROPOSAL (branch + commit, and a PR when
+	// there is a remote), answered 202; a plain directory is written directly.
+	if s.proposeSave(w, r, project, def) {
+		return
+	}
 	path, err := s.eng.SaveWorkflowIn(project, def)
 	if err != nil {
 		writeErr(w, 400, err)
@@ -684,6 +691,9 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
 	if !s.workflowInScope(w, r, urlName(r, "name")) {
+		return
+	}
+	if s.proposeDelete(w, r, urlName(r, "name")) {
 		return
 	}
 	if err := s.eng.DeleteWorkflow(urlName(r, "name")); err != nil {
