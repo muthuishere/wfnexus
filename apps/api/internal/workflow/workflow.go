@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -691,61 +690,17 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog, opts ...LoadOption) (ma
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
+	defs, err := parseDir(dir)
 	if err != nil {
 		return nil, err
 	}
+	g := &loadGroup{defs: defs, tasks: tasks}
+	newExpander([]*loadGroup{g}, opt).run(cat)
+	if g.err != nil {
+		return nil, g.err
+	}
 	out := map[string]*Definition{}
-	for _, e := range entries {
-		// A workflow is either a file or a DIRECTORY holding workflow.yaml plus
-		// the files that travel with it (files.go). Both forms load here; the
-		// flat one is untouched, so nothing that exists breaks.
-		var (
-			p     string
-			raw   []byte
-			files []File
-			err   error
-		)
-		if e.IsDir() {
-			raw, p, files, err = loadWorkflowDir(filepath.Join(dir, e.Name()))
-			if err != nil {
-				return nil, err
-			}
-			if raw == nil {
-				continue // a directory with no workflow.yaml is not ours
-			}
-		} else {
-			ext := filepath.Ext(e.Name())
-			if ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-			p = filepath.Join(dir, e.Name())
-			raw, err = os.ReadFile(p)
-			if err != nil {
-				return nil, err
-			}
-		}
-		d := &Definition{}
-		if err := yaml.Unmarshal(raw, d); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		d.Path = p
-		d.Files = files
-		for _, st := range d.Steps {
-			if len(st.Needs) > 0 {
-				d.authoredNeeds = true
-			}
-		}
-		if err := d.expandUses(tasks, opt); err != nil {
-			return nil, err
-		}
-		if err := d.expandJobs(tasks, opt); err != nil {
-			return nil, err
-		}
-		normalize(d)
-		if err := d.validate(cat); err != nil {
-			return nil, err
-		}
+	for _, d := range defs {
 		out[d.Name] = d
 	}
 	return out, nil

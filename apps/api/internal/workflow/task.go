@@ -133,13 +133,25 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			t = rt
 		} else {
 			local, ok := tasks[u.Task]
+			if opt.workflow != nil {
+				wt, found, err := opt.workflow(u.Task)
+				if err != nil {
+					return err
+				}
+				if found && ok {
+					return fmt.Errorf("%s: use %q is ambiguous — both a task and a workflow have that name", d.Name, u.Task)
+				}
+				if found {
+					local, ok = wt, true
+				}
+			}
 			if !ok {
 				known := make([]string, 0, len(tasks))
 				for n := range tasks {
 					known = append(known, n)
 				}
 				sort.Strings(known)
-				return fmt.Errorf("%s: unknown task %q — known: %v", d.Name, u.Task, known)
+				return fmt.Errorf("%s: unknown task %q — known: %v (or name a loaded workflow, `name` or `source/name`, that declares on: workflow_call)", d.Name, u.Task, known)
 			}
 			t = local
 		}
