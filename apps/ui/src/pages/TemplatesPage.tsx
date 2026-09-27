@@ -4,7 +4,7 @@ import FileList from '../components/FileList'
 import { href } from '../lib/routes'
 import Crumbs from '../components/Crumbs'
 import { ProposedNotice } from '../components/Changes'
-import { isProposal, type Proposal } from '../lifecycle'
+import { asProposal, type Proposal } from '../lifecycle'
 import { labelOf, useCategories } from '../lib/categories'
 
 /** The gallery: workflows that exist to be copied.
@@ -104,8 +104,8 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
     api.copyTemplate(t.name, as.trim(), project)
       .then(r => {
         // Into a repo, a copy is a proposed change, not a written file.
-        if (isProposal(r)) { setProposal(r); return }
-        location.hash = href.edit(project || 'local', r.name); onCopied()
+        const p = asProposal(r); if (p) { setProposal(p); return }
+        if ("name" in r) location.hash = href.edit(project || "local", r.name); onCopied()
       })
       .catch(e => onError(String(e.message || e)))
       .finally(() => setBusy(false))

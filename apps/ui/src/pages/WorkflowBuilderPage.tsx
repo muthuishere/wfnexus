@@ -11,7 +11,7 @@ import FileList from '../components/FileList'
 import { Field, IssueList } from '../components/builder/Bits'
 import Crumbs from '../components/Crumbs'
 import { href } from '../lib/routes'
-import { isProposal, type Proposal } from '../lifecycle'
+import { asProposal, type Proposal } from '../lifecycle'
 import { ProposedNotice } from '../components/Changes'
 
 /** The builder edits ONE thing at a time.
@@ -135,7 +135,7 @@ export default function WorkflowBuilderPage({ name, project }: { name?: string; 
       const r = await api.saveWorkflow(body.name, body, project)
       // A proposal is NOT saved: it is a change waiting on review. Saying
       // "Saved" would claim the workflow is live when it is not.
-      if (isProposal(r)) { setProposal(r); return }
+      const p = asProposal(r); if (p) { setProposal(p); return }
       setSaved(`Saved ${body.name}.`)
       if (!editing) location.hash = project ? href.edit(project, body.name) : `#/workflows/${body.name}/edit`
     } catch (e) {

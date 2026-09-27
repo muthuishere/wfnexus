@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api, type Template } from '../api'
 import { href } from '../lib/routes'
-import { isProposal, lifecycle, type Proposal } from '../lifecycle'
+import { asProposal, lifecycle, type Proposal } from '../lifecycle'
 import { ProposedNotice } from './Changes'
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -35,7 +35,7 @@ export default function ConnectRepo({ onDone }: { onDone?: () => void }) {
     if (!empty) return
     setBusy(true); setErr('')
     api.copyTemplate(t.name, t.name, empty)
-      .then(r => { if (isProposal(r)) setProposed(r); else location.hash = href.workflow(empty, t.name) })
+      .then(r => { const p = asProposal(r); if (p) setProposed(p); else location.hash = href.workflow(empty, t.name) })
       .catch(e => setErr(msg(e)))
       .finally(() => setBusy(false))
   }

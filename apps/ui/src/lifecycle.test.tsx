@@ -4,13 +4,13 @@ import Changes, { ProposalView, ReviewBadge, ProposedNotice } from './components
 import ConnectRepo from './components/ConnectRepo'
 import Checks, { checksFor } from './components/Checks'
 import { api } from './api'
-import { isProposal, prLabel, type Proposal, type ProposalDetail } from './lifecycle'
+import { asProposal, prLabel, type Proposal, type ProposalDetail } from './lifecycle'
 
-// The lifecycle API (proposals, review, drift) is being built on the server
-// alongside this UI, so the test server does not answer it yet. Those routes —
-// and only those — are answered here with the contract's exact shapes; every
-// other request still reaches the real server. When the server lands, delete
-// the stub and these become end-to-end like the rest.
+// The proposal routes are answered here in the SERVER's exact wire shape
+// (camelCase, flat review fields, wrapped in {proposal}) — the test server has
+// no git-backed project to open real proposals on. The server side is proven
+// end to end in apps/api/internal/api/proposals_test.go; this proves the UI
+// reads that shape. Every other request still reaches the real server.
 const thrown: unknown[] = []
 beforeAll(() => {
   window.addEventListener('error', e => thrown.push(e.error ?? e.message))
@@ -28,33 +28,41 @@ const deletion: Proposal = {
   status: 'pending', review: { verdict: 'unreviewed', reason: '', score: 0 },
 }
 
+// What the server sends for a proposal.
+const wire = (p: Proposal) => ({
+  id: p.id, project: p.project, workflow: p.workflow, kind: p.kind, branch: p.branch, base: 'main', commit: 'abc',
+  prUrl: p.pr_url || '', status: p.status, reviewVerdict: p.review.verdict, reviewReason: p.review.reason,
+  reviewScore: p.review.verdict === 'unreviewed' ? undefined : p.review.score, createdBy: 'ui', createdAt: '2026-09-27T10:00:00Z',
+})
+
 let calls: Array<{ method: string; url: string; body?: any }> = []
 let state: Record<string, ProposalDetail>
-let drift: Array<{ workflow: string; path: string }>
+let drift: Array<{ project: string; workflow: string; kind: string; files: string[] }>
 let passThrough: typeof fetch
 const json = (b: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } }))
 
 beforeEach(() => {
   calls = []
   state = { p1: { ...pending }, p2: { ...deletion, diff: '' } }
-  drift = [{ workflow: 'hand-made', path: '.wfx/workflows/hand-made.yaml' }]
+  drift = [{ project: 'local', workflow: 'hand-made', kind: 'create', files: ['.wfx/workflows/hand-made.yaml'] }]
   passThrough = globalThis.fetch
   globalThis.fetch = ((input: any, init?: any) => {
     const url = String(input), method = init?.method || 'GET'
     const body = init?.body ? JSON.parse(init.body) : undefined
     let m
-    if ((m = url.match(/^\/api\/projects\/([^/]+)\/proposals$/))) { calls.push({ method, url }); return json(Object.values(state)) }
+    if (url.match(/^\/api\/proposals\/drift/)) {
+      calls.push({ method, url, body })
+      if (method === 'GET') return json(drift)
+      drift = []
+      return json({ ok: true, validation: '', proposal: wire({ ...deletion, id: 'p3', kind: 'create', workflow: body.workflow, pr_url: 'https://github.com/acme/repo/pull/43' }) }, 202)
+    }
+    if (url.match(/^\/api\/proposals\?/)) { calls.push({ method, url }); return json(Object.values(state).map(wire)) }
     if ((m = url.match(/^\/api\/proposals\/([^/]+)\/(approve|reject)$/))) {
       calls.push({ method, url, body })
-      state[m[1]] = { ...state[m[1]], status: m[2] === 'approve' ? 'approved' : 'rejected' }
-      return json(state[m[1]])
+      state[m[1]] = { ...state[m[1]], status: m[2] === 'approve' ? 'merged' : 'rejected' }
+      return json({ ok: true, proposal: wire(state[m[1]]) })
     }
-    if ((m = url.match(/^\/api\/proposals\/([^/]+)$/))) { calls.push({ method, url }); return json(state[m[1]]) }
-    if (url.match(/\/drift\/propose$/)) {
-      calls.push({ method, url }); drift = []
-      return json({ ...deletion, id: 'p3', kind: 'create', workflow: 'hand-made', pr_url: 'https://github.com/acme/repo/pull/43' })
-    }
-    if (url.match(/\/drift$/)) { calls.push({ method, url }); return json(drift) }
+    if ((m = url.match(/^\/api\/proposals\/([^/]+)$/))) { calls.push({ method, url }); return json({ proposal: wire(state[m[1]]), diff: state[m[1]].diff }) }
     return passThrough(input, init)
   }) as typeof fetch
 })
@@ -62,8 +70,8 @@ afterEach(() => { globalThis.fetch = passThrough; cleanup(); expect(thrown).toEq
 
 describe('the lifecycle contract', () => {
   test('a save that answers with a proposal is told apart from one that wrote', () => {
-    expect(isProposal(pending)).toBe(true)
-    expect(isProposal({ name: 'x', path: '/y' })).toBe(false)
+    expect(asProposal({ ok: true, proposal: wire(pending) })).toEqual({ ...pending, diff: undefined, created_at: '2026-09-27T10:00:00Z' })
+    expect(asProposal({ name: 'x', path: '/y' })).toBeUndefined()
     expect(prLabel(pending)).toBe('PR #42')
     // No PR yet: the branch is the only honest name for it.
     expect(prLabel(deletion)).toBe('wfx/delete-failing')
@@ -110,7 +118,7 @@ describe('the Changes tab', () => {
     render(<Changes project="local" />)
     fireEvent.click(await screen.findByText('Propose commit'))
     await screen.findByText(/Proposed change:/)
-    expect(calls.some(c => c.method === 'POST' && c.url === '/api/projects/local/drift/propose')).toBe(true)
+    expect(calls.some(c => c.method === 'POST' && c.url === '/api/proposals/drift' && c.body.workflow === 'hand-made')).toBe(true)
   })
 })
 
@@ -118,7 +126,7 @@ describe('deciding a proposal', () => {
   test('Approve posts, and the proposal is then decided', async () => {
     render(<ProposalView id="p1" />)
     fireEvent.click(await screen.findByText('Approve'))
-    await screen.findByText('approved')
+    await screen.findByText('merged')
     expect(calls.find(c => c.url === '/api/proposals/p1/approve')?.method).toBe('POST')
     expect((screen.getByText('Approve') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -131,7 +139,7 @@ describe('deciding a proposal', () => {
     fireEvent.change(screen.getByLabelText('Why reject it?'), { target: { value: 'removes the approval gate' } })
     fireEvent.click(go)
     await screen.findByText('rejected')
-    expect(calls.find(c => c.url === '/api/proposals/p1/reject')?.body).toEqual({ reason: 'removes the approval gate' })
+    expect(calls.find(c => c.url === '/api/proposals/p1/reject')?.body).toMatchObject({ reason: 'removes the approval gate' })
   })
 })
 

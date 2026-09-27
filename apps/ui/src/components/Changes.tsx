@@ -159,7 +159,7 @@ export function Drift({ project, onProposed }: { project: string; onProposed?: (
         {!!rows?.length && (
           <button disabled={busy} onClick={() => {
             setBusy(true)
-            lifecycle.proposeDrift(project).then(p => { setDone(p); load(); onProposed?.() })
+            Promise.all(rows.map(r => lifecycle.proposeDrift(project, r.workflow))).then(ps => { setDone(ps[ps.length - 1]); load(); onProposed?.() })
               .catch(e => setErr(msg(e))).finally(() => setBusy(false))
           }}>Propose commit</button>)}
       </div>
@@ -169,7 +169,7 @@ export function Drift({ project, onProposed }: { project: string; onProposed?: (
         <>
           <p className="muted" style={{ marginBottom: 8 }}>On disk, but in no commit — nobody has reviewed them.</p>
           <ul className="driftlist">
-            {rows.map(r => <li key={r.path}><span className="mono">{r.workflow}</span> <span className="muted mono">{r.path}</span>{r.status && <span className="pill">{r.status}</span>}</li>)}
+            {rows.map(r => <li key={r.workflow}><span className="mono">{r.workflow}</span> <span className="muted mono">{r.path}</span>{r.status && <span className="pill">{r.status}</span>}</li>)}
           </ul>
         </>)}
     </div>

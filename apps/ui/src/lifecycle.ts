@@ -47,10 +47,29 @@ async function j<T>(r: Promise<Response>): Promise<T> {
 const post = (url: string, body?: unknown) =>
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
 
-/** True when a save/delete answered with a proposal rather than the old
- *  "written" workflow — so the page says "proposed", never "saved". */
-export function isProposal(x: unknown): x is Proposal {
-  return !!x && typeof x === 'object' && 'kind' in x && 'status' in x && 'branch' in x
+// Who decides — the same actor the run approve/reject sends (api.ts).
+function actor(): string {
+  try { return localStorage.getItem('wfx.actor') || 'ui' } catch { return 'ui' }
+}
+
+/** The server's proposal (camelCase, flat review fields). */
+type Wire = {
+  id: string; project: string; workflow: string; kind: ProposalKind; branch: string
+  prUrl?: string; status: ProposalStatus; reviewVerdict?: Verdict; reviewReason?: string
+  reviewScore?: number; createdAt?: string
+}
+const fromWire = (w: Wire): Proposal => ({
+  id: w.id, project: w.project, workflow: w.workflow, kind: w.kind, branch: w.branch,
+  pr_url: w.prUrl || undefined, status: w.status, created_at: w.createdAt,
+  review: { verdict: w.reviewVerdict || 'unreviewed', reason: w.reviewReason || '', score: w.reviewScore ?? 0 },
+})
+
+/** The proposal inside a save/delete/copy answer, or undefined when the
+ *  server wrote the workflow directly — so the page says "proposed", never
+ *  "saved", only when it really is a proposal. */
+export function asProposal(x: unknown): Proposal | undefined {
+  const w = (x as { proposal?: Wire } | null)?.proposal
+  return w && typeof w === 'object' && 'branch' in w ? fromWire(w) : undefined
 }
 
 /** "PR #12" from a GitHub-style URL; the branch when there is no PR yet. */
@@ -60,20 +79,36 @@ export function prLabel(p: Pick<Proposal, 'pr_url' | 'branch'>): string {
   return p.pr_url ? 'PR' : p.branch
 }
 
+type Drift = { project: string; workflow: string; kind: string; files: string[] }
+
 export const lifecycle = {
   /** Onboard a repository by its git URL (cloned once, on `branch`). */
   connect: (body: { url: string; branch?: string }) =>
     j<ConnectResult>(post('/api/projects', { repo: body.url, branch: body.branch || undefined })),
 
-  proposals: (project: string) => j<Proposal[]>(fetch(`/api/projects/${e(project)}/proposals`)),
-  proposal: (id: string) => j<ProposalDetail>(fetch(`/api/proposals/${e(id)}`)),
-  approve: (id: string) => j<Proposal>(post(`/api/proposals/${e(id)}/approve`)),
-  reject: (id: string, reason: string) => j<Proposal>(post(`/api/proposals/${e(id)}/reject`, { reason })),
+  proposals: (project: string, workflow?: string) =>
+    j<Wire[]>(fetch(`/api/proposals?project=${e(project)}${workflow ? `&workflow=${e(workflow)}` : ''}`))
+      .then(ws => (ws || []).map(fromWire)),
+  proposal: (id: string) =>
+    j<{ proposal: Wire; diff: string }>(fetch(`/api/proposals/${e(id)}`))
+      .then((r): ProposalDetail => ({ ...fromWire(r.proposal), diff: r.diff })),
+  approve: (id: string) =>
+    j<{ proposal: Wire }>(post(`/api/proposals/${e(id)}/approve`, { actor: actor() })).then(r => fromWire(r.proposal)),
+  reject: (id: string, reason: string) =>
+    j<{ proposal: Wire }>(post(`/api/proposals/${e(id)}/reject`, { reason, actor: actor() })).then(r => fromWire(r.proposal)),
 
   /** Deleting a workflow is a proposal too. */
   proposeDelete: (project: string, workflow: string) =>
-    j<Proposal>(fetch(`/api/workflows/${e(workflow)}?project=${e(project)}`, { method: 'DELETE' })),
+    j<unknown>(fetch(`/api/workflows/${e(workflow)}?project=${e(project)}`, { method: 'DELETE' })).then(r => {
+      const p = asProposal(r)
+      if (!p) throw new Error('deleted directly — this project is not a git repository')
+      return p
+    }),
 
-  drift: (project: string) => j<DriftEntry[]>(fetch(`/api/projects/${e(project)}/drift`)),
-  proposeDrift: (project: string) => j<Proposal>(post(`/api/projects/${e(project)}/drift/propose`)),
+  drift: (project: string) =>
+    j<Drift[]>(fetch(`/api/proposals/drift?project=${e(project)}`)).then(ds =>
+      (ds || []).map((d): DriftEntry => ({ workflow: d.workflow, path: d.files.join(', '), status: d.kind }))),
+  /** One proposal per drifted workflow — each is reviewed on its own. */
+  proposeDrift: (project: string, workflow: string) =>
+    j<{ proposal: Wire }>(post('/api/proposals/drift', { project, workflow, actor: actor() })).then(r => fromWire(r.proposal)),
 }

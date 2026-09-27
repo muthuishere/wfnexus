@@ -1,4 +1,3 @@
-import type { Proposal } from './lifecycle'
 
 // ── the step harness ────────────────────────────────────────────────────────
 // A step is a whole agent. These mirror apps/api/internal/workflow types.
@@ -316,8 +315,8 @@ export const api = {
   saveWorkflow: (name: string, definition: WorkflowDraft, project?: string) =>
     // With the lifecycle API a save is a PROPOSAL on a branch; an older server
     // still answers with the written workflow. Callers tell them apart with
-    // isProposal (lifecycle.ts).
-    j<Workflow | Proposal>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
+    // asProposal (lifecycle.ts).
+    j<Workflow | { ok: boolean; proposal: unknown }>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ definition }),
     })),
@@ -353,7 +352,7 @@ export const api = {
   templates: () => j<Template[]>(fetch('/api/templates')),
   template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
   copyTemplate: (name: string, as: string, project?: string) =>
-    j<{ name: string; path: string } | Proposal>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
+    j<{ name: string; path: string } | { ok: boolean; proposal: unknown }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
   /** Copying ANY workflow — one in an imported repository, not only a
    *  template — into your own, with every file beside it. */
   copyWorkflow: (name: string, as: string) =>
@@ -365,21 +364,6 @@ export const api = {
   removeWorker: (id: string) => j(fetch(`/api/workers/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   deleteWorkflow: (name: string) =>
     j(fetch(`/api/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' })),
-
-  /** Git-native workflows: a save/delete on a git-backed project answers 202
-   *  with `{proposal}` instead of writing; these list and decide them. */
-  proposals: (f: { project?: string; workflow?: string; status?: string } = {}) => {
-    const p = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][])
-    return j<Proposal[]>(fetch('/api/proposals' + (p.toString() ? `?${p}` : '')))
-  },
-  proposal: (id: string) => j<{ proposal: Proposal; diff: string }>(fetch(`/api/proposals/${id}`)),
-  approveProposal: (id: string) => j<{ proposal: Proposal }>(post(`/api/proposals/${id}/approve`, { actor: actor() })),
-  rejectProposal: (id: string, reason: string) =>
-    j<{ proposal: Proposal }>(post(`/api/proposals/${id}/reject`, { reason, actor: actor() })),
-  workflowDrift: (project?: string) =>
-    j<WorkflowDrift[]>(fetch('/api/proposals/drift' + (project ? `?project=${encodeURIComponent(project)}` : ''))),
-  proposeDrift: (project: string, workflow: string) =>
-    j<{ proposal: Proposal; validation: string }>(post('/api/proposals/drift', { project, workflow, actor: actor() })),
 
   /** What is wired on this machine — the default model, every provider and
    *  classifier, the shell, and whether each could run right now. */
@@ -444,15 +428,3 @@ export const api = {
     return () => es.close()
   },
 }
-
-export type Proposal = {
-  id: string; project: string; workflow: string
-  kind: 'create' | 'edit' | 'delete'
-  branch: string; base: string; commit: string; prUrl: string
-  status: 'pending' | 'approved' | 'rejected' | 'merged'
-  reviewVerdict: 'approve' | 'reject' | 'unreviewed'; reviewReason: string; reviewScore?: number
-  note?: string; reason?: string
-  createdBy: string; decidedBy?: string; createdAt: string; decidedAt?: string
-}
-
-export type WorkflowDrift = { project: string; workflow: string; kind: 'create' | 'edit' | 'delete'; files: string[] }
