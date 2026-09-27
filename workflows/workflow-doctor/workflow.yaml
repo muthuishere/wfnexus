@@ -164,6 +164,15 @@ steps:
       - incomplete: write the missing workflow.yaml from the folder's own
         scripts and the nearest complete sibling, and validate it.
 
+      Before committing, run `sec seal <file> --check` on every file you add or
+      change. A file holding a live value (a host, a key, a token) must not be
+      committed as it is: replace the literal with a reference by NAME —
+      `${NAME}` under the step's env: in workflow.yaml, `os.environ["NAME"]`
+      in a script, and no default that repeats the value. Name it for what it
+      is (PROM_URL, not whichever name sec matched). `wfx env --project <p>`
+      lists the names the store holds; a name it lacks goes in `needs_env`.
+      Never print, echo or copy a value to find out what it is.
+
       One commit per finding, message: what was broken, the evidence, the fix.
       No Co-authored-by line. Submit the fixes; do not write a file.
     output_schema:
@@ -180,6 +189,7 @@ steps:
               finding:  { type: string }
               files:    { type: array, items: { type: string } }
               summary:  { type: string }
+              needs_env: { type: array, items: { type: string } }
               test:     { type: string }
 
   # 4. Proof, not a claim.
