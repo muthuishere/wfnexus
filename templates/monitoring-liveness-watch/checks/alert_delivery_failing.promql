@@ -1,0 +1,6 @@
+# title: Alertmanager cannot deliver notifications via {integration}
+# severity: error
+# component: monitoring
+# key: integration
+# note: alerts fire but nobody is told.
+increase(alertmanager_notifications_failed_total[1h]) > 0

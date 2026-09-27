@@ -1,0 +1,18 @@
+# Asked by `wfx judge` (via verify.py) of EVERY line of the brief, with the
+# line's cited evidence. Bands: no < 0.30 < uncertain < 0.70 < yes.
+# yes -> printed · uncertain -> printed, marked "unconfirmed" · no -> removed.
+supported:
+  type: noul
+  instructions: >-
+    Read the CLAIM (and the REASON GIVEN, if any) and the EVIDENCE it cites.
+    Is everything the claim and its reason assert stated in, or directly
+    computable from, that evidence?
+  "true": >-
+    Every name, number, date, status and ask in the claim appears in the
+    evidence, or follows from it by simple arithmetic or by reading a field
+    (an unread mail addressed to me that asks a question needs a reply; a PR
+    listing me as a requested reviewer waits on my review).
+  "false": >-
+    The claim adds something the evidence does not contain — a deadline, a
+    person, an amount, an outcome, a sentiment, a cause — or says the
+    opposite of the evidence, or cites evidence about something else.

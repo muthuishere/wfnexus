@@ -1,0 +1,23 @@
+# Asked by `wfx judge` of each triaged finding. Bands: no < 0.30 < uncertain < 0.70 < yes.
+# yes -> filed (or merged into its existing issue); uncertain -> a person decides; no -> logged, never filed.
+actionable:
+  type: noul
+  instructions: >-
+    Given the evidence, is this a real, current production problem in the
+    product this repository builds, that an engineer should act on?
+  "true": >-
+    The evidence shows the product misbehaving now or about to — failed or
+    stuck work, data kept or lost against policy, monitoring blind, users
+    affected — and it is inside this product (its services, database, queues
+    or its own monitoring), not another product on the same servers.
+  "false": >-
+    It is expected behaviour (a delayed message, a scheduled grace period, a
+    validation error from bad user input), a one-off blip already recovered,
+    noise, or it belongs to a different product sharing the infrastructure.
+urgency:
+  type: choice
+  instructions: How soon must a person act on this?
+  options:
+    now: users are affected or data/compliance is at risk right now — act today
+    soon: degrading, blind or accumulating — act this week before it becomes an incident
+    later: real but harmless for now — worth a ticket in the backlog

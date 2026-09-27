@@ -1,0 +1,5 @@
+# title: Slow response: {instance}
+# severity: warning
+# component: edge
+# key: instance
+probe_duration_seconds > 3

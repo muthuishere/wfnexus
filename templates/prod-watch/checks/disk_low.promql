@@ -1,0 +1,5 @@
+# title: Disk under 15% free on {instance} {mountpoint}
+# severity: error
+# component: infrastructure
+# key: instance,mountpoint
+(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) < 0.15

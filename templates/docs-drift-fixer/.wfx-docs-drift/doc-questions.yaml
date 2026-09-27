@@ -1,0 +1,22 @@
+# Asked of every proposed doc edit by `wfx judge` (JEV, calibrated; bands
+# no < 0.30 < uncertain < 0.70 < yes). An edit is committed only when BOTH are yes.
+# The CODE EVIDENCE is read from the cited file by verify.py, never paraphrased
+# by the agent that wrote the edit.
+stale:
+  type: noul
+  instructions: >-
+    Does the OLD TEXT state something about this repository that the CODE
+    EVIDENCE and the SEARCH results contradict?
+  "true": >-
+    The old text names a path, tool, function, flag, default or behaviour of this
+    repository that the code shows is named differently now or no longer exists.
+  "false": >-
+    The old text is consistent with the code, or it describes another product, a
+    generic instruction for other repositories, a hypothetical, or history.
+supported:
+  type: noul
+  instructions: >-
+    Is every statement in the NEW TEXT supported by the CODE EVIDENCE, with
+    nothing that goes further than the evidence does?
+  "true": every name, path and behaviour in the new text is shown by the code evidence
+  "false": the new text states something the code evidence does not show, or overstates it

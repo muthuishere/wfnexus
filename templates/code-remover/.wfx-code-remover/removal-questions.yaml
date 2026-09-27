@@ -1,0 +1,33 @@
+# Asked of each dead-code candidate by `wfx judge` (JEV, calibrated; bands
+# no < 0.30 < uncertain < 0.70 < yes).
+#
+# Derived from skills/usage-prover/assets/removal-questions.yaml, with ONE
+# deliberate change: that file treats any text naming the symbol as a use, so a
+# doc that merely QUOTES dead code as an example (skills/dead-code-finder quotes
+# Engine.applyDecideGates) keeps it alive forever — measured: unused=0.34
+# (uncertain) with the quote mentioned, 0.83 (yes) without. Here text that
+# DEPENDS on the symbol (a template, config key, route string, CLI flag, an
+# instruction someone follows) still saves it; text that only DESCRIBES it is
+# updated in the removal's own commit by safe-remover, as that skill requires.
+unused:
+  type: noul
+  instructions: >-
+    Given the evidence, is this code unused at runtime, so that removing it
+    changes no behaviour and breaks nothing that depends on it?
+  "true": >-
+    Nothing live reaches it: no call from code that itself runs, no interface,
+    reflection or fmt use, no other build context; and no template, config
+    key, route string, CLI flag or instruction depends on it. Text that only
+    describes or quotes it (a doc example, a comment, a changelog line) can be
+    updated in the same commit and does not count as a use.
+  "false": >-
+    Something live reaches it, even indirectly, or a template, config key,
+    route string, CLI flag or instruction depends on it, or another build
+    context uses it.
+kind:
+  type: choice
+  instructions: What should happen to this code?
+  options:
+    remove: provably dead, nothing live reaches it, nothing depends on it by name, and deleting it is safe
+    keep: used, or depended on by name, or removing it would change behaviour or break a public contract
+    bug: it looks dead only because a caller was lost — a live sibling does the same job or a documented feature never triggers it; deleting it would hide a bug

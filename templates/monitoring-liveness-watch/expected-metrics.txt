@@ -1,0 +1,4 @@
+# One PromQL selector per line; each must return at least one series.
+# A metric that stops existing is the gap no threshold alert can see — the
+# alert on it evaluates to nothing and stays quiet. Add your custom metrics.
+up{job="prometheus"}

@@ -1,0 +1,29 @@
+# Asked by `wfx judge` of each triaged alert issue. Bands: no < 0.30 < uncertain < 0.70 < yes.
+# Both yes -> the triage comment is posted and its action is PROPOSED for approval.
+# Anything else -> a person looks at it; nothing is posted.
+verdict_holds:
+  type: noul
+  instructions: >-
+    Given the alert issue, the evidence gathered for it and the triage, is
+    the triage's verdict correct? The verdict is one of: real (a current
+    problem of this product), not_ours (belongs to another product on shared
+    infrastructure), duplicate (the same root cause as another open issue),
+    resolved (the signal is no longer present), noise (not actionable).
+  "true": >-
+    The evidence directly supports that verdict: for not_ours the failing
+    container/queue/table is named and is another product's; for duplicate
+    the other issue describes the same cause in the same component; for
+    resolved the check that raised it no longer raises it; for real the
+    signal is present and inside this product.
+  "false": >-
+    The evidence does not show it, points elsewhere, or a different verdict
+    fits better — e.g. two different errors in one service called
+    duplicates, or "resolved" when the check simply did not run.
+cause_supported:
+  type: noul
+  instructions: >-
+    Is the stated cause backed by something concrete in the triage — a quoted
+    log or metric line, a row count, a file:line in the code — rather than a
+    plausible story?
+  "true": the cause cites at least one concrete evidence line or code location that shows it
+  "false": the cause is asserted without a citation, or the citations do not show what is claimed

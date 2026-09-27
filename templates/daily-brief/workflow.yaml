@@ -1,0 +1,259 @@
+# daily-brief — the leader's 07:00 page: today, and what is waiting on me.
+#
+# EVIDENCE (docs/scenarios/top-6-by-category.md → general #5 `morning-brief`,
+# office-automation research P4):
+#   - "automated morning rundown: pulls calendar, priority emails … into one
+#     WhatsApp message. Took 30 mins to set up, saves me 10x that weekly"
+#     (r/automation 1l2voxr). Shipped as Activepieces "Daily Schedule & Task
+#     Briefing", Lindy "Catch me up", Copilot "Plan My Day"/"Executive
+#     Briefing", Zapier "Weekly Calendar Summary & Focus Tips by Claire Vo".
+#   - Fyxer's reply-decision model (openai.com/index/fyxer): the useful part of
+#     an inbox brief is "does this need a reply from me", not a list of mail.
+#   - Glean "Delegation tracker" / "intelligent reminders": asks and promises
+#     you made that have not closed.
+#   - apl-skill references/morning-brief.md BRIEF-1 (meetings, unread mail,
+#     Teams, PRs to review, PRs assigned, issues) — the backbone this runs.
+#
+# WHAT IT DOES BETTER THAN THOSE:
+#   1. Every line cites its source item (mail id, event, chat message, PR,
+#      issue, task) and a calibrated JEV classifier removes any line the cited
+#      source does not support — the catalogue's own verify rule, enforced.
+#   2. No silent failure: a mailbox, calendar, Tasks API or GitHub identity that
+#      could not be read is named at the top of the brief with the exact
+#      `apl login …` / fix. Every connected account is fanned out to, and the
+#      skill's own unread sweep (MAIL-X-3) is printed beside it as a cross-check.
+#   3. "Needs a decision" is ranked with a reason, excludes automated mail and
+#      threads I already answered (sent-mail thread match), and adds what the
+#      products above miss: my own promises from sent mail and the open action
+#      items meeting-actions recorded.
+#   4. Draft only. The brief is a local file (0600) + typed JSON; delivery by
+#      email is a separate step behind `requires_approval`.
+#
+# apl-skill verbs used (collect.py → sources.py): MAIL-X-3 bin/apl-mail-brief,
+# MAIL-R-18/16 (Gmail list+metadata), MAIL-R-4/13 (Graph inbox/sent),
+# MAIL-R-19/5 (threads with a person), CAL-R-7 / CAL-R-2, CHAT-1 + CHAT-5,
+# DRIVE-16 / DRIVE-2 (shared with me), DRIVE-14 / DRIVE-3 (files for a
+# meeting), CONT-5/CONT-6 + Graph People, tasks.md (Google Tasks, To Do),
+# GH-5/6/7/16/17 via GH-37/GH-36 `gh search` for every `apl with github:<label>`
+# identity, `apl features` (scope preflight), `apl accounts`.
+# deliver.py (only after approval): MAIL-W-13 / MAIL-W-11 / MAIL-W-6 / MAIL-W-1.
+#
+# Success number: minutes from 07:00 to "I know my day" (target: one read),
+# measured as claims kept / drafted and sources readable, printed on the brief.
+name: daily-brief
+template:
+  title: Daily brief — cited, ranked, draft-only
+  category: general
+  summary: >-
+    Weekday 07:00: today's meetings and what each needs, mail and chat that
+    need a decision (ranked, with why), PRs and issues waiting on you, your own
+    open promises and open alerts — from every connected Google/Microsoft
+    account and GitHub identity via apl. Every line cites its source and a
+    calibrated classifier removes unsupported lines; unreadable sources are
+    named. Nothing is sent without approval.
+  fill:
+    - "timezone (input tz) and the hour in the cron line"
+    - "gh_scope if your repositories are not all under your user and orgs"
+    - "delivery: deliver=gmail-draft|ms-draft to put the brief in your drafts after approval"
+
+description: >-
+  The leader's morning page. A read-only collector runs apl-skill's morning
+  brief recipes across every connected account, an agent drafts a ranked brief
+  in which every line cites a source item, a calibrated classifier checks each
+  line against its source, and the verified brief is saved as a private draft.
+  Delivery is a separate, approved step.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1-5"
+
+input_schema:
+  type: object
+  properties:
+    day:              { type: string,  title: "Day (YYYY-MM-DD; empty = today)", default: "" }
+    tz:               { type: string,  title: "Timezone (IANA; empty = this machine's)", default: "" }
+    lookback_h:       { type: integer, title: "Mail/chat look-back hours (0 = 24, or 72 on Monday)", default: 0 }
+    accounts:         { type: string,  title: "apl handles (comma list; empty = all)", default: "" }
+    gh_identities:    { type: string,  title: "GitHub identities (comma list of github:<label>; empty = all bound)", default: "" }
+    gh_scope:         { type: string,  title: "GitHub search scope (empty = user + orgs)", default: "" }
+    alert_label:      { type: string,  title: "Monitoring issue label", default: "sre-alert" }
+    internal_domains: { type: string,  title: "Internal email domains (empty = from accounts)", default: "" }
+    save_dir:         { type: string,  title: "Where the private brief is saved", default: "~/.local/share/wfx-lead/daily-brief" }
+    deliver:          { type: string,  title: "Delivery after approval", enum: [none, gmail-draft, gmail-send, ms-draft, ms-send], default: none }
+    deliver_handle:   { type: string,  title: "apl handle to deliver through", default: "" }
+    deliver_to:       { type: string,  title: "Deliver to (email)", default: "" }
+    dry_run:          { type: boolean, title: "Dry run — brief only; no state, no delivery", default: false }
+
+steps:
+  # 1. Read-only collection through apl-skill recipes. Exit 3 = nothing readable.
+  - id: collect
+    name: Collect the day (read-only, every account)
+    description: Calendar, mail, sent mail, Teams chat, tasks, shared docs, GitHub queue and alerts, open meeting actions.
+    run: |
+      DAY="{{ .Input.day }}" TZ_NAME="{{ .Input.tz }}" LOOKBACK_H="{{ .Input.lookback_h }}" \
+      ACCOUNTS="{{ .Input.accounts }}" GH_IDENTITIES="{{ .Input.gh_identities }}" GH_SCOPE="{{ .Input.gh_scope }}" \
+      ALERT_LABEL="{{ .Input.alert_label }}" INTERNAL_DOMAINS="{{ .Input.internal_domains }}" \
+      python3 collect.py
+    timeout_sec: 900
+    gates:
+      - field: exitCode
+        equals: 3
+        action: fail
+        message: "No source could be read — every account failed. See this step's output for the apl login to run."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 2. The only fuzzy part: rank and phrase. It reads files; it has no network.
+  - id: draft
+    name: Draft the brief
+    description: Ranked, cited lines in six sections, written to draft.json.
+    provider: claude-cli
+    skills: [leader-brief]
+    tools: [read, write, grep, glob]
+    max_turns: 40
+    soul: >-
+      You are a chief of staff who has read everything so the leader does not
+      have to. You would rather leave a line out than write one the source does
+      not say, and you always say why an item matters today.
+    prompt: |
+      The collector read the leader's accounts for {{ if .Input.day }}{{ .Input.day }}{{ else }}today{{ end }}.
+      Read ./evidence.md (one line per item; the sources block says what could
+      not be read) and ./evidence.json when a line needs more. Follow the
+      leader-brief skill exactly. apl-skill's references explain every field
+      (Gmail labels, Graph fields, chat types, gh search fields).
+
+      Write ./draft.json and submit the same object, with these sections in
+      this order (ids exact):
+        meetings    — each of today's meetings: time (in {{ if .Input.tz }}{{ .Input.tz }}{{ else }}the window's tz{{ end }}), who
+                      (count, external orgs), and what it needs from me (docs,
+                      the last thread with them, an open question). Skip
+                      declined/all-day reminders.
+        decide      — mail and chat that need a decision or a reply from me,
+                      ranked; `why` says what is being asked. Not automated mail,
+                      not threads with replied_by_me=true. At most 8.
+        waiting     — PRs awaiting my review, PRs/issues assigned to me, my PRs
+                      with changes requested. At most 8, oldest wait first.
+        commitments — promises I made in sent mail ("I'll send…", "will do by…")
+                      and open `action:` items, each with what was promised and
+                      when. At most 6.
+        monitoring  — open alert issues ({{ .Input.alert_label }}), newest first. At most 5.
+        fyi         — at most 3 other things worth knowing (a doc shared with me,
+                      an overdue task).
+      Give each section an `empty` text that is TRUE given the sources block
+      (e.g. "Mail could not be read" when mail was unreadable).
+    output_schema:
+      type: object
+      required: [title, sections]
+      properties:
+        title: { type: string }
+        sections:
+          type: array
+          items:
+            type: object
+            required: [id, heading, items]
+            properties:
+              id:      { type: string }
+              heading: { type: string }
+              empty:   { type: string }
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [text, cites]
+                  properties:
+                    text:  { type: string }
+                    cites: { type: array, items: { type: string } }
+                    why:   { type: string }
+                    rank:  { type: integer }
+        appendix:
+          type: array
+          items:
+            type: object
+            properties:
+              heading: { type: string }
+              body:    { type: string }
+
+  # 3. Verification before done: refs exist, and a calibrated classifier
+  #    checks each line against the evidence it cites.
+  - id: verify
+    name: Check every line against its source (JEV)
+    description: Removes lines with no or unknown citations and lines the cited source does not support; saves the brief.
+    run: |
+      python3 verify.py --name daily-brief --save-dir "{{ .Input.save_dir }}" --private
+    timeout_sec: 600
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The draft step wrote no draft.json."
+      - field: exitCode
+        equals: 4
+        action: fail
+        message: "The claim classifier could not run (TYPESAFE_API_KEY / OPENROUTER_API_KEY in the env store?) — the brief was saved marked NOT VERIFIED."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 4. Remember the watermark, and decide whether there is anything to deliver.
+  #    Exit 10 = nothing to deliver (dry run or deliver=none) → skip the gate.
+  - id: settle
+    name: Record the run; is delivery wanted?
+    run: |
+      if [ "{{ .Input.dry_run }}" = "true" ]; then echo "dry run: state untouched, nothing delivered"; exit 10; fi
+      wfx state set --workflow last_brief_at "$(date -u +%FT%TZ)"
+      if [ "{{ .Input.deliver }}" = "none" ]; then echo "brief saved as a private draft; no delivery configured"; exit 10; fi
+      echo "delivery requested: {{ .Input.deliver }} → {{ .Input.deliver_to }} (waits for approval)"
+    timeout_sec: 60
+    gates:
+      - field: exitCode
+        equals: 10
+        action: skip_to
+        skip_to: finish
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 5. The only outward act — after a person approves it.
+  - id: deliver
+    name: Deliver the brief (approved)
+    description: Puts the verified brief in the chosen mailbox as a draft or a mail to yourself.
+    requires_approval: true
+    run: |
+      DRY_RUN="{{ .Input.dry_run }}" python3 deliver.py --md brief.md --channel "{{ .Input.deliver }}" \
+        --handle "{{ .Input.deliver_handle }}" --to "{{ .Input.deliver_to }}" \
+        --subject "Daily brief {{ if .Input.day }}{{ .Input.day }}{{ else }}$(date +%F){{ end }}"
+    timeout_sec: 120
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: finish
+    name: Success numbers
+    run: |
+      python3 -c "import json; b=json.load(open('brief.json')); print(json.dumps(b['stats']))"
+    timeout_sec: 30
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

@@ -1,0 +1,5 @@
+# title: {job} is running an old config — the last reload failed
+# severity: warning
+# component: monitoring
+# key: job,instance
+({__name__=~"prometheus_config_last_reload_successful|alertmanager_config_last_reload_successful"} == 0)

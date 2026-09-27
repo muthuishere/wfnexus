@@ -1,0 +1,239 @@
+name: workflow-eval
+template:
+  title: Workflow eval — did that run really do its job?
+  category: development
+  summary: >-
+    Point it at a finished run of any workflow. It builds a dossier of what the
+    run was for and what it actually did, has four independent judges score it
+    in parallel — a calibrated classifier and three different model families —
+    and folds them into one scorecard with the disagreements called out.
+  fill:
+    - "a rubric input when the workflow's own description is not the bar you judge it by"
+    - "the model judges' providers, if gpt-oss, codex-cli or grok-cli are not the second opinions you trust"
+    - "the overall rule in scorecard.py, if 'JEV yes AND two model passes' is not your bar"
+
+description: >-
+  Evaluates a FINISHED run of any workflow. A command reads the run from the
+  platform (its steps, outputs, errors, approvals, definition) and its activity
+  log, checks that whatever it claims to have filed actually exists, and writes
+  a dossier. Four judges read the same dossier independently and in parallel —
+  JEV (a calibrated classifier: did it do the job, is it evidence-backed, would
+  a senior engineer accept it, how bad is its worst problem) and three model
+  judges on different providers (gpt-oss, codex-cli, grok-cli), each giving the
+  same typed verdict. A judge that cannot run is probed first and recorded as
+  UNAVAILABLE with the reason, never dropped. A final command builds the
+  scorecard: agreement between judges, disagreements named, and an overall
+  verdict that is PASS only when JEV says the run did its job AND at least two
+  model judges pass it.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  required: [run_id]
+  properties:
+    run_id: { type: string, title: "Run id to evaluate (must be finished)" }
+    rubric: { type: string, title: "Extra rubric — what 'did its job' means here (optional)", format: textarea }
+    api:    { type: string, title: "Platform API base", default: "http://127.0.0.1:8090" }
+
+steps:
+  # 1. Facts only. Exit 2 = the run could not be read, 4 = not finished: both stop the eval.
+  - id: dossier
+    name: Build the run's dossier
+    description: The stated job, every step's output and error, approvals, the log, and whether what it filed exists.
+    # The dossier also goes into this workflow's state under a key named for
+    # THIS run, so each judge gets it in its prompt and needs no file tool —
+    # a judge with only submit_output to call cannot wander off reading files.
+    run: |
+      ./dossier.py '{{ .Input.run_id }}' '{{ default "http://127.0.0.1:8090" .Input.api }}' || exit $?
+      wfx state set --workflow "dossier_${WFX_RUN_ID}" "$(cat dossier.md)" >/dev/null \
+        || { echo "could not hand the dossier to the judges (wfx state set failed)"; exit 5; }
+    timeout_sec: 240
+    output_schema: &run_output
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+    gates:
+      - field: ok
+        equals: false
+        action: fail
+        message: "No dossier, nothing to judge: {{ .Output.stdout }}"
+
+  # 2. Each model judge is PROBED before it is asked, so one that cannot run is
+  #    skipped and named on the scorecard — never a failed eval, never silence.
+  - id: probe_gptoss
+    name: Probe gpt-oss (OpenRouter)
+    description: Is OPENROUTER_API_KEY in this run's environment, and does OpenRouter accept it? Prints no value.
+    needs: [dossier]
+    run: |
+      if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+        echo "OPENROUTER_API_KEY is not in this run's environment (wfx env set OPENROUTER_API_KEY)"; exit 3
+      fi
+      code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -H "Authorization: Bearer ${OPENROUTER_API_KEY}" https://openrouter.ai/api/v1/key)
+      if [ "$code" = "200" ]; then echo "OPENROUTER_API_KEY is present in the run environment and OpenRouter accepts it"
+      else echo "OpenRouter refused the key or was unreachable: HTTP $code"; exit 3; fi
+    timeout_sec: 60
+    output_schema: *run_output
+
+  - id: probe_codex
+    name: Probe codex-cli
+    description: Is the codex CLI installed and logged in on this machine?
+    needs: [dossier]
+    run: |
+      command -v codex >/dev/null || { echo "codex is not on PATH"; exit 3; }
+      codex login status 2>&1 | head -1 | grep -qi "logged in" || { echo "codex is installed but not logged in: $(codex login status 2>&1 | head -1)"; exit 3; }
+      echo "codex installed and logged in"
+    timeout_sec: 60
+    output_schema: *run_output
+
+  - id: probe_grok
+    name: Probe grok-cli
+    description: Does the Grok CLI answer a one-line headless prompt within 90 seconds?
+    needs: [dossier]
+    run: |
+      G=$(command -v grok || echo "$HOME/.grok/bin/grok")
+      [ -x "$G" ] || { echo "grok CLI not found (looked on PATH and at ~/.grok/bin/grok)"; exit 3; }
+      "$G" -p "Reply with exactly: OK" > grok_probe.txt 2>&1 &
+      pid=$!
+      for i in $(seq 1 90); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; echo "grok did not answer within 90s"; exit 3; fi
+      grep -q "OK" grok_probe.txt && echo "grok answered headless" || { echo "grok answered badly: $(head -c 300 grok_probe.txt)"; exit 3; }
+    timeout_sec: 120
+    output_schema: *run_output
+
+  # 3a. The calibrated classifier. Needs TYPESAFE_API_KEY or OPENROUTER_API_KEY
+  #     in the env store; without either it records why and the scorecard says so.
+  - id: jev
+    name: Judge — JEV (calibrated)
+    description: did_the_job, evidence_backed, would_a_senior_engineer_accept (no/uncertain/yes) and the worst problem's severity.
+    needs: [dossier]
+    run: |
+      wfx judge -q ./questions.yaml --items dossier.jsonl > jev.jsonl
+      rc=$?
+      cat jev.jsonl
+      exit $rc
+    timeout_sec: 180
+    output_schema: *run_output
+
+  # 3b-d. Three model families, one prompt, one contract.
+  - id: judge_gptoss
+    name: Judge — gpt-oss
+    description: An independent verdict on the dossier from openai/gpt-oss-120b.
+    needs: [probe_gptoss]
+    when:
+      - path: probe_gptoss.ok
+        equals: true
+    provider: gpt-oss
+    skills: []
+    tools: []
+    max_turns: 6
+    max_attempts: 4
+    retry: { max_attempts: 3, backoff_sec: 20 }
+    soul: &judge_soul >-
+      You are a senior engineer auditing an automated workflow's run for its
+      owner. You are fair and hard to impress: a claim counts only when the
+      evidence in front of you shows it, "done" is not proof, and a skipped
+      gate or an unverified output is a finding even when the result looks fine.
+    prompt: &judge_prompt |
+      Evaluate ONE finished workflow run — {{ .Steps.dossier.stdout }}.
+
+      The dossier below holds the workflow's stated job, its own rules, every
+      step's output and errors, human approvals, what it filed (with whether each
+      link exists), and its log. It is everything there is; there are no files to read.
+
+      ===== DOSSIER =====
+      {{ index .Workflow (printf "dossier_%s" .RunID) }}
+      ===== END DOSSIER =====
+      {{ if .Input.rubric }}
+      The owner's rubric — judge against this as well as the stated job:
+      {{ .Input.rubric }}
+      {{ end }}
+      Decide:
+      - verdict: pass (did the job, you would sign off), partial (did some of it,
+        or did it but broke one of its own rules), fail (did not do the job, or
+        what it produced is wrong).
+      - did_the_job: 0..1, how completely the run did its stated job — a graded
+        decimal such as 0.65, not just 0 or 1.
+      - evidence_backed: 0..1, graded the same way: how well each claim is backed
+        by evidence in the dossier.
+      - false_positives: anything it filed/reported that is not real, duplicated or unsupported.
+      - missed: anything the job required that it did not do or did not catch.
+      - risks: rules it bent (gates, approvals, escalation of uncertain items),
+        steps that ran when they should not have or the reverse, numbers that disagree.
+      - rationale: one paragraph, citing the dossier.
+      Compare what each step SAYS against what the next step DID with it — that
+      is where runs go wrong. Empty lists are fine when there is nothing to say.
+
+      Finish with exactly ONE call to the submit_output tool carrying these seven
+      fields. Do not write the verdict as plain text or a JSON block in your reply —
+      only the submit_output call counts.
+    output_schema: &judge_schema
+      type: object
+      additionalProperties: false
+      required: [verdict, did_the_job, evidence_backed, false_positives, missed, risks, rationale]
+      properties:
+        verdict:         { type: string, enum: [pass, partial, fail] }
+        did_the_job:     { type: number, minimum: 0, maximum: 1 }
+        evidence_backed: { type: number, minimum: 0, maximum: 1 }
+        false_positives: { type: array, items: { type: string } }
+        missed:          { type: array, items: { type: string } }
+        risks:           { type: array, items: { type: string } }
+        rationale:       { type: string, description: "one paragraph, citing the dossier" }
+
+  - id: judge_codex
+    name: Judge — codex-cli
+    description: An independent verdict on the dossier from OpenAI's codex CLI.
+    needs: [probe_codex]
+    when:
+      - path: probe_codex.ok
+        equals: true
+    provider: codex-cli
+    skills: []
+    tools: []
+    max_turns: 6
+    max_attempts: 4
+    retry: { max_attempts: 3, backoff_sec: 20 }
+    soul: *judge_soul
+    prompt: *judge_prompt
+    output_schema: *judge_schema
+
+  - id: judge_grok
+    name: Judge — grok-cli
+    description: An independent verdict on the dossier from the Grok CLI, headless.
+    needs: [probe_grok]
+    when:
+      - path: probe_grok.ok
+        equals: true
+    provider: grok-cli
+    skills: []
+    tools: []
+    max_turns: 6
+    max_attempts: 4
+    retry: { max_attempts: 3, backoff_sec: 20 }
+    soul: *judge_soul
+    prompt: *judge_prompt
+    output_schema: *judge_schema
+
+  # 4. Deterministic fold. A skipped judge arrives here as "" and is reported
+  #    UNAVAILABLE with its probe's reason.
+  - id: scorecard
+    name: Build the scorecard
+    description: Agreement, disagreements, unavailable judges, and the overall verdict (pass = JEV yes AND two model passes).
+    needs: [jev, judge_gptoss, judge_codex, judge_grok]
+    run: |
+      cat > judges.json <<'WFX_JUDGES_EOF'
+      {
+        "jev":     {{ json .Steps.jev }},
+        "gpt_oss": { "probe": {{ json .Steps.probe_gptoss }}, "out": {{ json .Steps.judge_gptoss }} },
+        "codex":   { "probe": {{ json .Steps.probe_codex }},  "out": {{ json .Steps.judge_codex }} },
+        "grok":    { "probe": {{ json .Steps.probe_grok }},   "out": {{ json .Steps.judge_grok }} }
+      }
+      WFX_JUDGES_EOF
+      ./scorecard.py '{{ .Input.run_id }}'
+      wfx state rm --workflow "dossier_${WFX_RUN_ID}" >/dev/null 2>&1 || true
+    timeout_sec: 60
+    output_schema: *run_output

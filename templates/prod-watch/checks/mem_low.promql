@@ -1,0 +1,5 @@
+# title: Memory under 10% free on {instance}
+# severity: warning
+# component: infrastructure
+# key: instance
+(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.10
