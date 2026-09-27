@@ -56,6 +56,8 @@ func run(args []string) error {
 			return showWorkflow(rest[1])
 		}
 		return listWorkflows()
+	case "workflow":
+		return workflowCmd(rest)
 	case "apply":
 		if len(rest) >= 2 && rest[0] == "--from-run" {
 			return applyFromRun(rest[1], flagOf(rest, "--as", ""))
@@ -133,6 +135,9 @@ func usage() {
 
   wfx workflows                    list workflows
   wfx workflows show <name>        every step's harness: skills, tools, team, budget, gates
+  wfx workflow proposals [--project p] [--workflow w]  pending workflow changes (git branches/PRs)
+  wfx workflow approve <id>        merge a proposal; the project's checkout pulls
+  wfx workflow reject <id> --reason "why"  close its PR and delete its branch
   wfx apply <file.yaml>            validate and install a workflow
   wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing

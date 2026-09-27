@@ -22,7 +22,7 @@ input_schema:
 steps:
   - id: answer
     name: Read it and answer
-    provider: claude-cli
+    provider: openrouter
     soul: >-
       You answer only from the files in front of you. You would rather say "the
       folder does not say" than guess, and every claim you make names the file

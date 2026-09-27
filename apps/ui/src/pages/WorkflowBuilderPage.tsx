@@ -11,6 +11,8 @@ import FileList from '../components/FileList'
 import { Field, IssueList } from '../components/builder/Bits'
 import Crumbs from '../components/Crumbs'
 import { href } from '../lib/routes'
+import { asProposal, type Proposal } from '../lifecycle'
+import { ProposedNotice } from '../components/Changes'
 
 /** The builder edits ONE thing at a time.
  *
@@ -32,6 +34,7 @@ export default function WorkflowBuilderPage({ name, project }: { name?: string; 
   const [loadErr, setLoadErr] = useState('')
   const [saveErr, setSaveErr] = useState('')
   const [saved, setSaved] = useState('')
+  const [proposal, setProposal] = useState<Proposal>()
   const [busy, setBusy] = useState(false)
   const [showYaml, setShowYaml] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -124,12 +127,15 @@ export default function WorkflowBuilderPage({ name, project }: { name?: string; 
   }
 
   const save = async () => {
-    setBusy(true); setSaveErr(''); setSaved('')
+    setBusy(true); setSaveErr(''); setSaved(''); setProposal(undefined)
     try {
       const body = forSave(draft)
       // Saved INTO the project the builder was opened from — a repository's own
       // .wfx/workflows/, not the platform's directory.
-      await api.saveWorkflow(body.name, body, project)
+      const r = await api.saveWorkflow(body.name, body, project)
+      // A proposal is NOT saved: it is a change waiting on review. Saying
+      // "Saved" would claim the workflow is live when it is not.
+      const p = asProposal(r); if (p) { setProposal(p); return }
       setSaved(`Saved ${body.name}.`)
       if (!editing) location.hash = project ? href.edit(project, body.name) : `#/workflows/${body.name}/edit`
     } catch (e) {
@@ -165,6 +171,7 @@ export default function WorkflowBuilderPage({ name, project }: { name?: string; 
       {catalogErr && <div className="banner warn">Skill/tool registries unavailable — {catalogErr}.</div>}
       {saveErr && <div className="banner err"><b>The API refused this workflow.</b><div className="mono" style={{ marginTop: 6 }}>{saveErr}</div></div>}
       {saved && <div className="banner ok">{saved}</div>}
+      {proposal && <ProposedNotice proposal={proposal} />}
       {badJson.length > 0 && (
         <div className="banner err">
           <div className="errlist">

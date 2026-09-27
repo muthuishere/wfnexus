@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import StateStore from '../components/StateStore'
+import Changes, { ProposedNotice } from '../components/Changes'
+import Checks from '../components/Checks'
+import { lifecycle, type Proposal } from '../lifecycle'
 import Crumbs, { Tabs } from '../components/Crumbs'
 import { api, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
@@ -10,7 +13,7 @@ import { ago } from '../lib/time'
 import { href } from '../lib/routes'
 import { canDispatch, clip, sameWorkflow, shapeOf, summariseRun, triggerNames } from '../lib/workflow'
 
-type Tab = 'runs' | 'steps' | 'memory'
+type Tab = 'runs' | 'steps' | 'checks' | 'changes' | 'memory'
 
 /** One workflow, opened: what it has done (Runs), what it is (Steps), and what
  *  it remembers between runs (Memory). Editing opens the builder on this same
@@ -23,6 +26,7 @@ export default function WorkflowPage({ project, name }: { project: string; name:
   // Chosen once the runs arrive: a workflow that has run opens on its runs, one
   // that never has opens on its steps — there is nothing else to look at yet.
   const [tab, setTab] = useState<Tab>()
+  const [proposed, setProposed] = useState<Proposal>()
 
   const load = useCallback(() => {
     Promise.all([api.workflows(), api.runs({ project, workflow: name })])
@@ -87,6 +91,11 @@ export default function WorkflowPage({ project, name }: { project: string; name:
           {def.description && <p>{def.description}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="ghost danger-text" onClick={() => {
+            if (!confirm(`Propose deleting ${def.name}? It stays until the change is approved and merged.`)) return
+            lifecycle.proposeDelete(project, def.name).then(p => { setProposed(p); setTab('changes') })
+              .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+          }}>Delete</button>
           <a href={href.edit(project, def.name)}><button className="ghost">Edit steps</button></a>
           {canDispatch(def)
             ? <a href={href.startRun(project, def.name)}><button>Run</button></a>
@@ -97,10 +106,13 @@ export default function WorkflowPage({ project, name }: { project: string; name:
       </div>
 
       <Tabs<Tab> value={tab} onChange={setTab} tabs={[
-        { key: 'runs', label: 'Runs', count: runs.length },
+        { key: 'runs', label: 'History', count: runs.length },
         { key: 'steps', label: 'Steps', count: def.steps.length },
+        { key: 'checks', label: 'Checks' },
+        { key: 'changes', label: 'Changes' },
         { key: 'memory', label: 'Memory' },
       ]} />
+      {proposed && <ProposedNotice proposal={proposed} />}
 
       {tab === 'runs' && (
         <div className="card">
@@ -141,6 +153,8 @@ export default function WorkflowPage({ project, name }: { project: string; name:
 
       {/* The answer to "why does the scheduled run think it is already up to
           date?" — on the workflow's page instead of in a database client. */}
+      {tab === 'checks' && <Checks workflow={def} runs={runs} />}
+      {tab === 'changes' && <Changes project={project} workflow={def.name} />}
       {tab === 'memory' && <StateStore workflow={def.name} />}
     </>
   )

@@ -19,8 +19,8 @@ import os
 import sys
 
 MODEL_JUDGES = [("gpt_oss", "gpt-oss"),
-                ("codex", "codex-cli"),
-                ("grok", "grok-cli")]
+                ("codex", "gpt5"),
+                ("grok", "haiku")]
 
 run_id = sys.argv[1] if len(sys.argv) > 1 else "?"
 try:

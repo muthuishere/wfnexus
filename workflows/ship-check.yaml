@@ -74,7 +74,7 @@ jobs:
         # so it is a literal here by design: the platform refuses to promise a
         # model it cannot see on this machine. Swap the name for copilot-cli,
         # opencode or devin and nothing else in this file changes.
-        provider: claude-cli
+        provider: openrouter
         soul: >-
           You write commit messages the way a careful engineer does: a subject
           line that says what changed and why it matters, then prose that a

@@ -21,7 +21,7 @@ steps:
     # HTTP endpoint. Swap it for copilot-cli, opencode or devin — nothing else
     # in this file changes, because nothing else in a step depends on where its
     # turns come from.
-    provider: claude-cli
+    provider: openrouter
     soul: >-
       You answer from the repository in front of you, briefly, and you do not
       speculate about code you have not read.
