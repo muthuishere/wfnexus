@@ -210,7 +210,11 @@ func (s *Server) getProposal(w http.ResponseWriter, r *http.Request) {
 	diff := ""
 	if t, err := s.eng.TargetForProject(r.Context(), p.Project, p.Workflow); err == nil && t.Git {
 		gitMu.Lock()
-		diff, _ = t.Repo.Diff(r.Context(), p.Base, p.Branch)
+		if p.Status == proposal.StatusRejected || p.Status == proposal.StatusMerged {
+			diff, _ = t.Repo.CommitDiff(r.Context(), p.Commit)
+		} else {
+			diff, _ = t.Repo.Diff(r.Context(), p.Base, p.Branch)
+		}
 		gitMu.Unlock()
 	}
 	writeJSON(w, 200, map[string]any{"proposal": p, "diff": diff})
