@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/api"
@@ -210,6 +211,11 @@ func main() {
 	}
 
 	eng := engine.New(cfg, st, bl, defs, reg, cat)
+	// The engine has its secrets key now; nothing a run starts should inherit
+	// the server's own configuration (names only are logged, never values).
+	if gone := config.ScrubServerEnv(cfg); len(gone) > 0 {
+		log.Printf("config: %d server variable(s) kept out of what runs inherit: %s", len(gone), strings.Join(gone, " "))
+	}
 	eng.UseRemoteResolver(remote)
 
 	// Say what is actually wired before serving, not when a run fails on it.

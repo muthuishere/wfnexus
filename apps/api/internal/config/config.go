@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // splitList reads a comma-separated env var into trimmed, non-empty entries.
@@ -120,7 +122,21 @@ func stated(envKey, fromFile string) bool {
 	return os.Getenv(envKey) != "" || fromFile != ""
 }
 
+// read records every variable name the configuration is taken from, so the
+// server can take them out of its environment once it has read them.
+var (
+	readMu sync.Mutex
+	read   = map[string]bool{}
+)
+
+func noteRead(k string) {
+	readMu.Lock()
+	read[k] = true
+	readMu.Unlock()
+}
+
 func env(k, def string) string {
+	noteRead(k)
 	if v := os.Getenv(k); v != "" {
 		return v
 	}
@@ -128,6 +144,7 @@ func env(k, def string) string {
 }
 
 func envInt(k string, def int) int {
+	noteRead(k)
 	if v := os.Getenv(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
@@ -307,3 +324,35 @@ func boolStr(b *bool, def bool) string {
 }
 
 func join(list []string) string { return strings.Join(list, ",") }
+
+// ScrubServerEnv removes the server's own configuration from its process
+// environment: every variable the configuration was read from, and the one
+// holding the secrets key. Call it after the engine has loaded that key.
+//
+// Everything a run starts — a step's commands, an agent CLI, an ACP agent —
+// inherits this process's environment. Without this they saw WFX_RUNNER_TOKEN,
+// DATABASE_URL, the S3 keys and the platform's own secrets key; and a test
+// suite run by a step read WFX_DEFAULT_PROVIDER and WFX_ADDR and failed, which
+// a workflow reported as "the suite is already failing" (2026-09-27). Keys a
+// step is GIVEN (the env store, a provider's apiKeyEnv) are passed to it
+// explicitly and are not affected.
+func ScrubServerEnv(c Config) []string {
+	readMu.Lock()
+	names := make([]string, 0, len(read)+1)
+	for k := range read {
+		names = append(names, k)
+	}
+	readMu.Unlock()
+	if c.SecretKeyEnv != "" {
+		names = append(names, c.SecretKeyEnv)
+	}
+	var removed []string
+	for _, k := range names {
+		if _, ok := os.LookupEnv(k); ok {
+			_ = os.Unsetenv(k)
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(removed)
+	return removed
+}
