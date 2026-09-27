@@ -38,6 +38,14 @@
       "repairs": 2,
       "timeoutSec": 900
     },
+    "codex-acp": {
+      "kind": "acp",
+      "description": "OpenAI Codex over the Agent Client Protocol, through Zed's @zed-industries/codex-acp adapter (run with npx). Uses codex's own login (`codex login`). Advertises gpt-5.5, gpt-5.4, gpt-5.4-mini… as a model option; measured live 2026-09-27. gpt-5.5 because a ChatGPT-account login refuses the others it advertises (gpt-5.4-mini: \"not supported when using Codex with a ChatGPT account\", measured 2026-09-27); an API-key login can pick any.",
+      "preset": "codex",
+      "model": "gpt-5.5",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
     "codex-cli": {
       "kind": "cli",
       "description": "OpenAI's `codex` CLI as the model, on your own ChatGPT plan. `codex exec` is its documented non-interactive entry; --skip-git-repo-check because a turn runs in a scratch workdir, --color never so the reply carries no escapes. Verified live 2026-09-24 (12.7s, clean stdout). TERMS: UNVERIFIED — every OpenAI policy page returned HTTP 403 to the machine that checked on 2026-09-24, so no clause was actually read and none is asserted here. Treat it as you would claude-cli until you have read openai.com/policies/terms-of-use yourself: a subscription seat driven by a program may not be a permitted backend. The unambiguous path is the `openai` http provider with your own API key.",
@@ -225,6 +233,14 @@
         "{{prompt}}"
       ],
       "modelFlag": "--model",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "opencode-acp": {
+      "kind": "acp",
+      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key); `wfx models opencode-acp` lists everything opencode is configured for (~680 on 2026-09-27, the -free ones marked). Measured live 2026-09-27.",
+      "preset": "opencode",
+      "model": "opencode/mimo-v2.6-flash-free",
       "repairs": 2,
       "timeoutSec": 900
     },

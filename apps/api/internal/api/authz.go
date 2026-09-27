@@ -71,6 +71,7 @@ var resourcePerms = map[string][2]string{
 	"mcp":         {PermRegistryRead, PermRegistryWrite},
 	"providers":   {PermRegistryRead, PermRegistryWrite},
 	"classifiers": {PermRegistryRead, PermRegistryWrite},
+	"adapters":    {PermRegistryRead, PermRegistryWrite},
 	"registries":  {PermRegistryRead, PermRegistryWrite},
 	"models":      {PermRegistryRead, PermRegistryWrite},
 	"doctor":      {PermRegistryRead, PermRegistryWrite},

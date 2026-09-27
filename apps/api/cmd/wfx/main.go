@@ -89,6 +89,10 @@ func run(args []string) error {
 		return registry(first(rest))
 	case "doctor":
 		return doctor()
+	case "adapters":
+		return adapters()
+	case "models":
+		return providerModels(rest)
 	case "dryrun":
 		return dryRun(rest)
 	case "import":
@@ -161,6 +165,8 @@ func usage() {
   wfx state get --step k           one value; empty when never written
   wfx templates [name]             starting points to copy — the shape, minus your skills
   wfx new <template> --as <name>   copy one into a workflow of your own
+  wfx adapters                     agents wfnexus drives over ACP (devin, opencode, codex) and whether each is installed
+  wfx models <provider> [--free]   the models an acp provider's agent offers, asked live
   wfx workers                      machines in the pool, and the line that adds another
   wfx workers rm <id>              forget a machine
   wfx workers rotate               new join token; machines already joined keep working

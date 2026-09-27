@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	"os"
 	"os/exec"
 	"runtime"
@@ -290,6 +291,15 @@ func checkProviderWith(p catalog.Provider, stored map[string]string) DoctorProvi
 func providerBinary(p catalog.Provider) string {
 	if len(p.Command) > 0 {
 		return p.Command[0]
+	}
+	if p.Kind == catalog.KindACP {
+		name := p.Preset
+		if name == "" {
+			name = "devin"
+		}
+		if pr, ok := devinadapter.ACPPresets[name]; ok {
+			return pr.Bin // codex speaks ACP through npx, not through `codex`
+		}
 	}
 	if p.Preset != "" {
 		return p.Preset

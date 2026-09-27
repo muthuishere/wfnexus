@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -52,14 +53,54 @@ const (
 	ACPModePlan        = "plan"
 )
 
+// ACPPreset is how one agent speaks ACP: the program, its argv, how it is put
+// on a model, and the session mode that runs without stopping to ask.
+type ACPPreset struct {
+	Bin  string
+	Argv []string
+	// ModelFlag, when set, puts the model on the command line before Argv
+	// (devin's global --model). "" ⇒ the model is chosen over the protocol.
+	ModelFlag string
+	// Mode is the agent's own id for "act without asking".
+	Mode string
+	// Install is how a person gets the program, shown when it is missing.
+	Install string
+}
+
+// ACPPresets are the agents wfnexus knows by name. Each was measured over real
+// stdio ACP (2026-09-27): all three advertise their models as a "model"
+// configOption at session/new.
+var ACPPresets = map[string]ACPPreset{
+	// devin advertises only its current model over ACP; the others are reached
+	// with its --model flag, so the flag stays.
+	"devin": {Bin: "devin", Argv: []string{"acp"}, ModelFlag: "--model", Mode: ACPModeBypass,
+		Install: "curl -fsSL https://cli.devin.ai/install.sh | bash"},
+	// opencode offers every provider it is configured for (~680), free ones included.
+	"opencode": {Bin: "opencode", Argv: []string{"acp"}, Mode: "build",
+		Install: "brew install sst/tap/opencode"},
+	// codex speaks ACP through Zed's adapter; it uses codex's own login.
+	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
+		Install: "npm i -g @openai/codex && codex login"},
+}
+
 // ACP configures an ACPAgent.
 type ACP struct {
 	// Bin overrides the executable. "" ⇒ "devin".
 	Bin string
-	// Model is passed as a global --model before the acp subcommand. "" ⇒ the
-	// account default. Unlike the one-shot CLI this is fixed for the life of
-	// the process, since the session outlives a turn.
+	// Model is the model the session runs on. "" ⇒ the agent's own default.
+	// With ModelFlag it goes on the command line; otherwise it is chosen over
+	// the protocol after session/new and must be one the agent advertised, so
+	// a typo fails at start instead of running quietly on the default model.
 	Model string
+	// Argv is the agent's arguments (["acp"] for devin and opencode). nil ⇒
+	// the devin preset's.
+	Argv []string
+	// ModelFlag puts Model on the command line instead of choosing it over the
+	// protocol (devin's --model). "" ⇒ protocol.
+	ModelFlag string
+	// Env is appended to the agent's environment (which otherwise inherits
+	// this process's).
+	Env []string
 	// Cwd is the session's working directory. "" ⇒ the turn's Workdir.
 	Cwd string
 	// Mode is the session mode. "" ⇒ ACPModeBypass.
@@ -109,12 +150,33 @@ type ACPAgent struct {
 	chunks   strings.Builder
 
 	readErr chan error
+
+	// models is what the agent advertised at session/new; current is the
+	// model the session is on after start.
+	models  []ACPModel
+	current string
 }
+
+// ACPModel is one model an ACP agent offers.
+type ACPModel struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	// Free is true only when the id says so (opencode's "-free", OpenRouter's
+	// ":free"). Never guessed from price or name.
+	Free bool `json:"free"`
+}
+
+func isFree(id string) bool { return strings.HasSuffix(id, "-free") || strings.HasSuffix(id, ":free") }
 
 // NewACP builds an ACPAgent. Nothing starts until the first Execute.
 func NewACP(cfg ACP) *ACPAgent {
-	if cfg.Bin == "" {
-		cfg.Bin = "devin"
+	// No Argv means devin's way of speaking ACP (the adapter's original and
+	// default agent): `devin [--model m] acp`, whatever Bin says.
+	if d := ACPPresets["devin"]; cfg.Argv == nil {
+		cfg.Argv, cfg.ModelFlag = d.Argv, d.ModelFlag
+		if cfg.Bin == "" {
+			cfg.Bin = d.Bin
+		}
 	}
 	if cfg.Mode == "" {
 		cfg.Mode = ACPModeBypass
@@ -194,12 +256,11 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		return nil
 	}
 
-	args := []string{}
-	if a.cfg.Model != "" {
-		args = append(args, "--model", a.cfg.Model) // global flag, before the subcommand
+	var args []string
+	if a.cfg.ModelFlag != "" && a.cfg.Model != "" {
+		args = append(args, a.cfg.ModelFlag, a.cfg.Model) // a global flag, before the subcommand
 	}
-	args = append(args, "acp")
-	args = append(args, a.cfg.ExtraArgs...)
+	args = append(append(args, a.cfg.Argv...), a.cfg.ExtraArgs...)
 
 	// Deliberately NOT CommandContext: the process must outlive the turn that
 	// happened to start it. Close owns its lifetime.
@@ -209,6 +270,9 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		cwd = workdir
 	}
 	cmd.Dir = cwd
+	if len(a.cfg.Env) > 0 {
+		cmd.Env = append(os.Environ(), a.cfg.Env...)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -262,6 +326,14 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		return fmt.Errorf("devin-acp: session/new returned no session id")
 	}
 	a.session = sess.SessionID
+	a.models, a.current = parseModels(raw)
+
+	if a.cfg.ModelFlag == "" && a.cfg.Model != "" && a.cfg.Model != a.current {
+		if err := a.selectModel(startCtx); err != nil {
+			a.started = false
+			return err
+		}
+	}
 
 	// A failure here is not fatal: the mode is a convenience, and a build
 	// without set_mode still works — it just may stop to ask.
@@ -269,6 +341,111 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		"sessionId": a.session, "modeId": a.cfg.Mode,
 	})
 	return nil
+}
+
+// selectModel puts the session on cfg.Model over the protocol:
+// session/set_config_option (the "model" option every measured agent
+// advertises), falling back to the older session/set_model. When the agent
+// answers with its options, the model it reports is checked, so a model the
+// agent quietly ignored is an error, not a run on the wrong model.
+func (a *ACPAgent) selectModel(ctx context.Context) error {
+	want := a.cfg.Model
+	if len(a.models) > 0 && !hasModel(a.models, want) {
+		return fmt.Errorf("acp: the agent does not offer model %q (it offers %d; `wfx models <provider>` lists them)", want, len(a.models))
+	}
+	raw, err := a.call(ctx, "session/set_config_option", map[string]any{
+		"sessionId": a.session, "configId": "model", "value": want,
+	})
+	if err != nil {
+		if _, err2 := a.call(ctx, "session/set_model", map[string]any{
+			"sessionId": a.session, "modelId": want,
+		}); err2 != nil {
+			return fmt.Errorf("acp: could not select model %q: %v; %v", want, err, err2)
+		}
+		a.current = want
+		return nil
+	}
+	if _, cur := parseModels(raw); cur != "" && cur != want {
+		return fmt.Errorf("acp: asked for model %q, the agent is on %q", want, cur)
+	}
+	a.current = want
+	return nil
+}
+
+// Models starts the agent if needed and returns the models it offers and the
+// one this session is on. An agent that advertises none returns an empty list.
+func (a *ACPAgent) Models(ctx context.Context, workdir string) ([]ACPModel, string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.start(ctx, workdir); err != nil {
+		return nil, "", err
+	}
+	return a.models, a.current, nil
+}
+
+// parseModels reads both shapes agents use: configOptions (a "model" select,
+// possibly grouped — opencode) and the older models{availableModels,
+// currentModelId}.
+func parseModels(raw json.RawMessage) ([]ACPModel, string) {
+	var r struct {
+		ConfigOptions []struct {
+			ID           string          `json:"id"`
+			Category     string          `json:"category"`
+			CurrentValue string          `json:"currentValue"`
+			Options      json.RawMessage `json:"options"`
+		} `json:"configOptions"`
+		Models *struct {
+			CurrentModelID  string `json:"currentModelId"`
+			AvailableModels []struct {
+				ModelID string `json:"modelId"`
+				Name    string `json:"name"`
+			} `json:"availableModels"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(raw, &r) != nil {
+		return nil, ""
+	}
+	for _, o := range r.ConfigOptions {
+		if o.Category != "model" && o.ID != "model" {
+			continue
+		}
+		type opt struct {
+			Value   string `json:"value"`
+			Name    string `json:"name"`
+			Options []opt  `json:"options"`
+		}
+		var opts []opt
+		_ = json.Unmarshal(o.Options, &opts)
+		var out []ACPModel
+		var walk func([]opt)
+		walk = func(os []opt) {
+			for _, x := range os {
+				if x.Value != "" {
+					out = append(out, ACPModel{ID: x.Value, Name: x.Name, Free: isFree(x.Value)})
+				}
+				walk(x.Options)
+			}
+		}
+		walk(opts)
+		return out, o.CurrentValue
+	}
+	if r.Models != nil {
+		var out []ACPModel
+		for _, m := range r.Models.AvailableModels {
+			out = append(out, ACPModel{ID: m.ModelID, Name: m.Name, Free: isFree(m.ModelID)})
+		}
+		return out, r.Models.CurrentModelID
+	}
+	return nil, ""
+}
+
+func hasModel(ms []ACPModel, id string) bool {
+	for _, m := range ms {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // call sends a request and waits for its response.
@@ -301,15 +478,30 @@ func (a *ACPAgent) call(ctx context.Context, method string, params any) (json.Ra
 		var env struct {
 			Result json.RawMessage `json:"result"`
 			Error  *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
+				Code    int             `json:"code"`
+				Message string          `json:"message"`
+				Data    json.RawMessage `json:"data"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(raw, &env); err != nil {
 			return nil, err
 		}
 		if env.Error != nil {
-			return nil, fmt.Errorf("devin-acp: %s: %s (code %d)", method, env.Error.Message, env.Error.Code)
+			// "Internal error" alone hides the cause; agents put it in data
+			// (codex: "The 'gpt-5.4-mini' model is not supported when using
+			// Codex with a ChatGPT account").
+			detail := ""
+			if len(env.Error.Data) > 0 && string(env.Error.Data) != "null" {
+				var d struct {
+					Message string `json:"message"`
+				}
+				if json.Unmarshal(env.Error.Data, &d) == nil && d.Message != "" {
+					detail = ": " + d.Message
+				} else {
+					detail = ": " + string(env.Error.Data)
+				}
+			}
+			return nil, fmt.Errorf("acp: %s: %s (code %d)%s", method, env.Error.Message, env.Error.Code, detail)
 		}
 		return env.Result, nil
 	case err := <-a.readErr:
