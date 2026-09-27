@@ -87,7 +87,7 @@ def gather_evidence(f):
     run = next((r for r in reversed(f.get("run_ids") or []) if r), None)
     if run:
         for name, cmd in (("run.txt", ["wfx", "show", run]), ("run.log", ["wfx", "logs", run])):
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
             open(os.path.join(ev, name), "w").write(r.stdout[-200_000:])
         f["evidence_run"] = os.path.join(ev, "run.log")
 

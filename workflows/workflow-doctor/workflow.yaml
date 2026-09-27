@@ -314,6 +314,11 @@ steps:
       WFX_JSON
       python3 ./merge.py
     timeout_sec: 300
+    gates:
+      - field: ok
+        equals: false
+        action: fail
+        message: "a merge or its re-check failed — {{ .Output.stdout }}"
     output_schema:
       type: object
       properties:
@@ -334,6 +339,11 @@ steps:
     requires_approval: true
     run: *merge
     timeout_sec: 300
+    gates:
+      - field: ok
+        equals: false
+        action: fail
+        message: "a merge or its re-check failed — {{ .Output.stdout }}"
     output_schema:
       type: object
       properties:
@@ -356,8 +366,13 @@ steps:
       cat > diagnosis.json <<'WFX_JSON'
       {{ json .Steps.diagnose }}
       WFX_JSON
-      DRY_RUN={{ .Input.dry_run }} python3 ./report.py
+      DRY_RUN={{ .Input.dry_run }} COLLECT_EXIT={{ .Steps.collect.exitCode }} python3 ./report.py
     timeout_sec: 120
+    gates:
+      - field: ok
+        equals: false
+        action: fail
+        message: "the doctor could not look: {{ .Output.stdout }}"
     output_schema:
       type: object
       properties:

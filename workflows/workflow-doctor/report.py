@@ -27,6 +27,13 @@ def state(key, value=None):
 
 
 def main():
+    # A collector that crashed has not looked, so "nothing found" would be a
+    # lie: fail the run loudly instead of ending `done` (seen: a UnicodeDecodeError
+    # in collect, and the run reported done with every step skipped).
+    code = os.environ.get("COLLECT_EXIT", "")
+    if code not in ("0", "3", "5"):
+        print(f"collect did not finish (exit {code or 'unknown'}): nothing was checked — see the collect step's stderr")
+        return 1
     found = load("findings.json", {"findings": []})
     diag = {d["finding"]: d for d in load("diagnosis.json", {}).get("diagnoses", [])}
     prs = {p["finding"]: p["url"] for p in load("prs.json", {}).get("prs", [])}
@@ -91,4 +98,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())

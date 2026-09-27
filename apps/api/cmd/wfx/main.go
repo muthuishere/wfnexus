@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -1272,6 +1273,11 @@ func firstLine(s string) string {
 func clip(s string, n int) string {
 	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ⏎ ")
 	if len(s) > n {
+		// cut on a rune boundary: slicing bytes split a multi-byte character
+		// (a ⏎ or —) and made the whole log invalid UTF-8 for any reader
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
 		return s[:n] + "…"
 	}
 	return s
