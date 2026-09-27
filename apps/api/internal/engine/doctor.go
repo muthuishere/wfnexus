@@ -112,12 +112,14 @@ type DoctorCount struct {
 // everything it reports is a file, an environment variable name or a PATH
 // lookup, so it is safe to run at boot.
 func (e *Engine) Doctor() Doctor {
+	// the platform's env store supplies keys too — presence only, never a value
+	sysEnv, _ := e.platformEnv(context.Background(), "")
 	d := Doctor{
 		Problems: []string{},
 		Notes:    []string{},
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
-			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "",
+			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "" || sysEnv[e.cfg.LLMAPIKeyEnv] != "",
 		},
 		Models: e.Models(),
 	}
@@ -142,7 +144,7 @@ func (e *Engine) Doctor() Doctor {
 	}
 
 	for _, p := range e.catalog.Providers.List() {
-		d.Providers = append(d.Providers, checkProvider(p))
+		d.Providers = append(d.Providers, checkProviderWith(p, sysEnv))
 	}
 	sort.Slice(d.Providers, func(i, j int) bool { return d.Providers[i].Name < d.Providers[j].Name })
 
@@ -224,7 +226,13 @@ func (e *Engine) Doctor() Doctor {
 // runner, which must not grow a second readiness path.
 func InspectProvider(p catalog.Provider) DoctorProvider { return checkProvider(p) }
 
-func checkProvider(p catalog.Provider) DoctorProvider {
+func checkProvider(p catalog.Provider) DoctorProvider { return checkProviderWith(p, nil) }
+
+// checkProviderWith also counts a key held in the platform's env store, which
+// is where a run's key actually comes from; `stored` holds names → values and
+// only presence is read. Without it every OpenRouter provider read NOT READY
+// while every real run used the key.
+func checkProviderWith(p catalog.Provider, stored map[string]string) DoctorProvider {
 	out := DoctorProvider{Name: p.Name, Kind: string(p.Kind), Model: p.Model, Ready: true, State: bundle.StateReady}
 	switch p.Kind {
 	case catalog.KindMock:
@@ -239,7 +247,7 @@ func checkProvider(p catalog.Provider) DoctorProvider {
 		// same rule the runtime path applies. Without this, a provider that is
 		// correctly configured reports `NOT READY:  is not set`, naming no
 		// variable because there is none to name. The value is never read.
-		if p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) == "" {
+		if p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) == "" && stored[p.APIKeyEnv] == "" {
 			out.Ready, out.State, out.Problem = false, bundle.StateMissing, p.APIKeyEnv+" is not set"
 		}
 		return out
