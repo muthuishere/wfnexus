@@ -310,7 +310,7 @@ func listWorkflows() error {
 
 func showWorkflow(name string) error {
 	var w wf
-	if err := call("GET", "/api/workflows/"+name, nil, &w); err != nil {
+	if err := call("GET", "/api/workflows/"+url.PathEscape(name), nil, &w); err != nil {
 		return err
 	}
 	fmt.Printf("%s — %s\n%s\n\n", w.Name, firstLine(w.Description), w.Path)
@@ -402,7 +402,7 @@ func apply(args []string, install bool) error {
 	var res struct {
 		Path string `json:"path"`
 	}
-	if err := call("PUT", "/api/workflows/"+name, map[string]any{"definition": def}, &res); err != nil {
+	if err := call("PUT", "/api/workflows/"+url.PathEscape(name), map[string]any{"definition": def}, &res); err != nil {
 		return err
 	}
 	fmt.Printf("installed %s → %s\n", name, res.Path)
@@ -520,7 +520,7 @@ func startRun(args []string) error {
 	var created struct {
 		Run runRow `json:"run"`
 	}
-	if err := call("POST", "/api/workflows/"+name+"/runs", input, &created); err != nil {
+	if err := call("POST", "/api/workflows/"+url.PathEscape(name)+"/runs", input, &created); err != nil {
 		return err
 	}
 	r := created.Run
