@@ -113,6 +113,40 @@ func TestAnswerResolvesANeedsInputGate(t *testing.T) {
 	}
 }
 
+// A run step parked by a gate reads the person's reply from extra_context —
+// the bare reply, as the UI form writes it — never from `answers`, which also
+// holds the gate's own message. Here the message shows a reply EXAMPLE; a step
+// that parsed `answers` would read "approve S9" back as a decision.
+func TestAnswerToAGateReachesTheStepAsExtraContextOnly(t *testing.T) {
+	def := &workflow.Definition{Name: "gatereply", Steps: []workflow.Step{
+		{
+			ID: "decide", OutputSchema: workflow.RunOutputSchema(),
+			Run: `printf '%s' '{{ .Input.extra_context }}' | grep -q . || exit 20; echo "reply=[{{ .Input.extra_context }}]"`,
+			Gates: []workflow.Gate{{Field: "exitCode", Equals: 20, Action: "needs_input",
+				Message: "Decide S1 and S2. Reply like: approve S9"}},
+		},
+		{ID: "after", Run: "echo went on", OutputSchema: workflow.RunOutputSchema()},
+	}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	run := h.run(nil)
+	if run.Status != "needs_input" {
+		t.Fatalf("run = %s (%q), want needs_input", run.Status, run.Error)
+	}
+	if err := h.eng.AnswerQuestion(context.Background(), run.ID, "decide",
+		tn.Answer{Ok: true, Data: map[string]any{tn.RelayOutputKey: "approve S1"}}, Actor{ID: "alice", Via: "cli"}); err != nil {
+		t.Fatal(err)
+	}
+	run = h.wait(run.ID)
+	if run.Status != "done" {
+		t.Fatalf("after the answer run = %s (%s)", run.Status, run.Error)
+	}
+	out := output(t, h.steps(run.ID)["decide"])
+	if s, _ := out["stdout"].(string); !strings.Contains(s, "reply=[approve S1]") {
+		t.Fatalf("the step must see exactly the reply, got %q", s)
+	}
+}
+
 // A fail gate stops the run with the rendered reason and leaves later steps alone.
 func TestFailGateStopsTheRun(t *testing.T) {
 	def := gated("failgate",

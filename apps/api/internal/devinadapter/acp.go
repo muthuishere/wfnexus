@@ -43,6 +43,47 @@ import (
 	"time"
 )
 
+// NativeCall is one of the agent's OWN tool calls that the client refused:
+// the tool, the ACP kind, and the arguments it announced.
+type NativeCall struct {
+	ID    string
+	Tool  string
+	Kind  string
+	Input map[string]any
+}
+
+// RefusedCalls returns the agent's own tool calls refused during the last
+// turn, with the arguments each announced.
+func (a *ACPAgent) RefusedCalls() []NativeCall {
+	a.refusedMu.Lock()
+	defer a.refusedMu.Unlock()
+	out := make([]NativeCall, 0, len(a.refusedCalls))
+	for _, c := range a.refusedCalls {
+		// arguments can arrive on an update AFTER the permission request
+		if seen, ok := a.nativeSeen[c.ID]; ok {
+			in := map[string]any{}
+			for k, v := range seen.Input {
+				in[k] = v
+			}
+			for k, v := range c.Input {
+				in[k] = v
+			}
+			c.Input = in
+			if c.Tool == "" {
+				c.Tool = seen.Tool
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// ErrEmptyTurn is a turn that ended without a single word of reply. An agent
+// whose own tool requests were all refused often does exactly this — it
+// stops rather than answering — so the adapter treats it as a reply to
+// repair, not as a dead backend.
+var ErrEmptyTurn = errors.New("the session produced no text")
+
 // ACPMode is a devin session mode. Bypass is the default here for the same
 // reason PermissionBypass is: nothing is driving this interactively, so a
 // permission prompt would simply hang until the turn times out.
@@ -67,6 +108,8 @@ type ACPPreset struct {
 	Install string
 	// Env is added to the agent's environment before the step's own env.
 	Env []string
+	// SessionPerTurn: see ACP.SessionPerTurn.
+	SessionPerTurn bool
 }
 
 // opencodeAsAModel denies every tool opencode has of its own. wfnexus drives an
@@ -86,8 +129,11 @@ var ACPPresets = map[string]ACPPreset{
 	"devin": {Bin: "devin", Argv: []string{"acp"}, ModelFlag: "--model", Mode: ACPModeBypass,
 		Install: "curl -fsSL https://cli.devin.ai/install.sh | bash"},
 	// opencode offers every provider it is configured for (~680), free ones included.
+	// A fresh session per turn stops its history compounding (every prompt is
+	// the whole request) until its compaction agent kills the process.
 	"opencode": {Bin: "opencode", Argv: []string{"acp"}, Mode: "build",
-		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel}},
+		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel},
+		SessionPerTurn: true},
 	// codex speaks ACP through Zed's adapter; it uses codex's own login.
 	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
 		Install: "npm i -g @openai/codex && codex login"},
@@ -126,6 +172,18 @@ type ACP struct {
 	// a precaution is an open question (toolnexus ADR 0025 gate 1) — this flag
 	// is how it gets measured rather than assumed.
 	NoSupersede bool
+	// SessionPerTurn opens a fresh session for every turn, in the same
+	// process. Each prompt is already the complete request, so a long-lived
+	// session only piles up copies of it — opencode's grew until its own
+	// compaction agent ran and the process died mid-step. No supersede marker
+	// is needed: the fresh session has seen nothing to supersede.
+	SessionPerTurn bool
+	// AllowNativeTools answers the agent's session/request_permission with
+	// ALLOW. Off by default: the platform's loop executes the tools, and the
+	// step's allowlist and guardrails exist only there. An agent's own shell
+	// or editor runs outside them, so by default its request is refused (the
+	// agent's reject option, or a cancelled outcome when it offers none).
+	AllowNativeTools bool
 	// NoAnswerPermission stops the client answering session/request_permission.
 	// An unanswered request means the agent waits forever and the turn dies at
 	// the timeout — the trap ADR 0025 gate 2 asks to demonstrate. Never set
@@ -170,6 +228,38 @@ type ACPAgent struct {
 	// model the session is on after start.
 	models  []ACPModel
 	current string
+
+	refusedMu    sync.Mutex
+	refused      []string              // the agent's own tools it asked for and was refused, this turn
+	refusedCalls []NativeCall          // the same, with what each one meant to do
+	nativeSeen   map[string]NativeCall // tool calls the agent announced, by toolCallId
+
+	cwd            string  // the session's working directory, kept for fresh sessions
+	turnsInSession int     // prompts sent into the current session
+	stderr         tailBuf // the last few KB the agent wrote to stderr, for a death notice
+}
+
+// tailBuf keeps the last 4 KB written to it. An agent that dies says why on
+// stderr; discarding that turned every crash into a bare "broken pipe".
+type tailBuf struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (t *tailBuf) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > 4096 {
+		t.buf = t.buf[len(t.buf)-4096:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuf) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
 }
 
 // ACPModel is one model an ACP agent offers.
@@ -215,13 +305,22 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	if err := a.start(ctx, t.Workdir); err != nil {
 		return "", err
 	}
+	if a.cfg.SessionPerTurn && a.turnsInSession > 0 {
+		if err := a.newSession(ctx); err != nil {
+			return "", a.withStderr(err)
+		}
+	}
+	a.turnsInSession++
 
 	a.chunksMu.Lock()
 	a.chunks.Reset()
+	a.refusedMu.Lock()
+	a.refused, a.refusedCalls, a.nativeSeen = nil, nil, map[string]NativeCall{}
+	a.refusedMu.Unlock()
 	a.chunksMu.Unlock()
 
 	prompt := t.Prompt
-	if (t.Index > 1 || t.Attempt > 1) && !a.cfg.NoSupersede {
+	if (t.Index > 1 || t.Attempt > 1) && !a.cfg.NoSupersede && !a.cfg.SessionPerTurn {
 		// The session remembers the previous turns, and each of our prompts is
 		// a COMPLETE request rather than a delta — so the agent is looking at
 		// what appears to be the same question again with one more message on
@@ -233,7 +332,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 		"sessionId": a.session,
 		"prompt":    []any{map[string]any{"type": "text", "text": prompt}},
 	}); err != nil {
-		return "", err
+		return "", a.withStderr(err)
 	}
 
 	a.chunksMu.Lock()
@@ -241,7 +340,14 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	a.chunksMu.Unlock()
 
 	if strings.TrimSpace(out) == "" {
-		return "", fmt.Errorf("devin-acp: the session produced no text")
+		a.refusedMu.Lock()
+		refused := append([]string{}, a.refused...)
+		a.refusedMu.Unlock()
+		if len(refused) > 0 {
+			// the repair can then say exactly what not to do again
+			return "", fmt.Errorf("devin-acp: %w — it tried its own tools, which were refused: %s", ErrEmptyTurn, strings.Join(refused, "; "))
+		}
+		return "", fmt.Errorf("devin-acp: %w", ErrEmptyTurn)
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -316,7 +422,7 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("devin-acp: start: %w", err)
 	}
-	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	go func() { _, _ = io.Copy(&a.stderr, stderr) }()
 
 	a.cmd, a.stdin, a.started = cmd, stdin, true
 	a.procMu.Lock()
@@ -339,36 +445,58 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		return fmt.Errorf("devin-acp: initialize: %w", err)
 	}
 
-	raw, err := a.call(startCtx, "session/new", map[string]any{
-		"cwd": cwd, "mcpServers": []any{},
+	a.cwd = cwd
+	if err := a.newSession(startCtx); err != nil {
+		a.started = false
+		return err
+	}
+	return nil
+}
+
+// newSession opens a session in the running process, puts it on the
+// configured model and sets its mode — at start, and before every turn when
+// SessionPerTurn is set.
+func (a *ACPAgent) newSession(ctx context.Context) error {
+	raw, err := a.call(ctx, "session/new", map[string]any{
+		"cwd": a.cwd, "mcpServers": []any{},
 	})
 	if err != nil {
-		a.started = false
 		return fmt.Errorf("devin-acp: session/new: %w", err)
 	}
 	var sess struct {
 		SessionID string `json:"sessionId"`
 	}
 	if err := json.Unmarshal(raw, &sess); err != nil || sess.SessionID == "" {
-		a.started = false
 		return fmt.Errorf("devin-acp: session/new returned no session id")
 	}
 	a.session = sess.SessionID
+	a.turnsInSession = 0
 	a.models, a.current = parseModels(raw)
 
 	if a.cfg.ModelFlag == "" && a.cfg.Model != "" && a.cfg.Model != a.current {
-		if err := a.selectModel(startCtx); err != nil {
-			a.started = false
+		if err := a.selectModel(ctx); err != nil {
 			return err
 		}
 	}
 
 	// A failure here is not fatal: the mode is a convenience, and a build
 	// without set_mode still works — it just may stop to ask.
-	_, _ = a.call(startCtx, "session/set_mode", map[string]any{
+	_, _ = a.call(ctx, "session/set_mode", map[string]any{
 		"sessionId": a.session, "modeId": a.cfg.Mode,
 	})
 	return nil
+}
+
+// withStderr appends what the agent last wrote to stderr when it has died:
+// "broken pipe" alone names the symptom and hides the cause.
+func (a *ACPAgent) withStderr(err error) error {
+	tail := a.stderr.String()
+	msg := err.Error()
+	died := strings.Contains(msg, "broken pipe") || strings.Contains(msg, "closed its output")
+	if tail == "" || !died {
+		return err
+	}
+	return fmt.Errorf("%w; the agent's last stderr: %s", err, tail)
 }
 
 // selectModel puts the session on cfg.Model over the protocol:
@@ -579,9 +707,14 @@ func (a *ACPAgent) read(stdout io.Reader) {
 			// Deliberately ignored: the turn will now hang (gate 2).
 
 		case msg.ID != nil && strings.Contains(msg.Method, "permission"):
-			// Bypass mode should mean this never fires; answering anyway costs
-			// nothing and a silent hang would cost a whole turn.
-			a.allow(*msg.ID, msg.Params)
+			// Always answered — a silent hang would cost a whole turn (gate 2).
+			// But REFUSED unless native tools were opted into: the platform's
+			// loop owns the tools, and it is there that the step's allowlist and
+			// guardrails are enforced. An agent that runs its own shell instead
+			// (opencode's `build` agent does, dozens of commands a turn) acts
+			// outside every one of them. Refused, it is left with the protocol:
+			// a tool call in its reply, which the platform executes.
+			a.answerPermission(*msg.ID, msg.Params, a.cfg.AllowNativeTools)
 		}
 	}
 	err := sc.Err()
@@ -597,52 +730,131 @@ func (a *ACPAgent) read(stdout io.Reader) {
 func (a *ACPAgent) onUpdate(params json.RawMessage) {
 	var p struct {
 		Update struct {
-			SessionUpdate string `json:"sessionUpdate"`
-			Content       struct {
-				Text string `json:"text"`
-			} `json:"content"`
+			SessionUpdate string          `json:"sessionUpdate"`
+			Content       json.RawMessage `json:"content"`
+			ToolCallID    string          `json:"toolCallId"`
+			Title         string          `json:"title"`
+			Kind          string          `json:"kind"`
+			RawInput      map[string]any  `json:"rawInput"`
 		} `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
 		return
 	}
+	if u := p.Update; (u.SessionUpdate == "tool_call" || u.SessionUpdate == "tool_call_update") && u.ToolCallID != "" {
+		// The agent announcing one of its own tools: remember what it meant
+		// to do (the arguments often arrive only on an update), in case the
+		// call is refused and has to be handed to the platform instead.
+		a.refusedMu.Lock()
+		if a.nativeSeen == nil {
+			a.nativeSeen = map[string]NativeCall{}
+		}
+		c := a.nativeSeen[u.ToolCallID]
+		if c.Tool == "" && u.SessionUpdate == "tool_call" {
+			c.Tool = u.Title // the first title is the tool's name; later ones describe the call
+		}
+		if c.Kind == "" {
+			c.Kind = u.Kind
+		}
+		if len(u.RawInput) > 0 {
+			if c.Input == nil {
+				c.Input = map[string]any{}
+			}
+			for k, v := range u.RawInput {
+				c.Input[k] = v
+			}
+		}
+		a.nativeSeen[u.ToolCallID] = c
+		a.refusedMu.Unlock()
+		return
+	}
+	var content struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(p.Update.Content, &content)
+	p2 := struct{ Text string }{content.Text}
 	// Only the assistant's own message is the reply. Thought chunks and tool
 	// traffic are the agent narrating itself, and folding those in would put
 	// prose around the JSON the contract asks for.
-	if p.Update.SessionUpdate != "agent_message_chunk" || p.Update.Content.Text == "" {
+	if p.Update.SessionUpdate != "agent_message_chunk" || p2.Text == "" {
 		return
 	}
 	a.chunksMu.Lock()
-	a.chunks.WriteString(p.Update.Content.Text)
+	a.chunks.WriteString(p2.Text)
 	a.chunksMu.Unlock()
 }
 
 // allow answers a permission request with the first allow-shaped option.
-func (a *ACPAgent) allow(id int, params json.RawMessage) {
+func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) {
 	var p struct {
 		Options []struct {
 			OptionID string `json:"optionId"`
 			Kind     string `json:"kind"`
 		} `json:"options"`
+		ToolCall struct {
+			ToolCallID string         `json:"toolCallId"`
+			Title      string         `json:"title"`
+			Kind       string         `json:"kind"`
+			RawInput   map[string]any `json:"rawInput"`
+		} `json:"toolCall"`
 	}
 	_ = json.Unmarshal(params, &p)
+	if !allow {
+		what := strings.TrimSpace(p.ToolCall.Title)
+		if what == "" {
+			what = p.ToolCall.Kind
+		}
+		if len(what) > 80 {
+			what = what[:80] + "…"
+		}
+		a.refusedMu.Lock()
+		if what != "" && len(a.refused) < 8 {
+			a.refused = append(a.refused, what)
+		}
+		c := a.nativeSeen[p.ToolCall.ToolCallID]
+		if c.Tool == "" {
+			c.Tool = p.ToolCall.Title
+		}
+		if c.Kind == "" {
+			c.Kind = p.ToolCall.Kind
+		}
+		if c.Input == nil {
+			c.Input = map[string]any{}
+		}
+		for k, v := range p.ToolCall.RawInput {
+			c.Input[k] = v
+		}
+		c.ID = p.ToolCall.ToolCallID
+		if len(a.refusedCalls) < 8 {
+			a.refusedCalls = append(a.refusedCalls, c)
+		}
+		a.refusedMu.Unlock()
+	}
 
+	want := "reject"
+	if allow {
+		want = "allow"
+	}
 	choice := ""
 	for _, o := range p.Options {
-		if strings.HasPrefix(o.Kind, "allow") {
+		if strings.HasPrefix(o.Kind, want) {
 			choice = o.OptionID
 			break
 		}
 	}
-	if choice == "" && len(p.Options) > 0 {
-		choice = p.Options[0].OptionID
+	outcome := map[string]any{"outcome": "selected", "optionId": choice}
+	switch {
+	case choice == "" && allow && len(p.Options) > 0:
+		outcome["optionId"] = p.Options[0].OptionID
+	case choice == "":
+		// No reject option offered: ACP's other refusal is a cancelled
+		// request — never the first option, which is usually "allow".
+		outcome = map[string]any{"outcome": "cancelled"}
 	}
 
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id,
-		"result": map[string]any{
-			"outcome": map[string]any{"outcome": "selected", "optionId": choice},
-		},
+		"result": map[string]any{"outcome": outcome},
 	})
 	if err != nil {
 		return

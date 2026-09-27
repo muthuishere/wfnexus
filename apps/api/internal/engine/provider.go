@@ -201,7 +201,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 // preset keeps devin's own --model flag and implicit acp subcommand.
 func acpConfig(p catalog.Provider, model, workdir string, env []string) devinadapter.ACP {
 	cfg := devinadapter.ACP{
-		Model: model, Cwd: workdir, Env: env,
+		Model: model, Cwd: workdir, Env: env, SessionPerTurn: p.SessionPerTurn,
 		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
 	}
 	if len(p.Command) > 0 {
@@ -218,6 +218,7 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) devinada
 		cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
 		// The adapter's env first, the step's after, so a step can still override.
 		cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
+		cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
 	} else {
 		cfg.Bin = name // an unknown preset is the program's name, spoken to as `<name> acp`
 	}

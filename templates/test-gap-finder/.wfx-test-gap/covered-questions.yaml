@@ -1,0 +1,15 @@
+# Asked of each `covered` claim by `wfx judge`: an analyst said an existing test
+# already pins this scenario — does the test's own source bear that out?
+# A `no` sends the scenario back to triage as a gap; a test that merely RUNS the
+# code without asserting the behaviour does not cover it.
+pins:
+  type: noul
+  instructions: >-
+    Does this existing test assert the scenario's behaviour, so that it would
+    fail if that behaviour changed?
+  "true": >-
+    the test sets up this scenario's input and asserts this scenario's outcome
+    (the value, the exception, the emptiness, the order)
+  "false": >-
+    the test only exercises the same function with other inputs, or runs the
+    code without asserting this outcome, or asserts something else entirely

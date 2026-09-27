@@ -1,0 +1,34 @@
+# Asked of each GAP scenario by `wfx judge` (JEV, calibrated; noul bands
+# no < 0.30 < uncertain < 0.70 < yes; a choice is `sure` or `unsure`).
+# triage.py applies the decision table — the classifier never writes a test on
+# its own say-so, and anything it is not sure about goes to a person.
+verdict:
+  type: choice
+  instructions: >-
+    Should a test be written for this scenario, in this library's own test suite?
+  options:
+    makes_sense: >-
+      yes — it pins real behaviour a caller can reach through the public API (an
+      error path, a boundary, a null/empty input, a documented promise, an
+      untested public function), and the test would fail if that behaviour
+      regressed
+    does_not_make_sense: >-
+      no — it cannot be reached through the public API, or it only restates the
+      implementation (a tautology), or it tests the language, the runtime or a
+      third-party library rather than this code, or an existing test already
+      pins exactly this
+    unsure: >-
+      a person must decide — what the code SHOULD do here is itself unclear
+      (the behaviour looks accidental, undocumented or like a bug), so writing
+      the test would be choosing the contract
+regression_value:
+  type: noul
+  instructions: >-
+    Would a test for this scenario catch a plausible future change that breaks
+    a caller of this library?
+  "true": >-
+    a realistic edit to this code (a refactor, an off-by-one, a dropped None
+    check, a changed error type) would break callers and this test would catch it
+  "false": >-
+    nothing a caller relies on changes if this behaviour changes, or no
+    realistic edit would break it

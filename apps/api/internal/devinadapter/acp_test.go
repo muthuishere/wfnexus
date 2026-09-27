@@ -14,6 +14,7 @@ package devinadapter_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,13 +61,17 @@ for line in sys.stdin:
     if method=="initialize":
         send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1}})
     elif method=="session/new":
-        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"sess-1"}})
+        sessions=globals().get("sessions",0)+1; globals()["sessions"]=sessions
+        log.write("SESSION sess-%d\n" % sessions); log.flush()
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"sess-%d" % sessions}})
     elif method=="session/set_mode":
         log.write("MODE "+m["params"]["modeId"]+"\n"); log.flush()
         send({"jsonrpc":"2.0","id":mid,"result":{}})
     elif method=="session/prompt":
         text=m["params"]["prompt"][0]["text"]
-        log.write("PROMPT "+json.dumps(text)+"\n"); log.flush()
+        log.write("PROMPT "+m["params"]["sessionId"]+" "+json.dumps(text)+"\n"); log.flush()
+        if text.endswith("DIE"):
+            sys.stderr.write("fatal: context overflow in compaction\n"); sys.stderr.flush(); sys.exit(3)
         reply=replies[n] if n<len(replies) else replies[-1]
         n+=1
         # stream it in two chunks, with noise the client must ignore
@@ -144,6 +149,72 @@ func TestACPReusesOneProcessAcrossTurns(t *testing.T) {
 	// can answer the stale request.
 	if !strings.Contains(out, "SUPERSEDES") {
 		t.Error("the follow-up prompt did not supersede the earlier one")
+	}
+}
+
+// An agent whose own tool requests were all refused often just stops: the turn
+// ends with no text. That is a reply to repair, not a dead backend — live,
+// opencode did exactly this on the first turn of a step and failed the run.
+// The repair tells it why and asks again, in the same session.
+func TestAnEmptyACPTurnIsRepairedNotFatal(t *testing.T) {
+	bin, log := fakeACP(t, []string{"", answer("second time lucky")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+
+	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: t.TempDir()})
+	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "say something", tk)
+	if err != nil {
+		t.Fatalf("an empty turn killed the run: %v", err)
+	}
+	if !strings.Contains(res.Text, "second time lucky") {
+		t.Fatalf("final text = %q", res.Text)
+	}
+	if out := readLog(t, log); !strings.Contains(out, "no reply at all") {
+		t.Error("the repair prompt did not tell the agent why its turn was rejected")
+	}
+}
+
+// Every prompt is the COMPLETE request, so a stateful session only accumulates
+// copies of it; live, opencode's grew until its compaction agent ran and the
+// process died. SessionPerTurn opens a fresh session per turn in the SAME
+// process, and sends no supersede marker (there is nothing to supersede).
+func TestACPSessionPerTurnOpensAFreshSessionInOneProcess(t *testing.T) {
+	bin, log := fakeACP(t, []string{answer("one"), answer("two")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, SessionPerTurn: true})
+	defer acp.Close()
+	for i := 1; i <= 2; i++ {
+		if _, err := acp.Execute(context.Background(), devinadapter.Turn{Index: i, Attempt: 1, Prompt: "turn", Workdir: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := readLog(t, log)
+	if n := strings.Count(out, "ARGV "); n != 1 {
+		t.Errorf("process started %d times, want 1", n)
+	}
+	if !strings.Contains(out, "PROMPT sess-1 ") || !strings.Contains(out, "PROMPT sess-2 ") {
+		t.Errorf("turn 2 did not get a fresh session:\n%s", out)
+	}
+	if strings.Contains(out, "SUPERSEDES") {
+		t.Error("a fresh session has nothing to supersede; the marker only adds noise")
+	}
+}
+
+// An agent that dies says why on stderr. The client used to discard it, so a
+// crash surfaced as a bare "broken pipe" with the cause thrown away.
+func TestACPDeathCarriesTheAgentsStderr(t *testing.T) {
+	bin, _ := fakeACP(t, []string{answer("never")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+	_, err := acp.Execute(context.Background(), devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "please DIE", Workdir: t.TempDir()})
+	if err == nil {
+		t.Fatal("a dead agent returned no error")
+	}
+	if !strings.Contains(err.Error(), "context overflow in compaction") {
+		t.Fatalf("the agent's stderr is not in the error: %v", err)
 	}
 }
 
@@ -229,10 +300,12 @@ for line in sys.stdin:
         # Ask permission FIRST; the turn only finishes once it is answered.
         pending=mid
         send({"jsonrpc":"2.0","id":9001,"method":"session/request_permission",
-              "params":{"sessionId":"s","options":[
+              "params":{"sessionId":"s","toolCall":{"title":"read facts.txt","kind":"read"},"options":[
                   {"optionId":"yes","kind":"allow_once","name":"Allow"},
                   {"optionId":"no","kind":"reject_once","name":"Reject"}]}})
     elif mid==9001 and pending is not None:
+        o=m.get("result",{}).get("outcome",{})
+        open(sys.argv[0]+".chosen","w").write(o.get("optionId") or o.get("outcome",""))
         send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s",
               "update":{"sessionUpdate":"agent_message_chunk","content":{"text":reply}}}})
         send({"jsonrpc":"2.0","id":pending,"result":{"stopReason":"end_turn"}})
@@ -248,7 +321,7 @@ for line in sys.stdin:
 }
 
 // GATE 2: an unanswered session/request_permission hangs the turn; answering it
-// with the first allow-kind option completes it. This is the trap that costs
+// (with a refusal, by default) completes it. This is the trap that costs
 // the next implementer a day, and it bites even in bypass mode.
 func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 	bin := fakeACPPermission(t, answer("permitted"))
@@ -269,6 +342,30 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 		}
 	})
 
+	// Answered — but REFUSED by default. The platform's loop runs the tools,
+	// and only there do the step's allowlist and guardrails apply; an agent's
+	// own shell (opencode's build agent ran dozens of commands a turn) would
+	// act outside all of them. The old client picked the first allow option.
+	t.Run("refused by default, allowed only on opt-in", func(t *testing.T) {
+		for _, tc := range []struct {
+			allow bool
+			want  string
+		}{{false, "no"}, {true, "yes"}} {
+			_ = os.Remove(bin + ".chosen")
+			acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, AllowNativeTools: tc.allow})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if _, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()}); err != nil {
+				t.Fatalf("allow=%v: the turn must still complete: %v", tc.allow, err)
+			}
+			cancel()
+			acp.Close()
+			got, _ := os.ReadFile(bin + ".chosen")
+			if string(got) != tc.want {
+				t.Errorf("AllowNativeTools=%v chose %q, want %q", tc.allow, got, tc.want)
+			}
+		}
+	})
+
 	t.Run("unanswered hangs", func(t *testing.T) {
 		acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, NoAnswerPermission: true})
 		defer acp.Close()
@@ -285,6 +382,24 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 		}
 		t.Logf("GATE 2 REPRODUCED: unanswered permission hung the turn until the deadline (%v)", err)
 	})
+}
+
+// An agent refused its own tools usually ends the turn with nothing to say. The
+// empty-turn error names what it tried, so the repair can say "not read
+// facts.txt yourself — call the request's read" instead of a vague "no reply".
+func TestAnEmptyTurnNamesTheOwnToolsThatWereRefused(t *testing.T) {
+	bin := fakeACPPermission(t, "")
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+	if !errors.Is(err, devinadapter.ErrEmptyTurn) {
+		t.Fatalf("want ErrEmptyTurn, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "read facts.txt") {
+		t.Fatalf("the refused tool is not named: %v", err)
+	}
 }
 
 // GATE 4: is the warm-session win real in general, or only against a CLI with

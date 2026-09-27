@@ -42,6 +42,7 @@ package devinadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -181,6 +182,22 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	prompt := BuildPrompt(requestBody)
 	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
 		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
+		if errors.Is(err, ErrEmptyTurn) && ctx.Err() == nil {
+			// It reached for its own tools and stopped when refused. Its intent
+			// is known, so hand the platform the equivalent calls — the step's
+			// own tools, under its allowlist and guardrails — instead of
+			// asking again and hoping.
+			if rc, ok := a.opts.Agent.(interface{ RefusedCalls() []NativeCall }); ok {
+				if calls := TranslateNativeCalls(rc.RefusedCalls(), offeredTools(requestBody)); len(calls) > 0 {
+					return toolnexus.InProcessResponse{ToolCalls: calls}, nil
+				}
+			}
+			// Not a dead backend: the agent stopped without answering, usually
+			// after its own tools were refused. Say so, and ask again.
+			lastErr = fmt.Errorf("%w: your turn ended with no reply at all (%v). Your own tools are not available here — every request to use them is refused. The CALLER runs the functions in the request's \"tools\" (read, grep, glob, bash, …): put those calls in your <openai_response> as tool_calls", ErrUnparseable, err)
+			prompt = BuildRepairPrompt(requestBody, "", lastErr)
+			continue
+		}
 		if err != nil {
 			return toolnexus.InProcessResponse{}, err
 		}

@@ -8,9 +8,9 @@
 package catalog
 
 import (
-	"net/url"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,6 +73,12 @@ type Provider struct {
 	// itself. Never a silent fallback.
 	Repairs    int `json:"repairs,omitempty"`
 	TimeoutSec int `json:"timeoutSec,omitempty"`
+	// SessionPerTurn (acp) opens a fresh ACP session for every turn, in the
+	// same process. Each turn's prompt is already the COMPLETE request, so a
+	// stateful session only accumulates copies of it: opencode's grew until
+	// its own compaction agent ran and the process died mid-step. The
+	// opencode preset sets it; any other acp entry can.
+	SessionPerTurn bool `json:"sessionPerTurn,omitempty"`
 
 	// Price, per MILLION tokens, in USD (ADR 0020). Pointers because the
 	// three states are distinct: unset on an `http` provider means the price
