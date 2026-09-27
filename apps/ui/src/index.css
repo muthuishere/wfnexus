@@ -666,3 +666,8 @@ section:first-child > .grouphead { border-top: 0 }
   .agenthead { flex-wrap: wrap }
   .agenthead .limits { max-width: none; text-align: left; flex-basis: 100% }
 }
+
+/* the live model dropdown of an acp provider */
+.modelpick { display: flex; gap: 10px; align-items: center; }
+.modelpick select { flex: 1; min-width: 0; }
+.modelpick .freeonly { display: flex; gap: 6px; align-items: center; white-space: nowrap; font-size: 13px; color: var(--muted, inherit); }

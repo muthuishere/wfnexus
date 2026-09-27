@@ -1,4 +1,5 @@
-import type { Budget, BuiltinTool, Doctor, Skill, Step, TeamMember } from '../../api'
+import { useEffect, useState } from 'react'
+import { api, type Budget, type BuiltinTool, type Doctor, type ProviderModels, type Skill, type Step, type TeamMember } from '../../api'
 import {
   emptyGate, emptyGuardrail, emptyQuestion, emptyTeamMember,
   removeAt, replaceAt,
@@ -42,12 +43,18 @@ function BudgetGrid({ budget, onChange }: { budget?: Budget; onChange: (b: Budge
  *  that does not resolve just moves the failure to run time. Anything the
  *  doctor marks not-ready is shown as such rather than hidden: it is a real
  *  entry, and "install this CLI" is a more useful answer than an empty list. */
-function ModelPicker({ step, doctor, onChange }: {
+export function ModelPicker({ step, doctor, onChange }: {
   step: Step; doctor?: Doctor; onChange: (patch: Partial<Step>) => void
 }) {
   const providers = doctor?.providers || []
+  const ready = providers.filter(p => p.ready)
+  const missing = providers.filter(p => !p.ready)
   const chosen = providers.find(p => p.name === step.provider)
   const def = doctor?.default
+  const live = useAgentModels(chosen?.kind === 'acp' && chosen.ready ? chosen.name : undefined)
+  const [freeOnly, setFreeOnly] = useState(false)
+  const shown = (live.models?.models || []).filter(m => !freeOnly || m.free)
+  const freeCount = (live.models?.models || []).filter(m => m.free).length
   return (
     <div className="grid2">
       <Field label="Provider — where this step's turns come from"
@@ -58,25 +65,70 @@ function ModelPicker({ step, doctor, onChange }: {
           : def
             ? `The process default: ${def.model}${def.keySet ? '' : ` — but ${def.apiKeyEnv} is NOT SET`}`
             : 'The process default.'}>
-        <select value={step.provider || ''} onChange={e => onChange({ provider: e.target.value || undefined })}>
+        <select value={step.provider || ''} onChange={e => onChange({ provider: e.target.value || undefined, model: undefined })}>
           <option value="">— default ({def?.model || 'configured model'}) —</option>
-          {providers.map(p => (
-            <option key={p.name} value={p.name}>
-              {p.ready ? '' : '⚠ '}{p.name} · {p.kind}{p.model ? ` · ${p.model}` : ''}
-            </option>))}
+          <optgroup label="on this server">
+            {ready.map(p => (
+              <option key={p.name} value={p.name}>{p.name} · {p.kind}{p.model ? ` · ${p.model}` : ''}</option>))}
+          </optgroup>
+          {missing.length > 0 && (
+            <optgroup label="not on this server">
+              {missing.map(p => (
+                // Still selectable when the step already names it: an entry the
+                // YAML uses must stay visible, not silently vanish from the list.
+                <option key={p.name} value={p.name} disabled={p.name !== step.provider}>⚠ {p.name} · {p.kind} — {p.problem}</option>))}
+            </optgroup>)}
         </select>
       </Field>
-      <Field label="Model override"
-        hint={step.provider
-          ? 'Selects a model WITHIN that provider; it does not reach past it to the default endpoint.'
-          : 'A model id on the default endpoint. Leave empty to use the configured default.'}>
-        <input className="mono" list="doctor-models" value={step.model || ''}
-          placeholder={chosen?.model || def?.model || ''}
-          onChange={e => onChange({ model: e.target.value || undefined })} />
-        <datalist id="doctor-models">{(doctor?.models || []).map(m => <option key={m} value={m} />)}</datalist>
-      </Field>
+      {chosen?.kind === 'acp' && chosen.ready ? (
+        <Field label="Model — offered by this agent right now"
+          hint={live.error
+            ? `Could not ask the agent: ${live.error}`
+            : live.models
+              ? `${live.models.models.length} models, ${freeCount} free. Empty = ${chosen.model || live.models.current} (the provider's).`
+              : 'asking the agent…'}>
+          <div className="modelpick">
+            <select className="mono" value={step.model || ''} disabled={!live.models}
+              onChange={e => onChange({ model: e.target.value || undefined })}>
+              <option value="">— {chosen.model || live.models?.current || 'provider default'} —</option>
+              {step.model && !shown.some(m => m.id === step.model) && <option value={step.model}>{step.model}</option>}
+              {shown.map(m => <option key={m.id} value={m.id}>{m.free ? '★ free · ' : ''}{m.id}</option>)}
+            </select>
+            {freeCount > 0 && (
+              <label className="freeonly"><input type="checkbox" checked={freeOnly} onChange={e => setFreeOnly(e.target.checked)} /> free only</label>)}
+          </div>
+        </Field>
+      ) : (
+        <Field label="Model override"
+          hint={step.provider
+            ? 'Selects a model WITHIN that provider; it does not reach past it to the default endpoint.'
+            : 'A model id on the default endpoint. Leave empty to use the configured default.'}>
+          <input className="mono" list="doctor-models" value={step.model || ''}
+            placeholder={chosen?.model || def?.model || ''}
+            onChange={e => onChange({ model: e.target.value || undefined })} />
+          <datalist id="doctor-models">{(doctor?.models || []).map(m => <option key={m} value={m} />)}</datalist>
+        </Field>
+      )}
     </div>
   )
+}
+
+// Asking an agent for its models starts it (seconds), so one answer per
+// provider is kept for the life of the page.
+const modelCache = new Map<string, Promise<ProviderModels>>()
+function useAgentModels(provider?: string) {
+  const [state, setState] = useState<{ models?: ProviderModels; error?: string }>({})
+  useEffect(() => {
+    if (!provider) { setState({}); return }
+    let live = true
+    setState({})
+    if (!modelCache.has(provider)) modelCache.set(provider, api.providerModels(provider))
+    modelCache.get(provider)!
+      .then(m => { if (live) setState({ models: m }) })
+      .catch(e => { modelCache.delete(provider); if (live) setState({ error: String(e.message || e) }) })
+    return () => { live = false }
+  }, [provider])
+  return state
 }
 
 function TeamEditor({ step, skills, tools, onChange }: {
