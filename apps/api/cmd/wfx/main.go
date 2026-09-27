@@ -1092,8 +1092,8 @@ func applyFromRun(runID, as string) error {
 func doctor() error {
 	var d struct {
 		Default struct {
-			Model, BaseURL, Style, APIKeyEnv string
-			KeySet                           bool
+			Model, BaseURL, Style, APIKeyEnv, Provider string
+			KeySet                                     bool
 		} `json:"default"`
 		Providers   []doctorEntry `json:"providers"`
 		Classifiers []doctorEntry `json:"classifiers"`
@@ -1111,6 +1111,9 @@ func doctor() error {
 		return err
 	}
 
+	if d.Default.Provider != "" {
+		fmt.Printf("default provider %s  (WFX_DEFAULT_PROVIDER: steps without their own provider run here)\n", d.Default.Provider)
+	}
 	fmt.Printf("default model    %s\n", d.Default.Model)
 	fmt.Printf("                 %s (%s)\n", d.Default.BaseURL, d.Default.Style)
 	fmt.Printf("                 %s %s\n", d.Default.APIKeyEnv, tick(d.Default.KeySet, "set", "NOT SET"))

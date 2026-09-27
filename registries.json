@@ -238,9 +238,9 @@
     },
     "opencode-acp": {
       "kind": "acp",
-      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key); `wfx models opencode-acp` lists everything opencode is configured for (~680 on 2026-09-27, the -free ones marked). Measured live 2026-09-27.",
+      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key): space-bunny-free was the fastest of the free models that scored 7/7 on a commit-classification check (10s; ling/muse 21s, mimo 37s, nemotron-ultra 76s; longcat returned invalid JSON, nemotron-lightning hung) on 2026-09-27. `wfx models opencode-acp --free` lists them all.",
       "preset": "opencode",
-      "model": "opencode/mimo-v2.6-flash-free",
+      "model": "opencode/space-bunny-free",
       "repairs": 2,
       "timeoutSec": 900
     },

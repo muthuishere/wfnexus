@@ -69,7 +69,10 @@ type File struct {
 	Model struct {
 		BaseURL string `yaml:"baseUrl,omitempty"`
 		Style   string `yaml:"style,omitempty"`
-		Model   string `yaml:"model,omitempty"`
+		// Provider names a registry provider every step without its own
+		// `provider:` runs on, instead of the baseUrl endpoint above.
+		Provider string `yaml:"provider,omitempty"`
+		Model    string `yaml:"model,omitempty"`
 		// APIKeyEnv is the NAME of the variable holding the key. The key
 		// itself is never a field here, and that is deliberate: this file is
 		// the one people paste into an issue when something does not work.

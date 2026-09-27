@@ -80,6 +80,9 @@ type DoctorModel struct {
 	Style     string `json:"style"`
 	APIKeyEnv string `json:"apiKeyEnv"`
 	KeySet    bool   `json:"keySet"`
+	// Provider is the registry provider steps without their own run on
+	// (WFX_DEFAULT_PROVIDER); when set, the endpoint fields above are unused.
+	Provider string `json:"provider,omitempty"`
 }
 
 // DoctorProvider is one registry entry and whether it could actually run.
@@ -121,6 +124,7 @@ func (e *Engine) Doctor() Doctor {
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "" || sysEnv[e.cfg.LLMAPIKeyEnv] != "",
+			Provider: e.cfg.DefaultProvider,
 		},
 		Models: e.Models(),
 	}

@@ -245,3 +245,38 @@ func TestAnACPEntryWithACommandStillSpeaksACP(t *testing.T) {
 		t.Fatalf("a cli command resolved to %T", agent)
 	}
 }
+
+// An operator whose default endpoint is unusable (out of credit, no key) names
+// a registry provider instead, and every step that names none runs on it.
+func TestADefaultProviderCarriesEveryStepThatNamesNone(t *testing.T) {
+	t.Setenv("WFX_TEST_ALT_KEY", "not-a-real-key")
+	e := testEngine(t, testCatalog(t, catalog.Provider{
+		Name: "alt", Kind: catalog.KindHTTP, BaseURL: "https://alt.invalid/v1",
+		Style: "openai", Model: "alt-model", APIKeyEnv: "WFX_TEST_ALT_KEY",
+	}))
+	e.cfg.DefaultProvider = "alt"
+
+	got, err := e.resolveLLM(&workflow.Step{ID: "s"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LLM.BaseURL != "https://alt.invalid/v1" || got.Label != "alt/alt-model" {
+		t.Fatalf("the default provider was not used: %+v label=%q", got.LLM, got.Label)
+	}
+	// `model:` still picks within it.
+	if got, _ := e.resolveLLM(&workflow.Step{ID: "s", Model: "alt-mini"}, ""); got.LLM.Model != "alt-mini" || got.LLM.BaseURL != "https://alt.invalid/v1" {
+		t.Fatalf("model escaped the default provider: %+v", got.LLM)
+	}
+	// A step that names its own provider is untouched by the default.
+	if _, err := e.resolveLLM(&workflow.Step{ID: "s", Provider: "nope"}, ""); err == nil {
+		t.Fatal("a step's own provider must win over the default")
+	}
+}
+
+func TestADefaultProviderThatDoesNotExistIsRefusedNotBypassed(t *testing.T) {
+	e := testEngine(t, testCatalog(t))
+	e.cfg.DefaultProvider = "missing"
+	if got, err := e.resolveLLM(&workflow.Step{ID: "s"}, ""); err == nil {
+		t.Fatalf("ran on %q instead of refusing the unknown default provider", got.Label)
+	}
+}
