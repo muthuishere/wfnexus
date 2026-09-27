@@ -640,3 +640,29 @@ section:first-child > .grouphead { border-top: 0 }
 }
 .chips button:hover:not(:disabled) { background: var(--accent-50); color: var(--accent-600); border-color: var(--accent-200) }
 .chips button.active, .chips button.active:hover:not(:disabled) { background: var(--accent-600); color: var(--on-accent); border-color: var(--accent-600) }
+
+/* Steps tab — one step rendered as an agent with its scoped harness (StepHarness.tsx). */
+.agentcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px }
+.agentcard + .agentcard { margin-top: 14px }
+.agenthead { display: flex; align-items: flex-start; gap: 12px }
+.agenthead .num { flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--accent-600); color: var(--on-accent);
+  display: grid; place-items: center; font-weight: 600; font-size: 12.5px }
+.agenthead .titleline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 2px }
+.agenthead .titleline b { font-size: 15px; color: var(--text) }
+.agenthead .limits { flex: none; max-width: 40%; text-align: right; font-size: 11.5px }
+.hgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px }
+.hpanel { background: var(--raised); border: 1px solid var(--border); border-left: 3px solid var(--accent-200); border-radius: 8px; padding: 10px 12px; min-width: 0 }
+.hpanel h3 { margin: 0 0 6px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-700) }
+.hpanel h3 .muted { text-transform: none; letter-spacing: 0; font-weight: 400 }
+.hpanel .soul { white-space: pre-wrap; font-size: 13px; line-height: 1.5; color: var(--text-2); max-height: 220px; overflow: auto }
+.hpanel .chips .off { background: none; border: 0; color: var(--placeholder); font-style: italic; padding-left: 0 }
+.teamlist { display: flex; flex-direction: column; gap: 8px }
+.teamlist .member, .hpanel .question, .hpanel .guard, .hpanel .gate { padding: 6px 0; border-top: 1px solid var(--line) }
+.teamlist .member:first-child, .hpanel .question:first-of-type, .hpanel .guard:first-of-type, .hpanel .gate:first-of-type { border-top: 0; padding-top: 0 }
+.hpanel .guard { display: flex; flex-wrap: wrap; align-items: center; gap: 6px }
+.hpanel .guard > .muted { flex-basis: 100% }
+.hpanel .opts { margin: 4px 0 0 10px; padding-left: 8px; border-left: 2px solid var(--accent-100) }
+@media (max-width: 640px) {
+  .agenthead { flex-wrap: wrap }
+  .agenthead .limits { max-width: none; text-align: left; flex-basis: 100% }
+}

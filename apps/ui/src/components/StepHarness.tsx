@@ -37,7 +37,7 @@ export default function StepHarness({ step, index }: { step: Step; index: number
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="titleline">
             <b>{step.name}</b>
-            <span className="mono muted">{step.id}</span>
+            {step.id !== step.name && <span className="mono muted">{step.id}</span>}
             {step.requiresApproval && <span className="badge awaiting_approval">approval gate</span>}
             {step.askHuman && <span className="badge needs_input">may ask human</span>}
             {decide && <span className="badge running">judge first</span>}
