@@ -1,0 +1,7 @@
+# title: postgres_exporter reports pg_up=0 on {instance}
+# severity: error
+# component: monitoring
+# key: exporter
+# cross_check: database
+# note: pg_up=0 means the EXPORTER could not reach the database. Whether the database itself is down is decided by whether this run's own read-only SQL checks succeeded.
+label_replace(pg_up == 0, "exporter", "postgres_exporter", "", "")

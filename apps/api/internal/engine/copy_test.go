@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
@@ -212,4 +213,124 @@ func fileBody(t *testing.T, files []workflow.File, path string) []byte {
 	}
 	t.Fatalf("no file %q in %v", path, files)
 	return nil
+}
+
+// Editing a repository's workflow must change THAT repository's file. Every
+// save used to land in the platform's own directory, so the builder, opened on
+// a project's workflow, wrote a second copy into `local` and left the
+// repository exactly as it was.
+func TestSavingIntoAProjectWritesTheProjectsFile(t *testing.T) {
+	eng, local := copyEngine(t)
+	repo := t.TempDir()
+	wfDir := filepath.Join(repo, ".wfx", "workflows")
+	writeDirWorkflow(t, wfDir, "plain-shipper", sidecarWorkflowYAML)
+	if _, err := eng.ImportRepo(context.Background(), "theirs", repo, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// An existing workflow, saved with no project named: back where it lives.
+	def := *eng.Definitions()["theirs/plain-shipper"]
+	def.Description = "edited in the builder"
+	if _, err := eng.SaveWorkflowIn("", &def); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(local, "plain-shipper")); err == nil {
+		t.Fatal("the edit landed in the platform's directory as a second copy")
+	}
+	if got := eng.Definitions()["theirs/plain-shipper"].Description; got != "edited in the builder" {
+		t.Fatalf("the repository's workflow did not change: %q", got)
+	}
+
+	// A new workflow, created from the project's page: in that project.
+	fresh := def
+	fresh.Name, fresh.Files = "brand-new", nil
+	path, err := eng.SaveWorkflowIn("theirs", &fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(path) != wfDir {
+		t.Fatalf("a workflow created in project theirs was written to %s", path)
+	}
+	if eng.ProjectFor("brand-new") != "theirs" {
+		t.Fatalf("the new workflow belongs to %q", eng.ProjectFor("brand-new"))
+	}
+
+	// A project that does not exist is refused, not quietly swapped for local.
+	if _, err := eng.SaveWorkflowIn("nobody", &fresh); err == nil {
+		t.Fatal("a save into a project that does not exist was accepted")
+	}
+}
+
+// STARTING a project, as opposed to adding one that already has workflows.
+// The result is an empty project the builder can save into — and a template
+// copied from inside it lands in it, not in the platform's directory.
+func TestCreatingAProjectFromNothing(t *testing.T) {
+	eng, local := copyEngine(t)
+	ctx := context.Background()
+
+	src, err := eng.CreateProject(ctx, "fresh", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(src.Repo, ".git")); err != nil {
+		t.Errorf("a new project is not a git repository: %v", err)
+	}
+	if _, err := os.Stat(src.Dir); err != nil {
+		t.Fatalf("a new project has no .wfx/workflows/: %v", err)
+	}
+	listed := false
+	for _, s := range eng.Sources() {
+		listed = listed || s.Name == "fresh"
+	}
+	if !listed {
+		t.Fatal("the new project is not registered")
+	}
+
+	// The template lands IN the project.
+	def, err := eng.CopyTemplate(ctx, "shipper", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := eng.SaveWorkflowIn("fresh", def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(path, src.Dir) {
+		t.Fatalf("the copy went to %s, not into the project", path)
+	}
+	if _, err := os.Stat(filepath.Join(local, "first")); err == nil {
+		t.Fatal("the copy also landed in the platform's directory")
+	}
+
+	// A name already taken is refused, not silently re-pointed.
+	if _, err := eng.CreateProject(ctx, "fresh", ""); err == nil {
+		t.Fatal("creating a second project named fresh was accepted")
+	}
+	// And a bad name is refused BEFORE a folder is touched.
+	folder := t.TempDir()
+	if _, err := eng.CreateProject(ctx, "../escape", folder); err == nil {
+		t.Fatal("a name with a path in it was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(folder, ".wfx")); err == nil {
+		t.Fatal("a refused create still initialised the folder")
+	}
+}
+
+// An existing checkout with no workflows yet can become a project in place.
+func TestCreatingAProjectInAnExistingFolder(t *testing.T) {
+	eng, _ := copyEngine(t)
+	folder := t.TempDir()
+	if err := os.WriteFile(filepath.Join(folder, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := eng.CreateProject(context.Background(), "mine", folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Repo != folder {
+		t.Fatalf("the project is at %s, not the folder it was created in (%s)", src.Repo, folder)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "main.go")); err != nil {
+		t.Fatal("creating a project disturbed what was already in the folder")
+	}
 }

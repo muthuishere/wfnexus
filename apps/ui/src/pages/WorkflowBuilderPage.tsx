@@ -9,6 +9,8 @@ import StepEditor, { EnvEditor } from '../components/builder/StepEditor'
 import WorkflowCanvas from '../components/WorkflowCanvas'
 import FileList from '../components/FileList'
 import { Field, IssueList } from '../components/builder/Bits'
+import Crumbs from '../components/Crumbs'
+import { href } from '../lib/routes'
 
 /** The builder edits ONE thing at a time.
  *
@@ -18,7 +20,7 @@ import { Field, IssueList } from '../components/builder/Bits'
  *  that selects, and one pane that shows only what was selected. The page it
  *  replaces stacked every step's full editor down one scroll, which is why a
  *  twelve-control output-contract row could not be attributed to anything. */
-export default function WorkflowBuilderPage({ name }: { name?: string }) {
+export default function WorkflowBuilderPage({ name, project }: { name?: string; project?: string }) {
   const editing = !!name
   // The blank template is the initial state, not an effect — #/workflows/new
   // should render an editable workflow on the first paint.
@@ -125,9 +127,11 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
     setBusy(true); setSaveErr(''); setSaved('')
     try {
       const body = forSave(draft)
-      await api.saveWorkflow(body.name, body)
+      // Saved INTO the project the builder was opened from — a repository's own
+      // .wfx/workflows/, not the platform's directory.
+      await api.saveWorkflow(body.name, body, project)
       setSaved(`Saved ${body.name}.`)
-      if (!editing) location.hash = `#/workflows/${body.name}/edit`
+      if (!editing) location.hash = project ? href.edit(project, body.name) : `#/workflows/${body.name}/edit`
     } catch (e) {
       setSaveErr(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
@@ -138,13 +142,20 @@ export default function WorkflowBuilderPage({ name }: { name?: string }) {
 
   return (
     <>
+      {project && <Crumbs items={[
+        ['Projects', href.projects()], [project, href.project(project)],
+        ...(name ? [[name, href.workflow(project, name)] as [string, string]] : []),
+      ]} />}
       <div className="buildhead">
         <div>
-          <h1>{editing ? `Edit · ${name}` : 'New workflow'}</h1>
+          <h1>{editing ? `Edit · ${name}` : project ? `New workflow in ${project}` : 'New workflow'}</h1>
         </div>
         <div className="actions" style={{ marginLeft: 'auto', marginTop: 0 }}>
           <button className="ghost" onClick={() => setShowYaml(!showYaml)}>{showYaml ? 'Hide' : 'Show'} YAML</button>
-          <a href="#/workflows"><button className="ghost">Back</button></a>
+          <button className="ghost" onClick={() => {
+            if (project) location.hash = name ? href.workflow(project, name) : href.project(project)
+            else history.back()
+          }}>Back</button>
           <button disabled={busy || blocked > 0} onClick={save}>
             {busy ? 'saving…' : blocked ? `${blocked} problem${blocked > 1 ? 's' : ''} to fix` : editing ? 'Save workflow' : 'Create workflow'}
           </button>

@@ -1,0 +1,367 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
+name: docs-drift-fixer-proof
+description: Finds documentation that no longer matches the code — paths, symbols and flags the docs name that the code does not have, and names recent commits renamed or deleted — has an agent confirm each is really stale and make the smallest edit citing the code line that makes it true, re-checks every edit against that line with two calibrated questions, commits only what holds (one commit per doc), and opens a docs-only PR after a person approves.
+input_schema:
+    properties:
+        base_branch:
+            title: 'Base to branch from (default: the checkout''s HEAD)'
+            type: string
+        docs:
+            default: README.md,**/README.md,docs/**/*.md,**/SKILL.md
+            title: Doc globs (comma-separated)
+            type: string
+        dry_run:
+            default: true
+            title: Dry run — commit on the run's branch, write the PR body, push nothing
+            type: boolean
+        exclude:
+            default: docs/adr/**,**/CHANGELOG*,openspec/**,docs/spikes/**,docs/research/**,.claude/**,.codex/**,.opencode/**,**/node_modules/**
+            title: Never edit (history)
+            type: string
+        isolate:
+            default: true
+            title: Work in a throwaway git worktree
+            type: boolean
+        lookback_days:
+            default: 14
+            title: 'First run: look back this many days'
+            type: integer
+        max_findings:
+            default: 25
+            title: At most this many flags per run
+            type: integer
+        repo_path:
+            title: Local repo path (the run works in its own worktree)
+            type: string
+        repo_url:
+            title: …or a repo URL to clone
+            type: string
+        since:
+            title: 'Check changes since this commit (default: the last run''s, else lookback_days)'
+            type: string
+    type: object
+"on":
+    schedule:
+        - cron: 0 5 * * *
+          input:
+            dry_run: false
+    workflow_dispatch: null
+steps:
+    - id: collect
+      name: Find drift (machine checks)
+      description: Paths, symbols and flags the docs name that the code lacks; names recent commits renamed or deleted.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        additionalProperties: false
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                description: exit code was zero
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        required:
+            - ok
+            - exitCode
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 900
+      gates:
+        - field: exitCode
+          equals: 70
+          action: fail
+          message: Collect failed — {{ .Output.stderr }}
+        - field: exitCode
+          equals: 78
+          action: skip_to
+          skip_to: remember
+      run: |
+        printf '*\n' > .wfx-docs-drift/.gitignore
+        SINCE='{{ if .Input.since }}{{ .Input.since }}{{ else }}{{ .Workflow.last_sha }}{{ end }}' \
+        LOOKBACK_DAYS='{{ .Input.lookback_days }}' DOCS='{{ .Input.docs }}' EXCLUDE='{{ .Input.exclude }}' \
+        MAX_FINDINGS='{{ .Input.max_findings }}' BRANCH="wfx/docs-drift-$(printf %.8s '{{ .RunID }}')" \
+          python3 .wfx-docs-drift/collect.py
+        c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    - id: sync
+      name: Confirm and fix each flag (doc-syncer)
+      description: Reject flags that are not drift; for real drift, the smallest edit citing the code line. Working tree only.
+      prompt: |
+        Machine checks flagged the doc statements in `.wfx-docs-drift/candidates.jsonl`
+        (fields: id, kind, doc, line, token, detail, commit). Kinds: moved-path,
+        removed-symbol (a recent commit deleted it), missing-path, missing-symbol,
+        missing-flag. The commits checked are `$(cat .wfx-docs-drift/since.txt)..HEAD`.
+
+        Follow the doc-syncer skill for EVERY candidate:
+        - not drift (another product, generic advice for other repos, history, a path
+          relative to a module that exists) → `not_stale` with the reason;
+        - real drift → edit the doc in place, changing only the wrong words, and
+          report the edit with the EXACT old and new text (as they appear in the
+          file, one statement each), the code `path:line` that makes the new text
+          true, and the commit that caused the drift if known;
+        - cannot tell what is true now → `unsure`, no edit.
+        Edit only documentation files. Do not commit.
+      skills:
+        - doc-syncer
+        - repo-navigator
+      tools:
+        - read
+        - edit
+        - grep
+        - glob
+        - bash
+      output_schema:
+        additionalProperties: false
+        properties:
+            edits:
+                items:
+                    properties:
+                        candidate_id:
+                            type: string
+                        code_refs:
+                            description: path:line that makes new_text true
+                            items:
+                                type: string
+                            type: array
+                        commit:
+                            description: the commit that caused the drift, if known
+                            type: string
+                        doc:
+                            type: string
+                        new_text:
+                            description: the statement after, verbatim
+                            type: string
+                        old_text:
+                            description: the statement before, verbatim
+                            type: string
+                        summary:
+                            description: a few words, e.g. 'authoring tools are wf_catalog/wf_validate'
+                            type: string
+                    required:
+                        - candidate_id
+                        - doc
+                        - old_text
+                        - new_text
+                        - code_refs
+                        - summary
+                    type: object
+                type: array
+            not_stale:
+                items:
+                    properties:
+                        candidate_id:
+                            type: string
+                        why:
+                            type: string
+                    required:
+                        - candidate_id
+                        - why
+                    type: object
+                type: array
+            summary:
+                type: string
+            unsure:
+                items:
+                    properties:
+                        candidate_id:
+                            type: string
+                        why:
+                            type: string
+                    required:
+                        - candidate_id
+                        - why
+                    type: object
+                type: array
+        required:
+            - edits
+            - not_stale
+            - unsure
+            - summary
+        type: object
+      max_turns: 80
+      max_attempts: 3
+      timeout_sec: 2400
+      soul: You are a technical writer who trusts only the code. Most flags you are handed are not drift, and saying so is half your job. When text is wrong you change only the wrong words, and you can point at the line that makes the new words true.
+      guardrails:
+        - deny: bash
+          args_contain:
+            - git commit
+            - git push
+            - git checkout
+            - git reset
+            - git stash
+            - gh pr
+          reason: edits stay in the working tree; a later step verifies and commits
+      provider: claude-cli
+    - id: verify
+      name: Verify every edit against the code (JEV) and commit
+      description: Docs-only diff; evidence read from the cited line; stale AND supported both yes, else the doc is restored.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        additionalProperties: false
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                description: exit code was zero
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        required:
+            - ok
+            - exitCode
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 900
+      gates:
+        - field: exitCode
+          equals: 70
+          action: fail
+          message: Verification failed — {{ .Output.stdout }}{{ .Output.stderr }}
+        - field: exitCode
+          equals: 78
+          action: skip_to
+          skip_to: remember
+      run: |
+        cat > .wfx-docs-drift/sync.json <<'WFX_SYNC_EOF'
+        {{ json .Steps.sync }}
+        WFX_SYNC_EOF
+        python3 .wfx-docs-drift/verify.py
+        c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    - id: dry_run_stop
+      name: Stop here on a dry run
+      description: A dry run ends with the branch and the PR body — nothing is pushed.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        additionalProperties: false
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                description: exit code was zero
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        required:
+            - ok
+            - exitCode
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      gates:
+        - field: exitCode
+          equals: 78
+          action: skip_to
+          skip_to: remember
+      run: '[ "{{ .Input.dry_run }}" = "false" ] && { echo "live run: continuing to the publish gate"; exit 0; } || { echo "dry run: stopping before any push"; exit 78; }'
+    - id: publish
+      name: Push and open the docs PR (pr-publisher)
+      description: Push this run's branch and open the PR with the verified body.
+      prompt: |
+        Publish this run's branch (`git rev-parse --abbrev-ref HEAD`) as a pull request,
+        following pr-publisher. Base: {{ if .Input.base_branch }}{{ .Input.base_branch }}{{ else }}the repository's default branch{{ end }}.
+        Title: "[docs-drift] docs that no longer matched the code". Body:
+        `--body-file .wfx-docs-drift/pr-body.md`. Add the label `documentation` if it exists.
+      skills:
+        - pr-publisher
+      tools:
+        - read
+        - bash
+      output_schema:
+        additionalProperties: false
+        properties:
+            pr_url:
+                type: string
+            published:
+                type: boolean
+        required:
+            - published
+            - pr_url
+        type: object
+      max_turns: 15
+      max_attempts: 3
+      requires_approval: true
+      guardrails:
+        - deny: bash
+          args_contain:
+            - push --force
+            - push -f
+            - reset --hard
+            - git commit
+          reason: publish exactly what was verified
+      provider: claude-cli
+    - id: remember
+      name: Remember the last commit checked
+      description: Workflow state `last_sha` — advanced only by a real run.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        additionalProperties: false
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                description: exit code was zero
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        required:
+            - ok
+            - exitCode
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      run: |
+        if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse {{ .BaseRef }}; else printf '%s' '{{ .Workflow.last_sha }}'; fi | tr -d '\n'
+      state:
+        workflow:
+            last_sha: '{{ .Output.stdout }}'
+    - id: report
+      name: Report
+      description: What was flagged, fixed, held and left alone; where the branch and PR body are.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        additionalProperties: false
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                description: exit code was zero
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        required:
+            - ok
+            - exitCode
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      run: |
+        D=.wfx-docs-drift
+        echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD) · since $(cat $D/since.txt 2>/dev/null | cut -c1-10)"
+        echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+        [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 2200 $D/pr-body.md; }
+        exit 0
+max_parallel: 4

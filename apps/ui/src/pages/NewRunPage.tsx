@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api, type Workflow } from '../api'
+import Crumbs from '../components/Crumbs'
+import { href } from '../lib/routes'
 
 // Renders a form from the workflow's input_schema (flat object of strings/booleans/numbers).
-export default function NewRunPage({ name }: { name: string }) {
+export default function NewRunPage({ name, project }: { name: string; project?: string }) {
   const [wf, setWf] = useState<Workflow>()
   const [vals, setVals] = useState<Record<string, any>>({})
   const [err, setErr] = useState('')
@@ -24,10 +26,12 @@ export default function NewRunPage({ name }: { name: string }) {
       const body: Record<string, any> = {}
       for (const [k, v] of Object.entries(vals)) if (v !== '' && v !== undefined) body[k] = v
       const run = await api.createRun(wf.name, body)
-      location.hash = `#/runs/${run.id}`
+      location.hash = project ? href.run(project, wf.name, run.id) : `#/runs/${run.id}`
     } catch (e: any) { setErr(e.message) } finally { setBusy(false) }
   }
   return (
+    <>
+    {project && <Crumbs items={[['Projects', href.projects()], [project, href.project(project)], [wf.name, href.workflow(project, wf.name)]]} />}
     <div className="card" style={{ maxWidth: 760 }}>
       <h1>New run · {wf.name}</h1>
       <div className="muted">{wf.description}</div>
@@ -42,7 +46,8 @@ export default function NewRunPage({ name }: { name: string }) {
           {p.description && <div className="muted" style={{ fontSize: 12 }}>{p.description}</div>}
         </div>
       ))}
-      <div className="actions"><button disabled={busy || required.some(k => !vals[k])} onClick={submit}>{busy ? 'starting…' : 'Start run'}</button><a href="#/workflows"><button className="ghost">Cancel</button></a></div>
+      <div className="actions"><button disabled={busy || required.some(k => !vals[k])} onClick={submit}>{busy ? 'starting…' : 'Start run'}</button><button className="ghost" onClick={() => history.back()}>Cancel</button></div>
     </div>
+    </>
   )
 }

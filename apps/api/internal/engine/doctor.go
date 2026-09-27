@@ -10,6 +10,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
+	"github.com/muthuishere/wfnexus/apps/api/internal/judge"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -146,11 +147,34 @@ func (e *Engine) Doctor() Doctor {
 	sort.Slice(d.Providers, func(i, j int) bool { return d.Providers[i].Name < d.Providers[j].Name })
 
 	for _, c := range e.catalog.Classifiers.List() {
-		entry := DoctorProvider{Name: c.Name, Kind: c.Backend, Model: c.Model, Ready: true}
-		if c.APIKeyEnv != "" {
-			entry.Detail = c.APIKeyEnv
-			if os.Getenv(c.APIKeyEnv) == "" {
-				entry.Ready, entry.Problem = false, c.APIKeyEnv+" is not set"
+		kind := c.Backend
+		if kind == "" {
+			kind = "url"
+		}
+		entry := DoctorProvider{Name: c.Name, Kind: kind, Model: c.Model, Ready: true}
+		if kind == "url" {
+			entry.Detail = c.BaseURL
+		}
+		// The key variable a PRESET implies counts too: the `jev` entry names no
+		// apiKeyEnv and still needs OPENROUTER_API_KEY, and used to report ready
+		// without it. judge.Options is the one place that knows the implication.
+		keyEnv := c.APIKeyEnv
+		if _, implied, err := judge.Options(c); err == nil && keyEnv == "" {
+			keyEnv = implied
+		}
+		if keyEnv != "" {
+			entry.Detail = keyEnv
+			if os.Getenv(keyEnv) == "" {
+				entry.Ready, entry.Problem = false, keyEnv+" is not set"
+			}
+		}
+		// A header that references a variable nobody set sends an empty
+		// credential — say so here rather than as a 401 mid-run.
+		for h, v := range c.Headers {
+			for _, ref := range envRefs(v) {
+				if os.Getenv(ref) == "" && entry.Ready {
+					entry.Ready, entry.Problem = false, "header "+h+" references "+ref+", which is not set"
+				}
 			}
 		}
 		d.Classifiers = append(d.Classifiers, entry)
@@ -451,4 +475,21 @@ func (h *DoctorHost) volumeState(host, sourceDir string, writable bool) bundle.V
 	_ = os.Remove(probe.Name())
 	out.Writable = true
 	return out
+}
+
+// envRefs lists the variable names a ${VAR} template references.
+func envRefs(s string) []string {
+	var out []string
+	for {
+		i := strings.Index(s, "${")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(s[i:], "}")
+		if j < 0 {
+			return out
+		}
+		out = append(out, s[i+2:i+j])
+		s = s[i+j+1:]
+	}
 }

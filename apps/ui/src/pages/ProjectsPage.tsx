@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Project } from '../api'
-import DataTable, { type Column } from '../components/DataTable'
+import { href } from '../lib/routes'
+import { useWaiting } from '../lib/waiting'
+import { labelOf, useCategories } from '../lib/categories'
 import { ago } from '../lib/time'
 
 /** The dashboard, and the top of the hierarchy: project → workflow → runs.
@@ -15,57 +17,23 @@ export default function ProjectsPage() {
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
   const [adding, setAdding] = useState(false)
+  const waiting = useWaiting()
+  const cats = useCategories()
+  const groups = useMemo(() => {
+    const order = [...cats.map(c => c.id), '']
+    const by = new Map<string, Project[]>()
+    for (const p of projects || []) {
+      const k = p.category && order.includes(p.category) ? p.category : ''
+      by.set(k, [...(by.get(k) || []), p])
+    }
+    return order.filter(id => by.has(id)).map(id => ({ id, label: labelOf(cats, id), projects: by.get(id)! }))
+  }, [projects, cats])
 
   const load = useCallback(() => {
     api.projects().then(p => { setProjects(p); setErr('') })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
   }, [])
   useEffect(load, [load])
-
-  const columns: Column<Project>[] = [
-    {
-      key: 'name', header: 'Project', width: 200,
-      value: p => p.name,
-      cell: p => (
-        <>
-          <a href={`#/projects/${encodeURIComponent(p.name)}`} className="mono" style={{ fontWeight: 550 }}>{p.name}</a>
-          {p.local && <span className="pill" style={{ marginLeft: 6 }}>this platform</span>}
-        </>),
-    },
-    {
-      key: 'workflows', header: 'Workflows', width: 100, align: 'right',
-      value: p => p.workflows?.length ?? 0,
-      cell: p => p.workflows?.length || <span className="muted">—</span>,
-    },
-    {
-      key: 'runs', header: 'Runs', width: 90, align: 'right',
-      value: p => p.runs,
-      cell: p => p.runs || <span className="muted">—</span>,
-    },
-    {
-      key: 'last', header: 'Last run', width: 170,
-      value: p => p.lastRunAt || '',
-      cell: p => p.lastRun
-        ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span>{' '}
-          <span className="muted" style={{ fontSize: 12 }}>{ago(p.lastRunAt)}</span></>
-        : <span className="muted">never</span>,
-    },
-    {
-      key: 'where', header: 'Where it lives',
-      value: p => p.url || p.repo || p.dir,
-      cell: p => <span className="mono muted" title={p.dir}>{p.url || p.repo || p.dir}</span>,
-    },
-    {
-      key: 'actions', header: '', width: 100, align: 'right', sortable: false,
-      cell: p => p.local ? null : (
-        <button className="ghost small danger-text" onClick={e => {
-          e.stopPropagation()
-          if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
-          api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
-            .catch(er => setErr(String(er.message || er)))
-        }}>Forget</button>),
-    },
-  ]
 
   return (
     <>
@@ -78,21 +46,66 @@ export default function ProjectsPage() {
             and every run of them belong to it.
           </p>
         </div>
-        <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'Add project'}</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="ghost" onClick={() => api.reload()
+            .then(w => { setNote(`Reloaded — ${w.length} workflow(s).`); load() })
+            .catch(e => setErr(e instanceof Error ? e.message : String(e)))}>Reload from disk</button>
+          <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'New project'}</button>
+        </div>
       </div>
 
       {err && <div className="banner err">{err}</div>}
       {note && <div className="banner ok">{note}</div>}
-      {adding && <AddProject onDone={m => { setAdding(false); setNote(m); load() }} onError={setErr} />}
+      {adding && <NewProject onError={setErr} />}
 
-      <div className="card">
-        {!projects ? <div className="muted">loading…</div> : (
-          <DataTable
-            rows={projects} columns={columns} getKey={p => p.name}
-            onRowClick={p => { location.hash = `#/projects/${encodeURIComponent(p.name)}` }}
-            initialSort={{ key: 'last', dir: 'desc' }}
-            searchPlaceholder="Search projects…"
-            empty="No projects yet. Add a repository that has a .wfx/workflows/ directory." />)}
+      {/* A list, not a table: a person comes here to pick one and open it.
+          Everything else about a project is on its own page. */}
+      <div className="card flush">
+        {!projects && <div className="empty">loading…</div>}
+        {projects?.length === 0 && <div className="empty">No projects yet. Add a repository that has a <span className="mono">.wfx/workflows/</span> directory.</div>}
+        {/* Grouped by the kind of work each project does, in the category
+            list's own order, unset last — the list a person scans for "my
+            finance project" rather than one alphabet of names. One group,
+            and the heading would be noise, so it is left out. */}
+        {groups.map(g => (
+          <section key={g.id || '_none'}>
+            {groups.length > 1 && (
+              <div className="grouphead"><span>{g.label}</span><span className="muted">{g.projects.length}</span></div>)}
+            <ul className="wflist projects">
+              {g.projects.map(p => (
+              <li key={p.name} onClick={() => { location.hash = href.project(p.name) }}>
+                <span className={`dot ${p.lastRun || 'never'}`} />
+                <div className="wfmain">
+                  <a href={href.project(p.name)} className="wfname" onClick={e => e.stopPropagation()}>{p.name}</a>
+                  {p.local && <span className="pill" style={{ marginLeft: 8 }}>this platform</span>}
+                  {!!p.problems?.length && <span className="badge failed" style={{ marginLeft: 8 }}>{p.problems.length} did not load</span>}
+                  {waiting.some(r => (r.project || 'local') === p.name) && (
+                    <span className="badge awaiting_approval" style={{ marginLeft: 8 }}>
+                      {waiting.filter(r => (r.project || 'local') === p.name).length} waiting on you
+                    </span>)}
+                  <div className="wfdesc mono" title={p.dir}>{p.url || p.repo || p.dir}</div>
+                </div>
+                <div className="wfmeta">
+                  <span>{p.workflows?.length || 0} workflow{p.workflows?.length === 1 ? '' : 's'}</span>
+                  <span>·</span>
+                  <span>{p.runs || 0} run{p.runs === 1 ? '' : 's'}</span>
+                </div>
+                <div className="wflast">
+                  {p.lastRun
+                    ? <><span className={`badge ${p.lastRun}`}>{p.lastRun.replace(/_/g, ' ')}</span><span className="muted">{ago(p.lastRunAt)}</span></>
+                    : <span className="muted">never run</span>}
+                </div>
+                <span onClick={e => e.stopPropagation()}>
+                  {!p.local && (
+                    <button className="ghost small danger-text" onClick={() => {
+                      if (!confirm(`Forget ${p.name}? Its runs stay in the history and the clone is left on disk.`)) return
+                      api.removeProject(p.name).then(() => { setNote(`Forgot ${p.name}.`); load() })
+                        .catch(er => setErr(String(er.message || er)))
+                    }}>Forget</button>)}
+                </span>
+              </li>))}
+            </ul>
+          </section>))}
       </div>
 
       {projects?.some(p => p.problems?.length) && (
@@ -114,47 +127,95 @@ export default function ProjectsPage() {
   )
 }
 
-function AddProject({ onDone, onError }: { onDone: (msg: string) => void; onError: (e: string) => void }) {
+type Mode = 'start' | 'add'
+
+/** Two ways a project comes to exist, side by side, because a person knows
+ *  which one they mean before they have typed anything: STARTING one (nothing
+ *  exists yet, or a folder exists with no workflows in it) or ADDING one (a
+ *  repository that already has `.wfx/workflows/`). Either way the next page is
+ *  the project itself, where the first workflow gets made. */
+function NewProject({ onError }: { onError: (e: string) => void }) {
+  const [mode, setMode] = useState<Mode>('start')
   const [repo, setRepo] = useState('')
   const [name, setName] = useState('')
   const [branch, setBranch] = useState('')
+  const [category, setCategory] = useState('')
   const [busy, setBusy] = useState(false)
+  const cats = useCategories()
 
+  const ready = mode === 'start' ? !!(name.trim() || repo.trim()) : !!repo.trim()
   const submit = () => {
-    setBusy(true)
-    api.addProject({ repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined })
-      .then(p => onDone(`Added ${p.name} — ${p.workflows?.length ?? 0} workflow(s).`))
+    setBusy(true); onError('')
+    api.addProject(mode === 'start'
+      ? { create: true, name: name.trim() || undefined, repo: repo.trim() || undefined, category: category || undefined }
+      : { repo: repo.trim(), name: name.trim() || undefined, branch: branch.trim() || undefined, category: category || undefined })
+      .then(p => { location.hash = href.project(p.name) })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
 
   return (
     <div className="card">
-      <div className="subhead"><h2>Add a project</h2></div>
-      <div className="grid2">
-        <div className="bfield">
-          <label>Repository</label>
-          <input className="mono" value={repo} onChange={e => setRepo(e.target.value)}
-            placeholder="https://github.com/you/repo  ·  or  /path/to/checkout" />
-          <div className="hint">
-            A URL is cloned once. A local path is used <b>in place</b>, so you can edit a workflow
-            and run it again without pushing.
+      <div className="segmented" role="radiogroup" aria-label="How to create the project">
+        <button role="radio" aria-checked={mode === 'start'} className={mode === 'start' ? 'active' : ''}
+          onClick={() => setMode('start')}>
+          <b>Start a new project</b><span>empty, ready for its first workflow</span>
+        </button>
+        <button role="radio" aria-checked={mode === 'add'} className={mode === 'add' ? 'active' : ''}
+          onClick={() => setMode('add')}>
+          <b>Add an existing repository</b><span>that already has .wfx/workflows/</span>
+        </button>
+      </div>
+
+      {mode === 'start' ? (
+        <div className="grid2">
+          <div className="bfield">
+            <label>Name</label>
+            <input className="mono" value={name} autoFocus onChange={e => setName(e.target.value)} placeholder="my-project" />
+            <div className="hint">Letters, digits, dot, dash, underscore. It is half of <span className="mono">name/workflow</span>.</div>
+          </div>
+          <div className="bfield">
+            <label>Folder <span className="muted">(optional)</span></label>
+            <input className="mono" value={repo} onChange={e => setRepo(e.target.value)} placeholder="/path/to/an/existing/checkout" />
+            <div className="hint">
+              Leave empty and the platform makes a new folder for it. Name an existing folder and it is
+              used <b>in place</b>: <span className="mono">.wfx/workflows/</span> is added and nothing else in it is touched.
+            </div>
           </div>
         </div>
-        <div className="bfield">
-          <label>Name</label>
-          <input className="mono" value={name} onChange={e => setName(e.target.value)} placeholder="taken from the repository" />
-          <div className="hint">Half of a qualified workflow name, as in <span className="mono">name/workflow</span>.</div>
+      ) : (
+        <div className="grid2">
+          <div className="bfield">
+            <label>Repository</label>
+            <input className="mono" value={repo} autoFocus onChange={e => setRepo(e.target.value)}
+              placeholder="https://github.com/you/repo  ·  or  /path/to/checkout" />
+            <div className="hint">
+              A URL is cloned once. A local path is used <b>in place</b>, so you can edit a workflow
+              and run it again without pushing.
+            </div>
+          </div>
+          <div className="bfield">
+            <label>Name</label>
+            <input className="mono" value={name} onChange={e => setName(e.target.value)} placeholder="taken from the repository" />
+          </div>
+          <div className="bfield">
+            <label>Branch <span className="muted">(cloned repositories only)</span></label>
+            <input className="mono" value={branch} onChange={e => setBranch(e.target.value)} placeholder="default branch" />
+          </div>
         </div>
-        <div className="bfield">
-          <label>Branch <span className="muted">(cloned repositories only)</span></label>
-          <input className="mono" value={branch} onChange={e => setBranch(e.target.value)} placeholder="default branch" />
-        </div>
+      )}
+      <div className="bfield" style={{ maxWidth: 420 }}>
+        <label>What kind of work is it?</label>
+        <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Category">
+          <option value="">Not sure yet</option>
+          {cats.map(c => <option key={c.id} value={c.id}>{c.label} — {c.description}</option>)}
+        </select>
+        <div className="hint">Its templates are offered first when you add a workflow. Changeable later.</div>
       </div>
-      <button disabled={!repo.trim() || busy} onClick={submit}>{busy ? 'Adding…' : 'Add project'}</button>
-      <div className="hint">
-        The repository needs a <span className="mono">.wfx/workflows/</span> directory; one without is
-        refused rather than added as something that does nothing.
+      <div className="actions">
+        <button disabled={!ready || busy} onClick={submit}>
+          {busy ? 'Working…' : mode === 'start' ? 'Create project' : 'Add project'}
+        </button>
       </div>
     </div>
   )

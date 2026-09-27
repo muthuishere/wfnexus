@@ -75,12 +75,15 @@ var resourcePerms = map[string][2]string{
 	"doctor":      {PermRegistryRead, PermRegistryWrite},
 	"sources":     {PermProjectsRead, PermProjectsWrite},
 	"projects":    {PermProjectsRead, PermProjectsWrite},
-	"env":         {PermEnvRead, PermEnvWrite},
-	"state":       {PermStateRead, PermStateWrite},
-	"workers":     {PermWorkersRead, PermWorkersWrite},
-	"bundles":     {PermBundlesRead, PermPublish},
-	"users":       {PermAdminRead, PermAdminWrite},
-	"roles":       {PermAdminRead, PermAdminWrite},
+	// The closed list projects and templates choose from: reading it is
+	// reading projects; it has no write route.
+	"categories": {PermProjectsRead, PermProjectsWrite},
+	"env":        {PermEnvRead, PermEnvWrite},
+	"state":      {PermStateRead, PermStateWrite},
+	"workers":    {PermWorkersRead, PermWorkersWrite},
+	"bundles":    {PermBundlesRead, PermPublish},
+	"users":      {PermAdminRead, PermAdminWrite},
+	"roles":      {PermAdminRead, PermAdminWrite},
 	// How a subject is obtained, and what it may always ask about itself.
 	"device":  {PermPublic, PermPublic},
 	"health":  {PermPublic, PermPublic},

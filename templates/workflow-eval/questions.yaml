@@ -1,0 +1,41 @@
+# Asked by `wfx judge` of the run's dossier. Bands: no < 0.30 < uncertain < 0.70 < yes.
+# The scorecard's overall verdict is PASS only when did_the_job is `yes` here AND
+# at least two model judges pass the run.
+did_the_job:
+  type: noul
+  instructions: >-
+    Read the workflow's stated job, then what each step did and what the run
+    filed or produced. Did this run actually do the job it says it exists to do?
+  "true": >-
+    Every part of the stated job is visibly done: the inputs were read, each
+    problem it was meant to catch was handled the way the job says (filed,
+    fixed, escalated or reported), and the outputs it claims exist.
+  "false": >-
+    Part of the job is missing or only claimed: a step skipped or failed
+    without the run saying so, an output the run claims does not exist, a
+    required human decision was bypassed, or it reported success without doing
+    the work.
+evidence_backed:
+  type: noul
+  instructions: >-
+    Is every claim the run makes — each finding, cause and "done" — backed by
+    evidence visible in the dossier (numbers, log lines, file:line, links that
+    exist)?
+  "true": Each claim cites concrete evidence a person could check, and nothing important is asserted without it.
+  "false": Claims rest on assertion, adjectives or guesses; evidence is missing, vague or contradicts the claim.
+would_a_senior_engineer_accept:
+  type: noul
+  instructions: >-
+    If a senior engineer who owns this system reviewed this run's output
+    exactly as it is, would they accept it without redoing any of it?
+  "true": They would act on it as-is — correct, complete, no noise, nothing they would have to redo or retract.
+  "false": They would redo part of it, retract something it filed, or distrust it enough to check everything by hand.
+severity_of_worst_problem:
+  type: choice
+  instructions: What is the worst problem with how this run did its job?
+  options:
+    none: nothing wrong — the run did its job cleanly
+    cosmetic: wording, formatting or noise that changes no decision
+    process: it did the work but skipped or bent a rule of its own — a gate, an approval, an escalation
+    wrong_output: something it filed or reported is wrong, duplicated or unsupported
+    missed_job: it failed to do the job — a real problem went unhandled or nothing it claims happened

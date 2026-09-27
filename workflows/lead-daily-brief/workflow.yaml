@@ -1,0 +1,297 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
+name: lead-daily-brief
+description: The leader's morning page. A read-only collector runs apl-skill's morning brief recipes across every connected account, an agent drafts a ranked brief in which every line cites a source item, a calibrated classifier checks each line against its source, and the verified brief is saved as a private draft. Delivery is a separate, approved step.
+input_schema:
+    properties:
+        accounts:
+            default: ""
+            title: apl handles (comma list; empty = all)
+            type: string
+        alert_label:
+            default: sre-alert
+            title: Monitoring issue label
+            type: string
+        day:
+            default: ""
+            title: Day (YYYY-MM-DD; empty = today)
+            type: string
+        deliver:
+            default: none
+            enum:
+                - none
+                - gmail-draft
+                - gmail-send
+                - ms-draft
+                - ms-send
+            title: Delivery after approval
+            type: string
+        deliver_handle:
+            default: ""
+            title: apl handle to deliver through
+            type: string
+        deliver_to:
+            default: ""
+            title: Deliver to (email)
+            type: string
+        dry_run:
+            default: false
+            title: Dry run — brief only; no state, no delivery
+            type: boolean
+        gh_identities:
+            default: ""
+            title: GitHub identities (comma list of github:<label>; empty = all bound)
+            type: string
+        gh_scope:
+            default: ""
+            title: GitHub search scope (empty = user + orgs)
+            type: string
+        internal_domains:
+            default: ""
+            title: Internal email domains (empty = from accounts)
+            type: string
+        lookback_h:
+            default: 0
+            title: Mail/chat look-back hours (0 = 24, or 72 on Monday)
+            type: integer
+        save_dir:
+            default: ~/.local/share/wfx-lead/daily-brief
+            title: Where the private brief is saved
+            type: string
+        tz:
+            default: ""
+            title: Timezone (IANA; empty = this machine's)
+            type: string
+    type: object
+"on":
+    schedule:
+        - cron: 0 7 * * 1-5
+    workflow_dispatch: null
+steps:
+    - id: collect
+      name: Collect the day (read-only, every account)
+      description: Calendar, mail, sent mail, Teams chat, tasks, shared docs, GitHub queue and alerts, open meeting actions.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 900
+      gates:
+        - field: exitCode
+          equals: 3
+          action: fail
+          message: No source could be read — every account failed. See this step's output for the apl login to run.
+      run: |
+        DAY="{{ .Input.day }}" TZ_NAME="{{ .Input.tz }}" LOOKBACK_H="{{ .Input.lookback_h }}" \
+        ACCOUNTS="{{ .Input.accounts }}" GH_IDENTITIES="{{ .Input.gh_identities }}" GH_SCOPE="{{ .Input.gh_scope }}" \
+        ALERT_LABEL="{{ .Input.alert_label }}" INTERNAL_DOMAINS="{{ .Input.internal_domains }}" \
+        python3 collect.py
+    - id: draft
+      name: Draft the brief
+      description: Ranked, cited lines in six sections, written to draft.json.
+      prompt: |
+        The collector read the leader's accounts for {{ if .Input.day }}{{ .Input.day }}{{ else }}today{{ end }}.
+        Read ./evidence.md (one line per item; the sources block says what could
+        not be read) and ./evidence.json when a line needs more. Follow the
+        leader-brief skill exactly. apl-skill's references explain every field
+        (Gmail labels, Graph fields, chat types, gh search fields).
+
+        Write ./draft.json and submit the same object, with these sections in
+        this order (ids exact):
+          meetings    — each of today's meetings: time (in {{ if .Input.tz }}{{ .Input.tz }}{{ else }}the window's tz{{ end }}), who
+                        (count, external orgs), and what it needs from me (docs,
+                        the last thread with them, an open question). Skip
+                        declined/all-day reminders.
+          decide      — mail and chat that need a decision or a reply from me,
+                        ranked; `why` says what is being asked. Not automated mail,
+                        not threads with replied_by_me=true. At most 8.
+          waiting     — PRs awaiting my review, PRs/issues assigned to me, my PRs
+                        with changes requested. At most 8, oldest wait first.
+          commitments — promises I made in sent mail ("I'll send…", "will do by…")
+                        and open `action:` items, each with what was promised and
+                        when. At most 6.
+          monitoring  — open alert issues ({{ .Input.alert_label }}), newest first. At most 5.
+          fyi         — at most 3 other things worth knowing (a doc shared with me,
+                        an overdue task).
+        Give each section an `empty` text that is TRUE given the sources block
+        (e.g. "Mail could not be read" when mail was unreadable).
+      skills:
+        - leader-brief
+      tools:
+        - read
+        - write
+        - grep
+        - glob
+      output_schema:
+        properties:
+            appendix:
+                items:
+                    properties:
+                        body:
+                            type: string
+                        heading:
+                            type: string
+                    type: object
+                type: array
+            sections:
+                items:
+                    properties:
+                        empty:
+                            type: string
+                        heading:
+                            type: string
+                        id:
+                            type: string
+                        items:
+                            items:
+                                properties:
+                                    cites:
+                                        items:
+                                            type: string
+                                        type: array
+                                    rank:
+                                        type: integer
+                                    text:
+                                        type: string
+                                    why:
+                                        type: string
+                                required:
+                                    - text
+                                    - cites
+                                type: object
+                            type: array
+                    required:
+                        - id
+                        - heading
+                        - items
+                    type: object
+                type: array
+            title:
+                type: string
+        required:
+            - title
+            - sections
+        type: object
+      max_turns: 40
+      max_attempts: 3
+      soul: You are a chief of staff who has read everything so the leader does not have to. You would rather leave a line out than write one the source does not say, and you always say why an item matters today.
+      provider: claude-cli
+    - id: verify
+      name: Check every line against its source (JEV)
+      description: Removes lines with no or unknown citations and lines the cited source does not support; saves the brief.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 600
+      gates:
+        - field: exitCode
+          equals: 2
+          action: fail
+          message: The draft step wrote no draft.json.
+        - field: exitCode
+          equals: 4
+          action: fail
+          message: The claim classifier could not run (TYPESAFE_API_KEY / OPENROUTER_API_KEY in the env store?) — the brief was saved marked NOT VERIFIED.
+      run: |
+        python3 verify.py --name daily-brief --save-dir "{{ .Input.save_dir }}" --private
+    - id: settle
+      name: Record the run; is delivery wanted?
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 60
+      gates:
+        - field: exitCode
+          equals: 10
+          action: skip_to
+          skip_to: finish
+      run: |
+        if [ "{{ .Input.dry_run }}" = "true" ]; then echo "dry run: state untouched, nothing delivered"; exit 10; fi
+        wfx state set --workflow last_brief_at "$(date -u +%FT%TZ)"
+        if [ "{{ .Input.deliver }}" = "none" ]; then echo "brief saved as a private draft; no delivery configured"; exit 10; fi
+        echo "delivery requested: {{ .Input.deliver }} → {{ .Input.deliver_to }} (waits for approval)"
+    - id: deliver
+      name: Deliver the brief (approved)
+      description: Puts the verified brief in the chosen mailbox as a draft or a mail to yourself.
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 120
+      requires_approval: true
+      run: |
+        DRY_RUN="{{ .Input.dry_run }}" python3 deliver.py --md brief.md --channel "{{ .Input.deliver }}" \
+          --handle "{{ .Input.deliver_handle }}" --to "{{ .Input.deliver_to }}" \
+          --subject "Daily brief {{ if .Input.day }}{{ .Input.day }}{{ else }}$(date +%F){{ end }}"
+    - id: finish
+      name: Success numbers
+      prompt: ""
+      skills: []
+      tools: []
+      output_schema:
+        properties:
+            exitCode:
+                type: integer
+            ok:
+                type: boolean
+            stderr:
+                type: string
+            stdout:
+                type: string
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      timeout_sec: 30
+      run: |
+        python3 -c "import json; b=json.load(open('brief.json')); print(json.dumps(b['stats']))"
+max_parallel: 4

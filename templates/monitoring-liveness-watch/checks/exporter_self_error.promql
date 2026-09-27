@@ -1,0 +1,6 @@
+# title: Exporter {job} on {instance} is scraped fine but cannot read its source
+# severity: error
+# component: monitoring
+# key: job,instance
+# note: the scrape target itself is health=up, so an `up == 0` alert never fires. The exporter's OWN gauge says it cannot reach what it exports (wrong grant, password, DSN), so every metric it should produce is missing — this is how a broken postgres_exporter goes unnoticed for months.
+({__name__=~".+_exporter_last_scrape_error"} == 1) or ({__name__=~"(pg|mysql|redis|mongodb|elasticsearch|rabbitmq|memcached|pgbouncer|kafka|haproxy|nginx|apache)_up"} == 0)

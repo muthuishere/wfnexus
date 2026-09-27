@@ -1,0 +1,387 @@
+# code-remover — evidence-based dead-code removal, one commit per removal, one detailed PR.
+#
+# EVIDENCE (docs/scenarios/top-6-by-category.md, development #1)
+#   - dotnet/runtime, ten months of Copilot coding agent: "Removal/Cleanup 77 PRs
+#     84.7%… Our highest success rate by category"; revert rate 0.6%. The agent did
+#     best when it "constrain[ed] its searches to only a portion of the repo".
+#     https://devblogs.microsoft.com/dotnet/ten-months-with-cca-in-dotnet-runtime/
+#   - GitHub's agentic-workflow factory ships a dead-code-remover workflow.
+#     https://github.com/github/gh-aw/tree/main/.github/workflows
+#
+# WHAT THIS DOES BETTER THAN THOSE
+#   1. The finders AND the usage checks run as code (inventory.py, checks.py), not as
+#      an agent's claim that it searched: every candidate carries >=4 machine checks
+#      (literal, call-shape, indirect/reflection/build-tag, history, code graph).
+#   2. The agent's job is to SAVE code, and it is audited: a call-shaped hit it did
+#      not explain forces `needs-human`, whatever the model thinks (plan.py).
+#   3. A calibrated classifier (JEV, bands no<0.30<uncertain<0.70<yes) scores each
+#      candidate, and the decision table is applied by code — the model can never
+#      promote a candidate to `remove` on its own, and never overrules a reference.
+#   4. Lost callers are reported as BUGS, never deleted (deleting them hides a bug).
+#   5. One commit per removal, reverted on red, then re-proven by a separate step
+#      with the same ruler as the baseline (build, vet, counted tests), plus the
+#      finders re-run to list what became unreachable BECAUSE of this PR.
+#   6. A DIFFERENT model (codex-cli) reviews the diff; then every PR claim is checked
+#      against evidence the writer did not author, and the PR must quote the real
+#      numbers and every commit SHA.
+#   7. Two human gates: the removal plan (before anything is deleted) and the publish.
+#      `dry_run` (default true) stops before any push and leaves the branch + body.
+#
+# Needs: git, go (deadcode/staticcheck are used from PATH or ~/go/bin, else `go run`),
+# gh for the duplicate-PR check and publishing, TYPESAFE_API_KEY (or
+# OPENROUTER_API_KEY) in the env store for `wfx judge`.
+name: code-remover
+template:
+  title: Code remover — evidence-based dead-code PR
+  category: development
+  summary: >-
+    Finds code nothing calls, tries hard to prove it IS used, deletes only what
+    survives — one commit each, suite green after every one — and writes a PR a
+    reviewer can check line by line. Two human gates; dry_run stops before any push.
+  fill:
+    - "scope: point it at one module or directory — cleanup agents do best on a portion of the repo"
+    - "the publish step's base branch, if your default branch is not what `gh` reports"
+    - "TYPESAFE_API_KEY in the env store (wfx env set TYPESAFE_API_KEY) for the calibrated verdicts"
+
+description: >-
+  Evidence-based dead-code removal. Machine finders (deadcode, staticcheck U1000,
+  go mod tidy -diff, knip) inventory candidates; machine checks search every
+  tracked file, call shapes, indirect use and history; an agent tries to prove
+  each one is used; a calibrated classifier scores what is left and a decision
+  table decides remove / keep / bug / needs-a-human. After a person approves the
+  plan, each removal is its own commit with the suite green after it, re-proven
+  independently, reviewed by a different model, and described in a PR whose every
+  claim is checked against the evidence. Nothing is pushed until a person approves.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+      input: { dry_run: false }
+
+input_schema:
+  type: object
+  properties:
+    repo_path:    { type: string,  title: "Local repo path (the run works in its own worktree)" }
+    repo_url:     { type: string,  title: "…or a repo URL to clone" }
+    base_branch:  { type: string,  title: "Base to branch from (default: the checkout's HEAD)" }
+    scope:        { type: string,  title: "Directory to clean (a module or package)", default: "." }
+    max_removals: { type: integer, title: "At most this many removals per PR", default: 10 }
+    pr_prefix:    { type: string,  title: "PR title prefix (also the duplicate check)", default: "[dead-code]" }
+    dry_run:      { type: boolean, title: "Dry run — commit on the run's branch, write the PR body, push nothing", default: true }
+    isolate:      { type: boolean, title: "Work in a throwaway git worktree", default: true }
+
+steps:
+  # 1 ── deterministic ─────────────────────────────────────────────────────────
+  - id: baseline
+    name: Baseline build and test counts
+    description: Skip if a cleanup PR is already open; branch; build, vet and COUNT tests before touching anything.
+    timeout_sec: 3600
+    run: |
+      printf '*\n' > .wfx-code-remover/.gitignore
+      SCOPE='{{ .Input.scope }}' PR_PREFIX='{{ .Input.pr_prefix }}' \
+      BRANCH="wfx/code-remover-$(printf %.8s '{{ .RunID }}')" \
+        python3 .wfx-code-remover/baseline.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Baseline failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  - id: inventory
+    name: Inventory candidates (dead-code-finder)
+    description: deadcode -test, staticcheck U1000, go mod tidy -diff, knip — every candidate with the tool line that found it.
+    timeout_sec: 1800
+    run: |
+      SCOPE='{{ .Input.scope }}' python3 .wfx-code-remover/inventory.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Inventory failed — {{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  - id: checks
+    name: Machine usage checks
+    description: Per candidate, >=4 independent checks — literal repo-wide search, call shapes, indirect use, history, code graph.
+    timeout_sec: 900
+    run: python3 .wfx-code-remover/checks.py || exit 70
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Checks failed — {{ .Output.stderr }}" }
+
+  # 2 ── the fuzzy middle: try to SAVE each candidate ─────────────────────────────
+  - id: prove
+    name: Prove each candidate IS used (usage-prover)
+    description: Read every hit adversarially; find indirect use, dependent text and lost callers. Reads only.
+    provider: claude-cli
+    skills: [usage-prover, repo-navigator]
+    tools: [read, grep, glob, bash]
+    max_turns: 80
+    timeout_sec: 2400
+    soul: >-
+      You are the defence attorney for every piece of code a tool called dead. You
+      win when you find what uses it. You do not edit, delete or commit anything,
+      and a hit you have not read is a hit you have not explained.
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git reset", "git stash", "git push", "sed -i", "rm -"], reason: "the prover only reads" }
+    prompt: |
+      The finders flagged the candidates in `.wfx-code-remover/candidates.jsonl`.
+      Machine checks for each are in `.wfx-code-remover/checks.jsonl`: `code_hits`,
+      `text_hits`, `call_hits` (every file:line the searches found besides the
+      definition and its own doc comment), `indirect` signals and `history`.
+      Scope: {{ .Input.scope }}. Base commit: {{ .BaseRef }}.
+
+      Follow the usage-prover skill. For EVERY candidate:
+      1. Read its definition, then read every code hit and every call hit. A hit may
+         be a DIFFERENT symbol with the same name (another package, a local
+         variable, a CLI word in a string) — say so. A caller that is itself one of
+         the candidates AND itself unreachable does not keep this one alive; dismiss
+         it as "called only from <candidate id>, itself unreachable".
+      2. Indirect use: interface satisfaction (String/Error/MarshalJSON…, or an
+         interface in this repo declaring the method), reflection, a registry keyed
+         by string, build tags, another module's tests.
+      3. Text hits: split into `dependent_text` (a template, config key, route
+         string, CLI flag, or an instruction someone follows breaks if it goes) and
+         `descriptive_text` (a doc example, comment or changelog that only quotes
+         it — these get updated in the removal commit).
+      4. Lost caller: a live sibling doing the same job, a documented feature
+         nothing triggers, or `git log -S` showing the last call vanishing in a
+         commit about something else. If so, `lost_caller: true` with the why.
+
+      Every entry of `call_hits` MUST appear in either `real_references` or
+      `dismissed_hits` (as "path:line"), or the candidate goes to a human.
+      Do not modify any file. Submit one entry per candidate, using its `id`.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [candidates, summary]
+      properties:
+        summary: { type: string, description: "two sentences: how many look removable, kept, bugs" }
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [id, real_references, dependent_text, descriptive_text, dismissed_hits, lost_caller, analysis]
+            properties:
+              id:               { type: string }
+              real_references:  { type: array, items: { type: string }, description: "path:line — what actually uses it, and how" }
+              dependent_text:   { type: array, items: { type: string }, description: "path:line — text that breaks if it goes" }
+              descriptive_text: { type: array, items: { type: string }, description: "path:line — text that only quotes it" }
+              dismissed_hits:
+                type: array
+                items:
+                  type: object
+                  required: [hit, why]
+                  properties:
+                    hit: { type: string, description: "path:line" }
+                    why: { type: string }
+              lost_caller:      { type: boolean }
+              lost_caller_why:  { type: string }
+              analysis:         { type: string, description: "plain sentences: what each check showed and why that settles it" }
+
+  # 3 ── calibrated verdicts, decision table by code ─────────────────────────────
+  - id: plan
+    name: Judge and plan (JEV + decision table)
+    description: wfx judge per candidate, then remove / keep / bug / needs-a-human — applied literally, capped per PR.
+    timeout_sec: 900
+    run: |
+      cat > .wfx-code-remover/prove.json <<'WFX_PROVE_EOF'
+      {{ json .Steps.prove }}
+      WFX_PROVE_EOF
+      MAX_REMOVALS='{{ .Input.max_removals }}' python3 .wfx-code-remover/plan.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Planning failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 4 ── HUMAN GATE 1: the plan. Deletion starts only after a person approves. ───
+  - id: remove
+    name: Remove the approved candidates (safe-remover)
+    description: One commit per removal with its evidence; orphans cleaned; build+vet+test after each; revert on red.
+    requires_approval: true
+    provider: claude-cli
+    skills: [safe-remover]
+    tools: [read, edit, write, grep, glob, bash]
+    max_turns: 120
+    timeout_sec: 3600
+    soul: >-
+      You delete exactly what a person approved and nothing else. A removal that
+      breaks the build was wrong, and you revert it rather than fix forward.
+    guardrails:
+      - { deny: bash, args_contain: ["git push", "gh pr", "git add -A", "git add --all", "git add .", "--no-verify", "git reset --hard", "git rebase", "git commit --amend"], reason: "one plain commit per approved removal, staged with git add -u, never pushed" }
+    prompt: |
+      The approved plan is `.wfx-code-remover/plan.json` (human-readable:
+      `.wfx-code-remover/plan.md`). Remove ONLY rows whose `verdict` is `remove`.
+      You are already on this run's branch (`.wfx-code-remover/baseline.json` →
+      `branch`), cut from base commit {{ .BaseRef }}.
+
+      Follow the safe-remover skill, one removal at a time:
+      1. Delete the definition. When one approved candidate calls another, remove
+         the caller first so every commit builds.
+      2. Delete what it orphans and ONLY that: a test exercising nothing but it, an
+         import or helper used only by it. For each `descriptive_text` entry, fix
+         the text in the same commit (drop the sentence, or re-point an example at
+         something that exists) — never leave text naming a symbol that is gone.
+      3. In the module (`module` field): `go build ./... && go vet ./... && go test ./...`
+         (or the package's build+test for non-Go). Red → `git checkout -- .` and
+         record it as reverted with the error; never edit other code to make it pass.
+      4. Stage with `git add -u` (plus a new file only if you truly created one —
+         never `git add -A`/`.`; `.wfx-code-remover/` must never be committed) and
+         commit with the skill's message format:
+         `remove <symbol>: unreachable, <one-line evidence>` + Found by / Checks /
+         Classifier / Also removed lines (numbers from plan.json).
+      Append one JSON line per candidate to `.wfx-code-remover/removals.jsonl`:
+      {"symbol", "status": "removed"|"reverted", "sha", "lines_deleted",
+       "orphan_tests": [test names deleted], "also_removed": [...], "error"}.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [removed, reverted, summary]
+      properties:
+        removed:  { type: array, items: { type: string }, description: "symbol — short sha" }
+        reverted: { type: array, items: { type: string }, description: "symbol — the error" }
+        summary:  { type: string }
+
+  # 5 ── prove it, with the same ruler as the baseline ───────────────────────────
+  - id: verify
+    name: Prove the branch (before vs after)
+    description: Suite again with counts; every commit is a planned removal; no fix-forward; finders re-run for cascades.
+    timeout_sec: 3600
+    run: python3 .wfx-code-remover/verify.py || exit 70
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "The branch did not prove out — {{ .Output.stdout }}" }
+
+  # 6 ── a different model reviews the diff ──────────────────────────────────────
+  - id: review
+    name: Adversarial review on a different model (change-reviewer)
+    description: codex-cli reviews the diff it did not write, against the plan and the proof.
+    provider: codex-cli
+    skills: [change-reviewer]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    timeout_sec: 1800
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git push", "git checkout", "git reset"], reason: "the reviewer reads" }
+    prompt: |
+      Review the dead-code removal on this branch: `git diff {{ .BaseRef }}..HEAD`
+      and `git log --stat {{ .BaseRef }}..HEAD`. The approved plan is
+      `.wfx-code-remover/plan.json`; the independent proof is
+      `.wfx-code-remover/verify.json` (suite before/after, commits).
+
+      Follow change-reviewer. For a removal PR, hunt specifically for: anything
+      deleted that the plan did not approve; a removed symbol still reachable
+      through an interface, reflection, a string key or another build context;
+      orphans left behind (imports, helpers, tests or docs that named it); a test
+      deleted that exercised LIVE code; any line added that is not a doc fix.
+      Run `go build ./... && go vet ./...` in the module yourself.
+      `approved: false` only for a blocker, and say exactly which commit.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, verdict, findings]
+      properties:
+        approved: { type: boolean }
+        verdict:  { type: string }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, what]
+            properties:
+              severity: { type: string, enum: [blocker, major, minor, nit] }
+              what:     { type: string }
+              commit:   { type: string }
+    gates:
+      - { field: approved, equals: false, action: needs_input, message: "The codex reviewer blocked the branch: {{ .Output.verdict }}" }
+
+  # 7 ── the PR body, every claim traceable ──────────────────────────────────────
+  - id: write_pr
+    name: Write the cleanup PR (cleanup-pr-writer)
+    description: Removals table with evidence and commits, kept and why, bugs, needs-a-human, before/after, revert per commit.
+    provider: claude-cli
+    skills: [cleanup-pr-writer]
+    tools: [read, write, edit, grep, glob, bash]
+    max_turns: 40
+    timeout_sec: 1800
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git push", "gh pr"], reason: "the writer writes the body; publishing is a later, gated step" }
+    prompt: |
+      Write the pull request for this branch, following cleanup-pr-writer.
+      Facts, all in `.wfx-code-remover/`: plan.json (every candidate, its verdict,
+      the classifier's numbers, why), evidence.jsonl (the checks per candidate),
+      removals.jsonl, verify.json (suite before/after, commits with SHAs, lines,
+      newly unreachable), and the reviewer's verdict: {{ .Steps.review.verdict }}
+
+      1. Write `.wfx-code-remover/pr-body.md` in the skill's order. Use only numbers
+         from those files. Quote the before and after pass counts and lines
+         deleted exactly, and every removal commit's 7-char SHA. Add a
+         "Next run" line listing `newly_unreachable` from verify.json, and say the
+         claims were checked by a calibrated classifier.
+      2. Write `.wfx-code-remover/claims.jsonl`, one line per removal row, kept row,
+         bug row and the verification table:
+         {"id": "<row>", "claim": "<the row's why/what text as written in the body>",
+          "about": ["<candidate id from plan.json>" | "verification"]}
+      3. Run `python3 .wfx-code-remover/claims.py`. For any claim not supported or
+         number missing, rewrite the body to say only what the evidence shows (or
+         move the row to "Needs a human") and run it again until it exits 0.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [title, summary, claims]
+      properties:
+        title:   { type: string, description: "starts with the PR prefix, e.g. [dead-code] remove 6 unreachable functions in apps/api" }
+        summary: { type: string }
+        claims:  { type: integer, description: "claims checked" }
+
+  - id: claims
+    name: Re-check every claim (JEV) and the numbers
+    description: Independent of the writer — evidence from the machine's files; body must quote real counts and every SHA.
+    timeout_sec: 600
+    run: |
+      python3 .wfx-code-remover/claims.py
+      c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 20, action: needs_input, message: "PR claims not supported by the evidence — {{ .Output.stdout }}" }
+      - { field: exitCode, equals: 70, action: fail, message: "Claim check failed — {{ .Output.stderr }}" }
+
+  - id: dry_run_stop
+    name: Stop here on a dry run
+    description: A dry run ends with the branch and the PR body — nothing is pushed.
+    run: '[ "{{ .Input.dry_run }}" = "false" ] && { echo "live run: continuing to the publish gate"; exit 0; } || { echo "dry run: stopping before any push"; exit 78; }'
+    gates:
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 8 ── HUMAN GATE 2: the only step that touches the outside world ─────────────
+  - id: publish
+    name: Push and open the PR (pr-publisher)
+    description: Push this run's branch and open the PR with the checked body.
+    requires_approval: true
+    provider: claude-cli
+    skills: [pr-publisher]
+    tools: [read, bash]
+    max_turns: 15
+    guardrails:
+      - { deny: bash, args_contain: ["push --force", "push -f", "reset --hard", "git commit"], reason: "publish exactly what was approved" }
+    prompt: |
+      Publish this run's branch (see `.wfx-code-remover/baseline.json` → `branch`)
+      as a pull request, following pr-publisher.
+      Base: {{ if .Input.base_branch }}{{ .Input.base_branch }}{{ else }}the repository's default branch (`gh repo view --json defaultBranchRef`){{ end }}.
+      Title: {{ .Steps.write_pr.title }}
+      Body: `--body-file .wfx-code-remover/pr-body.md`. Read back the PR URL.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [published, pr_url]
+      properties:
+        published: { type: boolean }
+        pr_url:    { type: string }
+
+  # 9 ── always: what happened, where to look ────────────────────────────────────
+  - id: report
+    name: Report
+    description: Branch, commits, plan and PR body location — the run's answer whatever path it took.
+    run: |
+      D=.wfx-code-remover
+      echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD)"
+      echo "--- commits on the branch"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      [ -f $D/plan.md ] && { echo "--- plan"; head -c 1500 $D/plan.md; }
+      [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before',v['before'],'after',v['after'],'lines -%d +%d'%(v['lines_deleted'],v['lines_added']),'next run:',v['newly_unreachable'])"
+      [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 900 $D/pr-body.md; }
+      exit 0

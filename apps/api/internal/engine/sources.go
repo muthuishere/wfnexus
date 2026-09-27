@@ -156,6 +156,92 @@ func (e *Engine) ImportRepo(ctx context.Context, name, ref, branch string) (work
 	return src, e.ReloadDefinitions()
 }
 
+// CreateProject starts a project from nothing, rather than adding one that
+// already exists.
+//
+// With no folder, the project gets its own directory under the runtime
+// directory (`<work>/projects/<name>`). With a folder — an existing checkout
+// that has no workflows yet — the project is that folder, used in place, and
+// `.wfx/workflows/` is created in it. Either way it becomes a git repository
+// if it is not one already, because the workflows a project runs are mostly
+// about a repository, and a run's default `repo_path` is this directory.
+//
+// ImportRepo refuses a directory with no `.wfx/workflows/` so that "imported,
+// and nothing happened" cannot occur by accident. This is the deliberate
+// version of the same act: the person asked for an empty project, so empty is
+// the correct result, and the next thing they see is how to add a workflow.
+//
+// An existing project name is refused. ImportRepo replaces a same-named source,
+// which is right for re-pointing a clone and wrong for "new": a create that
+// silently took over an existing project's name would re-home its workflows.
+func (e *Engine) CreateProject(ctx context.Context, name, folder string) (workflow.Source, error) {
+	if name == "" && folder != "" {
+		name = inferName(folder)
+	}
+	if name == "" {
+		return workflow.Source{}, fmt.Errorf("a new project needs a name")
+	}
+	// Checked before anything touches the disk: the name becomes a directory,
+	// and a folder is initialised, before ImportRepo would ever refuse it.
+	if !safeName.MatchString(name) || name == "local" || name == templatesSource {
+		return workflow.Source{}, fmt.Errorf("project name %q must start alphanumeric and contain only "+
+			"letters, digits, dot, dash and underscore, and cannot be \"local\" or %q", name, templatesSource)
+	}
+	for _, src := range e.Sources() {
+		if src.Name == name {
+			return workflow.Source{}, fmt.Errorf("a project named %q already exists", name)
+		}
+	}
+
+	dir := folder
+	if dir == "" {
+		dir = filepath.Join(e.cfg.WorkDir, "projects", name)
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+			return workflow.Source{}, fmt.Errorf("%s already exists and is not empty; add it as an existing folder instead", dir)
+		}
+	} else {
+		if !isLocalPath(folder) {
+			return workflow.Source{}, fmt.Errorf("%q is not a folder on this machine — to use a remote repository, add it instead of creating one", folder)
+		}
+		abs, err := filepath.Abs(expandHome(folder))
+		if err != nil {
+			return workflow.Source{}, err
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return workflow.Source{}, fmt.Errorf("%s: %w", abs, err)
+		}
+		if !info.IsDir() {
+			return workflow.Source{}, fmt.Errorf("%s is a file, not a folder", abs)
+		}
+		dir = abs
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(workflow.RepoWorkflowDir)), 0o755); err != nil {
+		return workflow.Source{}, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		// `-b main` pinned: an unpinned init inherits init.defaultBranch from
+		// whoever runs the server, which is exactly how a fixture once went red
+		// on CI and green on a laptop.
+		if out, err := exec.CommandContext(ctx, "git", "init", "-q", "-b", "main", dir).CombinedOutput(); err != nil {
+			return workflow.Source{}, fmt.Errorf("git init %s: %v: %s", dir, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return e.ImportRepo(ctx, name, dir, "")
+}
+
+// expandHome turns a leading ~ into the home directory. filepath.Abs does not,
+// so "~/code/x" would otherwise become "<cwd>/~/code/x".
+func expandHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
+}
+
 // ForgetRepo removes a source. The clone is left on disk: deleting a working
 // copy somebody may have edited is not something to do as a side effect.
 func (e *Engine) ForgetRepo(name string) error {

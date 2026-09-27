@@ -30,6 +30,9 @@ type Template struct {
 	Fill []string `json:"fill,omitempty"`
 	// Source is the project it came from — "local" for the platform's own.
 	Source string `json:"source,omitempty"`
+	// Category is the kind of work it serves; a project of the same category
+	// is offered it first.
+	Category string `json:"category,omitempty"`
 	// Phases names the steps in order, which is the shape someone is choosing
 	// between when they pick one.
 	Phases []TemplatePhase `json:"phases"`
@@ -87,7 +90,7 @@ func (e *Engine) Template(name string) (*workflow.Definition, error) {
 func describeTemplate(d *workflow.Definition) Template {
 	t := Template{
 		Name: d.Name, Title: d.Template.Title, Summary: d.Template.Summary,
-		Description: d.Description, Fill: d.Template.Fill, Source: d.Source,
+		Description: d.Description, Fill: d.Template.Fill, Source: d.Source, Category: d.Template.Category,
 		Files: workflow.Infos(d.Files), Path: d.Path,
 	}
 	if t.Title == "" {

@@ -1,0 +1,20 @@
+# Asked of each dead-code candidate by `wfx judge`. The same shape as a
+# workflow step's decide.questions, so these move into a workflow unchanged.
+unused:
+  type: noul
+  instructions: >-
+    Given the evidence, is this code unused at runtime, so that removing it
+    changes no behaviour and breaks no text that names it?
+  "true": >-
+    Nothing reaches it: no direct call, no interface, reflection or fmt use, no
+    template, config, doc or skill that names it, no other build context.
+  "false": >-
+    Something reaches it, even indirectly, or a doc, skill, template or config
+    names it, or another build context uses it.
+kind:
+  type: choice
+  instructions: What should happen to this code?
+  options:
+    remove: provably dead, nothing names it, and deleting it is safe
+    keep: used, or named somewhere, or removing it would change behaviour or break a public contract
+    bug: it looks dead only because a caller was lost — a live sibling does the same job or a documented feature never triggers it; deleting it would hide a bug

@@ -1,0 +1,5 @@
+# title: Scrape target down: {job} {instance}
+# severity: warning
+# component: monitoring
+# key: job,instance
+up == 0

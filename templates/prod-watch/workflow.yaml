@@ -1,0 +1,318 @@
+# prod-watch — a production watcher that files ONE trustworthy issue per problem.
+#
+# Practitioner evidence (docs/scenarios/top-6-by-category.md):
+#   alert-investigator  — read-only RCA, "inconclusive" allowed, every claim linked to a query
+#     https://www.relvy.ai/blog/llm-cost-of-ai-sre-investigating-production-alerts
+#     https://engineering.fb.com/2024/06/24/data-infrastructure/leveraging-ai-for-efficient-incident-response/
+#   ci-failure-doctor   — one DEDUPLICATED issue per root cause, updated rather than re-filed
+#     https://github.com/githubnext/agentics/blob/main/docs/ci-doctor.md
+#     https://docs.gitlab.com/user/duo_agent_platform/flows/foundational_flows/fix_pipeline/
+#   data-quality-alert-rca — freshness/volume checks walked to a cause that cites a row count or log line
+#     https://docs.getmontecarlo.com/docs/troubleshooting-agent
+#     https://datrick.com/ai-data-pipeline-failure-triage-recovery-automation
+#   Summary patterns: deterministic around / inference inside; a calibrated three-band
+#   gate decides who acts; a person signs anything uncertain.
+#
+# What it does BETTER than those, and than the reqsume-prod-watch it generalises:
+#   1. Checks are DATA, not code: one file per rule in checks/ (*.sql, *.promql,
+#      *.logql) with a small header (title, severity, key, note). Adding a check
+#      is adding a file; a broken check is reported as its own finding instead
+#      of blanking every database signal (one SQL document did that before).
+#   2. Every SQL check runs alone inside BEGIN READ ONLY … ROLLBACK with a
+#      statement timeout, and functions that act outside a transaction
+#      (pg_terminate_backend, dblink, set_config, …) are refused.
+#   3. A HEARTBEAT: every run writes `prod-watch.heartbeat` to project state
+#      ("<time> sources=<ok>/<total>") and can GET an external dead-man URL.
+#      monitoring-liveness-watch reads it, so a watcher that stopped is itself
+#      an issue — the one failure a watcher cannot report about itself.
+#   4. No silent loss: a candidate the agent dropped, or a classifier outage,
+#      goes to a person instead of vanishing; a collector crash FAILS the run
+#      rather than reading as "healthy".
+#   5. Dedup across hand-filed issues: triage may map a finding onto an open
+#      issue that has no fingerprint; a second calibrated question
+#      (same_problem) must agree before it is merged. A closed problem that
+#      returns is filed as a regression linking the old issue.
+#   6. Private IPs are redacted from issue text; fingerprints stay stable
+#      (sha1(check|key) — the same formula as before, so existing issues match).
+#
+# Read-only by construction: GET-only HTTP, READ ONLY SQL, and the agent step is
+# denied psql/ssh/gh writes by guardrails. Nothing is fixed from here.
+name: prod-watch
+template:
+  title: Production watch — one issue per real problem
+  category: debugging-ops
+  summary: >-
+    Every 15 minutes: read-only logs, metrics and database checks raise
+    candidates by rule; an agent explains each against the code; a calibrated
+    classifier decides; one issue per problem, comments throttled, uncertain
+    ones go to a person. Writes a heartbeat so its own silence is detectable.
+  fill:
+    - "env: PRODUCT, ISSUE_REPO, ISSUE_LABEL — where issues go"
+    - "collect step env: OBS_SSH / LOKI_URL / PROM_URL / LOKI_QUERY for logs and metrics; DB_PSQL for database checks (leave empty to skip a source)"
+    - "checks/: your rules, one file each — the shipped ones are generic examples (probes, disk, memory, exporter, long transactions); see checks/failed_jobs.sql.example"
+    - "triage skills: add your product's production map skill beside prod-signal-triage (what is normal, known false positives, neighbours that are not yours)"
+    - "the project env store needs TYPESAFE_API_KEY (or OPENROUTER_API_KEY) for the classifier: wfx env set TYPESAFE_API_KEY --project <p>"
+    - "optional HEARTBEAT_URL: an external dead-man's switch (healthchecks.io style GET) for when the scheduler itself dies"
+
+description: >-
+  Watches production on a schedule — error logs, uptime and host metrics, and
+  database checks that say work failed or stopped, all read-only. Anything
+  wrong is explained against the code, judged by a calibrated classifier, and
+  filed as ONE issue per problem; a problem it is unsure about stops the run
+  and asks a person instead of filing a guess. Every run leaves a heartbeat.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+input_schema:
+  type: object
+  properties:
+    window_min: { type: integer, title: "Look back (minutes)", default: 20 }
+    dry_run:    { type: boolean, title: "Dry run — report, do not file or comment", default: false }
+
+env:
+  PRODUCT: "your-product"                 # FILL: used in issue text
+  ISSUE_REPO: "your-org/your-repo"        # FILL: where issues are filed
+  ISSUE_LABEL: "sre-alert"                # FILL: the label that marks them (must exist)
+  WORKFLOW_NAME: "prod-watch"             # the footer of every issue; keep it = name
+  COMMENT_EVERY_H: "24"                   # at most one "still happening" per issue per this many hours
+
+steps:
+  # 1. Every signal, read-only. Exit 0 = healthy (nothing after runs but the
+  #    heartbeat), 3 = candidates, anything else = the collector broke.
+  - id: collect
+    name: Collect production signals
+    description: Logs, metrics and checks/*.{sql,promql,logql} — read-only; rules raise candidates.
+    env:
+      # FILL — any source left empty is skipped (and says so in `sources`).
+      OBS_SSH: ""                          # ssh host that can reach Loki/Prometheus on its loopback; empty = direct
+      LOKI_URL: "http://localhost:3100"
+      PROM_URL: "http://localhost:9090"
+      LOKI_QUERY: '{app="your-app"} |~ "(?i)(\\bERROR\\b|level=error|\"level\":\"error\"|panic:|fatal)"'
+      LOKI_GROUP_LABEL: "container"        # one finding per (this label, normalised message)
+      LOKI_GROUP_STRIP: ""                 # regex removed from the label value (e.g. a deploy hash suffix)
+      CHECKS_DIR: "checks"                 # the sidecar dir, or a path in your repo
+      DB_PSQL: ""                          # e.g. ssh -o BatchMode=yes db sudo -u postgres psql -d app   or   psql "$DATABASE_URL"
+    run: |
+      WINDOW_MIN={{ .Input.window_min }} python3 ./collect.py > signals.json
+      rc=$?
+      if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then echo "collector broke (exit $rc) — refusing to report healthy"; exit 2; fi
+      python3 -c "
+      import json
+      d = json.load(open('signals.json'))
+      print('sources:', json.dumps(d['sources']), d['sources_ok'])
+      for c in d['candidates']:
+          print('-', c['severity'], c['kind'], c['fingerprint'], c['title'])
+      "
+      if [ $rc -eq 3 ]; then
+        gh issue list -R "$ISSUE_REPO" --state open --limit 100 --json number,title,labels,createdAt > known_issues.json 2>/dev/null || echo '[]' > known_issues.json
+      fi
+      exit $rc
+    timeout_sec: 300
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The collector itself broke — see this step's stdout/stderr. Not reporting healthy."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 2. The heartbeat — written on EVERY run that got this far, healthy or not.
+  #    monitoring-liveness-watch reads it back from project state.
+  - id: heartbeat
+    name: Write the heartbeat
+    description: Records "<time> sources=<ok>/<total>" in project state; pings HEARTBEAT_URL if set.
+    needs: [collect]
+    env:
+      HEARTBEAT_URL: ""                    # optional external dead-man's switch (GET)
+    run: |
+      ok=$(python3 -c "import json; print(json.load(open('signals.json'))['sources_ok'])")
+      if [ -n "$HEARTBEAT_URL" ]; then curl -fsS -m 10 -o /dev/null "$HEARTBEAT_URL" || echo "heartbeat ping failed" >&2; fi
+      printf '%s sources=%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ok"
+    timeout_sec: 30
+    state:
+      project:
+        prod-watch.heartbeat: "{{ .Output.stdout }}"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 3. Explain each candidate against the code. The rules raised them; this
+  #    step may not add one, and must account for every one.
+  - id: triage
+    name: Explain and connect to the code
+    description: Per candidate — cause with file:line, impact, smallest fix and who applies it, and whether it is ours.
+    needs: [collect]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    provider: claude-cli
+    # FILL: add your product's production-map skill (e.g. reqsume-prod-triage).
+    skills: [prod-signal-triage]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    guardrails:
+      - deny: bash
+        args_contain: ["psql", "ssh ", "gh issue create", "gh issue comment", "gh issue close", "gh issue edit", "kubectl", "docker "]
+        reason: "Triage is read-only on the code: production was already read by the collector (./signals.json). Explain from that evidence."
+    system: >-
+      You are the on-call engineer reading production signals you did not
+      produce. You report only what the evidence and the code show, and you say
+      "unknown" rather than guess a cause.
+    prompt: |
+      Production signals are in ./signals.json (read-only collectors, window
+      {{ .Input.window_min }} minutes). Open issues in the tracker are in
+      ./known_issues.json. The repository checked out here is the product itself.
+      A candidate may carry a `note` — a fact from the check's author; honour it.
+
+      For EVERY entry in `candidates`, and only those:
+      1. Explain what is wrong in plain words, and the impact on users, data or compliance.
+      2. Find the probable cause in THIS repository (cite file:line) and in the evidence.
+         If the cause is infrastructure (a grant, a setting, a host), say which and quote
+         the evidence line that shows it.
+      3. The smallest fix, and `owner`: "code change (PR)" or "operator on <which host>".
+      4. `in_scope`: false only if it belongs to another product on the same servers
+         (say which in `scope_note`).
+      5. Collapse symptoms of ONE cause into one finding: keep the cause's fingerprint
+         and list the symptoms' fingerprints in `covers`. Every candidate fingerprint
+         must appear exactly once, as a `fingerprint` or inside a `covers`.
+      6. `existing_issue`: the number of an OPEN issue in known_issues.json that already
+         describes this exact problem, else 0. Only when you are sure it is the same cause.
+
+      Then write, in the working directory:
+      - triage.json — exactly your submitted output.
+      - findings.jsonl — one line per finding: {"id": <fingerprint>, "state": "<title,
+        summary, evidence and probable cause as plain sentences>"} — the classifier
+        reads this, so put facts in it, not adjectives.
+      - duplicates.jsonl — one line per finding with existing_issue > 0:
+        {"id": <fingerprint>, "state": "NEW FINDING: <title + evidence>. EXISTING ISSUE
+        #<n>: <its title>"}. An empty file when there are none.
+
+      Keep each candidate's `fingerprint` unchanged: it is how a repeat is recognised.
+    output_schema:
+      type: object
+      required: [findings]
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            required: [fingerprint, title, severity, component, summary, impact, evidence, probable_cause, suggested_fix, owner, in_scope, covers, existing_issue]
+            properties:
+              fingerprint:    { type: string }
+              covers:         { type: array, items: { type: string } }
+              title:          { type: string }
+              severity:       { type: string, enum: [critical, error, warning] }
+              component:      { type: string }
+              summary:        { type: string }
+              impact:         { type: string }
+              evidence:       { type: array, items: { type: string } }
+              probable_cause: { type: string }
+              code_refs:      { type: array, items: { type: string } }
+              suggested_fix:  { type: string }
+              owner:          { type: string }
+              in_scope:       { type: boolean }
+              scope_note:     { type: string }
+              existing_issue: { type: integer }
+
+  # 4. A calibrated verdict per finding, and a second one for any proposed
+  #    duplicate. A classifier failure does not stop filing: the item has no
+  #    verdict, so the filer sends it to a person.
+  - id: verdict
+    name: Judge each finding (JEV)
+    description: actionable (yes / uncertain / no) and urgency per finding; same_problem per proposed duplicate.
+    needs: [triage]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    run: |
+      test -s findings.jsonl || { echo "triage wrote no findings.jsonl"; exit 2; }
+      wfx judge -q ./questions.yaml --items findings.jsonl > verdicts.jsonl || echo "some findings could not be judged — they go to a person"
+      if [ -s duplicates.jsonl ]; then
+        wfx judge -q ./duplicate.yaml --items duplicates.jsonl > dup_verdicts.jsonl || echo "some duplicate checks failed — they go to a person"
+      fi
+      python3 -c "
+      import json
+      for f in ('verdicts.jsonl', 'dup_verdicts.jsonl'):
+          try:
+              for l in open(f):
+                  v = json.loads(l); a = v.get('answers') or {}
+                  print(f, v['id'], {k: (x.get('band'), round(x.get('noul', 0), 2)) if 'band' in x else x.get('choice') for k, x in a.items()}, v.get('error', ''))
+          except FileNotFoundError:
+              pass
+      "
+    timeout_sec: 180
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "Triage produced no findings file although candidates were raised."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 5. File yes-findings once each; merge agreed duplicates; stop for a person
+  #    on anything uncertain.
+  - id: file
+    name: File issues
+    description: One issue per problem, found again by fingerprint; comments at most daily; uncertain ones stop the run.
+    needs: [verdict]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    run: DRY_RUN={{ .Input.dry_run }} python3 ./file_issues.py
+    timeout_sec: 120
+    gates:
+      - field: exitCode
+        equals: 1
+        action: fail
+        message: "Filing failed (GitHub unreachable or a bad input file) — see stderr."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 6. Only when the classifier was unsure (never in a dry run): a person
+  #    decides, and the decision is recorded on the run.
+  - id: escalate
+    name: Ask a person about the uncertain ones
+    description: Lists what the classifier could not settle and files only what a person says to.
+    needs: [file]
+    when:
+      - path: file.exitCode
+        equals: 3
+    provider: claude-cli
+    skills: [approval-desk]
+    tools: [read, bash, ask_human]
+    max_turns: 20
+    prompt: |
+      ./uncertain.json lists production findings that could not be settled
+      automatically, each with a `why`. Ask the person, with ask_human, which of
+      them to file — show each one's title, one-line evidence and the why, numbered.
+      File ONLY the ones they name, each with:
+        gh issue create -R "$ISSUE_REPO" --label "$ISSUE_LABEL" --title "[$ISSUE_LABEL] <title>" --body-file <file>
+      where the body ends with the line `<!-- wfx-fingerprint: <fingerprint> -->`.
+    output_schema:
+      type: object
+      required: [filed, skipped]
+      properties:
+        filed:   { type: array, items: { type: string } }
+        skipped: { type: array, items: { type: string } }

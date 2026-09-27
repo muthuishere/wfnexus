@@ -1,0 +1,6 @@
+# title: Uptime probe failing: {instance}
+# severity: critical
+# component: edge
+# key: instance
+# note: blackbox probe_success=0 means the URL did not answer as configured (status, TLS or timeout).
+probe_success == 0

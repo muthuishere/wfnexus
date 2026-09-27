@@ -1,0 +1,295 @@
+# monitoring-liveness-watch — watches the WATCHERS, and files one issue per gap.
+#
+# Motivation: reqsume's postgres_exporter could not connect to its database for
+# months (issue #507). Prometheus showed the target as `up`, so no `up == 0`
+# alert fired; every custom DB metric was simply absent, every alert on them
+# evaluated to nothing, and the dashboard's `or on() vector(0)` panels drew a
+# reassuring 0. A threshold alert cannot see a metric that does not exist.
+#
+# Practitioner evidence (docs/scenarios/top-6-by-category.md):
+#   alert-investigator  — read-only telemetry, every claim linked to a query result
+#     https://www.relvy.ai/blog/llm-cost-of-ai-sre-investigating-production-alerts
+#     https://engineering.fb.com/2024/06/24/data-infrastructure/leveraging-ai-for-efficient-incident-response/
+#   data-quality-alert-rca — freshness / volume checks: "no new data" is the signal
+#     https://docs.getmontecarlo.com/docs/troubleshooting-agent
+#     https://datrick.com/ai-data-pipeline-failure-triage-recovery-automation
+#   ci-failure-doctor   — one deduplicated issue per root cause
+#     https://github.com/githubnext/agentics/blob/main/docs/ci-doctor.md
+#
+# What it does BETTER than a Watchdog/`up == 0` alert and those tools:
+#   - Checks ABSENCE, not thresholds: exporters that are up but self-report a
+#     source error; every metric the exporter's own config declares
+#     (EXPORTER_QUERIES — a new custom metric is watched the day it is added);
+#     every metric a dashboard panel uses, with `or vector(0)` masking called
+#     out; log streams that went silent (a *.logql check with `raise: empty`).
+#   - Checks the watcher itself: the prod-watch heartbeat in project state
+#     (stale, or degraded "sources=2/4"), and the platform's run history —
+#     including a watcher run held open waiting on a person.
+#   - Rule evaluation failures and undeliverable notifications: alerts that
+#     exist on paper only.
+#   - One issue per ROOT CAUSE: the agent folds symptoms (12 missing metrics,
+#     3 blind panels) into the exporter finding via `covers`, and maps a gap
+#     onto an issue a person or another watcher already opened (#507) — merged
+#     only when a calibrated same_problem question agrees.
+#
+# Read-only: GET-only HTTP to Prometheus/Loki/the platform API; files only read.
+name: monitoring-liveness-watch
+template:
+  title: Monitoring liveness watch — who watches the watchers
+  category: debugging-ops
+  summary: >-
+    Hourly: finds exporters that are up but blind, expected metrics and log
+    streams that stopped existing, dashboard panels showing nothing, alert
+    rules that cannot fire or deliver, and watcher workflows that went silent.
+    One issue per gap, symptoms folded into their cause, uncertain ones to a person.
+  fill:
+    - "env: PRODUCT, ISSUE_REPO, ISSUE_LABEL — use the SAME label as your prod-watch so the two dedupe against each other"
+    - "collect step env: OBS_SSH / PROM_URL / LOKI_URL, and which sources to check: EXPECTED_METRICS, EXPORTER_QUERIES (glob of exporter queries.yaml in your repo), DASHBOARDS (glob of Grafana JSON in your repo), HEARTBEATS (watcher workflow=max minutes)"
+    - "checks/: the shipped ones are generic (exporter self-errors, rule evaluation, alert delivery, config reload); add a *.logql with `raise: empty` per log stream you rely on (see logs_flowing.logql.example)"
+    - "expected-metrics.txt: your custom metrics, one selector per line"
+    - "triage skills: add your product's production-map skill beside prod-signal-triage"
+    - "the project env store needs TYPESAFE_API_KEY (or OPENROUTER_API_KEY) for the classifier"
+
+description: >-
+  Watches the monitoring itself: exporters that are up but cannot read their
+  source, expected metrics and log streams that stopped existing, dashboards
+  whose panels show nothing, alert rules that cannot evaluate or deliver, and
+  watcher workflows whose heartbeat went stale. Each gap is explained against
+  the repository, judged by a calibrated classifier, and filed as one issue.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 * * * *"
+
+input_schema:
+  type: object
+  properties:
+    dry_run: { type: boolean, title: "Dry run — report, do not file or comment", default: false }
+
+env:
+  PRODUCT: "your-product"                 # FILL
+  ISSUE_REPO: "your-org/your-repo"        # FILL
+  ISSUE_LABEL: "sre-alert"                # FILL: same label as prod-watch, so they dedupe together
+  WORKFLOW_NAME: "monitoring-liveness-watch"
+  COMMENT_EVERY_H: "72"                   # a monitoring gap changes slowly; remind at most every 3 days
+
+steps:
+  - id: collect
+    name: Check that every signal still exists
+    description: Scrape targets, exporter self-errors, expected metrics, dashboards, log streams, watcher heartbeats — read-only.
+    env:
+      OBS_SSH: ""                          # FILL: ssh host with Prometheus/Loki on its loopback; empty = direct
+      PROM_URL: "http://localhost:9090"
+      LOKI_URL: "http://localhost:3100"
+      PROM_TARGETS: "1"                    # every active scrape target: down, or up with lastError
+      CHECKS_DIR: "checks"
+      EXPECTED_METRICS: "expected-metrics.txt"
+      EXPORTER_QUERIES: ""                 # FILL e.g. infra/postgres/queries.yaml (glob, in your repo)
+      DASHBOARDS: ""                       # FILL e.g. infra/grafana/dashboards/*.json (glob, in your repo)
+      HEARTBEATS: "prod-watch=45"          # FILL: watcher workflow=max minutes since its last completed run
+      HEARTBEAT_STATE_MAX_MIN: "45"
+      WFX_API: "http://127.0.0.1:8090"
+    run: |
+      HEARTBEAT_STATE='{{ .Project.prod-watch.heartbeat }}' python3 ./collect.py > signals.json
+      rc=$?
+      if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then echo "collector broke (exit $rc) — refusing to report healthy"; exit 2; fi
+      python3 -c "
+      import json
+      d = json.load(open('signals.json'))
+      print('sources:', json.dumps(d['sources']), d['sources_ok'])
+      for c in d['candidates']:
+          print('-', c['severity'], c['kind'], c['fingerprint'], c['title'])
+      "
+      if [ $rc -eq 3 ]; then
+        gh issue list -R "$ISSUE_REPO" --state open --limit 100 --json number,title,labels,createdAt > known_issues.json 2>/dev/null || echo '[]' > known_issues.json
+      fi
+      exit $rc
+    timeout_sec: 600
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The liveness collector itself broke — see stdout/stderr. Not reporting healthy."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # Its own heartbeat, so prod-watch (HEARTBEATS=monitoring-liveness-watch=180)
+  # can watch this watcher back.
+  - id: heartbeat
+    name: Write the heartbeat
+    description: Records "<time> sources=<ok>/<total>" in project state.
+    needs: [collect]
+    run: |
+      printf '%s sources=%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(python3 -c "import json; print(json.load(open('signals.json'))['sources_ok'])")"
+    timeout_sec: 30
+    state:
+      project:
+        liveness-watch.heartbeat: "{{ .Output.stdout }}"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: triage
+    name: Explain each gap against the repository
+    description: Why the signal is missing (grant, DSN, renamed metric, dead shipper), what goes unseen because of it, the smallest fix and who applies it.
+    needs: [collect]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    provider: claude-cli
+    # FILL: add your product's production-map skill.
+    skills: [prod-signal-triage]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    guardrails:
+      - deny: bash
+        args_contain: ["psql", "ssh ", "gh issue create", "gh issue comment", "gh issue close", "gh issue edit", "kubectl", "docker "]
+        reason: "Triage is read-only on the code: the monitoring was already read by the collector (./signals.json). Explain from that evidence."
+    system: >-
+      You are the engineer who owns the monitoring. A gap is only real if the
+      evidence shows a signal missing; you say "unknown" rather than guess why.
+    prompt: |
+      Monitoring-liveness signals are in ./signals.json; open issues are in
+      ./known_issues.json. The repository checked out here is the product, with
+      its exporter configs, dashboards and alert rules. A candidate may carry a
+      `note` from the check's author; honour it.
+
+      For EVERY entry in `candidates`, and only those:
+      1. What is not being watched because of it — name the failures that would now
+         go unnoticed (e.g. "pg_cron failing, queue backlog").
+      2. The probable cause, citing the repo (file:line of the exporter config, the
+         dashboard JSON, the grant in a README/migration) and the evidence line.
+         A metric NAME mismatch between config, dashboard and collector is a cause too.
+      3. The smallest fix and `owner` ("operator on <host>" or "code change (PR)").
+      4. `in_scope`: false if the gap is another product's monitoring (say which in scope_note).
+      5. ONE finding per root cause: missing metrics, blind panels and exporter
+         errors caused by the same broken exporter are one finding — keep the
+         cause's fingerprint, list the others in `covers`. Every candidate
+         fingerprint must appear exactly once, as `fingerprint` or in `covers`.
+      6. `existing_issue`: an OPEN issue in known_issues.json that already describes this
+         exact problem, else 0.
+
+      Then write triage.json (your submitted output), findings.jsonl (one
+      {"id": <fingerprint>, "state": "<facts as plain sentences>"} per finding)
+      and duplicates.jsonl (one {"id": <fingerprint>, "state": "NEW FINDING: …
+      EXISTING ISSUE #<n>: <title>"} per finding with existing_issue > 0; empty
+      file when none). Keep fingerprints unchanged.
+    output_schema:
+      type: object
+      required: [findings]
+      properties:
+        findings:
+          type: array
+          items:
+            type: object
+            required: [fingerprint, title, severity, component, summary, impact, evidence, probable_cause, suggested_fix, owner, in_scope, covers, existing_issue]
+            properties:
+              fingerprint:    { type: string }
+              covers:         { type: array, items: { type: string } }
+              title:          { type: string }
+              severity:       { type: string, enum: [critical, error, warning] }
+              component:      { type: string }
+              summary:        { type: string }
+              impact:         { type: string }
+              evidence:       { type: array, items: { type: string } }
+              probable_cause: { type: string }
+              code_refs:      { type: array, items: { type: string } }
+              suggested_fix:  { type: string }
+              owner:          { type: string }
+              in_scope:       { type: boolean }
+              scope_note:     { type: string }
+              existing_issue: { type: integer }
+
+  - id: verdict
+    name: Judge each gap (JEV)
+    description: actionable and urgency per gap; same_problem per proposed duplicate.
+    needs: [triage]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    run: |
+      test -s findings.jsonl || { echo "triage wrote no findings.jsonl"; exit 2; }
+      wfx judge -q ./questions.yaml --items findings.jsonl > verdicts.jsonl || echo "some gaps could not be judged — they go to a person"
+      if [ -s duplicates.jsonl ]; then
+        wfx judge -q ./duplicate.yaml --items duplicates.jsonl > dup_verdicts.jsonl || echo "some duplicate checks failed — they go to a person"
+      fi
+      python3 -c "
+      import json
+      for f in ('verdicts.jsonl', 'dup_verdicts.jsonl'):
+          try:
+              for l in open(f):
+                  v = json.loads(l); a = v.get('answers') or {}
+                  print(f, v['id'], {k: (x.get('band'), round(x.get('noul', 0), 2)) if 'band' in x else x.get('choice') for k, x in a.items()}, v.get('error', ''))
+          except FileNotFoundError:
+              pass
+      "
+    timeout_sec: 180
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "Triage produced no findings file although gaps were raised."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: file
+    name: File one issue per gap
+    description: New gaps filed once; known ones commented at most every COMMENT_EVERY_H; uncertain ones stop for a person.
+    needs: [verdict]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    run: DRY_RUN={{ .Input.dry_run }} python3 ./file_issues.py
+    timeout_sec: 120
+    gates:
+      - field: exitCode
+        equals: 1
+        action: fail
+        message: "Filing failed — see stderr."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: escalate
+    name: Ask a person about the uncertain ones
+    description: Lists what could not be settled automatically and files only what a person says to.
+    needs: [file]
+    when:
+      - path: file.exitCode
+        equals: 3
+    provider: claude-cli
+    skills: [approval-desk]
+    tools: [read, bash, ask_human]
+    max_turns: 20
+    prompt: |
+      ./uncertain.json lists monitoring gaps that could not be settled
+      automatically, each with a `why`. Ask the person, with ask_human, which of
+      them to file — title, one-line evidence and the why, numbered. File ONLY the
+      ones they name:
+        gh issue create -R "$ISSUE_REPO" --label "$ISSUE_LABEL" --title "[$ISSUE_LABEL] <title>" --body-file <file>
+      with the body ending in `<!-- wfx-fingerprint: <fingerprint> -->`.
+    output_schema:
+      type: object
+      required: [filed, skipped]
+      properties:
+        filed:   { type: array, items: { type: string } }
+        skipped: { type: array, items: { type: string } }

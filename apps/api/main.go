@@ -231,6 +231,12 @@ func main() {
 
 	logDoctor(eng.Doctor())
 
+	// Nothing is executing yet, so a run still marked running was cut off by
+	// the last shutdown — mark it, visibly, before anything new starts.
+	if n := eng.MarkInterrupted(ctx); n > 0 {
+		log.Printf("  interrupted %d run(s) left running by the last shutdown — marked failed, retryable", n)
+	}
+
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)
 	for _, d := range workflow.Sorted(defs) {

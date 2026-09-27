@@ -1,0 +1,13 @@
+# Asked only when triage mapped a finding onto an issue that is already open
+# (one filed by hand, or by another watcher, without this finding's fingerprint).
+same_problem:
+  type: noul
+  instructions: >-
+    Is the new finding the same underlying problem as the existing issue — so
+    fixing what the issue describes would make the finding go away?
+  "true": >-
+    Same root cause: the issue describes this failure, or this is a direct
+    symptom of what the issue describes, in the same component.
+  "false": >-
+    A different cause, a different component, or only superficially similar
+    words (two different errors in the same service are two problems).

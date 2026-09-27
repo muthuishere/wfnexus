@@ -1,0 +1,24 @@
+# Asked by `wfx judge` of each monitoring gap. Bands: no < 0.30 < uncertain < 0.70 < yes.
+actionable:
+  type: noul
+  instructions: >-
+    Given the evidence, is this a real, current gap in the monitoring of the
+    product this repository builds — something that should be watched is not,
+    so a failure there would go unnoticed?
+  "true": >-
+    A signal the product relies on is missing or wrong now: an exporter cannot
+    read its source, expected metrics or log streams have no data, dashboard
+    panels show nothing (or a constant hiding nothing), alert rules cannot
+    evaluate or deliver, or a watcher stopped running.
+  "false": >-
+    Monitoring is working and the finding is an artefact: a metric that is
+    legitimately absent (a feature not deployed, a queue that only exists
+    under load), a panel for another product, or a one-off scrape blip already
+    recovered.
+urgency:
+  type: choice
+  instructions: How soon must a person act on this?
+  options:
+    now: a production failure would be invisible right now in something users or data depend on
+    soon: partly blind — fix this week
+    later: cosmetic or low-value signal — backlog

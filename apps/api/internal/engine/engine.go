@@ -30,6 +30,9 @@ import (
 )
 
 type Engine struct {
+	// redactions holds each run's sensitive values so no event stores one.
+	redactions runSecrets
+
 	cfg     config.Config
 	store   Store
 	blob    Artifacts
@@ -311,6 +314,23 @@ func (e *Engine) Models() []string {
 // the new version is live without a restart. Validation happens on a temporary
 // copy, so a rejected definition never lands on disk.
 func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
+	// Always the platform's own directory: a bundle pull or a copy lands HERE,
+	// and must never overwrite a repository's file that shares its name.
+	return e.SaveWorkflowIn("local", d)
+}
+
+// SaveWorkflowIn is SaveWorkflow into a named project — the repository's own
+// `.wfx/workflows/`, which is where the builder is opened from.
+//
+// Before this, every save went to the platform's own directory: editing a
+// repository's workflow in the builder quietly wrote a second copy into
+// `local`, and the repository's file never changed.
+func (e *Engine) SaveWorkflowIn(project string, d *workflow.Definition) (string, error) {
+	dir, err := e.saveDir(project, d.Name)
+	if err != nil {
+		return "", err
+	}
+
 	// The host half of the mount rule, applied HERE rather than only when the
 	// run starts. workflow.CheckMounts cannot do it — `~/.ssh` means a
 	// different folder on every machine — but a save happens on the platform,
@@ -320,11 +340,35 @@ func (e *Engine) SaveWorkflow(d *workflow.Definition) (string, error) {
 	if err := e.checkMountHosts(d.Mount); err != nil {
 		return "", err
 	}
-	path, err := workflow.Save(e.cfg.WorkflowsDir, d, e.validator())
+	path, err := workflow.Save(dir, d, e.validator())
 	if err != nil {
 		return "", err
 	}
 	return path, e.ReloadDefinitions()
+}
+
+// saveDir decides which directory a save writes into. See SaveWorkflowIn.
+//
+// With a project, the question is only whether that project has a directory:
+// its own copy of the name (`project/name`, how the loader always keys it) is
+// saved back in place, and a name it does not have yet is created there —
+// even when another project has the same short name, because the loader keeps
+// both reachable by their qualified names. Without one, an existing workflow
+// goes back to its own source and a new one to the platform's directory.
+func (e *Engine) saveDir(project, name string) (string, error) {
+	home := project
+	if home == "" {
+		home = "local"
+		if existing := e.Definitions()[name]; existing != nil && existing.Source != "" {
+			home = existing.Source
+		}
+	}
+	for _, src := range e.Sources() {
+		if src.Name == home && src.Name != templatesSource {
+			return src.Dir, nil
+		}
+	}
+	return "", fmt.Errorf("no project named %q", home)
 }
 
 // SaveProvider and friends write one registry entry and reload the catalog, so
@@ -376,6 +420,8 @@ func (e *Engine) Subscribe(runID uuid.UUID) (<-chan *model.Event, func()) {
 }
 
 func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string, payload any) {
+	// Before ANY destination — the store, the live stream, a worker's sink.
+	payload = redactEvent(payload, e.redactions.get(runID))
 	// A worker has no event table. Its activity is posted back to the platform,
 	// which appends it to the run's log — so the live view of a step running on
 	// somebody's Windows box is the same view as one running here.
@@ -708,7 +754,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		input = map[string]any{}
 	}
 
-	workdir, err := e.prepareWorkspace(ctx, runID, input)
+	workdir, err := e.prepareWorkspace(ctx, runID, withRepoDefault(input, def.RepoDir))
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
@@ -765,6 +811,12 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		st, err := e.store.GetStep(ctx, runID, step.ID)
 		if err != nil {
 			return err
+		}
+		// A guard that fails skips the step before its approval is asked for:
+		// nobody should be asked to approve a branch that is not taken.
+		guard := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
+		if e.skipUnlessGuarded(ctx, runID, step, guard) {
+			continue
 		}
 		if step.RequiresApproval && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
@@ -853,6 +905,33 @@ func gateHit(g workflow.Gate, out map[string]any) bool {
 	}
 	// json numbers decode as float64; compare via JSON text to be type-lenient
 	return string(mustJSON(v)) == string(mustJSON(g.Equals))
+}
+
+// withRepoDefault makes a project's own repository the default a run acts on.
+//
+// RepoDir was documented as exactly that — "the default repo a run of it acts
+// on" — and nothing read it: a project workflow with no repo_path input ran in
+// an empty directory, so an agent asked to find a cause "in this repository"
+// found no repository (reqsume-prod-watch, first rehearsal). The run still gets
+// its own worktree unless the input opts out with isolate: false, so a project
+// checkout is never worked in directly by default. An explicit repo_path or
+// repo_url always wins.
+func withRepoDefault(input map[string]any, repoDir string) map[string]any {
+	if repoDir == "" {
+		return input
+	}
+	if p, _ := input["repo_path"].(string); p != "" {
+		return input
+	}
+	if u, _ := input["repo_url"].(string); u != "" {
+		return input
+	}
+	out := make(map[string]any, len(input)+1)
+	for k, v := range input {
+		out[k] = v
+	}
+	out["repo_path"] = repoDir
+	return out
 }
 
 // prepareWorkspace returns the repo directory for this run: input.repo_path is

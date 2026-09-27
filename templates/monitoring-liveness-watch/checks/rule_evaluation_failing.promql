@@ -1,0 +1,6 @@
+# title: Prometheus rules failing to evaluate in group {rule_group}
+# severity: error
+# component: monitoring
+# key: rule_group
+# note: a rule that fails to evaluate never fires its alert — the alert exists on paper only.
+increase(prometheus_rule_evaluation_failures_total[1h]) > 0

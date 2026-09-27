@@ -1,0 +1,227 @@
+# meeting-brief — 30 minutes before an important meeting: who, history, what I owe.
+#
+# EVIDENCE (docs/scenarios/top-6-by-category.md → sales #2 `pre-call-brief`;
+# office-automation S4; enterprise-knowledge F18/S1):
+#   - OpenAI GTM assistant: "a 20% lift in productivity—about one extra day
+#     each week" (openai.com/index/openai-gtm-assistant); Rocket Pro prep from
+#     "30–60 minutes a day" to under 5 minutes (Salesforce customer story).
+#   - Anthropic "Meeting Prep Agent" for finance (Mizuho: "prep time has been
+#     transformed into idea time"); Lindy "Prep every meeting"; Gumloop
+#     "Agentic Meeting Prep Flow"; n8n #2110/#2125/#2582 company research before
+#     a call (18.5k / 9.6k / 9.7k views).
+#   - apl-skill: CAL-R-2/CAL-R-7 (events), MAIL-W-0 resolution order and
+#     MAIL-R-19/MAIL-R-5 (threads with a person), CONT-5/CONT-6 + Graph People
+#     (who and which org), CHAT-1+CHAT-5 (Teams with them), DRIVE-14/DRIVE-3 +
+#     docs export (the agenda doc attached to the invite), GH-36/GH-37 via
+#     `apl with github:<label>` (their issues/PRs in my repos).
+#
+# WHAT IT DOES BETTER:
+#   1. It is event-timed, not a 07:00 batch: a 15-minute sweep picks meetings
+#      starting 25–40 minutes out and remembers what it briefed (state), so each
+#      meeting gets exactly one brief, when it is still useful.
+#   2. It reads MY history with these people across every mailbox, Teams and
+#      GitHub — not public web news — which is what "what do I owe them" needs.
+#   3. Suggested agenda and questions must each cite what prompted them; the
+#      calibrated claim check removes any unsupported line (the pre-call-brief
+#      entry's "drop unsourced" rule, enforced by JEV rather than by prompt).
+#   4. Unreadable mailboxes/calendars are named; nothing is sent — delivery to
+#      your own mailbox is an approved step.
+#
+# Success number: briefed meetings / eligible meetings, and claims kept vs
+# drafted (printed on every brief).
+name: meeting-brief
+template:
+  title: Meeting brief — 30 minutes before, cited
+  category: general
+  summary: >-
+    Every 15 minutes, finds external or flagged meetings starting 25–40 minutes
+    out that have not been briefed, and prepares: who is coming and from which
+    organisation, the last threads with them, open items and promises, the
+    relevant docs and PRs, a suggested agenda and questions, and what you owe
+    them. Every line cites its source; draft only.
+  fill:
+    - "internal_domains if your company domains are not the ones on your apl accounts"
+    - "keywords for internal meetings you still want briefed (e.g. board, review, 1:1)"
+    - "delivery: deliver=gmail-draft|ms-draft to receive the brief in your drafts after approval"
+
+description: >-
+  Picks meetings about to start that deserve preparation, reads everything
+  relevant about the people in them through apl-skill recipes, drafts a cited
+  brief, verifies every line with a calibrated classifier and saves it as a
+  private draft. Remembers what it briefed.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+input_schema:
+  type: object
+  properties:
+    from_min:         { type: integer, title: "Earliest start (minutes from now)", default: 25 }
+    to_min:           { type: integer, title: "Latest start (minutes from now)", default: 40 }
+    event_id:         { type: string,  title: "Brief this event (id or ref fragment); empty = sweep", default: "" }
+    include_internal: { type: boolean, title: "Also brief internal meetings", default: false }
+    keywords:         { type: string,  title: "Title keywords that make a meeting important (comma list)", default: "" }
+    max_meetings:     { type: integer, title: "At most this many meetings per run", default: 3 }
+    accounts:         { type: string,  title: "apl handles (empty = all)", default: "" }
+    gh_identities:    { type: string,  title: "GitHub identities (empty = all bound)", default: "" }
+    gh_scope:         { type: string,  title: "GitHub search scope (empty = user + orgs)", default: "" }
+    internal_domains: { type: string,  title: "Internal email domains (empty = from accounts)", default: "" }
+    save_dir:         { type: string,  title: "Where briefs are saved", default: "~/.local/share/wfx-lead/meeting-brief" }
+    deliver:          { type: string,  title: "Delivery after approval", enum: [none, gmail-draft, gmail-send, ms-draft, ms-send], default: none }
+    deliver_handle:   { type: string,  title: "apl handle to deliver through", default: "" }
+    deliver_to:       { type: string,  title: "Deliver to (email)", default: "" }
+    dry_run:          { type: boolean, title: "Dry run — no state, no delivery", default: false }
+
+steps:
+  - id: collect
+    name: Pick meetings and read their context (read-only)
+    run: |
+      FROM_MIN="{{ .Input.from_min }}" TO_MIN="{{ .Input.to_min }}" EVENT_ID="{{ .Input.event_id }}" \
+      INCLUDE_INTERNAL="{{ .Input.include_internal }}" KEYWORDS="{{ .Input.keywords }}" MAX_MEETINGS="{{ .Input.max_meetings }}" \
+      ACCOUNTS="{{ .Input.accounts }}" GH_IDENTITIES="{{ .Input.gh_identities }}" GH_SCOPE="{{ .Input.gh_scope }}" \
+      INTERNAL_DOMAINS="{{ .Input.internal_domains }}" python3 collect.py
+    timeout_sec: 900
+    gates:
+      - field: exitCode
+        equals: 10
+        action: skip_to
+        skip_to: finish
+      - field: exitCode
+        equals: 3
+        action: fail
+        message: "No calendar could be read — see this step's output for the apl login to run."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: draft
+    name: Draft the meeting brief
+    provider: claude-cli
+    skills: [leader-brief]
+    tools: [read, write, grep, glob]
+    max_turns: 40
+    soul: >-
+      You are the leader's chief of staff walking them to the meeting room. You
+      tell them only what the record shows about these people and what they
+      owe or are owed, and you never pad.
+    prompt: |
+      ./evidence.md lists the meeting(s) to brief (evidence.json → "meetings")
+      and everything read about their attendees. Follow the leader-brief
+      skill. For EACH meeting write these sections (ids exact, prefix the
+      heading with the meeting's time and title when there is more than one):
+        who      — each attendee: name, organisation, role (from person:/contact
+                   items; say "organisation unknown" only in text you cite from
+                   the event itself).
+        history  — the last 3–5 threads/chats with them: date, subject, where it
+                   stood.
+        open     — open items, asks and promises in either direction, with who
+                   owes what.
+        material — the attached/related docs and PRs/issues worth opening first.
+        agenda   — 3–5 suggested agenda points and questions; each cites the
+                   thread, doc or issue that prompted it.
+        owe      — what I owe them (from my sent mail and their asks).
+      Write ./draft.json and submit the same object.
+    output_schema:
+      type: object
+      required: [title, sections]
+      properties:
+        title: { type: string }
+        sections:
+          type: array
+          items:
+            type: object
+            required: [id, heading, items]
+            properties:
+              id:      { type: string }
+              heading: { type: string }
+              empty:   { type: string }
+              items:
+                type: array
+                items:
+                  type: object
+                  required: [text, cites]
+                  properties:
+                    text:  { type: string }
+                    cites: { type: array, items: { type: string } }
+                    why:   { type: string }
+                    rank:  { type: integer }
+        appendix:
+          type: array
+          items:
+            type: object
+            properties:
+              heading: { type: string }
+              body:    { type: string }
+
+  - id: verify
+    name: Check every line against its source (JEV)
+    run: python3 verify.py --name meeting-brief --save-dir "{{ .Input.save_dir }}" --private
+    timeout_sec: 600
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The draft step wrote no draft.json."
+      - field: exitCode
+        equals: 4
+        action: fail
+        message: "The claim classifier could not run — the brief was saved marked NOT VERIFIED."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: settle
+    name: Remember the briefed meetings
+    run: DRY_RUN="{{ .Input.dry_run }}" DELIVER="{{ .Input.deliver }}" python3 settle.py
+    timeout_sec: 60
+    gates:
+      - field: exitCode
+        equals: 10
+        action: skip_to
+        skip_to: finish
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: deliver
+    name: Deliver the brief (approved)
+    requires_approval: true
+    run: |
+      DRY_RUN="{{ .Input.dry_run }}" python3 deliver.py --md brief.md --channel "{{ .Input.deliver }}" \
+        --handle "{{ .Input.deliver_handle }}" --to "{{ .Input.deliver_to }}" --subject "Meeting brief"
+    timeout_sec: 120
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: finish
+    name: Result
+    run: |
+      if [ -f brief.json ]; then python3 -c "import json; print(json.dumps(json.load(open('brief.json'))['stats']))"
+      else python3 -c "import json; e=json.load(open('evidence.json')); print('no meeting needs a brief now;', len(e.get('skipped',[])), 'skipped:', json.dumps(e.get('skipped',[]))[:1500])"; fi
+    timeout_sec: 30
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

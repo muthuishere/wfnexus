@@ -1,0 +1,8 @@
+# Asked of each claim in a cleanup PR, before it is published.
+supported:
+  type: noul
+  instructions: >-
+    Is the CLAIM fully supported by the EVIDENCE — every fact in it appears in
+    the evidence, and nothing in it goes further than the evidence does?
+  "true": every statement in the claim is backed by the evidence given
+  "false": the claim states something the evidence does not show, or overstates it

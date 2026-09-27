@@ -128,9 +128,13 @@ export type Provider = {
   baseUrl?: string; style?: string; model?: string; apiKeyEnv?: string
   preset?: string; command?: string[]; args?: string[]; repairs?: number; timeoutSec?: number
 }
+/** A classifier registry entry — toolnexus ClassifierOptions, field for field.
+ *  `backend` may be empty when `baseUrl` is given: the JEV wire at that URL. */
 export type Classifier = {
-  name: string; description?: string; backend: string
+  name: string; description?: string; backend?: string
   baseUrl?: string; model?: string; apiKeyEnv?: string
+  headers?: Record<string, string>; timeoutSec?: number; retries?: number
+  retryableStatuses?: number[]; requestParams?: Record<string, unknown>
 }
 export type McpServer = { name: string; description?: string; command?: string; args?: string[]; url?: string }
 export type Skipped = { location: string; reason: string }
@@ -163,7 +167,12 @@ export type Project = {
   lastRun?: string
   lastRunAt?: string
   problems?: Skipped[]
+  /** The kind of work it does — one of the categories list; absent when unset. */
+  category?: string
 }
+
+/** The closed list a project and a template choose from (GET /api/categories). */
+export type Category = { id: string; label: string; description: string }
 
 /** What is actually wired on THIS machine, as opposed to what is declared. */
 export type Doctor = {
@@ -240,6 +249,8 @@ export type TemplatePhase = {
 export type Template = {
   name: string; title: string; summary: string; description?: string
   fill?: string[]; source?: string; phases: TemplatePhase[]
+  /** The kind of work it serves; a project of the same category sees it first. */
+  category?: string
   /** true when a phase has no skills yet — the normal state of a template. */
   needsSkills: boolean
   /** Everything that comes with it — a run.js, a fixture, a README. Shown
@@ -298,9 +309,10 @@ export const api = {
    *  builder mirrors what it can in TypeScript; this is the truth. */
   validateWorkflow: (definition: WorkflowDraft) =>
     j<{ valid: boolean; error?: string }>(post('/api/workflows/validate', { definition })),
-  /** Create or replace a workflow. The API validates and 400s with {error} on rejection. */
-  saveWorkflow: (name: string, definition: WorkflowDraft) =>
-    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}`, {
+  /** Create or replace a workflow. The API validates and 400s with {error} on
+   *  rejection. `project` is where it is saved; without it, its own project. */
+  saveWorkflow: (name: string, definition: WorkflowDraft, project?: string) =>
+    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ definition }),
     })),
@@ -335,8 +347,8 @@ export const api = {
   /** The template gallery, and copying one into a workflow of your own. */
   templates: () => j<Template[]>(fetch('/api/templates')),
   template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
-  copyTemplate: (name: string, as: string) =>
-    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as })),
+  copyTemplate: (name: string, as: string, project?: string) =>
+    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
   /** Copying ANY workflow — one in an imported repository, not only a
    *  template — into your own, with every file beside it. */
   copyWorkflow: (name: string, as: string) =>
@@ -374,16 +386,24 @@ export const api = {
   tools: () => j<BuiltinTool[]>(fetch('/api/tools')),
   projects: () => j<Project[]>(fetch('/api/projects')),
   project: (name: string) => j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`)),
-  addProject: (body: { repo: string; name?: string; branch?: string }) =>
+  /** `create: true` STARTS a project (empty; `repo` is then an optional
+   *  existing folder). Without it, ADDS one that already has workflows. */
+  categories: () => j<Category[]>(fetch('/api/categories')),
+  setProjectCategory: (name: string, category: string) =>
+    j<Project>(fetch(`/api/projects/${encodeURIComponent(name)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ category }),
+    })),
+  addProject: (body: { repo?: string; name?: string; branch?: string; create?: boolean; category?: string }) =>
     j<Project>(post('/api/projects', body)),
   removeProject: (name: string) =>
     j(fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })),
 
   /** Runs, narrowed by the two axes of the hierarchy. */
-  runs: (q?: { project?: string; workflow?: string }) => {
+  runs: (q?: { project?: string; workflow?: string; status?: string[] }) => {
     const p = new URLSearchParams()
     if (q?.project) p.set('project', q.project)
     if (q?.workflow) p.set('workflow', q.workflow)
+    if (q?.status?.length) p.set('status', q.status.join(','))
     return j<Run[]>(fetch('/api/runs' + (p.toString() ? `?${p}` : '')))
   },
   run: (id: string) => j<RunDetail>(fetch(`/api/runs/${id}`)),

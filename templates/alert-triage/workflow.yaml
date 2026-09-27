@@ -1,0 +1,321 @@
+# alert-triage — every new alert issue gets a cited triage: real, not ours,
+# duplicate, resolved or noise; cause, fix and owner. Closing and relabelling
+# wait for a person.
+#
+# Motivation (reqsume): #410 was a video-ai worker's error filed against
+# reqsume; #415 and #417 are the same health-endpoint problem filed twice.
+# Both cost a person the time to notice — this does the noticing, with the
+# evidence attached, and leaves the decision to them.
+#
+# Practitioner evidence (docs/scenarios/top-6-by-category.md):
+#   alert-investigator — read-only evidence, one hypothesis with links, "inconclusive" allowed,
+#     any mitigation behind approval ("Very few are ready to give AI write access to production")
+#     https://www.relvy.ai/blog/llm-cost-of-ai-sre-investigating-production-alerts
+#     https://engineering.fb.com/2024/06/24/data-infrastructure/leveraging-ai-for-efficient-incident-response/
+#   ci-failure-doctor — "Same root cause as an open issue? (issue# / new / not actionable)"
+#     https://github.com/githubnext/agentics/blob/main/docs/ci-doctor.md
+#     https://docs.gitlab.com/user/duo_agent_platform/flows/foundational_flows/fix_pipeline/
+#   data-quality-alert-rca — data / system / code / unknown, the hypothesis must cite a log line, row count or commit
+#     https://docs.getmontecarlo.com/docs/troubleshooting-agent
+#     https://datrick.com/ai-data-pipeline-failure-triage-recovery-automation
+#
+# What it does BETTER:
+#   - "Still happening?" is decided by re-running the SAME rule files the watcher
+#     filed from (collect.py + checks/), per fingerprint — not by the model's
+#     reading of an old issue body. Resolved-vs-real becomes a fact.
+#   - Duplicate candidates are shortlisted deterministically (shared fingerprint,
+#     title overlap, open AND closed) before the model sees them, so it
+#     compares against the right issues instead of the ones it happens to find.
+#   - Two calibrated questions check the triage by something other than its
+#     author: does the verdict hold, and is the cause cited rather than told.
+#     Both yes -> comment; anything else -> a person, and nothing is posted.
+#   - Actions are derived from the verdict by code (duplicate -> close as dup;
+#     not_ours -> close naming the owner; resolved -> close completed), always
+#     behind requires_approval, and re-checked against the live issue before
+#     they run.
+#   - Evidence is pluggable: any executable in evidence.d/ runs per issue with
+#     ISSUE_NUMBER/ISSUE_FILE/EVIDENCE_DIR (firing alerts, recent commits and
+#     the live re-check ship; add a runbook lookup, a deploy log, a DB probe).
+#   - Idempotent sweeps: an issue is triaged again only when a person has said
+#     something since the last triage comment.
+name: alert-triage
+template:
+  title: Alert triage — real, not ours, duplicate or resolved
+  category: debugging-ops
+  summary: >-
+    Per new alert issue (a webhook, or an hourly sweep of untriaged ones):
+    gathers live evidence, recent changes and likely duplicates, decides real /
+    not ours / duplicate / resolved / noise with a cited cause, fix and owner,
+    checks that on a calibrated classifier, and comments. Closing and
+    relabelling wait for a person's approval.
+  fill:
+    - "env: ISSUE_REPO and ALERT_LABEL — the tracker and the label your watchers file under"
+    - "gather step env: CHECKS_DIR / OBS_SSH / PROM_URL / LOKI_URL / LOKI_QUERY / DB_PSQL so 'still happening' can be re-checked — the same config as your prod-watch; copy its checks/ here"
+    - "evidence.d/: add executables for your own evidence (runbooks, deploy history, a service's health endpoint)"
+    - "triage skills: add your product's production-map skill (what is normal, which neighbours on shared servers are NOT yours)"
+    - "the project env store needs TYPESAFE_API_KEY (or OPENROUTER_API_KEY) for the classifier"
+    - "a sender for repository_dispatch: e.g. a GitHub Action on issues.labeled that POSTs {event_type: alert_issue_opened, client_payload: {issue: N}}"
+
+description: >-
+  Triages alert issues: for a new one (repository_dispatch) or every untriaged
+  one (hourly sweep), gathers read-only evidence — is the signal still there,
+  what changed, which issues look the same — decides real / not ours /
+  duplicate / resolved / noise with a cited cause, fix and owner, checks that
+  verdict on a calibrated classifier and posts it as a comment. Closing or
+  relabelling is only proposed; a person approves it.
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [alert_issue_opened]
+  schedule:
+    - cron: "23 * * * *"
+      input: { issue: 0, max_issues: 5, dry_run: false }
+
+input_schema:
+  type: object
+  properties:
+    issue:      { type: integer, title: "Issue number (0 = sweep every untriaged alert)", default: 0 }
+    max_issues: { type: integer, title: "Most issues per sweep", default: 5 }
+    dry_run:    { type: boolean, title: "Dry run — print the comments and actions, post nothing", default: false }
+
+env:
+  ISSUE_REPO: "your-org/your-repo"        # FILL
+  ALERT_LABEL: "sre-alert"                # FILL: the label alert issues carry
+  DUPLICATE_LABEL: "duplicate"            # added when a duplicate is closed (must exist)
+  TRIAGED_LABEL: ""                       # optional: label proposed for issues triaged as real
+  WORKFLOW_NAME: "alert-triage"
+
+steps:
+  - id: gather
+    name: Pick issues and gather evidence
+    description: The issue(s), likely duplicates (open and closed), recent commits, firing alerts, and a live re-check of the signal.
+    env:
+      # FILL: the same sources as your prod-watch, so 'still happening' is a fact.
+      CHECKS_DIR: "checks"
+      OBS_SSH: ""
+      PROM_URL: "http://localhost:9090"
+      LOKI_URL: "http://localhost:3100"
+      LOKI_QUERY: ""
+      DB_PSQL: ""
+      WINDOW_MIN: "60"
+    run: |
+      ISSUE={{ .Input.issue }} MAX_ISSUES={{ .Input.max_issues }} python3 ./gather.py
+      rc=$?
+      if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then echo "gather broke (exit $rc)"; exit 2; fi
+      exit $rc
+    timeout_sec: 900
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "Could not read the issue tracker or the evidence — see stderr."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: triage
+    name: Decide real / not ours / duplicate / resolved
+    description: Per issue — verdict, cause with a citation, fix, owner, duplicate_of; 'unknown' over a guess.
+    needs: [gather]
+    when:
+      - path: gather.exitCode
+        equals: 3
+    provider: claude-cli
+    # FILL: add your product's production-map skill.
+    skills: [prod-signal-triage]
+    tools: [read, grep, glob, bash]
+    max_turns: 50
+    guardrails:
+      - deny: bash
+        args_contain: ["psql", "ssh ", "gh issue create", "gh issue comment", "gh issue close", "gh issue edit", "gh label", "kubectl", "docker "]
+        reason: "Triage only reads: the evidence is already in ./evidence/<n>/ and the repository is checked out here. Posting and closing are later steps."
+    system: >-
+      You are the on-call engineer triaging alert issues someone else filed.
+      You decide from evidence, cite it, and prefer "unknown" to a confident
+      guess. You never close or post anything yourself.
+    prompt: |
+      ./targets.json lists the alert issues to triage. For each issue <n>,
+      ./evidence/<n>/ holds: issue.json (as filed, with comments), related.json
+      (possible duplicates, open and closed, with why they matched) and one
+      .txt per evidence script — 10-still-happening (the watcher's rules re-run
+      NOW, per fingerprint), 20-firing-alerts, 30-recent-changes, and any others.
+      The repository checked out here is the product.
+
+      For EACH issue decide `verdict`:
+        real      — the problem is present (or was, and nothing shows it stopped) and it is this product's
+        not_ours  — the container / queue / table / host in the evidence belongs to another product
+        duplicate — the SAME root cause as another OPEN issue (`duplicate_of`: the older one).
+                    Two different errors in one service are not duplicates. A symptom
+                    of another issue's cause IS a duplicate only if fixing that issue fixes this.
+        resolved  — the rule that raised it no longer raises it AND the source was readable;
+                    a check that did not run is "unknown", never "resolved"
+        noise     — expected behaviour or bad input, not a defect
+      Then: `cause` citing evidence lines or file:line in this repo; `evidence` (verbatim
+      lines); `fix` — the smallest one; `owner` — "code change (PR)", "operator on
+      <host>", or the other product/team; `still_happening` yes/no/unknown from
+      10-still-happening; `related` — other issue numbers a reader should see.
+
+      Write triage.json (exactly your submitted output) and items.jsonl — one line
+      per issue: {"id": "<n>", "state": "<the alert title and body summary; the
+      verdict and why; the cause with its cited evidence; the related issues'
+      titles>"}. The classifier reads items.jsonl to check you, so state facts.
+    output_schema:
+      type: object
+      required: [issues]
+      properties:
+        issues:
+          type: array
+          items:
+            type: object
+            required: [number, verdict, summary, cause, evidence, fix, owner, still_happening, duplicate_of, related]
+            properties:
+              number:          { type: integer }
+              verdict:         { type: string, enum: [real, not_ours, duplicate, resolved, noise] }
+              summary:         { type: string }
+              cause:           { type: string }
+              evidence:        { type: array, items: { type: string } }
+              code_refs:       { type: array, items: { type: string } }
+              fix:             { type: string }
+              owner:           { type: string }
+              still_happening: { type: string, enum: ["yes", "no", "unknown"] }
+              duplicate_of:    { type: integer }
+              related:         { type: array, items: { type: integer } }
+
+  - id: verdict
+    name: Check the triage (JEV)
+    description: verdict_holds and cause_supported per issue, on a calibrated classifier.
+    needs: [triage]
+    when:
+      - path: gather.exitCode
+        equals: 3
+    run: |
+      test -s items.jsonl || { echo "triage wrote no items.jsonl"; exit 2; }
+      wfx judge -q ./questions.yaml --items items.jsonl > verdicts.jsonl || echo "some issues could not be judged — they go to a person"
+      python3 -c "
+      import json
+      for l in open('verdicts.jsonl'):
+          v = json.loads(l); a = v.get('answers') or {}
+          print('#' + v['id'], {k: (x.get('band'), round(x.get('noul', 0), 2)) for k, x in a.items()}, v.get('error', ''))
+      "
+    timeout_sec: 180
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "Triage produced no items file."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: comment
+    name: Post the triage
+    description: One comment per issue whose triage the classifier confirmed; proposes the implied close/label; routes the rest to a person.
+    needs: [verdict]
+    when:
+      - path: gather.exitCode
+        equals: 3
+    run: DRY_RUN={{ .Input.dry_run }} python3 ./post_triage.py
+    timeout_sec: 120
+    gates:
+      - field: exitCode
+        equals: 1
+        action: fail
+        message: "Posting failed — see stderr."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # Which way the run goes from here. Two tiny steps because a guard compares
+  # one value: 3 = there is something for this branch to do.
+  - id: pending
+    name: Anything to approve?
+    needs: [comment]
+    when:
+      - path: gather.exitCode
+        equals: 3
+    run: |
+      if [ -s actions.json ]; then python3 -c "import json; [print('-', a['what']) for a in json.load(open('actions.json'))]"; exit 3; fi
+      echo "nothing to close or relabel"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: unsure
+    name: Anything for a person?
+    needs: [comment]
+    when:
+      - path: gather.exitCode
+        equals: 3
+    run: |
+      if [ -s uncertain.json ]; then python3 -c "import json; [print('-', '#%s' % u['number'], u['why']) for u in json.load(open('uncertain.json'))]"; exit 3; fi
+      echo "every triage was confirmed"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # The outward, hard-to-undo part: closing and relabelling. A person approves
+  # the list shown in `pending`; act.py re-checks each issue is still open first.
+  - id: act
+    name: Close / relabel (approved)
+    description: Carries out exactly the proposed actions, after a person approves them.
+    needs: [pending]
+    when:
+      - path: pending.exitCode
+        equals: 3
+    requires_approval: true
+    run: python3 ./act.py
+    timeout_sec: 120
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: escalate
+    name: Ask a person about the unconfirmed ones
+    description: Shows each unconfirmed triage and its classifier numbers; posts only what the person approves.
+    needs: [unsure]
+    when:
+      - path: unsure.exitCode
+        equals: 3
+    provider: claude-cli
+    skills: [approval-desk]
+    tools: [read, bash, ask_human]
+    max_turns: 20
+    prompt: |
+      ./uncertain.json lists alert issues whose triage the classifier did not
+      confirm, each with its verdict, cause, evidence and a `why`. Ask the person
+      with ask_human — numbered, one line each: issue number, verdict, cause, why.
+      For each they approve, post the triage as a comment ending with
+      `<!-- wfx-triage: <verdict> -->`:
+        gh issue comment <n> -R "$ISSUE_REPO" --body-file <file>
+      Close or relabel nothing: that is the approval gate's job.
+    output_schema:
+      type: object
+      required: [posted, skipped]
+      properties:
+        posted:  { type: array, items: { type: integer } }
+        skipped: { type: array, items: { type: integer } }

@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,8 @@ func run(args []string) error {
 		return apply(rest, true)
 	case "validate":
 		return apply(rest, false)
+	case "judge":
+		return cmdJudge(rest)
 	case "run":
 		return startRun(rest)
 	case "runs":
@@ -159,8 +162,11 @@ func usage() {
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
+  wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes
   wfx projects                     every project: workflows and run activity
-  wfx project add <repo> [--as n]  add a project — a repo whose .wfx/workflows/ we run
+  wfx project add <repo> [--as n] [--category c]  add a repo that has .wfx/workflows/
+  wfx project new <name> [--dir path] [--category c]  start an empty project
+  wfx project set <name> --category c  what kind of work it does (wfx project categories)
   wfx project rm <name>            forget one (the clone stays on disk)
   wfx sources [forget <name>]      where workflows are loaded from
   wfx doctor                       what is wired: default model, providers, classifiers, skills
@@ -304,7 +310,7 @@ func listWorkflows() error {
 
 func showWorkflow(name string) error {
 	var w wf
-	if err := call("GET", "/api/workflows/"+name, nil, &w); err != nil {
+	if err := call("GET", "/api/workflows/"+url.PathEscape(name), nil, &w); err != nil {
 		return err
 	}
 	fmt.Printf("%s — %s\n%s\n\n", w.Name, firstLine(w.Description), w.Path)
@@ -396,7 +402,7 @@ func apply(args []string, install bool) error {
 	var res struct {
 		Path string `json:"path"`
 	}
-	if err := call("PUT", "/api/workflows/"+name, map[string]any{"definition": def}, &res); err != nil {
+	if err := call("PUT", "/api/workflows/"+url.PathEscape(name), map[string]any{"definition": def}, &res); err != nil {
 		return err
 	}
 	fmt.Printf("installed %s → %s\n", name, res.Path)
@@ -433,6 +439,70 @@ func inputsFrom(args []string) (map[string]any, error) {
 	return input, nil
 }
 
+// typedInputs converts `-i key=value` strings to the type the workflow's
+// input_schema declares. A shell has only strings, and the server — rightly —
+// validates types, so without this no workflow with an integer or boolean
+// input could be started from the command line at all.
+func typedInputs(workflow string, in map[string]any) (map[string]any, error) {
+	var def struct {
+		InputSchema struct {
+			Properties map[string]struct {
+				Type any `json:"type"`
+			} `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	if err := call("GET", "/api/workflows/"+url.PathEscape(workflow), nil, &def); err != nil {
+		return in, nil // the run request will report a missing workflow itself
+	}
+	out := map[string]any{}
+	for k, v := range in {
+		s, _ := v.(string)
+		typ := ""
+		if p, ok := def.InputSchema.Properties[k]; ok {
+			switch t := p.Type.(type) {
+			case string:
+				typ = t
+			case []any:
+				for _, x := range t {
+					if xs, _ := x.(string); xs != "" && xs != "null" {
+						typ = xs
+						break
+					}
+				}
+			}
+		}
+		switch typ {
+		case "integer":
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants an integer, got %q", k, s)
+			}
+			out[k] = n
+		case "number":
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants a number, got %q", k, s)
+			}
+			out[k] = f
+		case "boolean":
+			b, err := strconv.ParseBool(s)
+			if err != nil {
+				return nil, fmt.Errorf("input %s wants true or false, got %q", k, s)
+			}
+			out[k] = b
+		case "array", "object":
+			var j any
+			if err := json.Unmarshal([]byte(s), &j); err != nil {
+				return nil, fmt.Errorf("input %s wants JSON (%s), got %q", k, typ, s)
+			}
+			out[k] = j
+		default:
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
 func startRun(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f]")
@@ -442,18 +512,21 @@ func startRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	if input, err = typedInputs(name, input); err != nil {
+		return err
+	}
 	// POST answers with the same envelope as GET /api/runs/{id}: the run under
 	// `run`, not flat.
 	var created struct {
 		Run runRow `json:"run"`
 	}
-	if err := call("POST", "/api/workflows/"+name+"/runs", input, &created); err != nil {
+	if err := call("POST", "/api/workflows/"+url.PathEscape(name)+"/runs", input, &created); err != nil {
 		return err
 	}
 	r := created.Run
 	fmt.Printf("run %s started (%s)\n", r.ID, name)
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(r.ID)
+		return follow(r.ID, false)
 	}
 	fmt.Printf("follow it with:  wfx logs %s -f\n", r.ID)
 	return nil
@@ -548,15 +621,19 @@ func logs(args []string) error {
 		return fmt.Errorf("usage: wfx logs <run-id> [-f]")
 	}
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(id)
+		return follow(id, false)
 	}
-	return follow(id) // the stream replays the backlog, then ends when cancelled
+	return follow(id, true) // what happened so far, then exit — even while the run is still going
 }
 
 // follow streams the run's activity. The SSE endpoint replays everything that
 // already happened before live events, so a late follower sees the whole run.
-func follow(id string) error {
-	res, err := http.Get(base() + "/api/runs/" + id + "/events?after=0")
+func follow(id string, once bool) error {
+	q := "?after=0"
+	if once {
+		q += "&once=1"
+	}
+	res, err := http.Get(base() + "/api/runs/" + url.PathEscape(id) + "/events" + q)
 	if err != nil {
 		return err
 	}
@@ -695,7 +772,29 @@ func act(id, verb string, body map[string]any) error {
 func projects(args []string) error {
 	switch {
 	case len(args) >= 2 && (args[0] == "add" || args[0] == "import"):
-		return importRepo(args[1:])
+		return addProject(args[1:], false)
+	case len(args) >= 2 && args[0] == "new":
+		return addProject(args[1:], true)
+	case len(args) >= 2 && args[0] == "set":
+		cat := flagOf(args, "--category", "\x00")
+		if cat == "\x00" {
+			return fmt.Errorf("usage: wfx project set <name> --category <id>   (wfx project categories)")
+		}
+		var p struct{ Name, Category string }
+		if err := call("PATCH", "/api/projects/"+url.PathEscape(args[1]), map[string]any{"category": cat}, &p); err != nil {
+			return err
+		}
+		fmt.Printf("%s: category %s\n", p.Name, orDash(p.Category))
+		return nil
+	case len(args) >= 1 && args[0] == "categories":
+		var cats []struct{ ID, Label, Description string }
+		if err := call("GET", "/api/categories", nil, &cats); err != nil {
+			return err
+		}
+		for _, c := range cats {
+			fmt.Printf("%-15s %-28s %s\n", c.ID, c.Label, c.Description)
+		}
+		return nil
 	case len(args) >= 2 && (args[0] == "rm" || args[0] == "remove" || args[0] == "forget"):
 		if err := call("DELETE", "/api/projects/"+url.PathEscape(args[1]), nil, nil); err != nil {
 			return err
@@ -705,16 +804,16 @@ func projects(args []string) error {
 	}
 
 	var list []struct {
-		Name, Dir, Repo, URL, LastRun, LastRunAt string
-		Local                                    bool
-		Workflows                                []string
-		Runs                                     int
-		Problems                                 []struct{ Location, Reason string }
+		Name, Dir, Repo, URL, LastRun, LastRunAt, Category string
+		Local                                              bool
+		Workflows                                          []string
+		Runs                                               int
+		Problems                                           []struct{ Location, Reason string }
 	}
 	if err := call("GET", "/api/projects", nil, &list); err != nil {
 		return err
 	}
-	fmt.Printf("%-16s %-9s %-6s %-12s %s\n", "PROJECT", "WORKFLOWS", "RUNS", "LAST RUN", "WHERE")
+	fmt.Printf("%-16s %-15s %-9s %-6s %-12s %s\n", "PROJECT", "CATEGORY", "WORKFLOWS", "RUNS", "LAST RUN", "WHERE")
 	for _, p := range list {
 		where := p.Repo
 		if p.URL != "" {
@@ -727,7 +826,7 @@ func projects(args []string) error {
 		if last == "" {
 			last = "—"
 		}
-		fmt.Printf("%-16s %-9d %-6d %-12s %s\n", p.Name, len(p.Workflows), p.Runs, last, where)
+		fmt.Printf("%-16s %-15s %-9d %-6d %-12s %s\n", p.Name, orDash(p.Category), len(p.Workflows), p.Runs, last, where)
 		for _, pr := range p.Problems {
 			fmt.Printf("  ✗ %s: %s\n", pr.Location, pr.Reason)
 		}
@@ -826,6 +925,42 @@ func dryRun(args []string) error {
 // importRepo registers a repository as a workflow source. A workflow lives in
 // the repository it acts on — the same arrangement as .github/workflows — so
 // this is how one arrives from outside.
+// addProject ADDS a repository that already has workflows (create=false), or
+// STARTS a new, empty project (create=true: a fresh folder, or --dir, an
+// existing checkout given .wfx/workflows/). --category files it under the kind
+// of work it does, so it is offered that category's templates first.
+func addProject(args []string, create bool) error {
+	body := map[string]any{
+		"name":     flagOf(args, "--as", ""),
+		"branch":   flagOf(args, "--branch", ""),
+		"category": flagOf(args, "--category", ""),
+		"create":   create,
+	}
+	if create {
+		body["name"] = args[0]
+		body["repo"] = flagOf(args, "--dir", "")
+	} else {
+		body["repo"] = args[0]
+	}
+	var p struct{ Name, Dir, Category string }
+	if err := call("POST", "/api/projects", body, &p); err != nil {
+		return err
+	}
+	verb := "added"
+	if create {
+		verb = "created"
+	}
+	fmt.Printf("%s %s (%s) at %s\n", verb, p.Name, orDash(p.Category), p.Dir)
+	return nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
 func importRepo(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: wfx import <repo-url-or-path> [--as name] [--branch b]")

@@ -167,6 +167,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/projects", s.listProjects)
 		r.Post("/projects", s.createProject)
 		r.Get("/projects/{name}", s.getProject)
+		r.Patch("/projects/{name}", s.patchProject)
+		r.Get("/categories", s.listCategories)
 		// The env store: system-wide, and per project.
 		r.Get("/env", s.listSystemEnv)
 		r.Put("/env", s.setSystemEnv)
@@ -490,26 +492,50 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, p)
 }
 
-// createProject clones a repository (or points at a local checkout, used in
-// place) and loads the workflows in its .wfx/workflows/.
+// createProject does one of two things:
+//
+//   - `create: true` STARTS a project: a fresh directory, or `repo` as an
+//     existing folder with no workflows yet (Engine.CreateProject).
+//   - otherwise it ADDS one that already has workflows: clones a repository,
+//     or points at a local checkout used in place.
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name   string `json:"name"`
 		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		Branch   string `json:"branch"`
+		Create   bool   `json:"create"`
+		Category string `json:"category"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if body.Repo == "" {
-		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place"))
+	// Checked BEFORE anything is cloned or created: a bad category must not
+	// leave a project behind that the request then reports as failed.
+	if err := workflow.ValidCategory(body.Category); err != nil {
+		writeErr(w, 400, err)
 		return
 	}
-	src, err := s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
+	var src workflow.Source
+	var err error
+	if body.Create {
+		src, err = s.eng.CreateProject(r.Context(), body.Name, body.Repo)
+	} else if body.Repo == "" {
+		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place; "+
+			"to start an empty project, send `create: true`"))
+		return
+	} else {
+		src, err = s.eng.ImportRepo(r.Context(), body.Name, body.Repo, body.Branch)
+	}
 	if err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	if body.Category != "" {
+		if err := s.eng.SetProjectCategory(src.Name, body.Category); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
 	}
 	p, err := s.eng.Project(r.Context(), src.Name)
 	if err != nil {
@@ -517,6 +543,40 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, p)
+}
+
+// patchProject changes what can be changed about a project after the fact —
+// its category.
+func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
+	name := urlName(r, "name")
+	if !s.inScope(r, name) {
+		notFound(w)
+		return
+	}
+	var body struct {
+		Category *string `json:"category"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if body.Category != nil {
+		if err := s.eng.SetProjectCategory(name, *body.Category); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+	}
+	p, err := s.eng.Project(r.Context(), name)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
+// listCategories is the closed list a project and a template choose from.
+func (s *Server) listCategories(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, workflow.Categories)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
@@ -587,7 +647,16 @@ func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
 // survives a round trip through the real loader.
 func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
-	if !s.workflowInScope(w, r, name) {
+	// `?project=` names the project the workflow is saved into
+	// (Engine.SaveWorkflowIn); without it, the workflow's own. The scope gate
+	// checks whichever of the two decides the directory.
+	project := r.URL.Query().Get("project")
+	if project == "" {
+		if !s.workflowInScope(w, r, name) {
+			return
+		}
+	} else if !s.inScope(r, project) {
+		notFound(w)
 		return
 	}
 	// Decoded in a dialect-tolerant way: a definition written as a FILE says
@@ -605,7 +674,7 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", def.Name, name))
 		return
 	}
-	path, err := s.eng.SaveWorkflow(def)
+	path, err := s.eng.SaveWorkflowIn(project, def)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -719,9 +788,16 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	if scope := s.scopeOf(r); scope != "" {
 		project = scope
 	}
+	var status []string
+	for _, st := range strings.Split(r.URL.Query().Get("status"), ",") {
+		if st = strings.TrimSpace(st); st != "" {
+			status = append(status, st)
+		}
+	}
 	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
 		Project:  project,
 		Workflow: r.URL.Query().Get("workflow"),
+		Status:   status,
 		Limit:    100,
 	})
 	if err != nil {
@@ -852,6 +928,11 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			send(ev)
 			last = ev.ID
 		}
+	}
+	// once=1 is the backlog as a finite response: a script or an agent reading
+	// what a run did must get an answer, not a stream that never ends.
+	if r.URL.Query().Get("once") == "1" {
+		return
 	}
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()

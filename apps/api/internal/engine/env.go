@@ -111,7 +111,15 @@ func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.St
 	if workdir != "" {
 		run = workflow.MergeEnv(run, RunEnv(runID.String(), step.ID, e.projectOfRun(ctx, runID), workdir))
 	}
-	return workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env), nil
+	env := workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env)
+	// Every sensitive value this step can see is registered BEFORE the step
+	// runs, so the first event it produces is already scrubbed (redact.go).
+	sealed := map[string]bool{}
+	for k := range base {
+		sealed[k] = true
+	}
+	e.redactions.add(runID, env, sealed)
+	return env, nil
 }
 
 // RunEnv are the facts about this run that a step can read without being told

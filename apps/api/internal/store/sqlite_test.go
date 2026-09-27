@@ -75,6 +75,14 @@ func TestSQLiteRunsStepsEventsArtifacts(t *testing.T) {
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("FindRuns: %v %d", err, len(runs))
 	}
+	// "What is waiting on a person" is a status filter, and it must both find
+	// and exclude — a filter that ignored its argument would pass the first half.
+	if got, err := st.FindRuns(ctx, RunFilter{Status: []string{"awaiting_approval", "running"}}); err != nil || len(got) != 1 {
+		t.Fatalf("status filter missed a matching run: %v %d", err, len(got))
+	}
+	if got, err := st.FindRuns(ctx, RunFilter{Status: []string{"awaiting_approval", "needs_input"}}); err != nil || len(got) != 0 {
+		t.Fatalf("status filter let a running run through: %v %d", err, len(got))
+	}
 	if all, err := st.ListRuns(ctx, 10); err != nil || len(all) != 1 {
 		t.Fatalf("ListRuns: %v %d", err, len(all))
 	}

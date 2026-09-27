@@ -8,6 +8,7 @@
 package catalog
 
 import (
+	"net/url"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,10 +93,33 @@ type Classifier struct {
 	// Backend: typesafe | openrouter | llm | static. typesafe and openrouter set
 	// base, model and key env as a unit — assembling them by hand is how a
 	// caller ends up with TypeSafe's model spelling against OpenRouter's base.
-	Backend   string `json:"backend"`
+	//
+	// Empty with a BaseURL: the JEV (systemone) wire at that URL — a
+	// self-hosted judge, a proxy, a gateway nobody has a preset for. A
+	// classifier is an ENDPOINT, and naming one of four vendors was never the
+	// only way to have one.
+	Backend   string `json:"backend,omitempty"`
 	BaseURL   string `json:"baseUrl,omitempty"`
 	Model     string `json:"model,omitempty"`
 	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
+
+	// The rest mirror toolnexus ClassifierOptions field for field, so an entry
+	// here can say anything the library can be told.
+	//
+	// Headers are extra request headers. A value may reference ${ENV_VAR},
+	// expanded by the library AT CALL TIME and never logged. A credential-shaped
+	// header (Authorization, *key*, *token*, *secret*) MUST be a reference: a
+	// literal there would be a key sitting in a config file.
+	Headers map[string]string `json:"headers,omitempty"`
+	// TimeoutSec bounds one request. 0 ⇒ the library's default.
+	TimeoutSec int `json:"timeoutSec,omitempty"`
+	// Retries on transient errors. 0 ⇒ the library's default (2).
+	Retries int `json:"retries,omitempty"`
+	// RetryableStatuses WIDEN the retryable set (a Cloudflare-fronted origin
+	// answering 520–527); they can never remove 429.
+	RetryableStatuses []int `json:"retryableStatuses,omitempty"`
+	// RequestParams are extra top-level keys merged into the request body.
+	RequestParams map[string]any `json:"requestParams,omitempty"`
 }
 
 func (c Classifier) EntryName() string { return c.Name }
@@ -315,15 +339,49 @@ func validateProvider(p Provider) error {
 	return nil
 }
 
+// ValidateClassifier is the check a saved entry passes, exported so an entry
+// assembled from command-line flags is held to the same rules.
+func ValidateClassifier(c Classifier) error { return validateClassifier(c) }
+
 func validateClassifier(c Classifier) error {
 	switch c.Backend {
 	case "typesafe", "openrouter", "llm", "static":
-		return nil
 	case "":
-		return fmt.Errorf("backend is required (typesafe, openrouter, llm or static)")
+		if c.BaseURL == "" {
+			return fmt.Errorf("give a backend (typesafe, openrouter, llm or static) or a baseUrl")
+		}
 	default:
 		return fmt.Errorf("unknown backend %q", c.Backend)
 	}
+	if c.BaseURL != "" {
+		u, err := url.Parse(c.BaseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("baseUrl %q is not an http(s) URL", c.BaseURL)
+		}
+	}
+	for k, v := range c.Headers {
+		if credentialHeader(k) && !strings.Contains(v, "${") {
+			return fmt.Errorf("header %q holds a literal value; a credential header must reference a variable, e.g. \"Bearer ${JEV_KEY}\"", k)
+		}
+	}
+	if c.TimeoutSec < 0 || c.Retries < 0 {
+		return fmt.Errorf("timeoutSec and retries cannot be negative")
+	}
+	return nil
+}
+
+// credentialHeader is a header whose value is, by its name, a secret.
+func credentialHeader(name string) bool {
+	n := strings.ToLower(name)
+	if n == "authorization" || n == "proxy-authorization" || n == "cookie" {
+		return true
+	}
+	for _, w := range []string{"key", "token", "secret", "password", "auth"} {
+		if strings.Contains(n, w) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateNotifier(n Notifier) error {

@@ -1,0 +1,11 @@
+-- Rename to failed_jobs.sql and point it at YOUR table. A check returns the
+-- BAD rows only: zero rows means healthy. Group and count in SQL; never
+-- select payloads or personal data — counts, statuses and error codes only.
+-- title: Jobs failing: {action} — {error}
+-- severity: error
+-- component: jobs
+-- key: action,error
+SELECT action, coalesce(error->>'code', 'unknown') AS error, count(*) AS n, max(completed_at) AS last
+FROM jobs
+WHERE status = 'failed' AND completed_at > now() - interval '$WINDOW_MIN minutes'
+GROUP BY 1, 2

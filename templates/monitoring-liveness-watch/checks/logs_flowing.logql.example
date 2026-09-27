@@ -1,0 +1,9 @@
+# Rename to logs_flowing.logql and name YOUR service's stream. `raise: empty`
+# turns silence into the finding: no lines in the window means the shipper
+# (promtail/alloy/vector) or the service itself stopped.
+# title: No logs from your-service in the last 60 minutes
+# severity: error
+# component: monitoring
+# raise: empty
+# window: 60
+{container=~"your-service-.+"}
