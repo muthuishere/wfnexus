@@ -62,7 +62,7 @@ def main():
     if not re.fullmatch(r"[0-9a-f]{7,40}", since) or subprocess.run(
             ["git", "merge-base", "--is-ancestor", since, head], capture_output=True).returncode:
         days = os.environ.get("LOOKBACK_DAYS") or "14"
-        since = git("rev-list", "-1", f"--before={days} days ago", "HEAD").strip() or git("rev-list", "--max-parents=0", "HEAD").split()[0]
+        since = git("rev-list", "-1", f"--before={days} days ago", "HEAD").strip() or (git("rev-list", "--max-parents=0", "HEAD").split() or [head])[0]
     open(f"{D}/since.txt", "w").write(since)
     commits = git("log", "--format=%h %s", f"{since}..HEAD").splitlines()
 
