@@ -1,3 +1,5 @@
+import type { Proposal } from './lifecycle'
+
 // ── the step harness ────────────────────────────────────────────────────────
 // A step is a whole agent. These mirror apps/api/internal/workflow types.
 // Fields marked optional are either genuinely optional in the YAML or are still
@@ -312,7 +314,10 @@ export const api = {
   /** Create or replace a workflow. The API validates and 400s with {error} on
    *  rejection. `project` is where it is saved; without it, its own project. */
   saveWorkflow: (name: string, definition: WorkflowDraft, project?: string) =>
-    j<Workflow>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
+    // With the lifecycle API a save is a PROPOSAL on a branch; an older server
+    // still answers with the written workflow. Callers tell them apart with
+    // isProposal (lifecycle.ts).
+    j<Workflow | Proposal>(fetch(`/api/workflows/${encodeURIComponent(name)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ definition }),
     })),
@@ -348,7 +353,7 @@ export const api = {
   templates: () => j<Template[]>(fetch('/api/templates')),
   template: (name: string) => j<Workflow>(fetch(`/api/templates/${encodeURIComponent(name)}`)),
   copyTemplate: (name: string, as: string, project?: string) =>
-    j<{ name: string; path: string }>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
+    j<{ name: string; path: string } | Proposal>(post(`/api/templates/${encodeURIComponent(name)}/copy`, { as, project })),
   /** Copying ANY workflow — one in an imported repository, not only a
    *  template — into your own, with every file beside it. */
   copyWorkflow: (name: string, as: string) =>

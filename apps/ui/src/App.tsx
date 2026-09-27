@@ -12,6 +12,7 @@ import WorkersPage from './pages/WorkersPage'
 import TemplatesPage from './pages/TemplatesPage'
 import Identity from './components/Identity'
 import WaitingOnYou from './components/WaitingOnYou'
+import Icon, { type IconName } from './components/Icon'
 
 // tiny hash router. The app is one drill-down — projects → a project → a
 // workflow → a run — and the addresses read the same way:
@@ -57,25 +58,48 @@ export default function App() {
   else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
   const inProjects = !r[0] || ['projects', 'runs', 'workflows'].includes(r[0])
+  const nav: Array<[string, string, IconName, boolean]> = [
+    ['Projects', '#/projects', 'projects', inProjects],
+    ['Templates', '#/templates', 'templates', r[0] === 'templates'],
+    ['Skills & tools', '#/skills', 'skills', r[0] === 'skills'],
+    ['Workers', '#/workers', 'workers', r[0] === 'workers'],
+    ['System', '#/system', 'system', r[0] === 'system'],
+  ]
   return (
-    <>
-      <div className="top">
+    <div className="shell">
+      {/* The few PLACES in the app, down the left. Everything inside a
+          project is reached by drilling down, not from here. */}
+      <aside className="side">
         <div className="brand">wf<span>nexus</span></div>
-        <nav>
-          <a href="#/projects" className={inProjects ? 'active' : ''}>Projects</a>
-          <a href="#/templates" className={r[0] === 'templates' ? 'active' : ''}>Templates</a>
-          <a href="#/skills" className={r[0] === 'skills' ? 'active' : ''}>Skills &amp; tools</a>
-          <a href="#/workers" className={r[0] === 'workers' ? 'active' : ''}>Workers</a>
-          <a href="#/system" className={r[0] === 'system' ? 'active' : ''}>System</a>
+        <nav aria-label="Main">
+          {nav.map(([label, to, icon, active]) => (
+            <a key={to} href={to} className={active ? 'active' : ''}><Icon name={icon} /><span>{label}</span></a>))}
         </nav>
-        <div className="spacer" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>{backend ? `toolnexus · ${backend}` : 'toolnexus'}</span>
+        <div className="foot">{backend ? `toolnexus · ${backend}` : 'toolnexus'}</div>
+      </aside>
+      <div className="main">
+        <div className="top">
           <WaitingOnYou />
+          <ThemeToggle />
           {/* Nothing at all on a loopback install with no users — see Identity. */}
           <Identity />
         </div>
+        <div className="page">{page}</div>
       </div>
-      <div className="page">{page}</div>
-    </>
+    </div>
   )
+}
+
+/** Light / dark / follow the system. Remembered per browser; the tokens in
+ *  index.css do the rest. */
+function ThemeToggle() {
+  const read = () => { try { return localStorage.getItem('wfx.theme') || '' } catch { return '' } }
+  const [t, setT] = useState(read)
+  useEffect(() => {
+    if (t) document.documentElement.dataset.theme = t
+    else delete document.documentElement.dataset.theme
+    try { if (t) localStorage.setItem('wfx.theme', t); else localStorage.removeItem('wfx.theme') } catch { /* private mode */ }
+  }, [t])
+  const next = t === '' ? 'dark' : t === 'dark' ? 'light' : ''
+  return <button className="theme" onClick={() => setT(next)} title="Theme">{t || 'auto'} theme</button>
 }
