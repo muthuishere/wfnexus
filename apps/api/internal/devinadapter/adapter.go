@@ -185,7 +185,7 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 		if errors.Is(err, ErrEmptyTurn) && ctx.Err() == nil {
 			// Not a dead backend: the agent stopped without answering, usually
 			// after its own tools were refused. Say so, and ask again.
-			lastErr = fmt.Errorf("%w: your turn ended with no reply at all. Your own tools are not available here — every request to use them is refused. The CALLER runs the functions in the request's \"tools\": put the calls in your <openai_response>", ErrUnparseable)
+			lastErr = fmt.Errorf("%w: your turn ended with no reply at all (%v). Your own tools are not available here — every request to use them is refused. The CALLER runs the functions in the request's \"tools\" (read, grep, glob, bash, …): put those calls in your <openai_response> as tool_calls", ErrUnparseable, err)
 			prompt = BuildRepairPrompt(requestBody, "", lastErr)
 			continue
 		}

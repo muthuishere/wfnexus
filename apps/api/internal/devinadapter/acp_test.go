@@ -14,6 +14,7 @@ package devinadapter_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,7 +300,7 @@ for line in sys.stdin:
         # Ask permission FIRST; the turn only finishes once it is answered.
         pending=mid
         send({"jsonrpc":"2.0","id":9001,"method":"session/request_permission",
-              "params":{"sessionId":"s","options":[
+              "params":{"sessionId":"s","toolCall":{"title":"read facts.txt","kind":"read"},"options":[
                   {"optionId":"yes","kind":"allow_once","name":"Allow"},
                   {"optionId":"no","kind":"reject_once","name":"Reject"}]}})
     elif mid==9001 and pending is not None:
@@ -381,6 +382,24 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 		}
 		t.Logf("GATE 2 REPRODUCED: unanswered permission hung the turn until the deadline (%v)", err)
 	})
+}
+
+// An agent refused its own tools usually ends the turn with nothing to say. The
+// empty-turn error names what it tried, so the repair can say "not read
+// facts.txt yourself — call the request's read" instead of a vague "no reply".
+func TestAnEmptyTurnNamesTheOwnToolsThatWereRefused(t *testing.T) {
+	bin := fakeACPPermission(t, "")
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+	if !errors.Is(err, devinadapter.ErrEmptyTurn) {
+		t.Fatalf("want ErrEmptyTurn, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "read facts.txt") {
+		t.Fatalf("the refused tool is not named: %v", err)
+	}
 }
 
 // GATE 4: is the warm-session win real in general, or only against a CLI with

@@ -194,6 +194,9 @@ type ACPAgent struct {
 	models  []ACPModel
 	current string
 
+	refusedMu sync.Mutex
+	refused   []string // the agent's own tools it asked for and was refused, this turn
+
 	cwd            string  // the session's working directory, kept for fresh sessions
 	turnsInSession int     // prompts sent into the current session
 	stderr         tailBuf // the last few KB the agent wrote to stderr, for a death notice
@@ -274,6 +277,9 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 
 	a.chunksMu.Lock()
 	a.chunks.Reset()
+	a.refusedMu.Lock()
+	a.refused = nil
+	a.refusedMu.Unlock()
 	a.chunksMu.Unlock()
 
 	prompt := t.Prompt
@@ -297,6 +303,13 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	a.chunksMu.Unlock()
 
 	if strings.TrimSpace(out) == "" {
+		a.refusedMu.Lock()
+		refused := append([]string{}, a.refused...)
+		a.refusedMu.Unlock()
+		if len(refused) > 0 {
+			// the repair can then say exactly what not to do again
+			return "", fmt.Errorf("devin-acp: %w — it tried its own tools, which were refused: %s", ErrEmptyTurn, strings.Join(refused, "; "))
+		}
 		return "", fmt.Errorf("devin-acp: %w", ErrEmptyTurn)
 	}
 	return strings.TrimSpace(out), nil
@@ -707,8 +720,28 @@ func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) 
 			OptionID string `json:"optionId"`
 			Kind     string `json:"kind"`
 		} `json:"options"`
+		ToolCall struct {
+			Title string `json:"title"`
+			Kind  string `json:"kind"`
+		} `json:"toolCall"`
 	}
 	_ = json.Unmarshal(params, &p)
+	if !allow {
+		what := strings.TrimSpace(p.ToolCall.Title)
+		if what == "" {
+			what = p.ToolCall.Kind
+		}
+		if len(what) > 80 {
+			what = what[:80] + "…"
+		}
+		if what != "" {
+			a.refusedMu.Lock()
+			if len(a.refused) < 8 {
+				a.refused = append(a.refused, what)
+			}
+			a.refusedMu.Unlock()
+		}
+	}
 
 	want := "reject"
 	if allow {
