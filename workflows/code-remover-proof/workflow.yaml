@@ -262,7 +262,7 @@ steps:
             - sed -i
             - rm -
           reason: the prover only reads
-      provider: claude-cli
+      provider: openrouter
     - id: plan
       name: Judge and plan (JEV + decision table)
       description: wfx judge per candidate, then remove / keep / bug / needs-a-human — applied literally, capped per PR.
@@ -377,7 +377,7 @@ steps:
             - git rebase
             - git commit --amend
           reason: one plain commit per approved removal, staged with git add -u, never pushed
-      provider: claude-cli
+      provider: openrouter
     - id: verify
       name: Prove the branch (before vs after)
       description: Suite again with counts; every commit is a planned removal; no fix-forward; finders re-run for cascades.
@@ -479,7 +479,7 @@ steps:
             - git checkout
             - git reset
           reason: the reviewer reads
-      provider: codex-cli
+      provider: gpt5
     - id: write_pr
       name: Write the cleanup PR (cleanup-pr-writer)
       description: Removals table with evidence and commits, kept and why, bugs, needs-a-human, before/after, revert per commit.
@@ -537,7 +537,7 @@ steps:
             - git push
             - gh pr
           reason: the writer writes the body; publishing is a later, gated step
-      provider: claude-cli
+      provider: openrouter
     - id: claims
       name: Re-check every claim (JEV) and the numbers
       description: Independent of the writer — evidence from the machine's files; body must quote real counts and every SHA.
@@ -641,7 +641,7 @@ steps:
             - reset --hard
             - git commit
           reason: publish exactly what was approved
-      provider: claude-cli
+      provider: openrouter
     - id: report
       name: Report
       description: Branch, commits, plan and PR body location — the run's answer whatever path it took.

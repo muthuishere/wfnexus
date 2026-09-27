@@ -7,7 +7,7 @@ description: >-
   a dossier. Four judges read the same dossier independently and in parallel —
   JEV (a calibrated classifier: did it do the job, is it evidence-backed, would
   a senior engineer accept it, how bad is its worst problem) and three model
-  judges on different providers (gpt-oss, codex-cli, grok-cli), each giving the
+  judges on different providers (gpt-oss, gpt5, haiku — all over HTTP APIs),
   same typed verdict. A judge that cannot run is probed first and recorded as
   UNAVAILABLE with the reason, never dropped. A final command builds the
   scorecard: agreement between judges, disagreements named, and an overall
@@ -68,29 +68,31 @@ steps:
     output_schema: *run_output
 
   - id: probe_codex
-    name: Probe codex-cli
-    description: Is the codex CLI installed and logged in on this machine?
+    name: Probe gpt5 (OpenRouter)
+    description: Is OPENROUTER_API_KEY in this run's environment, and does OpenRouter accept it?
     needs: [dossier]
     run: |
-      command -v codex >/dev/null || { echo "codex is not on PATH"; exit 3; }
-      codex login status 2>&1 | head -1 | grep -qi "logged in" || { echo "codex is installed but not logged in: $(codex login status 2>&1 | head -1)"; exit 3; }
-      echo "codex installed and logged in"
+      if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+        echo "OPENROUTER_API_KEY is not in this run's environment (wfx env set OPENROUTER_API_KEY)"; exit 3
+      fi
+      code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -H "Authorization: Bearer ${OPENROUTER_API_KEY}" https://openrouter.ai/api/v1/key)
+      if [ "$code" = "200" ]; then echo "OPENROUTER_API_KEY is present in the run environment and OpenRouter accepts it"
+      else echo "OpenRouter refused the key or was unreachable: HTTP $code"; exit 3; fi
     timeout_sec: 60
     output_schema: *run_output
 
   - id: probe_grok
-    name: Probe grok-cli
-    description: Does the Grok CLI answer a one-line headless prompt within 90 seconds?
+    name: Probe haiku (OpenRouter)
+    description: The same OpenRouter key serves the haiku judge — a second check, so a transient refusal does not silence two judges.
     needs: [dossier]
     run: |
-      G=$(command -v grok || echo "$HOME/.grok/bin/grok")
-      [ -x "$G" ] || { echo "grok CLI not found (looked on PATH and at ~/.grok/bin/grok)"; exit 3; }
-      "$G" -p "Reply with exactly: OK" > grok_probe.txt 2>&1 &
-      pid=$!
-      for i in $(seq 1 90); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; echo "grok did not answer within 90s"; exit 3; fi
-      grep -q "OK" grok_probe.txt && echo "grok answered headless" || { echo "grok answered badly: $(head -c 300 grok_probe.txt)"; exit 3; }
-    timeout_sec: 120
+      if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+        echo "OPENROUTER_API_KEY is not in this run's environment (wfx env set OPENROUTER_API_KEY)"; exit 3
+      fi
+      code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -H "Authorization: Bearer ${OPENROUTER_API_KEY}" https://openrouter.ai/api/v1/key)
+      if [ "$code" = "200" ]; then echo "OPENROUTER_API_KEY is present in the run environment and OpenRouter accepts it"
+      else echo "OpenRouter refused the key or was unreachable: HTTP $code"; exit 3; fi
+    timeout_sec: 60
     output_schema: *run_output
 
   # 3a. The calibrated classifier. Needs TYPESAFE_API_KEY or OPENROUTER_API_KEY
@@ -173,13 +175,13 @@ steps:
         rationale:       { type: string, description: "one paragraph, citing the dossier" }
 
   - id: judge_codex
-    name: Judge — codex-cli
-    description: An independent verdict on the dossier from OpenAI's codex CLI.
+    name: Judge — gpt5
+    description: An independent verdict on the dossier from openai/gpt-5.6-luna over OpenRouter.
     needs: [probe_codex]
     when:
       - path: probe_codex.ok
         equals: true
-    provider: codex-cli
+    provider: gpt5
     skills: []
     tools: []
     max_turns: 6
@@ -190,13 +192,13 @@ steps:
     output_schema: *judge_schema
 
   - id: judge_grok
-    name: Judge — grok-cli
-    description: An independent verdict on the dossier from the Grok CLI, headless.
+    name: Judge — haiku
+    description: An independent verdict on the dossier from anthropic/claude-haiku-4.5 over OpenRouter.
     needs: [probe_grok]
     when:
       - path: probe_grok.ok
         equals: true
-    provider: grok-cli
+    provider: haiku
     skills: []
     tools: []
     max_turns: 6
