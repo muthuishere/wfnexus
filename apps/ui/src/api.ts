@@ -373,6 +373,12 @@ export const api = {
   // loader REFUSED, and it is the more interesting half: it is why a name a
   // workflow uses is not available.
   providers: () => j<Registry<Provider>>(fetch('/api/providers')),
+  /** Asked LIVE of an acp provider's agent: every model it offers. Slow (it
+   *  starts the agent), so callers cache it. */
+  providerModels: (name: string) =>
+    j<ProviderModels>(fetch(`/api/providers/${encodeURIComponent(name)}/models`)),
+  /** The agents this server can drive over ACP, and whether each is installed. */
+  adapters: () => j<AcpAdapter[]>(fetch('/api/adapters')),
   classifiers: () => j<Registry<Classifier>>(fetch('/api/classifiers')),
   mcp: () => j<Registry<McpServer>>(fetch('/api/mcp')),
   saveProvider: (p: Provider) =>
@@ -428,3 +434,7 @@ export const api = {
     return () => es.close()
   },
 }
+
+export type AcpModel = { id: string; name?: string; free: boolean }
+export type ProviderModels = { provider: string; current: string; models: AcpModel[]; configured?: string; offered: boolean }
+export type AcpAdapter = { name: string; bin: string; argv: string[]; modelFlag?: string; mode: string; install: string; installed: boolean; path?: string; providers: string[] }
