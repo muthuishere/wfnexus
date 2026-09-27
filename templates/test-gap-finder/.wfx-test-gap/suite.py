@@ -98,13 +98,17 @@ def import_roots(style):
     roots = ["src"] if os.path.isdir("src") else []
     for d in style.get("source_dirs") or []:
         d = os.path.normpath(d.rstrip("/") or ".")
+        if os.path.isfile(d):  # a module file in scope: its directory is the package
+            d = os.path.dirname(d) or "."
         while d not in ("", ".") and os.path.exists(os.path.join(d, "__init__.py")):
             d = os.path.dirname(d)
         roots.append(d or ".")
     return list(dict.fromkeys(roots))
 
 
-MANAGED = re.compile(r"\b(uv run|poetry run|hatch run|pdm run|tox|nox|rye run)\b")
+# a project runner, or an interpreter inside a virtualenv: the project is installed
+# there, and extra sys.path entries only shadow it (two citenexus tests broke)
+MANAGED = re.compile(r"\b(uv run|poetry run|hatch run|pdm run|tox|nox|rye run)\b|\S*/(\.?venv|env)/bin/python")
 
 
 def pytest_command(style):
@@ -135,11 +139,15 @@ def pytest_command(style):
     env = [e for e in env if not e.startswith("PYTHONPATH=")] + [f"PYTHONPATH={paths}"]
     if MANAGED.search(cmd):
         # a project runner installs the project into its own env: leave its paths alone
-        return cmd, None
+        quiet = re.sub(r"(?<=\s)(-q|-qq|--quiet)(?=\s|$)", "", cmd)
+        return (quiet, None) if quiet == cmd else (" ".join(quiet.split()), "dropped -q so each test id is listed")
     if "pytest" in cmd:
         m = re.match(r"^(\s*cd\s+\S+\s*&&\s*)?(.*)$", cmd, re.S)
-        body = " ".join(t for t in shlex.split(m[2]) if not re.match(r"^[A-Z_][A-Z0-9_]*=", t))
-        new = (m[1] or "") + " ".join(env) + " " + " ".join(shlex.quote(t) for t in shlex.split(body))
+        # tokens, never a re-joined string: `-m "not integration"` must stay one argument
+        # -q/--quiet would cancel the -v that lists each test id and its status
+        body = [t for t in shlex.split(m[2]) if not re.match(r"^[A-Z_][A-Z0-9_]*=", t)
+                and t not in ("-q", "--quiet", "-qq")]
+        new = (m[1] or "") + " ".join(shlex.quote(e) for e in env) + " " + " ".join(shlex.quote(t) for t in body)
         return new, f"import roots added: `{new}`"
     new = " ".join(env + ["python3", "-m", "pytest", shlex.quote(start)])
     return new, f"`{cmd}` is not a pytest command; counted with the equivalent `{new}`"
@@ -158,15 +166,34 @@ def run_pytest(style, cov, out_prefix):
     command, note = pytest_command(style)
     if note:
         res["note"] = note
-    env, gap = py_env(cov)
-    if gap:
-        res["gaps"].append(gap)
-        cov = False
+    m = re.search(r"(\S*/(?:\.?venv|env))/bin/python", command)
+    if m:
+        # calling a venv's python directly skips activation, so the console
+        # scripts it installed (a CLI the tests shell out to) are not on PATH
+        venv = os.path.abspath(os.path.join(cd_dir(command), m[1]))
+        env = {"VIRTUAL_ENV": venv, "PATH": f"{venv}/bin:" + os.environ.get("PATH", "")}
+        if cov and subprocess.run([f"{venv}/bin/python", "-c", "import pytest_cov"], capture_output=True).returncode:
+            # the run's own worktree venv, never the developer's
+            ok = any(subprocess.run(c, capture_output=True).returncode == 0 for c in (
+                ["uv", "pip", "install", "-q", "--python", f"{venv}/bin/python", "pytest-cov"],
+                [f"{venv}/bin/python", "-m", "pip", "install", "-q", "pytest-cov"]))
+            if not ok:
+                res["gaps"].append(f"pytest-cov is not in {m[1]} and could not be installed there")
+                cov = False
+    else:
+        env, gap = py_env(cov)
+        if gap:
+            res["gaps"].append(gap)
+            cov = False
     covf = os.path.abspath(f"{out_prefix}.coverage.json")
     args = "-v -p no:cacheprovider -o console_output_style=classic"
+    scope = [os.path.abspath(x) for x in style.get("source_dirs") or ["."]]
     if cov:
-        for s in style.get("source_dirs") or ["."]:
-            args += f" --cov={shlex.quote(os.path.abspath(s))}"
+        # coverage.py measures directories and modules, not file paths: a file in
+        # scope is measured through its directory and the totals are recomputed
+        # over the in-scope files below
+        for s in dict.fromkeys(os.path.dirname(x) if os.path.isfile(x) else x for x in scope):
+            args += f" --cov={shlex.quote(s)}"
         args += f" --cov-branch --cov-report=json:{shlex.quote(covf)}"
         if "uv run" in command and "pytest-cov" not in command:
             command = command.replace("uv run", "uv run --with pytest-cov", 1)
@@ -185,12 +212,16 @@ def run_pytest(style, cov, out_prefix):
     if cov:
         if os.path.exists(covf):
             c = json.load(open(covf))
+            inscope = lambda f: any(f == x or f.startswith(x.rstrip("/") + "/") for x in scope)
+            files = {p: f for p, f in c["files"].items() if inscope(os.path.abspath(repo_rel(p, command)))}
+            stm = sum(f["summary"].get("num_statements", 0) + f["summary"].get("num_branches", 0) for f in files.values())
+            hit = sum(f["summary"].get("covered_lines", 0) + f["summary"].get("covered_branches", 0) for f in files.values())
             res["coverage"] = {
-                "percent": round(c["totals"]["percent_covered"], 2),
+                "percent": round(100.0 * hit / stm, 2) if stm else round(c["totals"]["percent_covered"], 2),
                 "files": {repo_rel(p, command): {"percent": round(f["summary"]["percent_covered"], 2),
                                                  "missing": f.get("missing_lines", [])}
-                          for p, f in c["files"].items()},
-                "tool": "pytest-cov (line+branch)"}
+                          for p, f in files.items()},
+                "tool": "pytest-cov (line+branch, scope only)"}
         else:
             res["gaps"].append("pytest-cov produced no report: " + tail(err, 300))
     return res
