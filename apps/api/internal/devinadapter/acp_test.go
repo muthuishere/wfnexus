@@ -233,6 +233,8 @@ for line in sys.stdin:
                   {"optionId":"yes","kind":"allow_once","name":"Allow"},
                   {"optionId":"no","kind":"reject_once","name":"Reject"}]}})
     elif mid==9001 and pending is not None:
+        o=m.get("result",{}).get("outcome",{})
+        open(sys.argv[0]+".chosen","w").write(o.get("optionId") or o.get("outcome",""))
         send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s",
               "update":{"sessionUpdate":"agent_message_chunk","content":{"text":reply}}}})
         send({"jsonrpc":"2.0","id":pending,"result":{"stopReason":"end_turn"}})
@@ -248,7 +250,7 @@ for line in sys.stdin:
 }
 
 // GATE 2: an unanswered session/request_permission hangs the turn; answering it
-// with the first allow-kind option completes it. This is the trap that costs
+// (with a refusal, by default) completes it. This is the trap that costs
 // the next implementer a day, and it bites even in bypass mode.
 func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 	bin := fakeACPPermission(t, answer("permitted"))
@@ -266,6 +268,30 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 		res, err := devinadapter.ParseReply(out)
 		if err != nil || res.Content != "permitted" {
 			t.Fatalf("reply = %q (%v)", out, err)
+		}
+	})
+
+	// Answered — but REFUSED by default. The platform's loop runs the tools,
+	// and only there do the step's allowlist and guardrails apply; an agent's
+	// own shell (opencode's build agent ran dozens of commands a turn) would
+	// act outside all of them. The old client picked the first allow option.
+	t.Run("refused by default, allowed only on opt-in", func(t *testing.T) {
+		for _, tc := range []struct {
+			allow bool
+			want  string
+		}{{false, "no"}, {true, "yes"}} {
+			_ = os.Remove(bin + ".chosen")
+			acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, AllowNativeTools: tc.allow})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if _, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()}); err != nil {
+				t.Fatalf("allow=%v: the turn must still complete: %v", tc.allow, err)
+			}
+			cancel()
+			acp.Close()
+			got, _ := os.ReadFile(bin + ".chosen")
+			if string(got) != tc.want {
+				t.Errorf("AllowNativeTools=%v chose %q, want %q", tc.allow, got, tc.want)
+			}
 		}
 	})
 

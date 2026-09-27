@@ -126,6 +126,12 @@ type ACP struct {
 	// a precaution is an open question (toolnexus ADR 0025 gate 1) — this flag
 	// is how it gets measured rather than assumed.
 	NoSupersede bool
+	// AllowNativeTools answers the agent's session/request_permission with
+	// ALLOW. Off by default: the platform's loop executes the tools, and the
+	// step's allowlist and guardrails exist only there. An agent's own shell
+	// or editor runs outside them, so by default its request is refused (the
+	// agent's reject option, or a cancelled outcome when it offers none).
+	AllowNativeTools bool
 	// NoAnswerPermission stops the client answering session/request_permission.
 	// An unanswered request means the agent waits forever and the turn dies at
 	// the timeout — the trap ADR 0025 gate 2 asks to demonstrate. Never set
@@ -579,9 +585,14 @@ func (a *ACPAgent) read(stdout io.Reader) {
 			// Deliberately ignored: the turn will now hang (gate 2).
 
 		case msg.ID != nil && strings.Contains(msg.Method, "permission"):
-			// Bypass mode should mean this never fires; answering anyway costs
-			// nothing and a silent hang would cost a whole turn.
-			a.allow(*msg.ID, msg.Params)
+			// Always answered — a silent hang would cost a whole turn (gate 2).
+			// But REFUSED unless native tools were opted into: the platform's
+			// loop owns the tools, and it is there that the step's allowlist and
+			// guardrails are enforced. An agent that runs its own shell instead
+			// (opencode's `build` agent does, dozens of commands a turn) acts
+			// outside every one of them. Refused, it is left with the protocol:
+			// a tool call in its reply, which the platform executes.
+			a.answerPermission(*msg.ID, msg.Params, a.cfg.AllowNativeTools)
 		}
 	}
 	err := sc.Err()
@@ -618,7 +629,7 @@ func (a *ACPAgent) onUpdate(params json.RawMessage) {
 }
 
 // allow answers a permission request with the first allow-shaped option.
-func (a *ACPAgent) allow(id int, params json.RawMessage) {
+func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) {
 	var p struct {
 		Options []struct {
 			OptionID string `json:"optionId"`
@@ -627,22 +638,30 @@ func (a *ACPAgent) allow(id int, params json.RawMessage) {
 	}
 	_ = json.Unmarshal(params, &p)
 
+	want := "reject"
+	if allow {
+		want = "allow"
+	}
 	choice := ""
 	for _, o := range p.Options {
-		if strings.HasPrefix(o.Kind, "allow") {
+		if strings.HasPrefix(o.Kind, want) {
 			choice = o.OptionID
 			break
 		}
 	}
-	if choice == "" && len(p.Options) > 0 {
-		choice = p.Options[0].OptionID
+	outcome := map[string]any{"outcome": "selected", "optionId": choice}
+	switch {
+	case choice == "" && allow && len(p.Options) > 0:
+		outcome["optionId"] = p.Options[0].OptionID
+	case choice == "":
+		// No reject option offered: ACP's other refusal is a cancelled
+		// request — never the first option, which is usually "allow".
+		outcome = map[string]any{"outcome": "cancelled"}
 	}
 
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id,
-		"result": map[string]any{
-			"outcome": map[string]any{"outcome": "selected", "optionId": choice},
-		},
+		"result":  map[string]any{"outcome": outcome},
 	})
 	if err != nil {
 		return
