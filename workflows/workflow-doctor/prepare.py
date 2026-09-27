@@ -39,6 +39,13 @@ def main():
     for d in diag:
         if not d.get("fix_now"):
             continue
+        # the id, and only the id: an agent once wrote "<id> — <title>: <error>"
+        # here and the branch name it became was refused by git
+        m = re.match(r"\s*([0-9a-f]{12})\b", d.get("finding", ""))
+        if not m:
+            print(f"SKIP {d.get('finding')!r}: not a finding id")
+            continue
+        d["finding"] = m.group(1)
         f = findings.get(d["finding"], {})
         repo = d.get("repo") or f.get("repo")
         if not repo or not os.path.isdir(repo):
