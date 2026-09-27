@@ -92,6 +92,14 @@
       "model": "accounts/fireworks/models/llama-v3p1-8b-instruct",
       "apiKeyEnv": "OPENAI_API_KEY"
     },
+    "gemini": {
+      "kind": "http",
+      "description": "Google Gemini through its OpenAI-compatible endpoint (ai.google.dev/gemini-api/docs/openai): baseUrl + model verified live 2026-09-27 with a chat completion. A different vendor from the OpenRouter default, which is what an adversarial reviewer step wants; GEMINI_API_KEY is an AI Studio key.",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "style": "openai",
+      "model": "gemini-2.5-flash",
+      "apiKeyEnv": "GEMINI_API_KEY"
+    },
     "gpt": {
       "kind": "http",
       "description": "A second opinion from a different family, for review steps.",
