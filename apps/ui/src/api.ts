@@ -177,7 +177,7 @@ export type Category = { id: string; label: string; description: string }
 
 /** What is actually wired on THIS machine, as opposed to what is declared. */
 export type Doctor = {
-  default: { model: string; baseUrl: string; style: string; apiKeyEnv: string; keySet: boolean }
+  default: { model: string; baseUrl: string; style: string; apiKeyEnv: string; keySet: boolean; provider?: string }
   providers: DoctorEntry[]
   classifiers: DoctorEntry[]
   storage: { driver: string; artifacts: string }

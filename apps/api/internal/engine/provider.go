@@ -50,6 +50,15 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 }
 
 func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string) (resolved, error) {
+	// No provider named, but the operator named a default one: the step runs
+	// on it exactly as if it had said so — `model:` selects within it, and a
+	// default that does not resolve is refused, never quietly swapped for the
+	// endpoint below.
+	if step.Provider == "" && e.cfg.DefaultProvider != "" {
+		s := *step
+		s.Provider = e.cfg.DefaultProvider
+		step = &s
+	}
 	// No provider named: the process-wide default, with `model:` as an override
 	// of the model id only. This is the path every workflow used before
 	// providers existed and it keeps working unchanged.

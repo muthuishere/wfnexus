@@ -52,6 +52,10 @@ type Config struct {
 	LLMBaseURL     string
 	LLMStyle       string
 	Model          string
+	// DefaultProvider, when set, is the registry provider a step with no
+	// `provider:` runs on (its `model:` still selects within it). "" ⇒ the
+	// LLMBaseURL endpoint, as before.
+	DefaultProvider string
 	// MaxConcurrentRuns bounds how many runs execute at once; the rest wait in
 	// queued. Each run drives several agents and a repo worktree, so this is the
 	// knob that keeps a burst of reports from thrashing the machine.
@@ -201,26 +205,27 @@ func LoadWithFile(path string) (Config, error) {
 		// k8s manifests STATE `WFX_ADDR=:8090` themselves, the same way they
 		// state WFX_MODE=server, so a deployment listens widely because it
 		// says so rather than because of where a default happens to sit.
-		Addr:           env("WFX_ADDR", or(f.Addr, "127.0.0.1:8090")),
-		StorageDriver:  storageDriver,
-		DatabaseURL:    env("DATABASE_URL", or(f.Storage.DSN, defDSN)),
-		ArtifactDriver: artifactDriver,
-		ArtifactDir:    env("WFX_ARTIFACT_DIR", or(f.Artifacts.Dir, filepath.Join(home, ".local", "share", "wfnexus", "artifacts"))),
-		S3Endpoint:     env("S3_ENDPOINT", or(f.Artifacts.Endpoint, "127.0.0.1:9030")),
-		S3AccessKey:    env("S3_ACCESS_KEY", or(f.Artifacts.AccessKey, "bfp")),
-		S3SecretKey:    env("S3_SECRET_KEY", or(f.Artifacts.SecretKey, "bfpbfpbfp")),
-		S3Bucket:       env("S3_BUCKET", or(f.Artifacts.Bucket, "bfp-artifacts")),
-		S3UseSSL:       env("S3_USE_SSL", boolStr(f.Artifacts.UseSSL, false)) == "true",
-		WorkflowsDir:   env("WFX_WORKFLOWS_DIR", or(f.Paths.Workflows, filepath.Join(root, "workflows"))),
-		TemplatesDir:   env("WFX_TEMPLATES_DIR", or(f.Paths.Templates, filepath.Join(root, "templates"))),
-		SkillsDir:      env("WFX_SKILLS_DIR", or(f.Paths.Skills, filepath.Join(root, "skills"))),
-		McpConfig:      env("WFX_MCP_CONFIG", or(f.Paths.Mcp, filepath.Join(root, "mcp.json"))),
-		RegistriesPath: env("WFX_REGISTRIES", or(f.Paths.Registries, filepath.Join(root, "registries.json"))),
-		WorkDir:        env("WFX_WORKDIR", or(f.Paths.Work, filepath.Join(home, ".local", "share", "wfnexus", "runs"))),
-		UIDir:          env("WFX_UI_DIR", or(f.Paths.UI, filepath.Join(root, "apps", "ui", "dist"))),
-		LLMBaseURL:     env("LLM_BASE_URL", or(f.Model.BaseURL, "https://openrouter.ai/api/v1")),
-		LLMStyle:       env("LLM_STYLE", or(f.Model.Style, "openai")),
-		Model:          env("WFX_MODEL", or(f.Model.Model, "anthropic/claude-sonnet-4.5")),
+		Addr:            env("WFX_ADDR", or(f.Addr, "127.0.0.1:8090")),
+		StorageDriver:   storageDriver,
+		DatabaseURL:     env("DATABASE_URL", or(f.Storage.DSN, defDSN)),
+		ArtifactDriver:  artifactDriver,
+		ArtifactDir:     env("WFX_ARTIFACT_DIR", or(f.Artifacts.Dir, filepath.Join(home, ".local", "share", "wfnexus", "artifacts"))),
+		S3Endpoint:      env("S3_ENDPOINT", or(f.Artifacts.Endpoint, "127.0.0.1:9030")),
+		S3AccessKey:     env("S3_ACCESS_KEY", or(f.Artifacts.AccessKey, "bfp")),
+		S3SecretKey:     env("S3_SECRET_KEY", or(f.Artifacts.SecretKey, "bfpbfpbfp")),
+		S3Bucket:        env("S3_BUCKET", or(f.Artifacts.Bucket, "bfp-artifacts")),
+		S3UseSSL:        env("S3_USE_SSL", boolStr(f.Artifacts.UseSSL, false)) == "true",
+		WorkflowsDir:    env("WFX_WORKFLOWS_DIR", or(f.Paths.Workflows, filepath.Join(root, "workflows"))),
+		TemplatesDir:    env("WFX_TEMPLATES_DIR", or(f.Paths.Templates, filepath.Join(root, "templates"))),
+		SkillsDir:       env("WFX_SKILLS_DIR", or(f.Paths.Skills, filepath.Join(root, "skills"))),
+		McpConfig:       env("WFX_MCP_CONFIG", or(f.Paths.Mcp, filepath.Join(root, "mcp.json"))),
+		RegistriesPath:  env("WFX_REGISTRIES", or(f.Paths.Registries, filepath.Join(root, "registries.json"))),
+		WorkDir:         env("WFX_WORKDIR", or(f.Paths.Work, filepath.Join(home, ".local", "share", "wfnexus", "runs"))),
+		UIDir:           env("WFX_UI_DIR", or(f.Paths.UI, filepath.Join(root, "apps", "ui", "dist"))),
+		LLMBaseURL:      env("LLM_BASE_URL", or(f.Model.BaseURL, "https://openrouter.ai/api/v1")),
+		LLMStyle:        env("LLM_STYLE", or(f.Model.Style, "openai")),
+		Model:           env("WFX_MODEL", or(f.Model.Model, "anthropic/claude-sonnet-4.5")),
+		DefaultProvider: env("WFX_DEFAULT_PROVIDER", f.Model.Provider),
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),
 		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", or(join(f.Runners.Labels), "local"))),

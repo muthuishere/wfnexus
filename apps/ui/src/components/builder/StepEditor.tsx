@@ -62,11 +62,13 @@ export function ModelPicker({ step, doctor, onChange }: {
           ? (chosen.ready
             ? `${chosen.kind}${chosen.detail ? ` · ${chosen.detail}` : ''}`
             : `NOT READY on this machine: ${chosen.problem}. The step will be refused rather than run on a different model.`)
-          : def
+          : def?.provider
+            ? `The server's default provider: ${def.provider}.`
+            : def
             ? `The process default: ${def.model}${def.keySet ? '' : ` — but ${def.apiKeyEnv} is NOT SET`}`
             : 'The process default.'}>
         <select value={step.provider || ''} onChange={e => onChange({ provider: e.target.value || undefined, model: undefined })}>
-          <option value="">— default ({def?.model || 'configured model'}) —</option>
+          <option value="">— default ({def?.provider || def?.model || 'configured model'}) —</option>
           <optgroup label="on this server">
             {ready.map(p => (
               <option key={p.name} value={p.name}>{p.name} · {p.kind}{p.model ? ` · ${p.model}` : ''}</option>))}
