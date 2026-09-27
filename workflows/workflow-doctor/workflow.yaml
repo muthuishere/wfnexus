@@ -234,7 +234,10 @@ steps:
     when:
       - path: verify.exitCode
         equals: 0      # 0 = at least one fix proven; 1 = none; 4 = nothing to verify
-    provider: codex-cli
+    # A different model family from the fixer, over an API key: a CLI seat hit
+    # its usage limit mid-run (run 11), and automating a subscription seat is
+    # what the registry's terms notes warn against.
+    provider: gpt
     skills: [pr-reviewer, change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40
