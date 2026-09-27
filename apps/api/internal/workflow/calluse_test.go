@@ -122,3 +122,63 @@ func mkdir(t *testing.T, p string) {
 		t.Fatal(err)
 	}
 }
+
+func twoSources(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	mkdir(t, a)
+	mkdir(t, b)
+	return a, b
+}
+
+func TestAWorkflowUsesAWorkflowFromAnotherSource(t *testing.T) {
+	shared, app := twoSources(t)
+	write(t, filepath.Join(shared, "build.yaml"), callableBuild)
+	write(t, filepath.Join(app, "release.yaml"), `
+name: release
+uses:
+  - use: build
+  - use: shared/build
+    as: again
+`)
+	// The caller's source comes FIRST, so the callee is not yet loaded when it is read.
+	defs, skips, err := LoadSources([]Source{{Name: "app", Dir: app}, {Name: "shared", Dir: shared}}, catalog())
+	if err != nil || len(skips) != 0 {
+		t.Fatalf("err=%v skips=%+v", err, skips)
+	}
+	got := strings.Join(stepIDs(defs["release"]), ",")
+	if got != "build.compile,build.test,again.compile,again.test" {
+		t.Fatalf("steps = %s", got)
+	}
+}
+
+func TestAnUnknownSourceInAQualifiedUseIsASkip(t *testing.T) {
+	_, app := twoSources(t)
+	write(t, filepath.Join(app, "release.yaml"), "name: release\nuses:\n  - use: nowhere/build\n")
+	defs, skips, err := LoadSources([]Source{{Name: "app", Dir: app}}, catalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := defs["release"]; ok || len(skips) != 1 || !strings.Contains(skips[0].Reason, "nowhere/build") {
+		t.Fatalf("want release skipped naming nowhere/build, got defs=%v skips=%+v", defs, skips)
+	}
+}
+
+func TestUsingAWorkflowFromASourceThatFailedSkipsTheCaller(t *testing.T) {
+	shared, app := twoSources(t)
+	write(t, filepath.Join(shared, "build.yaml"), callableBuild)
+	// A second, broken workflow makes the whole shared source fail validation.
+	write(t, filepath.Join(shared, "broken.yaml"), "name: broken\nsteps:\n  - id: x\n    skills: [no-such-skill]\n    prompt: p\n")
+	write(t, filepath.Join(app, "release.yaml"), "name: release\nuses:\n  - use: build\n")
+	defs, skips, err := LoadSources([]Source{{Name: "shared", Dir: shared}, {Name: "app", Dir: app}}, catalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := defs["release"]; ok {
+		t.Fatal("a caller must not run steps from a source the platform reports as broken")
+	}
+	if len(skips) != 2 {
+		t.Fatalf("want both sources skipped, got %+v", skips)
+	}
+}

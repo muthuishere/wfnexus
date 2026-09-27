@@ -64,18 +64,35 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 	var skips []Skip
 	seen := map[string]string{} // workflow name → the source that claimed it
 
-	for _, src := range sources {
+	// Parse every source before expanding any, so a workflow can `use:` one
+	// from another source (load_calls.go).
+	groups := make([]*loadGroup, len(sources))
+	for i, src := range sources {
+		g := &loadGroup{name: src.Name}
+		groups[i] = g
 		tasksDir := ""
 		if src.Repo != "" {
 			tasksDir = filepath.Join(src.Repo, filepath.FromSlash(RepoTaskDir))
 		}
-		defs, err := loadDirIfPresent(src.Dir, tasksDir, cat, opts...)
-		if err != nil {
+		if g.tasks, g.err = LoadTasks(tasksDir); g.err != nil {
+			continue
+		}
+		g.defs, g.err = parseDirIfPresent(src.Dir)
+	}
+	newExpander(groups, newLoadOptions(opts)).run(cat)
+
+	for i, src := range sources {
+		g := groups[i]
+		if g.err != nil {
 			// One repository's broken file must not stop the platform booting,
 			// or importing a repository becomes a way to take the server down.
 			// It is recorded as a skip, which `wfx doctor` shows.
-			skips = append(skips, Skip{Source: src.Name, Location: src.Dir, Reason: err.Error()})
+			skips = append(skips, Skip{Source: src.Name, Location: src.Dir, Reason: g.err.Error()})
 			continue
+		}
+		defs := map[string]*Definition{}
+		for _, d := range g.defs {
+			defs[d.Name] = d
 		}
 		for name, d := range defs {
 			d.Source = src.Name
@@ -107,16 +124,16 @@ type Skip struct {
 	Reason   string `json:"reason"`
 }
 
-// loadDirIfPresent treats an absent directory as empty. A repository without
+// parseDirIfPresent treats an absent directory as empty. A repository without
 // workflows is the normal case, not an error.
-func loadDirIfPresent(dir, tasksDir string, cat Catalog, opts ...LoadOption) (map[string]*Definition, error) {
+func parseDirIfPresent(dir string) ([]*Definition, error) {
 	if dir == "" {
 		return nil, nil
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil, nil
 	}
-	return LoadDirWithTasks(dir, tasksDir, cat, opts...)
+	return parseDir(dir)
 }
 
 // SortedSources returns sources in a stable order for display.

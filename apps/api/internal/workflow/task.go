@@ -151,7 +151,7 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 					known = append(known, n)
 				}
 				sort.Strings(known)
-				return fmt.Errorf("%s: unknown task %q — known: %v (or name a workflow in this directory that declares on: workflow_call)", d.Name, u.Task, known)
+				return fmt.Errorf("%s: unknown task %q — known: %v (or name a loaded workflow, `name` or `source/name`, that declares on: workflow_call)", d.Name, u.Task, known)
 			}
 			t = local
 		}

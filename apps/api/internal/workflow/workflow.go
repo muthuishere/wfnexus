@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -691,133 +690,20 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog, opts ...LoadOption) (ma
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
+	defs, err := parseDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	parsed := map[string]*Definition{}
-	var order []string
-	for _, e := range entries {
-		// A workflow is either a file or a DIRECTORY holding workflow.yaml plus
-		// the files that travel with it (files.go). Both forms load here; the
-		// flat one is untouched, so nothing that exists breaks.
-		var (
-			p     string
-			raw   []byte
-			files []File
-			err   error
-		)
-		if e.IsDir() {
-			raw, p, files, err = loadWorkflowDir(filepath.Join(dir, e.Name()))
-			if err != nil {
-				return nil, err
-			}
-			if raw == nil {
-				continue // a directory with no workflow.yaml is not ours
-			}
-		} else {
-			ext := filepath.Ext(e.Name())
-			if ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-			p = filepath.Join(dir, e.Name())
-			raw, err = os.ReadFile(p)
-			if err != nil {
-				return nil, err
-			}
-		}
-		d := &Definition{}
-		if err := yaml.Unmarshal(raw, d); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		d.Path = p
-		d.Files = files
-		for _, st := range d.Steps {
-			if len(st.Needs) > 0 {
-				d.authoredNeeds = true
-			}
-		}
-		parsed[d.Name] = d
-		order = append(order, d.Name)
+	g := &loadGroup{defs: defs, tasks: tasks}
+	newExpander([]*loadGroup{g}, opt).run(cat)
+	if g.err != nil {
+		return nil, g.err
 	}
-
-	// Expansion is lazy and memoised so one workflow can `use:` another from
-	// the same directory, in any file order, with a cycle named instead of a
-	// stack overflow.
-	expanded := map[string]bool{}
-	visiting := map[string]bool{}
-	var expand func(name string, chain []string) error
-	expand = func(name string, chain []string) error {
-		if expanded[name] {
-			return nil
-		}
-		if visiting[name] {
-			return fmt.Errorf("%s: workflows use each other in a cycle: %s", name, strings.Join(append(chain, name), " → "))
-		}
-		visiting[name] = true
-		defer delete(visiting, name)
-		d := parsed[name]
-		o := opt
-		o.workflow = func(callee string) (*Task, bool, error) {
-			c, ok := parsed[callee]
-			if !ok {
-				return nil, false, nil
-			}
-			if callee == name {
-				return nil, true, fmt.Errorf("%s: a workflow cannot use itself", name)
-			}
-			if !c.On.Allows(TriggerWorkflowCall) {
-				return nil, true, fmt.Errorf("%s: use %q names a workflow that does not declare `on: workflow_call` "+
-					"(it declares %v) — add workflow_call to its `on:` so it may be called", name, callee, c.On.Names())
-			}
-			if err := expand(callee, append(chain, name)); err != nil {
-				return nil, true, err
-			}
-			return workflowAsTask(c), true, nil
-		}
-		if err := d.expandUses(tasks, o); err != nil {
-			return err
-		}
-		if err := d.expandJobs(tasks, o); err != nil {
-			return err
-		}
-		expanded[name] = true
-		return nil
-	}
-
 	out := map[string]*Definition{}
-	for _, name := range order {
-		if err := expand(name, nil); err != nil {
-			return nil, err
-		}
-	}
-	for _, name := range order {
-		d := parsed[name]
-		normalize(d)
-		if err := d.validate(cat); err != nil {
-			return nil, err
-		}
+	for _, d := range defs {
 		out[d.Name] = d
 	}
 	return out, nil
-}
-
-// workflowAsTask presents an expanded workflow as a task, so a caller's
-// `use:` walks the same prefix/override/rename path either way. The callee's
-// workflow-level env is carried onto its steps, because normalize — which
-// would otherwise apply it — runs on the caller, not the callee.
-func workflowAsTask(d *Definition) *Task {
-	steps := make([]Step, len(d.Steps))
-	for i, s := range d.Steps {
-		s.Env = MergeEnv(d.Env, s.Env)
-		s.Needs = append([]string(nil), s.Needs...)
-		s.Skills = append([]string(nil), s.Skills...)
-		s.Tools = append([]string(nil), s.Tools...)
-		s.MCP = append([]string(nil), s.MCP...)
-		s.Guardrails = append([]Guardrail(nil), s.Guardrails...)
-		steps[i] = s
-	}
-	return &Task{Name: d.Name, Description: d.Description, Steps: steps, Path: d.Path}
 }
 
 // normalize converts yaml's map[string]any (already string-keyed in yaml.v3) and
