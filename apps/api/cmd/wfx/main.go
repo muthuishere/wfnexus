@@ -138,6 +138,8 @@ func usage() {
   wfx workflow proposals [--project p] [--workflow w]  pending workflow changes (git branches/PRs)
   wfx workflow approve <id>        merge a proposal; the project's checkout pulls
   wfx workflow reject <id> --reason "why"  close its PR and delete its branch
+  wfx workflow drift [--project p] workflows changed on disk but never committed
+  wfx workflow drift --propose <w> [--project p]  open a proposal from that on-disk change
   wfx apply <file.yaml>            validate and install a workflow
   wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing
