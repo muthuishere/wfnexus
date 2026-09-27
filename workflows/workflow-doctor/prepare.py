@@ -55,9 +55,15 @@ def main():
             print(f"SKIP {d['finding']}: worktree failed: {msg[-200:]}")
             continue
         copied = []
-        if d.get("cause") == "untracked" and f.get("path") and os.path.isdir(f["path"]):
-            rel = os.path.relpath(f["path"], repo)
-            for dirpath, dirnames, filenames in os.walk(f["path"]):
+        # The folder to bring in: the finding's own path, or — for a failed run —
+        # the workflow's folder in its source. Copied whenever the branch does not
+        # have it, whatever the cause: a bug in a never-committed workflow can only
+        # be fixed by committing the workflow with the fix.
+        folder = f.get("path") or (os.path.join(f["source_dir"], f["workflow"].split("/")[-1]) if f.get("source_dir") and f.get("workflow") else "")
+        in_branch = folder and os.path.exists(os.path.join(wt, os.path.relpath(folder, repo)))
+        if folder and os.path.isdir(folder) and not in_branch and not os.path.relpath(folder, repo).startswith(".."):
+            rel = os.path.relpath(folder, repo)
+            for dirpath, dirnames, filenames in os.walk(folder):
                 dirnames[:] = [x for x in dirnames if x != "__pycache__" and not SECRETISH.search(x)]
                 for name in filenames:
                     src = os.path.join(dirpath, name)

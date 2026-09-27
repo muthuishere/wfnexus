@@ -208,12 +208,13 @@ steps:
     needs: [verify]
     when:
       - path: verify.exitCode
-        equals: 0      # 0 = fixes exist and every one is proven; 4 = nothing to verify
+        equals: 0      # 0 = at least one fix proven; 1 = none; 4 = nothing to verify
     provider: codex-cli
     skills: [pr-reviewer, change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40
     prompt: |
+      Review ONLY the fixes ./verify.json marks ok — block every other one.
       ./fixes.json lists fixes; ./worktrees.json says where each branch is
       checked out (./fixes/<finding>); ./verify.json
       has what the checks proved. For each, read `git diff origin/<base>...HEAD`

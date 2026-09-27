@@ -3,11 +3,11 @@
 
 Per fix, in its worktree:
   - the branch has commits past its base and nothing uncommitted
-  - every changed workflow.yaml passes `wfx validate`
+  - every workflow folder it touches holds a workflow.yaml that validates
   - Go changed → `go test ./...` in the module that changed
   - no changed file holds a live secret (`sec seal --check` when sec exists)
 
-Exit 0 = fixes exist and all are proven. 1 = at least one failed. 4 = nothing
+Exit 0 = at least one fix is proven (only those go on). 1 = none is. 4 = nothing
 to verify (no fix step ran, or it fixed nothing). Detail in verify.json.
 """
 import json
@@ -51,10 +51,25 @@ def check(fix):
     if not files:
         record("the branch changes something", False)
 
+    # Every workflow folder the branch touches must hold a workflow.yaml that
+    # validates. A fix that drops the definition (say, because a file held a
+    # secret) leaves a folder that cannot run — that is not a fix.
+    folders = set()
     for f in files:
-        if f.endswith("workflow.yaml") and os.path.exists(os.path.join(wt, f)):
-            code, msg = sh(["wfx", "validate", f], wt, 120)
-            record(f"wfx validate {f}", code == 0, msg)
+        parts = f.split("/")
+        for i, p in enumerate(parts[:-1]):
+            if p in ("workflows", "templates") and i + 1 < len(parts) - 1:
+                folders.add("/".join(parts[: i + 2]))
+                break
+    for folder in sorted(folders):
+        wf = os.path.join(folder, "workflow.yaml")
+        if not os.path.isdir(os.path.join(wt, folder)):
+            continue  # the branch removed the folder
+        if not os.path.exists(os.path.join(wt, wf)):
+            record(f"{folder} has a workflow.yaml", False, "the branch leaves this workflow folder without its definition")
+            continue
+        code, msg = sh(["wfx", "validate", wf], wt, 120)
+        record(f"wfx validate {wf}", code == 0, msg)
     for mod in sorted({go_module(wt, f) for f in files if f.endswith(".go")} - {""}):
         code, msg = sh(["go", "test", "./...", "-count=1"], mod)
         record(f"go test {os.path.relpath(mod, wt)}", code == 0, msg)
@@ -86,7 +101,8 @@ def main():
         print(("PROVEN " if r["ok"] else "FAILED ") + r["finding"])
         for c in r["checks"]:
             print(f"   {'ok  ' if c['ok'] else 'FAIL'} {c['check']}" + ("" if c["ok"] else f" — {c['detail'][-300:]}"))
-    return 0 if all(r["ok"] for r in results) else 1
+    # proven fixes go on to review; a failed one does not hold them back
+    return 0 if any(r["ok"] for r in results) else 1
 
 
 if __name__ == "__main__":
