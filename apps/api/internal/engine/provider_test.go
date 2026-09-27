@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"strings"
 	"testing"
 
@@ -278,5 +279,49 @@ func TestADefaultProviderThatDoesNotExistIsRefusedNotBypassed(t *testing.T) {
 	e.cfg.DefaultProvider = "missing"
 	if got, err := e.resolveLLM(&workflow.Step{ID: "s"}, ""); err == nil {
 		t.Fatalf("ran on %q instead of refusing the unknown default provider", got.Label)
+	}
+}
+
+// The classifier a decide step uses when it names none can be a registry
+// entry, so an install whose default endpoint is dead (OpenRouter out of
+// credit) points every judge at one that works.
+func TestADefaultClassifierStandsInForAStepThatNamesNone(t *testing.T) {
+	c := testCatalog(t)
+	c.Classifiers.Add(catalog.Classifier{Name: "ts", Backend: "typesafe", Model: "jev-1.13"}, "test")
+	e := testEngine(t, c)
+	e.cfg.DefaultClassifier = "ts"
+	if _, err := e.classifierFor(&workflow.Step{ID: "d"}); err != nil {
+		t.Fatalf("the default classifier was not used: %v", err)
+	}
+	e.cfg.DefaultClassifier = "missing"
+	if _, err := e.classifierFor(&workflow.Step{ID: "d"}); err == nil {
+		t.Fatal("an unknown default classifier must be refused, not replaced by the endpoint")
+	}
+	// A step's own classifier still wins over the default.
+	if _, err := e.classifierFor(&workflow.Step{ID: "d", Classifier: "ts"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Found by a code-review run on a free model: with a default provider set, the
+// doctor still blamed the unused endpoint's missing key.
+func TestTheDoctorJudgesTheDefaultProviderNotTheUnusedEndpoint(t *testing.T) {
+	t.Setenv("WFX_TEST_DEFAULT_KEY", "")
+	dir := t.TempDir()
+	cfg := testEngine(t, nil).cfg
+	cfg.WorkDir, cfg.DefaultProvider = dir, "m"
+	e := New(cfg, nil, nil, map[string]*workflow.Definition{}, skills.Load(dir), testCatalog(t, catalog.Provider{Name: "m", Kind: catalog.KindMock}))
+	for _, p := range e.Doctor().Problems {
+		if strings.Contains(p, "WFX_TEST_DEFAULT_KEY") {
+			t.Fatalf("blamed the unused endpoint: %s", p)
+		}
+	}
+	e.cfg.DefaultProvider = "missing"
+	found := false
+	for _, p := range e.Doctor().Problems {
+		found = found || strings.Contains(p, "default provider missing")
+	}
+	if !found {
+		t.Fatal("an unknown default provider must be a problem")
 	}
 }

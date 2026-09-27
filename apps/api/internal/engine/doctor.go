@@ -128,7 +128,15 @@ func (e *Engine) Doctor() Doctor {
 		},
 		Models: e.Models(),
 	}
-	if !d.Default.KeySet {
+	// With a default provider those steps never touch the endpoint, so its
+	// key is not a problem — the provider's own readiness is what matters.
+	if dp := e.cfg.DefaultProvider; dp != "" {
+		if p, ok := e.catalog.Providers.Get(dp); !ok {
+			d.Problems = append(d.Problems, "the default provider "+dp+" is not in the registry, so any step that names no provider will be refused")
+		} else if c := checkProviderWith(p, sysEnv); !c.Ready {
+			d.Problems = append(d.Problems, "the default provider "+dp+" is not ready ("+c.Problem+"), so any step that names no provider will fail")
+		}
+	} else if !d.Default.KeySet {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
 	}

@@ -44,6 +44,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -175,6 +177,7 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	defer cancel()
 
 	var lastErr error
+	var lastText string
 	prompt := BuildPrompt(requestBody)
 	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
 		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
@@ -185,11 +188,22 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 		if perr == nil {
 			return res, nil
 		}
-		lastErr = perr
+		lastErr, lastText = perr, text
 		prompt = BuildRepairPrompt(requestBody, text, perr)
 	}
-	return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w",
-		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr)
+	// The rejected reply itself, clipped, is what makes this debuggable: "invalid
+	// json" alone does not say whether the model truncated, narrated, or wrapped.
+	return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w; last reply (%d chars): %s",
+		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr, len(lastText), clipEnds(lastText, 300))
+}
+
+// clipEnds keeps the head and tail of a long reply, on one line.
+func clipEnds(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= 2*n {
+		return strconv.Quote(s)
+	}
+	return strconv.Quote(s[:n]) + " … " + strconv.Quote(s[len(s)-n:])
 }
 
 // invoke writes the prompt to a file and hands it to the Agent.

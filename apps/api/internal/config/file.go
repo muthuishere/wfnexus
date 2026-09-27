@@ -80,6 +80,9 @@ type File struct {
 	} `yaml:"model,omitempty"`
 
 	Classifier struct {
+		// Name picks a registry classifier as the default, instead of
+		// the baseUrl endpoint.
+		Name      string `yaml:"name,omitempty"`
 		BaseURL   string `yaml:"baseUrl,omitempty"`
 		Model     string `yaml:"model,omitempty"`
 		APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
