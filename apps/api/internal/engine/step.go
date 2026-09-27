@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -370,6 +371,11 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 				}
 				if wd, _ := args["workdir"].(string); wd == "" && workdir != "" {
 					args["workdir"] = workdir
+				} else if wd != "" && workdir != "" && !filepath.IsAbs(wd) {
+					// A relative workdir is the workspace's, not this process's:
+					// `workdir: fixes/x` failed "no such file" with fixes/x right
+					// there, and a reviewer blocked three fixes as unreadable.
+					args["workdir"] = filepath.Join(workdir, wd)
 				}
 				if cmd, _ := args["command"].(string); cmd != "" && envPrefix != "" {
 					args["command"] = envPrefix + cmd

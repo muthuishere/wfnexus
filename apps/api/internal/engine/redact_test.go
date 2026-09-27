@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,5 +98,23 @@ func TestAProjectRunDefaultsToItsRepository(t *testing.T) {
 	}
 	if got := withRepoDefault(map[string]any{}, ""); got["repo_path"] != nil {
 		t.Fatalf("a platform workflow got a repo: %v", got)
+	}
+}
+
+// The hook, not just pinPaths: bash takes its own branch in BeforeTool, and a
+// test of pinPaths alone passed while bash's relative workdir still went out
+// unpinned.
+func TestBashRelativeWorkdirIsPinnedByTheHook(t *testing.T) {
+	e := &Engine{cfg: config.Config{WorkDir: t.TempDir()}}
+	e.sink = func(string, any) {}
+	ws := t.TempDir()
+	h := e.hooks(context.Background(), uuid.New(), "review", ws, 10, nil, "")
+	ov, err := h.BeforeTool(context.Background(), tn.BeforeToolEvent{Name: "bash",
+		Args: map[string]any{"command": "git diff", "workdir": "fixes/abc"}})
+	if err != nil || ov == nil {
+		t.Fatalf("no override: %v", err)
+	}
+	if got := ov.Args["workdir"]; got != filepath.Join(ws, "fixes/abc") {
+		t.Fatalf("bash workdir = %v, want it inside the workspace", got)
 	}
 }
