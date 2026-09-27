@@ -26,7 +26,10 @@ import (
 // Until then, relative paths are MADE workspace-relative before the tool runs.
 
 // pathArgs are the argument names the builtins resolve as filesystem paths.
-var pathArgs = []string{"path"}
+// `workdir` is bash's: a relative one was resolved against the server's cwd, so
+// `workdir: fixes/x` failed with "no such file" although fixes/x was right
+// there in the workspace — and a reviewer concluded the fix did not exist.
+var pathArgs = []string{"path", "workdir"}
 
 // pinPaths rewrites a tool call's relative path arguments to sit inside
 // workdir. It returns nil when nothing needed changing.

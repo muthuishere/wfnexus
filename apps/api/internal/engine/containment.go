@@ -88,6 +88,9 @@ func containmentGuardrail(workdir string, mounts ...string) agents.Guardrail {
 			}
 			return ""
 		}
+		if wd, _ := ev.Args["workdir"].(string); wd != "" && outside(root, resolveIn(root, wd)) {
+			return deny(ev.Name, wd)
+		}
 		cmd, _ := ev.Args["command"].(string)
 		// An absolute path outside the workspace needs no directory change at
 		// all. Measured escapes this catches, all of which the directory-change
