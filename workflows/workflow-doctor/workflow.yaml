@@ -95,7 +95,7 @@ steps:
             type: object
             required: [finding, cause, explanation, evidence, fixable, fix_now, repo, smallest_fix]
             properties:
-              finding:      { type: string }
+              finding:      { type: string, pattern: "^[0-9a-f]{12}$", description: "the finding's id from findings.json, exactly — nothing else" }
               cause:        { type: string, enum: [workflow_bug, platform_bug, needs_secret, transient, reported_outage, incomplete, untracked, unknown] }
               explanation:  { type: string }
               evidence:     { type: array, items: { type: string } }
