@@ -29,9 +29,26 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 		if got != want {
 			t.Errorf("%+v: got %q, want %q", c.p, got, want)
 		}
-		if cfg.Env[len(cfg.Env)-1] != "K=V" || cfg.Model != "m" {
+		// the step's env is carried, and last, so it overrides a preset's own
+		if len(cfg.Env) == 0 || cfg.Env[len(cfg.Env)-1] != "K=V" || cfg.Model != "m" {
 			t.Errorf("%+v: env/model not carried: %+v", c.p, cfg)
 		}
+	}
+}
+
+// Every ACP prompt is the whole request, so in one long session opencode's
+// history compounded until its compaction agent killed the process mid-step.
+// The opencode preset opens a fresh session per turn; devin (unmeasured)
+// keeps its old behaviour; any entry can opt in with sessionPerTurn.
+func TestTheOpencodePresetStartsAFreshSessionEachTurn(t *testing.T) {
+	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", nil); !cfg.SessionPerTurn {
+		t.Error("the opencode preset must open a fresh session per turn")
+	}
+	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "devin"}, "m", "/w", nil); cfg.SessionPerTurn {
+		t.Error("devin must keep its long-lived session")
+	}
+	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Command: []string{"x"}, SessionPerTurn: true}, "m", "/w", nil); !cfg.SessionPerTurn {
+		t.Error("a registry entry's sessionPerTurn must reach the adapter")
 	}
 }
 

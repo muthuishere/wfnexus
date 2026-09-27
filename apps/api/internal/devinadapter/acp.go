@@ -73,6 +73,8 @@ type ACPPreset struct {
 	Install string
 	// Env is added to the agent's environment before the step's own env.
 	Env []string
+	// SessionPerTurn: see ACP.SessionPerTurn.
+	SessionPerTurn bool
 }
 
 // opencodeAsAModel denies every tool opencode has of its own. wfnexus drives an
@@ -92,8 +94,11 @@ var ACPPresets = map[string]ACPPreset{
 	"devin": {Bin: "devin", Argv: []string{"acp"}, ModelFlag: "--model", Mode: ACPModeBypass,
 		Install: "curl -fsSL https://cli.devin.ai/install.sh | bash"},
 	// opencode offers every provider it is configured for (~680), free ones included.
+	// A fresh session per turn stops its history compounding (every prompt is
+	// the whole request) until its compaction agent kills the process.
 	"opencode": {Bin: "opencode", Argv: []string{"acp"}, Mode: "build",
-		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel}},
+		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel},
+		SessionPerTurn: true},
 	// codex speaks ACP through Zed's adapter; it uses codex's own login.
 	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
 		Install: "npm i -g @openai/codex && codex login"},
@@ -132,6 +137,12 @@ type ACP struct {
 	// a precaution is an open question (toolnexus ADR 0025 gate 1) — this flag
 	// is how it gets measured rather than assumed.
 	NoSupersede bool
+	// SessionPerTurn opens a fresh session for every turn, in the same
+	// process. Each prompt is already the complete request, so a long-lived
+	// session only piles up copies of it — opencode's grew until its own
+	// compaction agent ran and the process died mid-step. No supersede marker
+	// is needed: the fresh session has seen nothing to supersede.
+	SessionPerTurn bool
 	// AllowNativeTools answers the agent's session/request_permission with
 	// ALLOW. Off by default: the platform's loop executes the tools, and the
 	// step's allowlist and guardrails exist only there. An agent's own shell
@@ -182,6 +193,33 @@ type ACPAgent struct {
 	// model the session is on after start.
 	models  []ACPModel
 	current string
+
+	cwd            string  // the session's working directory, kept for fresh sessions
+	turnsInSession int     // prompts sent into the current session
+	stderr         tailBuf // the last few KB the agent wrote to stderr, for a death notice
+}
+
+// tailBuf keeps the last 4 KB written to it. An agent that dies says why on
+// stderr; discarding that turned every crash into a bare "broken pipe".
+type tailBuf struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (t *tailBuf) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > 4096 {
+		t.buf = t.buf[len(t.buf)-4096:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuf) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
 }
 
 // ACPModel is one model an ACP agent offers.
@@ -227,13 +265,19 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	if err := a.start(ctx, t.Workdir); err != nil {
 		return "", err
 	}
+	if a.cfg.SessionPerTurn && a.turnsInSession > 0 {
+		if err := a.newSession(ctx); err != nil {
+			return "", a.withStderr(err)
+		}
+	}
+	a.turnsInSession++
 
 	a.chunksMu.Lock()
 	a.chunks.Reset()
 	a.chunksMu.Unlock()
 
 	prompt := t.Prompt
-	if (t.Index > 1 || t.Attempt > 1) && !a.cfg.NoSupersede {
+	if (t.Index > 1 || t.Attempt > 1) && !a.cfg.NoSupersede && !a.cfg.SessionPerTurn {
 		// The session remembers the previous turns, and each of our prompts is
 		// a COMPLETE request rather than a delta — so the agent is looking at
 		// what appears to be the same question again with one more message on
@@ -245,7 +289,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 		"sessionId": a.session,
 		"prompt":    []any{map[string]any{"type": "text", "text": prompt}},
 	}); err != nil {
-		return "", err
+		return "", a.withStderr(err)
 	}
 
 	a.chunksMu.Lock()
@@ -328,7 +372,7 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("devin-acp: start: %w", err)
 	}
-	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	go func() { _, _ = io.Copy(&a.stderr, stderr) }()
 
 	a.cmd, a.stdin, a.started = cmd, stdin, true
 	a.procMu.Lock()
@@ -351,36 +395,58 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 		return fmt.Errorf("devin-acp: initialize: %w", err)
 	}
 
-	raw, err := a.call(startCtx, "session/new", map[string]any{
-		"cwd": cwd, "mcpServers": []any{},
+	a.cwd = cwd
+	if err := a.newSession(startCtx); err != nil {
+		a.started = false
+		return err
+	}
+	return nil
+}
+
+// newSession opens a session in the running process, puts it on the
+// configured model and sets its mode — at start, and before every turn when
+// SessionPerTurn is set.
+func (a *ACPAgent) newSession(ctx context.Context) error {
+	raw, err := a.call(ctx, "session/new", map[string]any{
+		"cwd": a.cwd, "mcpServers": []any{},
 	})
 	if err != nil {
-		a.started = false
 		return fmt.Errorf("devin-acp: session/new: %w", err)
 	}
 	var sess struct {
 		SessionID string `json:"sessionId"`
 	}
 	if err := json.Unmarshal(raw, &sess); err != nil || sess.SessionID == "" {
-		a.started = false
 		return fmt.Errorf("devin-acp: session/new returned no session id")
 	}
 	a.session = sess.SessionID
+	a.turnsInSession = 0
 	a.models, a.current = parseModels(raw)
 
 	if a.cfg.ModelFlag == "" && a.cfg.Model != "" && a.cfg.Model != a.current {
-		if err := a.selectModel(startCtx); err != nil {
-			a.started = false
+		if err := a.selectModel(ctx); err != nil {
 			return err
 		}
 	}
 
 	// A failure here is not fatal: the mode is a convenience, and a build
 	// without set_mode still works — it just may stop to ask.
-	_, _ = a.call(startCtx, "session/set_mode", map[string]any{
+	_, _ = a.call(ctx, "session/set_mode", map[string]any{
 		"sessionId": a.session, "modeId": a.cfg.Mode,
 	})
 	return nil
+}
+
+// withStderr appends what the agent last wrote to stderr when it has died:
+// "broken pipe" alone names the symptom and hides the cause.
+func (a *ACPAgent) withStderr(err error) error {
+	tail := a.stderr.String()
+	msg := err.Error()
+	died := strings.Contains(msg, "broken pipe") || strings.Contains(msg, "closed its output")
+	if tail == "" || !died {
+		return err
+	}
+	return fmt.Errorf("%w; the agent's last stderr: %s", err, tail)
 }
 
 // selectModel puts the session on cfg.Model over the protocol:
@@ -667,7 +733,7 @@ func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) 
 
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id,
-		"result":  map[string]any{"outcome": outcome},
+		"result": map[string]any{"outcome": outcome},
 	})
 	if err != nil {
 		return

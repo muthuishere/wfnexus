@@ -60,13 +60,17 @@ for line in sys.stdin:
     if method=="initialize":
         send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1}})
     elif method=="session/new":
-        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"sess-1"}})
+        sessions=globals().get("sessions",0)+1; globals()["sessions"]=sessions
+        log.write("SESSION sess-%d\n" % sessions); log.flush()
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"sess-%d" % sessions}})
     elif method=="session/set_mode":
         log.write("MODE "+m["params"]["modeId"]+"\n"); log.flush()
         send({"jsonrpc":"2.0","id":mid,"result":{}})
     elif method=="session/prompt":
         text=m["params"]["prompt"][0]["text"]
-        log.write("PROMPT "+json.dumps(text)+"\n"); log.flush()
+        log.write("PROMPT "+m["params"]["sessionId"]+" "+json.dumps(text)+"\n"); log.flush()
+        if text.endswith("DIE"):
+            sys.stderr.write("fatal: context overflow in compaction\n"); sys.stderr.flush(); sys.exit(3)
         reply=replies[n] if n<len(replies) else replies[-1]
         n+=1
         # stream it in two chunks, with noise the client must ignore
@@ -170,6 +174,46 @@ func TestAnEmptyACPTurnIsRepairedNotFatal(t *testing.T) {
 	}
 	if out := readLog(t, log); !strings.Contains(out, "no reply at all") {
 		t.Error("the repair prompt did not tell the agent why its turn was rejected")
+	}
+}
+
+// Every prompt is the COMPLETE request, so a stateful session only accumulates
+// copies of it; live, opencode's grew until its compaction agent ran and the
+// process died. SessionPerTurn opens a fresh session per turn in the SAME
+// process, and sends no supersede marker (there is nothing to supersede).
+func TestACPSessionPerTurnOpensAFreshSessionInOneProcess(t *testing.T) {
+	bin, log := fakeACP(t, []string{answer("one"), answer("two")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, SessionPerTurn: true})
+	defer acp.Close()
+	for i := 1; i <= 2; i++ {
+		if _, err := acp.Execute(context.Background(), devinadapter.Turn{Index: i, Attempt: 1, Prompt: "turn", Workdir: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := readLog(t, log)
+	if n := strings.Count(out, "ARGV "); n != 1 {
+		t.Errorf("process started %d times, want 1", n)
+	}
+	if !strings.Contains(out, "PROMPT sess-1 ") || !strings.Contains(out, "PROMPT sess-2 ") {
+		t.Errorf("turn 2 did not get a fresh session:\n%s", out)
+	}
+	if strings.Contains(out, "SUPERSEDES") {
+		t.Error("a fresh session has nothing to supersede; the marker only adds noise")
+	}
+}
+
+// An agent that dies says why on stderr. The client used to discard it, so a
+// crash surfaced as a bare "broken pipe" with the cause thrown away.
+func TestACPDeathCarriesTheAgentsStderr(t *testing.T) {
+	bin, _ := fakeACP(t, []string{answer("never")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+	_, err := acp.Execute(context.Background(), devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "please DIE", Workdir: t.TempDir()})
+	if err == nil {
+		t.Fatal("a dead agent returned no error")
+	}
+	if !strings.Contains(err.Error(), "context overflow in compaction") {
+		t.Fatalf("the agent's stderr is not in the error: %v", err)
 	}
 }
 
