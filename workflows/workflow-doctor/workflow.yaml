@@ -176,12 +176,14 @@ steps:
       committed as it is: replace the literal with a reference by NAME —
       `${NAME}` under the step's env: in workflow.yaml, `os.environ["NAME"]`
       in a script, and no default that repeats the value. Name it for what it
-      is (PROM_URL, not whichever name sec matched). `wfx env --project <p>`
-      lists the names the store holds; a name it lacks goes in `needs_env`.
+      is (PROM_URL, not whichever name sec matched). Run `wfx env --project <p>`
+      FIRST and use a name the store already holds when one fits; only a name
+      it lacks goes in `needs_env`. Search the whole folder for the value
+      (`sec seal <file> --check` on every file), defaults and comments included.
       Never print, echo or copy a value to find out what it is.
 
-      A finding in ./findings.json with `previous_review` was fixed before and a
-      reviewer blocked it: that text is your brief. Address every point in it,
+      A finding in ./findings.json with `previous_review` was attempted before
+      and failed verify or was blocked by the reviewer: that text is your brief. Address every point in it,
       and say how in the summary.
 
       One commit per finding, message: what was broken, the evidence, the fix.

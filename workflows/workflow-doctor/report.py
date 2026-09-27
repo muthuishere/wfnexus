@@ -33,6 +33,8 @@ def main():
     merged = set(load("merged.json", {}).get("merged", []))
     blocked = {v["finding"]: v["reason"] for v in load("review.json", {}).get("verdicts", []) if v.get("verdict") == "block"}
 
+    failed_proof = {r["finding"]: "; ".join(f"{c['check']}: {c['detail'][-300:]}" for c in r["checks"] if not c["ok"])
+                    for r in load("verify.json", {}).get("results", []) if not r.get("ok")}
     if not found["findings"]:
         print("healthy: nothing broken since", found.get("since", "the last look"))
     person = []
@@ -45,7 +47,9 @@ def main():
         elif f["id"] in prs:
             line = f"PR      {what} — {prs[f['id']]} (awaiting merge)"
         elif f["id"] in blocked:
-            line = f"BLOCKED {what} — reviewer: {blocked[f['id']]}"
+            line = f"BLOCKED {what} — reviewer: {blocked[f['id']][:200]}"
+        elif f["id"] in failed_proof:
+            line = f"UNPROVEN {what} — {failed_proof[f['id']][:200]}"
         else:
             line = f"OPEN    {what} — {cause}"
             if f.get("needs_secret"):
@@ -70,10 +74,15 @@ def main():
                 if f["kind"] in ("incomplete", "untracked", "load_problem") and f["id"] in diag and not diag[f["id"]].get("fix_now")}
     # what is still broken is carried to the next look, so moving last_checked
     # forward never drops an unfixed failure
-    # a reviewer's block is the next attempt's brief: carried with the finding
+    # what stopped this attempt — a failed proof or a reviewer's block — is the
+    # next attempt's brief, carried with the finding
+    failed_proof = {r["finding"]: "; ".join(f"{c['check']}: {c['detail'][-300:]}" for c in r["checks"] if not c["ok"])
+                    for r in load("verify.json", {}).get("results", []) if not r.get("ok")}
     for f in found["findings"]:
-        if f["id"] in blocked:
-            f["previous_review"] = blocked[f["id"]]
+        why = [x for x in (failed_proof.get(f["id"]) and "verify failed — " + failed_proof[f["id"]],
+                           blocked.get(f["id"]) and "reviewer blocked — " + blocked[f["id"]]) if x]
+        if why:
+            f["previous_review"] = " | ".join(why)
     still = [f for f in found["findings"] if f["id"] not in prs and f["kind"] in ("run_failed", "transient")]
     state("open", json.dumps(still))
     if found.get("checked_at"):
