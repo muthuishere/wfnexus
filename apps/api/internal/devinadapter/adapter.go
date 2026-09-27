@@ -42,6 +42,7 @@ package devinadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -181,6 +182,13 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	prompt := BuildPrompt(requestBody)
 	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
 		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
+		if errors.Is(err, ErrEmptyTurn) && ctx.Err() == nil {
+			// Not a dead backend: the agent stopped without answering, usually
+			// after its own tools were refused. Say so, and ask again.
+			lastErr = fmt.Errorf("%w: your turn ended with no reply at all. Your own tools are not available here — every request to use them is refused. The CALLER runs the functions in the request's \"tools\": put the calls in your <openai_response>", ErrUnparseable)
+			prompt = BuildRepairPrompt(requestBody, "", lastErr)
+			continue
+		}
 		if err != nil {
 			return toolnexus.InProcessResponse{}, err
 		}

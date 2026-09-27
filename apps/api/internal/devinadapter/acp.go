@@ -43,6 +43,12 @@ import (
 	"time"
 )
 
+// ErrEmptyTurn is a turn that ended without a single word of reply. An agent
+// whose own tool requests were all refused often does exactly this — it
+// stops rather than answering — so the adapter treats it as a reply to
+// repair, not as a dead backend.
+var ErrEmptyTurn = errors.New("the session produced no text")
+
 // ACPMode is a devin session mode. Bypass is the default here for the same
 // reason PermissionBypass is: nothing is driving this interactively, so a
 // permission prompt would simply hang until the turn times out.
@@ -247,7 +253,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	a.chunksMu.Unlock()
 
 	if strings.TrimSpace(out) == "" {
-		return "", fmt.Errorf("devin-acp: the session produced no text")
+		return "", fmt.Errorf("devin-acp: %w", ErrEmptyTurn)
 	}
 	return strings.TrimSpace(out), nil
 }

@@ -147,6 +147,32 @@ func TestACPReusesOneProcessAcrossTurns(t *testing.T) {
 	}
 }
 
+// An agent whose own tool requests were all refused often just stops: the turn
+// ends with no text. That is a reply to repair, not a dead backend — live,
+// opencode did exactly this on the first turn of a step and failed the run.
+// The repair tells it why and asks again, in the same session.
+func TestAnEmptyACPTurnIsRepairedNotFatal(t *testing.T) {
+	bin, log := fakeACP(t, []string{"", answer("second time lucky")})
+	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	defer acp.Close()
+
+	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: t.TempDir()})
+	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "say something", tk)
+	if err != nil {
+		t.Fatalf("an empty turn killed the run: %v", err)
+	}
+	if !strings.Contains(res.Text, "second time lucky") {
+		t.Fatalf("final text = %q", res.Text)
+	}
+	if out := readLog(t, log); !strings.Contains(out, "no reply at all") {
+		t.Error("the repair prompt did not tell the agent why its turn was rejected")
+	}
+}
+
 // Thought chunks and tool narration are not the reply.
 func TestACPIgnoresNonMessageUpdates(t *testing.T) {
 	bin, _ := fakeACP(t, []string{answer("just the answer")})
