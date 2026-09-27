@@ -185,8 +185,13 @@ def main():
                     error="workflow folder is not in git", signature="untracked")
 
     for f in carried:
-        if f.get("id") and f["id"] not in findings and f["id"] not in handled and f.get("kind") in ("run_failed", "transient"):
-            findings[f["id"]] = f  # still broken until a fix merges; a new run of it would re-add it anyway
+        if not f.get("id") or f["id"] in handled or f.get("kind") not in ("run_failed", "transient"):
+            continue
+        if f["id"] in findings:  # it failed again: keep what the last reviewer said
+            if f.get("previous_review"):
+                findings[f["id"]]["previous_review"] = f["previous_review"]
+        else:
+            findings[f["id"]] = f  # still broken until a fix merges
     for f in findings.values():
         gather_evidence(f)
     out = {"checked_at": now.isoformat(), "since": since, "findings": list(findings.values())}

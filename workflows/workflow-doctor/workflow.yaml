@@ -180,6 +180,10 @@ steps:
       lists the names the store holds; a name it lacks goes in `needs_env`.
       Never print, echo or copy a value to find out what it is.
 
+      A finding in ./findings.json with `previous_review` was fixed before and a
+      reviewer blocked it: that text is your brief. Address every point in it,
+      and say how in the summary.
+
       One commit per finding, message: what was broken, the evidence, the fix.
       No Co-authored-by line. Submit the fixes; do not write a file.
     output_schema:
