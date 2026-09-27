@@ -526,7 +526,7 @@ func startRun(args []string) error {
 	r := created.Run
 	fmt.Printf("run %s started (%s)\n", r.ID, name)
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(r.ID)
+		return follow(r.ID, false)
 	}
 	fmt.Printf("follow it with:  wfx logs %s -f\n", r.ID)
 	return nil
@@ -621,15 +621,19 @@ func logs(args []string) error {
 		return fmt.Errorf("usage: wfx logs <run-id> [-f]")
 	}
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(id)
+		return follow(id, false)
 	}
-	return follow(id) // the stream replays the backlog, then ends when cancelled
+	return follow(id, true) // what happened so far, then exit — even while the run is still going
 }
 
 // follow streams the run's activity. The SSE endpoint replays everything that
 // already happened before live events, so a late follower sees the whole run.
-func follow(id string) error {
-	res, err := http.Get(base() + "/api/runs/" + id + "/events?after=0")
+func follow(id string, once bool) error {
+	q := "?after=0"
+	if once {
+		q += "&once=1"
+	}
+	res, err := http.Get(base() + "/api/runs/" + url.PathEscape(id) + "/events" + q)
 	if err != nil {
 		return err
 	}

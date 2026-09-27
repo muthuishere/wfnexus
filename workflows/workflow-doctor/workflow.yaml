@@ -72,9 +72,9 @@ steps:
         otherwise say what is missing.
       - untracked: a workflow folder not in git. Fixable: add it on a branch.
 
-      Evidence: `wfx show <run>`, `curl -s $WFX_API/api/runs/<run>/events`
-      (WFX_API defaults to http://127.0.0.1:8090), the workflow's directory,
-      and the repo. Never read a vault/ directory or a .env/credentials file.
+      Evidence: `wfx show <run>`, `wfx logs <run>` (what the run did, then it
+      exits), the workflow's directory, and the repo. Never curl
+      /api/runs/<id>/events without `once=1`: it is a live stream and does not end. Never read a vault/ directory or a .env/credentials file.
 
       fixable = true only for workflow_bug, platform_bug, and untracked, or an
       incomplete folder whose definition is clear. Rank fixable ones by count ×

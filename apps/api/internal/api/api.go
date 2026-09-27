@@ -929,6 +929,11 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			last = ev.ID
 		}
 	}
+	// once=1 is the backlog as a finite response: a script or an agent reading
+	// what a run did must get an answer, not a stream that never ends.
+	if r.URL.Query().Get("once") == "1" {
+		return
+	}
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
 	for {
