@@ -1,0 +1,28 @@
+# Asked of every requirement by `wfx judge` (JEV, calibrated). The state is built
+# by judge.py from facts a machine gathered: the requirement text READ FROM THE
+# SPEC FILE, the code and test lines the mapper cited READ FROM THOSE FILES, the
+# spec's and the code's last commits, and other spec statements naming the same
+# tokens. A choice comes back with a band (sure / unsure); an unsure verdict is
+# shown to a person, never acted on silently.
+verdict:
+  type: choice
+  instructions: >-
+    Compare the requirement with the code evidence. Which of these is true?
+    Judge only from the quoted lines and facts, not from what code usually does.
+  options:
+    conforms: the quoted code does what the requirement says (or, for an ADR decision, the code follows the decision)
+    code_violates_spec: code exists for this behaviour but does something different from what the requirement says, and nothing shows the difference was deliberate
+    spec_outdated: the code does something different AND the evidence shows it moved on deliberately (a later commit, a test asserting the new behaviour, or a newer ADR), so the requirement text is what is stale
+    conflict: the requirement contradicts another spec statement or ADR quoted in the evidence, so no code can satisfy both
+    unimplemented: the requirement is behaviour THIS repository is responsible for, and no code in it implements it
+    untestable_vague: the requirement is advice, aspiration or too vague to check against code, or it describes something this repository does not own (a third-party file format or library behaviour, or guidance for a person or agent writing files)
+action:
+  type: choice
+  instructions: >-
+    If the requirement and the code disagree, which is the smallest correct way
+    to make them agree again?
+  options:
+    none: they already agree; change nothing
+    change_code: the requirement is right; fix the code (and add a test) to do what it says
+    change_spec: the code is right; edit the requirement so it describes what the code deliberately does
+    clarify: a person must decide what the product should do (the requirement is vague, or two sources contradict)

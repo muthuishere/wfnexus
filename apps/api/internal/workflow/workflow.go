@@ -1174,8 +1174,15 @@ func rewriteStepPaths(text string) string {
 // referencing a field the schema does not declare simply loses that sentence,
 // and the agent reads a question with a hole in it. Nobody notices. That is
 // what RenderStrict is for.
+//
+// "Empty" has to be enforced: for a map[string]any (.Input, .Output) Go's
+// missingkey=zero yields a nil interface, which text/template PRINTS as the
+// literal "<no value>". An optional input left unset therefore reached a
+// shell step as BASE='<no value>' and `gh pr create --base '<no value>'`
+// failed on a live run. A missing value renders as nothing, as documented.
 func Render(text string, data TemplateData) (string, error) {
-	return render(text, data, "missingkey=zero")
+	out, err := render(text, data, "missingkey=zero")
+	return strings.ReplaceAll(out, "<no value>", ""), err
 }
 
 // RenderStrict is the CHECKING render: a missing key is an error naming the

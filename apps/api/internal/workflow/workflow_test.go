@@ -231,6 +231,19 @@ func TestRenderMissingFieldsDoNotExplode(t *testing.T) {
 	}
 }
 
+// An optional input the caller left out renders EMPTY, not Go's "<no value>":
+// a run step's BASE='{{ .Input.base_branch }}' must test as unset.
+func TestRenderMissingInputRendersEmpty(t *testing.T) {
+	data := TemplateData{Input: map[string]any{"set": "x"}, Output: map[string]any{}}
+	got, err := Render(`[{{ .Input.base_branch }}][{{ .Input.set }}][{{ .Output.detail }}]`, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "[][x][]" {
+		t.Fatalf("render = %q, want [][x][]", got)
+	}
+}
+
 func TestRenderSkippedStepRendersEmptyNotError(t *testing.T) {
 	// a skip_to gate can bypass a step a later prompt references
 	data := TemplateData{Steps: map[string]any{"ran": map[string]any{"value": "here"}}}

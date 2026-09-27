@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -78,6 +79,37 @@ func TestNeedsInputGatePausesThenResumes(t *testing.T) {
 	updated, _ := h.store.GetRun(context.Background(), run.ID)
 	if !strings.Contains(string(updated.Input), "v2.1") {
 		t.Fatalf("answer not merged into run input: %s", updated.Input)
+	}
+}
+
+// `wfx answer` resolves a run parked by a needs_input GATE (no ask_human
+// request stored): the gate's message is the question, the answer lands in
+// input.answers, and the step re-runs.
+func TestAnswerResolvesANeedsInputGate(t *testing.T) {
+	def := gated("gateanswer",
+		workflow.Gate{Field: "valid", Equals: false, Action: "needs_input", Message: "Which base branch?"},
+		nextStep("fix"))
+	llm := newFakeLLM(t,
+		submit(map[string]any{"valid": false, "missing": []any{}}), finish(),
+		submit(map[string]any{"valid": true, "missing": []any{}}), finish(),
+		submit(map[string]any{"ok": true}), finish(),
+	)
+	h := newHarness(t, def, llm, "")
+	run := h.run(nil)
+	if run.Status != "needs_input" {
+		t.Fatalf("run = %s, want needs_input", run.Status)
+	}
+	if err := h.eng.AnswerQuestion(context.Background(), run.ID, "triage",
+		tn.Answer{Ok: true, Data: map[string]any{tn.RelayOutputKey: "use dev"}}, Actor{ID: "alice", Via: "test"}); err != nil {
+		t.Fatalf("answering a gate-parked step: %v", err)
+	}
+	run = h.wait(run.ID)
+	if run.Status != "done" {
+		t.Fatalf("after the answer run = %s (%s)", run.Status, run.Error)
+	}
+	updated, _ := h.store.GetRun(context.Background(), run.ID)
+	if !strings.Contains(string(updated.Input), "Which base branch?") || !strings.Contains(string(updated.Input), "use dev") {
+		t.Fatalf("question and answer not in input.answers: %s", updated.Input)
 	}
 }
 

@@ -1,0 +1,470 @@
+# spec-drift-finder — every spec requirement checked against the code; a person decides which side changes.
+#
+# THE IDEA (the owner's)
+#   Specs rot in both directions: the code breaks a requirement nobody re-read, or the
+#   code moved on deliberately and the spec still describes last quarter. Finding that
+#   needs judgement per requirement, and FIXING it needs a person, because a spec is
+#   a product decision, not a lint finding.
+#
+# WHAT THIS DOES BETTER THAN "ASK AN AGENT TO READ THE SPECS"
+#   1. Requirements are split out by CODE (collect.py), each with file:line: OpenSpec
+#      SHALL/MUST sentences and WHEN/THEN scenarios, checked tasks of open changes, ADR
+#      decisions, rules and table rows of plain spec docs, OpenAPI operations. The count
+#      is fixed before any model runs, so "exhaustive" is checkable.
+#   2. Mapping fans out one mapper per spec file, and coverage.py (code) proves every
+#      requirement got a reading; the gaps get a second, typed pass. Cited locations
+#      that do not exist are dropped, never trusted.
+#   3. The verdict is a calibrated classifier (JEV) over evidence READ FROM THE FILES by
+#      code — the requirement text, the cited code/test lines, git history of both, and
+#      other spec statements naming the same tokens (how a conflict becomes visible) —
+#      never the mapper's paraphrase. Six verdicts: conforms, code_violates_spec,
+#      spec_outdated, conflict, unimplemented, untestable_vague.
+#   4. The decision table is code. Anything that would change a spec, every conflict,
+#      every unimplemented/vague item and every unsure verdict goes to a PERSON, who
+#      picks change_code / change_spec / skip per item. Only a code fix the classifier
+#      is sure about defaults to approved — and it is still listed and can be overridden.
+#   5. Code fixes come with a test; spec fixes are the smallest edit, and in an OpenSpec
+#      repo they are a change delta under openspec/changes/, never an in-place rewrite
+#      of a living or archived spec. One commit per requirement.
+#   6. Verified independently: every commit stays in its lane, the suite stays green,
+#      and every changed requirement is RE-JUDGED with the same evidence builder and must
+#      come out `conforms`. Then a different model reviews the diff, every change claim
+#      is checked against its commit, and the PR body is written by code.
+#   7. Two human gates (the decisions, the publish); dry_run stops before any push.
+#
+# Needs: git, python3, gh (duplicate check + publish), TYPESAFE_API_KEY or
+# OPENROUTER_API_KEY for `wfx judge`, and `wfx` on the PATH of the machine running it.
+name: spec-drift-finder
+template:
+  title: Spec drift finder — specs vs code, a person decides
+  category: development
+  summary: >-
+    Splits every spec (OpenSpec, ADRs, SPEC docs, API contracts) into atomic
+    requirements, maps each to code, gets a calibrated verdict with evidence, asks a
+    person change-code-or-change-spec per item, makes the minimal fix, re-proves each
+    requirement conforms, and opens one PR behind approval.
+  fill:
+    - "extra_specs: documents this repo treats as specs that the default globs miss"
+    - "test_cmd: the suite command, if auto-detection (Taskfile test / go / cargo / npm / pytest) picks the wrong one"
+    - "TYPESAFE_API_KEY (or OPENROUTER_API_KEY) in the env store for the calibrated verdicts"
+
+description: >-
+  Finds every spec in the repository, splits it into atomic requirements with
+  file:line, maps each requirement to the code that implements it (one mapper per
+  spec file, coverage proven by code), classifies each with a calibrated verdict
+  over evidence read from the files, recommends change_code / change_spec /
+  clarify with the smallest edit, and asks a person to decide every item that
+  touches a spec. Makes the minimal code fix (with a test) or spec edit (an
+  OpenSpec change delta where that is the convention), proves the suite stays
+  green and every changed requirement now conforms, has a different model review
+  it, and opens a PR with the requirement → verdict → decision → change table.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1"
+      input: { dry_run: false }
+
+input_schema:
+  type: object
+  properties:
+    repo_path:        { type: string,  title: "Local repo path (the run works in its own worktree)" }
+    repo_url:         { type: string,  title: "…or a repo URL to clone" }
+    base_branch:      { type: string,  title: "PR base (default: the repository's default branch)" }
+    extra_specs:      { type: string,  title: "More spec files/globs, comma-separated (e.g. references/json-schema.md)" }
+    exclude:          { type: string,  title: "Never read as specs (comma globs)", default: "openspec/changes/archive/**,**/node_modules/**,**/vendor/**,.wfx-*/**,**/README.md,**/INDEX.md,**/template*.md" }
+    max_requirements: { type: integer, title: "Check at most this many requirements (0 = all; the rest are listed as unchecked)", default: 0 }
+    test_cmd:         { type: string,  title: "Suite command (default: auto-detect)" }
+    decisions:        { type: string,  title: "Decisions up front, e.g. 'R012=change_code rest=skip' (otherwise the run asks)" }
+    pr_prefix:        { type: string,  title: "PR title prefix (also the duplicate check)", default: "[spec-drift]" }
+    dry_run:          { type: boolean, title: "Dry run — commit on the run's branch, write the PR body, push nothing", default: true }
+    isolate:          { type: boolean, title: "Work in a throwaway git worktree", default: true }
+
+steps:
+  # 1 ── collect: every spec, split into requirements (code) ───────────────────
+  - id: collect
+    name: Collect specs and split into requirements
+    description: OpenSpec specs + open changes, SPEC docs, ADR decisions, API contracts — atomic requirements with file:line; baseline suite.
+    timeout_sec: 3600
+    run: |
+      printf '*\n' > .wfx-spec-drift/.gitignore
+      if gh pr list --state open --search '{{ .Input.pr_prefix }} in:title' --json title -q '.[].title' 2>/dev/null | grep -qF '{{ .Input.pr_prefix }}'; then
+        echo "a {{ .Input.pr_prefix }} PR is already open — nothing to do until it merges"; exit 78
+      fi
+      EXTRA_SPECS='{{ .Input.extra_specs }}' EXCLUDE='{{ .Input.exclude }}' MAX_REQUIREMENTS='{{ .Input.max_requirements }}' \
+      TEST_CMD='{{ .Input.test_cmd }}' BRANCH="wfx/spec-drift-$(printf %.8s '{{ .RunID }}')" \
+        python3 .wfx-spec-drift/collect.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Collect failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 2 ── map: one mapper per spec file (fan-out), writing a reading per requirement ──
+  - id: map
+    name: Map every requirement to code (one mapper per spec file)
+    description: Fan out a read-only mapper per spec file; each writes code/test file:line (or none) for every requirement id it was given.
+    skills: [repo-navigator]
+    tools: [read, grep, glob, bash, write]
+    max_turns: 60
+    budget: { max_turns: 60, max_children: 24, max_concurrent: 4 }
+    timeout_sec: 3600
+    soul: >-
+      You coordinate; you do not map requirements yourself. You hand each spec file to
+      its own mapper, check by the machine's count that every requirement came back,
+      and send the missing ones out again.
+    team:
+      - id: mapper
+        does: "Maps ONE spec file's requirements to code: for every requirement id given, the file:line that implements it and the tests that exercise it, or that there is none. Writes one JSON line per requirement. Never edits code."
+        soul: "You trust only the source. A requirement you have not found in code is `missing`, not guessed. You read the line before you cite it."
+        tools: [read, grep, glob, bash, write]
+        budget: { max_turns: 60 }
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git reset", "git stash", "git push", "sed -i", "rm -"], reason: "mapping only reads the repository; it writes only under .wfx-spec-drift/map/" }
+    prompt: |
+      `.wfx-spec-drift/specs.json` lists the spec files and, for each, the requirement
+      ids (`ids`) split out of it. Each requirement is one line of
+      `.wfx-spec-drift/requirements.jsonl` (id, where = spec file:line, kind, text,
+      and `hints`: tokens it names with the non-spec files where each appears).
+
+      For EVERY spec file with ids, delegate ONE task to `mapper` (run them in
+      parallel), giving it the spec path, its ids, and these instructions verbatim:
+
+        For each requirement id: read its line in .wfx-spec-drift/requirements.jsonl,
+        read the requirement in the spec file, then find the code that implements it
+        (start from `hints`, then grep/read). Read every line you cite. Write ONE JSON
+        object per line to .wfx-spec-drift/map/<spec path with / replaced by _>.jsonl:
+        {"id": "R012", "status": "implemented|partial|missing|not_code",
+         "code_refs": ["path:line" or "path:start-end", ...],
+         "test_refs": ["path:line", ...],
+         "notes": "what the code does, in one or two sentences, with the actual value/behaviour",
+         "moved_on": "if the code differs from the requirement: the commit (git log -S / git log -L), test or ADR showing it changed ON PURPOSE; else empty"}
+        `not_code` = the requirement is guidance for a person or an agent, not behaviour
+        any code implements. Cite the implementing line, not an import or a comment.
+        One line for EVERY id you were given — no id may be left out.
+
+      Then run `python3 .wfx-spec-drift/coverage.py`. If it prints UNMAPPED ids,
+      delegate those ids again (grouped by spec file) and re-run it, until it prints no
+      UNMAPPED line or you have tried twice. Do not map requirements yourself and do not
+      edit any file outside .wfx-spec-drift/map/.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [summary, spec_files_delegated]
+      properties:
+        summary:              { type: string, description: "how many requirements were mapped, and what is still unmapped" }
+        spec_files_delegated: { type: integer }
+
+  - id: coverage
+    name: Prove every requirement was mapped (code)
+    description: Merge the mappers' files; drop cited locations that do not exist; list unmapped ids.
+    timeout_sec: 300
+    run: |
+      python3 .wfx-spec-drift/coverage.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Coverage check failed — {{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: judge }
+
+  - id: map_gaps
+    name: Map the requirements nobody mapped
+    description: Only the ids coverage.py listed; a typed reading per id.
+    skills: [repo-navigator]
+    tools: [read, grep, glob, bash]
+    max_turns: 60
+    timeout_sec: 2400
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git reset", "git push", "sed -i", "rm -"], reason: "mapping only reads" }
+    prompt: |
+      These requirement ids have no mapping yet (from `.wfx-spec-drift/missing.txt`):
+      {{ .Steps.coverage.stdout }}
+
+      For each, read its line in `.wfx-spec-drift/requirements.jsonl` and the
+      requirement in its spec file, find the code that implements it (start from
+      `hints`), read every line you cite, and submit one mapping per id. `status`:
+      implemented | partial | missing | not_code (guidance, not behaviour).
+      `moved_on`: a commit, test or ADR showing the code differs ON PURPOSE, else "".
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [mappings]
+      properties:
+        mappings:
+          type: array
+          items:
+            type: object
+            required: [id, status, code_refs, test_refs, notes]
+            properties:
+              id:        { type: string }
+              status:    { type: string, enum: [implemented, partial, missing, not_code] }
+              code_refs: { type: array, items: { type: string }, description: "path:line" }
+              test_refs: { type: array, items: { type: string } }
+              notes:     { type: string }
+              moved_on:  { type: string }
+
+  # 3 ── judge: a calibrated verdict for every requirement, decision table by code ──
+  - id: judge
+    name: Judge every requirement (JEV) and plan
+    description: Evidence read from the files; six verdicts; the decision table says what a person must decide.
+    timeout_sec: 1800
+    run: |
+      cat > .wfx-spec-drift/gaps.json <<'WFX_GAPS_EOF'
+      {{ json .Steps.map_gaps }}
+      WFX_GAPS_EOF
+      python3 .wfx-spec-drift/coverage.py --final >/dev/null; [ $? -eq 70 ] && exit 70
+      python3 .wfx-spec-drift/judge.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Judging failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 4 ── recommend: why, and the smallest edit, for each non-conforming item ──────
+  - id: recommend
+    name: Recommend change_code / change_spec / clarify with the smallest edit
+    description: For every non-conforming requirement, the reason and the smallest edit on each side. Reads only.
+    skills: [repo-navigator, doc-syncer]
+    tools: [read, grep, glob, bash]
+    max_turns: 60
+    timeout_sec: 2400
+    soul: >-
+      You are the engineer who has to explain to the product owner which side is wrong.
+      You say why in one sentence a person can check, and you propose the smallest edit,
+      never a redesign.
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git reset", "git push", "sed -i", "rm -"], reason: "recommending only reads" }
+    prompt: |
+      `.wfx-spec-drift/plan.json` has every requirement with its verdict. For EVERY
+      row whose `verdict` is not `conforms` (see `.wfx-spec-drift/plan.md`), read the
+      requirement at `where`, the code at `code_refs`/`test_refs`, and the evidence
+      line for its id in `.wfx-spec-drift/evidence.jsonl`. Then submit:
+      - recommendation: change_code (the spec is right), change_spec (the code is right
+        and deliberate), or clarify (a person must decide what the product does);
+      - reason: one sentence with the concrete difference (the value/behaviour each says);
+      - smallest_edit: for change_code the file:line and what changes (and the test to
+        add); for change_spec the exact old words → new words in the spec; for clarify
+        the question the person must answer.
+      One item per non-conforming id. Do not edit any file.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, recommendation, reason, smallest_edit]
+            properties:
+              id:             { type: string }
+              recommendation: { type: string, enum: [change_code, change_spec, clarify] }
+              reason:         { type: string }
+              smallest_edit:  { type: string }
+
+  # 5 ── HUMAN GATE 1: specs belong to the human ─────────────────────────────────
+  - id: decide
+    name: A person decides every item (change_code / change_spec / skip)
+    description: Everything touching a spec, every conflict and every unsure verdict waits for a person; confident code fixes default to approved but are listed.
+    timeout_sec: 300
+    run: |
+      cat > .wfx-spec-drift/recommend.json <<'WFX_REC_EOF'
+      {{ json .Steps.recommend }}
+      WFX_REC_EOF
+      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
+      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      WFX_ANS_EOF
+      cat > .wfx-spec-drift/decisions.txt <<'WFX_DEC_EOF'
+      {{ if .Input.decisions }}{{ .Input.decisions }}{{ end }}
+      WFX_DEC_EOF
+      python3 .wfx-spec-drift/gate.py
+      c=$?; case $c in 0|20|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Decision gate failed — {{ .Output.stderr }}" }
+      - { field: exitCode, equals: 20, action: needs_input, message: "{{ .Output.stdout }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 6 ── act: the minimal change per decided item, one commit each ───────────────
+  - id: act
+    name: Make each decided change (fix-author for code, doc-syncer for specs)
+    description: change_code → minimal fix + a test; change_spec → smallest spec edit (an OpenSpec change delta where that is the convention). One commit per requirement.
+    skills: [fix-author, doc-syncer, repo-navigator]
+    tools: [read, edit, write, grep, glob, bash]
+    max_turns: 150
+    timeout_sec: 5400
+    soul: >-
+      You change exactly what a person decided and nothing else. A code fix is the
+      smallest one that makes the requirement true, with a test that would have caught
+      it. A spec edit changes only the words that are wrong.
+    guardrails:
+      - { deny: bash, args_contain: ["git push", "gh pr", "git add -A", "git add --all", "git add .", "--no-verify", "git reset --hard", "git rebase", "git commit --amend", "git checkout -b"], reason: "one plain commit per decided requirement, staged by name, never pushed" }
+    prompt: |
+      `.wfx-spec-drift/decisions.json` → `decisions`: every non-conforming requirement
+      with `decision.decision` (change_code / change_spec / skip), the reason and the
+      proposed smallest edit. You are on this run's branch, cut from {{ .BaseRef }}.
+      Suite command: see `test_cmd` in `.wfx-spec-drift/baseline.json`.
+
+      Work through the rows whose decision is change_code or change_spec, in id order:
+
+      change_code (follow fix-author): make the smallest code change that makes the
+      requirement (`text`, at `where`) true. Add or extend a test that fails without the
+      fix and passes with it, next to the existing tests for that code. Run the suite.
+      Never edit a spec file in this commit.
+
+      change_spec (follow doc-syncer): the code is right; change only the words of the
+      requirement that are wrong, so it describes what the code does (cite the code line).
+      - If the spec is under `openspec/specs/`, do NOT edit it in place: add the change to
+        ONE OpenSpec change for this run, `openspec/changes/spec-drift-{{ printf "%.8s" .RunID }}/`:
+        `proposal.md` (## Why — the drift found; ## What Changes — one bullet per
+        requirement) and `specs/<capability>/spec.md` with `## MODIFIED Requirements`
+        holding the WHOLE `### Requirement: <exact same name>` block as it should now
+        read, scenarios included. Never touch openspec/changes/archive/.
+      - Otherwise edit the spec document in place, smallest edit.
+      Never edit code in a change_spec commit.
+
+      After each requirement: stage the files BY NAME (`git add <path>`; never -A/.; never
+      anything under .wfx-spec-drift/) and commit with the subject
+      `spec-drift <id>: <change_code|change_spec> — <one line>`. If you cannot make it
+      work (suite red because of your change), undo with `git checkout -- <files>` and
+      record it as failed; never fix forward in unrelated code.
+
+      Append one JSON line per acted requirement to `.wfx-spec-drift/act.jsonl`:
+      {"id", "decision", "status": "done"|"failed", "sha", "summary": "<what changed, one line>",
+       "files": [...], "code_refs": ["path:line of the fixed code"], "test_refs": ["path:line of the test"],
+       "new_text": "<change_spec: the requirement sentence as it now reads>", "new_where": "<file:line of it>",
+       "error": "<if failed>"}
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [done, failed, summary]
+      properties:
+        done:    { type: array, items: { type: string }, description: "id — short sha" }
+        failed:  { type: array, items: { type: string }, description: "id — why" }
+        summary: { type: string }
+
+  # 7 ── verify: lanes, suite, and every changed requirement re-judged ────────────
+  - id: verify
+    name: Prove the branch (lanes, suite, re-judge to conforms)
+    description: Each commit in its lane; suite green before → green after; every changed requirement must now be judged `conforms`.
+    timeout_sec: 3600
+    run: |
+      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
+      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      WFX_ANS_EOF
+      python3 .wfx-spec-drift/verify.py
+      c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Verification failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 20, action: needs_input, message: "The branch did not prove out — {{ .Output.stdout }} (answer accept-verify to continue anyway; the PR will say so)" }
+
+  # 8 ── review: a different model, adversarially ───────────────────────────────
+  - id: review
+    name: Adversarial review on a different model (change-reviewer)
+    description: A different model reviews the diff it did not write, against the decisions and the proof.
+    provider: gemini
+    skills: [change-reviewer]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    timeout_sec: 1800
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git push", "git checkout", "git reset"], reason: "the reviewer reads" }
+    prompt: |
+      Review this branch: `git diff {{ .BaseRef }}..HEAD` and `git log --stat {{ .BaseRef }}..HEAD`.
+      What a person decided: `.wfx-spec-drift/decisions.json` (per requirement id: verdict,
+      decision, reason). The independent proof: `.wfx-spec-drift/verify.json`.
+
+      Follow change-reviewer. For a spec-drift PR, hunt for: a change nobody decided;
+      a code fix that does not actually make the requirement true, or has no test that
+      would fail without it; a spec edit that rewrites more than the wrong words, edits
+      an archived spec, or makes the spec describe a bug; a change_spec commit that
+      touches code or a change_code commit that touches a spec; anything unrelated.
+      `approved: false` only for a blocker, and name the commit.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, verdict, findings]
+      properties:
+        approved: { type: boolean }
+        verdict:  { type: string }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, what]
+            properties:
+              severity: { type: string, enum: [blocker, major, minor, nit] }
+              what:     { type: string }
+              commit:   { type: string }
+    gates:
+      - { field: approved, equals: false, action: needs_input, message: "The reviewer blocked the branch: {{ .Output.verdict }}" }
+
+  # 9 ── the PR body by code, then every change claim checked against its commit ──
+  - id: write_pr
+    name: Write the PR body (code)
+    description: Requirement → verdict → decision → change table, decisions and who made them, proof, review — every number from the run's files.
+    timeout_sec: 300
+    run: |
+      cat > .wfx-spec-drift/review.txt <<'WFX_REV_EOF'
+      {{ .Steps.review.verdict }}
+      WFX_REV_EOF
+      TITLE_PREFIX='{{ .Input.pr_prefix }}' REVIEW="$(cat .wfx-spec-drift/review.txt)" python3 .wfx-spec-drift/prbody.py || exit 70
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Writing the PR body failed — {{ .Output.stderr }}" }
+
+  - id: claims
+    name: Check every change claim against its commit (JEV)
+    description: Does each commit's diff do what the PR row says, and nothing else? The body must name every commit.
+    timeout_sec: 900
+    run: |
+      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
+      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      WFX_ANS_EOF
+      python3 .wfx-spec-drift/claims.py
+      c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 20, action: needs_input, message: "PR claims not supported by their commits — {{ .Output.stdout }} (answer accept-claims to publish anyway; the body will say so)" }
+      - { field: exitCode, equals: 70, action: fail, message: "Claim check failed — {{ .Output.stderr }}" }
+
+  - id: dry_run_stop
+    name: Stop here on a dry run
+    description: A dry run ends with the branch and the PR body — nothing is pushed.
+    run: '[ "{{ .Input.dry_run }}" = "false" ] && { echo "live run: continuing to the publish gate"; exit 0; } || { echo "dry run: stopping before any push"; exit 78; }'
+    gates:
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 10 ── HUMAN GATE 2: the only step that touches the outside world ─────────────
+  - id: publish
+    name: Push and open the PR
+    description: Push this run's branch and open the PR with the code-written, claim-checked body.
+    requires_approval: true
+    timeout_sec: 300
+    run: |
+      (
+        set -e
+        BR=$(git rev-parse --abbrev-ref HEAD)
+        BASE='{{ .Input.base_branch }}'
+        [ -n "$BASE" ] || BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
+        # push over https with gh's credential (works when origin is ssh and no key is loaded)
+        URL=$(gh repo view --json url -q .url)
+        git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push "$URL.git" "HEAD:refs/heads/$BR" 2>&1
+        gh pr create --base "$BASE" --head "$BR" --title "$(cat .wfx-spec-drift/pr-title.txt)" --body-file .wfx-spec-drift/pr-body.md
+      ) || exit 70
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Publishing failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+
+  # 11 ── always: what happened, where to look ───────────────────────────────────
+  - id: report
+    name: Report
+    description: Counts by verdict, decisions, commits, proof and the PR body location — whatever path the run took.
+    run: |
+      D=.wfx-spec-drift
+      echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD)"
+      [ -f $D/specs.json ] && python3 -c "import json;s=json.load(open('$D/specs.json'));print('specs:',len(s['specs']),'requirements:',s.get('total'),'truncated:',s.get('truncated'))"
+      [ -f $D/plan.json ] && python3 -c "
+      import json,collections
+      p=json.load(open('$D/plan.json'))['plan']
+      print('verdicts:',dict(collections.Counter(r['verdict'] for r in p)))"
+      [ -f $D/decisions.json ] && python3 -c "
+      import json
+      for r in json.load(open('$D/decisions.json'))['decisions']: print(' ',r['id'],r['verdict'],'->',r['decision']['decision'],'by',r['decision']['by'])"
+      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: suite',v['suite'].get('before'),'->',v['suite'].get('after'),'re-judge',[(r['id'],r['verdict']) for r in v['rejudge']],'problems',v['problems'])"
+      [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
+      exit 0

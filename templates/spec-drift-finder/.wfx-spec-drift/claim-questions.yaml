@@ -1,0 +1,12 @@
+# Asked of each change the spec-drift PR claims, by `wfx judge` (JEV, calibrated).
+supported:
+  type: noul
+  instructions: >-
+    Does the commit diff do what the PR's claim says, for this requirement, and
+    nothing unrelated to it?
+  "true": >-
+    The diff makes exactly the change the claim describes (a code fix plus its
+    test, or a spec edit), it is about this requirement, and it adds nothing else.
+  "false": >-
+    The diff does something different from the claim, does less than it claims,
+    or also changes unrelated things.

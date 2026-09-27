@@ -628,12 +628,19 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID str
 	if err != nil {
 		return err
 	}
-	if len(st.Pending) == 0 {
-		return fmt.Errorf("step %s is not waiting on a question", stepID)
-	}
 	var req tn.Request
-	if err := json.Unmarshal(st.Pending, &req); err != nil {
-		return err
+	switch {
+	case len(st.Pending) > 0:
+		if err := json.Unmarshal(st.Pending, &req); err != nil {
+			return err
+		}
+	case st.Status == "needs_input":
+		// A needs_input GATE parks the step with its rendered message and no
+		// ask_human request. The message IS the question; without this the CLI
+		// (`wfx answer`) had no way to resolve a gate-parked run at all.
+		req = tn.Request{Kind: "input", Prompt: st.Error}
+	default:
+		return fmt.Errorf("step %s is not waiting on a question", stepID)
 	}
 	// A NOT-OK answer is a real outcome, not a missing one, and its Reason
 	// tells a decline from a timeout — which a bare answer string could not
