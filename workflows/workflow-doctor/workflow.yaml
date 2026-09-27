@@ -136,6 +136,13 @@ steps:
     when:
       - path: prepare.exitCode
         equals: 0
+    # The doctor commits as itself. Without this a commit took whatever user
+    # the owning checkout was configured with — a teammate got the credit.
+    env:
+      GIT_AUTHOR_NAME: wfx workflow-doctor
+      GIT_AUTHOR_EMAIL: workflow-doctor@wfnexus.local
+      GIT_COMMITTER_NAME: wfx workflow-doctor
+      GIT_COMMITTER_EMAIL: workflow-doctor@wfnexus.local
     provider: claude-cli
     skills: [fix-author, test-author, workflow-author, repo-navigator]
     tools: [read, write, edit, grep, glob, bash]
