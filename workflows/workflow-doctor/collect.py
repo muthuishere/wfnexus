@@ -15,6 +15,7 @@ by an agent, because the fix is a person running `wfx env set`, never code.
 Findings already handed to a PR (workflow state `handled`) are not repeated.
 
 Exit 0 = nothing to do. Exit 3 = findings (findings.json and stdout).
+Exit 5 = another doctor run is active, so this one does nothing.
 Env: WFX_API (http://127.0.0.1:8090), SINCE_HOURS (24, first look only).
 """
 import datetime as dt
@@ -110,6 +111,19 @@ def main():
     except Exception as e:  # a doctor that cannot see is itself a finding, never "healthy"
         print(f"cannot read the platform API at {API}: {e}")
         return 2
+
+    # One doctor at a time: two would check out the same branches and take
+    # each other's worktrees away (seen: the hourly run did exactly that).
+    me = os.environ.get("WFX_RUN_ID", "")
+    try:
+        live = get("/api/runs?workflow=" + SELF + "&status=running,awaiting_approval,needs_input&limit=20")
+        live = live.get("runs", live) if isinstance(live, dict) else live
+    except Exception:
+        live = []
+    others = [r["id"] for r in live if r.get("id") != me]
+    if others:
+        print(f"another workflow-doctor run is active ({others[0]}); this one stands down")
+        return 5
 
     by_project = {p["name"]: p for p in projects}
     findings = {}
