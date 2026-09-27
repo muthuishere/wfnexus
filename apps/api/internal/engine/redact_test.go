@@ -118,3 +118,18 @@ func TestBashRelativeWorkdirIsPinnedByTheHook(t *testing.T) {
 		t.Fatalf("bash workdir = %v, want it inside the workspace", got)
 	}
 }
+
+// Found by a code-review run on a free model: a step's error quotes the
+// agent's rejected reply, and error text did not pass through the run's
+// redaction — only emit did. A model that echoed a secret leaked it there.
+func TestAStepErrorQuotingAModelsReplyIsRedacted(t *testing.T) {
+	secrets := []secretValue{{name: "GH_TOKEN", value: "ghp_averyrealtoken1234"}}
+	err := `devinadapter: no valid reply; last reply: "{\"content\":\"the token is ghp_averyrealtoken1234\"}"`
+	got := redactText(err, secrets)
+	if strings.Contains(got, "ghp_averyrealtoken1234") {
+		t.Fatalf("the secret survived in the error: %s", got)
+	}
+	if !strings.Contains(got, "[redacted:GH_TOKEN]") {
+		t.Fatalf("no redaction mark: %s", got)
+	}
+}
