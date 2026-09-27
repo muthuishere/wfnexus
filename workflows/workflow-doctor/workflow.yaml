@@ -1,0 +1,294 @@
+name: workflow-doctor
+description: >-
+  The platform looking after its own workflows. Every hour it collects what is
+  broken across every project — failed runs, files that do not load, workflow
+  folders with no workflow.yaml, workflow folders that are not in git — finds
+  the cause of each, fixes the ones that are code, proves each fix (validate,
+  and the Go suite when platform code changed), has a different model review
+  it, opens a pull request, and merges. What code cannot fix — a missing
+  secret, a real outage the workflow correctly reported — is reported with the
+  exact command a person runs.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 * * * *"
+
+input_schema:
+  type: object
+  properties:
+    auto_merge: { type: boolean, title: "Merge a fix that passed verify and review without asking", default: false }
+    max_fixes:  { type: integer, title: "At most this many fixes per run", default: 3 }
+    dry_run:    { type: boolean, title: "Diagnose and report only: no branches, PRs or merges", default: false }
+
+steps:
+  # 1. Rules before models. Exit 0 = nothing broken, and only the report runs.
+  - id: collect
+    name: Collect what is broken
+    description: Failed runs since the last look, load problems, incomplete and untracked workflow folders. Read-only.
+    run: python3 ./collect.py
+    timeout_sec: 120
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 2. Why, for each finding. Reads, never edits.
+  - id: diagnose
+    name: Find the cause of each finding
+    needs: [collect]
+    when:
+      - path: collect.exitCode
+        equals: 3
+    provider: claude-cli
+    skills: [prod-signal-triage, repo-navigator, workflow-author]
+    tools: [read, grep, glob, bash]
+    max_turns: 60
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "git commit", "gh pr", "gh issue", "wfx approve", "wfx env set", "rm -", "kamal", "docker "]
+        reason: "diagnosis reads; fixing, publishing and merging are later steps"
+    system: >-
+      You are the engineer who owns this workflow platform. You report only what
+      the run's events, the workflow file and the code show, with file:line, and
+      you say "unknown" rather than guess.
+    prompt: |
+      ./findings.json lists what is broken. For each finding decide the cause:
+
+      - workflow_bug: the workflow file or its sidecar scripts are wrong
+        (a bad path, a step that never writes the file a later step reads, a
+        wrong guard, a schema the output cannot satisfy).
+      - platform_bug: wfnexus itself misbehaves (the engine, CLI or API).
+        Its source is the repo at the `local` project's git root.
+      - needs_secret: a secret is missing (the collector marks these). Not code.
+      - transient: an interrupted or rate-limited run. Retry, not a fix.
+      - reported_outage: the workflow worked and correctly reported a real
+        problem in the system it watches. Not a workflow bug.
+      - incomplete: a folder with no workflow.yaml. Fixable ONLY if the folder's
+        own scripts and a sibling template make the missing definition clear;
+        otherwise say what is missing.
+      - untracked: a workflow folder not in git. Fixable: add it on a branch.
+
+      Evidence: `wfx show <run>`, `curl -s $WFX_API/api/runs/<run>/events`
+      (WFX_API defaults to http://127.0.0.1:8090), the workflow's directory,
+      and the repo. Never read a vault/ directory or a .env/credentials file.
+
+      fixable = true only for workflow_bug, platform_bug, and untracked, or an
+      incomplete folder whose definition is clear. Rank fixable ones by count ×
+      how much they block, and mark at most {{ .Input.max_fixes }} as `fix_now`.
+      Set has_fixes to true when any finding has fix_now; if dry_run is
+      {{ .Input.dry_run }} and that is true, set has_fixes to false.
+      Write exactly your submitted output to ./diagnosis.json as well.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [has_fixes, diagnoses]
+      properties:
+        has_fixes: { type: boolean }
+        diagnoses:
+          type: array
+          items:
+            type: object
+            required: [finding, cause, explanation, evidence, fixable, fix_now, repo, smallest_fix]
+            properties:
+              finding:      { type: string }
+              cause:        { type: string, enum: [workflow_bug, platform_bug, needs_secret, transient, reported_outage, incomplete, untracked, unknown] }
+              explanation:  { type: string }
+              evidence:     { type: array, items: { type: string } }
+              fixable:      { type: boolean }
+              fix_now:      { type: boolean }
+              repo:         { type: string }
+              smallest_fix: { type: string }
+              person_action: { type: string }
+
+  # 3. The fix, in a worktree of the repo that owns it — never the person's checkout.
+  - id: fix
+    name: Fix each fix_now finding on its own branch
+    needs: [diagnose]
+    when:
+      - path: diagnose.has_fixes
+        equals: true
+    provider: claude-cli
+    skills: [fix-author, test-author, workflow-author, repo-navigator]
+    tools: [read, write, edit, grep, glob, bash]
+    max_turns: 120
+    guardrails:
+      - deny: bash
+        args_contain: ["git push", "gh pr", "wfx approve", "wfx env set", "git checkout main", "git reset --hard", "kamal", "docker "]
+        reason: "fixes are committed on a branch in a worktree; pushing and merging are later, reviewed steps"
+    prompt: |
+      Fix every diagnosis in ./diagnosis.json with fix_now = true, and nothing else.
+
+      For each one, in the repo named by its `repo`:
+        base=$(git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||'); base=${base:-main}
+        git -C <repo> fetch -q origin "$base"
+        git -C <repo> worktree add -q <repo>/../.wfx-doctor/<finding> -b wfx/doctor-<finding> "origin/$base"
+      and work ONLY inside that worktree. The person's own checkout is never touched.
+
+      - workflow_bug: the smallest change to the workflow or its scripts, then
+        `wfx validate <path>/workflow.yaml` until it passes.
+      - platform_bug: the smallest code change plus a regression test that FAILS
+        without it (run it both ways), then the package's tests.
+      - untracked: copy the folder from the person's checkout into the worktree
+        at the same path, `wfx validate` it, and commit it. Never copy a .env,
+        a vault/ file or anything holding a secret value — check with
+        `sec seal <file> --check` where sec exists, or refuse the file.
+      - incomplete: write the missing workflow.yaml from the folder's own
+        scripts and the nearest complete sibling, and validate it.
+
+      One commit per finding, message: what was broken, the evidence, the fix.
+      No Co-authored-by line. Write ./fixes.json as your submitted output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [fixes]
+      properties:
+        fixes:
+          type: array
+          items:
+            type: object
+            required: [finding, repo, worktree, branch, base, files, summary]
+            properties:
+              finding:  { type: string }
+              repo:     { type: string }
+              worktree: { type: string }
+              branch:   { type: string }
+              base:     { type: string }
+              files:    { type: array, items: { type: string } }
+              summary:  { type: string }
+              test:     { type: string }
+
+  # 4. Proof, not a claim.
+  - id: verify
+    name: Prove every fix
+    description: wfx validate on every changed workflow; the Go suite where Go changed; a committed, clean branch. Exit 0 proven, 1 a fix failed, 4 nothing to verify.
+    needs: [fix]
+    run: python3 ./verify.py
+    timeout_sec: 1200
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 5. A second model reads each diff cold.
+  - id: review
+    name: Review each fix adversarially
+    needs: [verify]
+    when:
+      - path: verify.exitCode
+        equals: 0      # 0 = fixes exist and every one is proven; 4 = nothing to verify
+    provider: codex-cli
+    skills: [pr-reviewer, change-reviewer]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    prompt: |
+      ./fixes.json lists fixes, each on a branch in a worktree; ./verify.json
+      has what the checks proved. For each, read `git -C <worktree> diff <base>...HEAD`
+      against its diagnosis in ./diagnosis.json. Block it if it fixes a symptom
+      not the cause, changes more than the finding needs, weakens a check, a
+      guard or a test, or commits anything that looks like a secret. Otherwise
+      approve. Set any_approved to true if at least one is approved.
+      Write exactly your submitted output to ./review.json as well.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [any_approved, verdicts]
+      properties:
+        any_approved: { type: boolean }
+        verdicts:
+          type: array
+          items:
+            type: object
+            required: [finding, verdict, reason]
+            properties:
+              finding: { type: string }
+              verdict: { type: string, enum: [approve, block] }
+              reason:  { type: string }
+
+  # 6. The approved fixes become pull requests.
+  - id: publish
+    name: Open a pull request per approved fix
+    needs: [review]
+    when:
+      - path: review.any_approved
+        equals: true
+    provider: claude-cli
+    skills: [pr-publisher]
+    tools: [read, bash]
+    max_turns: 30
+    prompt: |
+      For each fix in ./fixes.json whose verdict in the review step is approve
+      ({{ json .Steps.review.verdicts }}): push its branch from its worktree and
+      open a PR against its base. Body: the finding, the diagnosis and its
+      evidence (./diagnosis.json), what verify proved (./verify.json), the
+      reviewer's reason. Never add a Co-authored-by line.
+      Write ./prs.json as your submitted output.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [prs]
+      properties:
+        prs:
+          type: array
+          items:
+            type: object
+            required: [finding, url, repo]
+            properties:
+              finding: { type: string }
+              url:     { type: string }
+              repo:    { type: string }
+
+  # 7a. Merge without asking — only when the person switched it on.
+  - id: merge_auto
+    name: Merge (auto)
+    needs: [publish]
+    when:
+      - path: input.auto_merge
+        equals: true
+    run: python3 ./merge.py
+    timeout_sec: 300
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 7b. Otherwise a person approves the merge on the run page.
+  - id: merge_gated
+    name: Merge (approved)
+    needs: [publish]
+    when:
+      - path: input.auto_merge
+        equals: false
+    requires_approval: true
+    run: python3 ./merge.py
+    timeout_sec: 300
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 8. Always: what was done, what was not, and what a person must do.
+  - id: report
+    name: Report and remember
+    needs: [collect, diagnose, fix, verify, review, publish, merge_auto, merge_gated]
+    run: DRY_RUN={{ .Input.dry_run }} python3 ./report.py
+    timeout_sec: 120
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }

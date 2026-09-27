@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""report.py — what the doctor did, what it did not, and what a person must do.
+
+Always runs last. Moves `last_checked` forward, and remembers as `handled` the
+findings that became a PR (so an open fix is not fixed again) and the
+folder-level findings already reported as needing a person (so the same
+incomplete folder is not re-diagnosed every hour). Failed runs are bounded by
+`last_checked`, so they are never silenced — a new failure is a new finding.
+"""
+import json
+import os
+import subprocess
+
+
+def load(name, default):
+    try:
+        return json.load(open(name))
+    except Exception:
+        return default
+
+
+def state(key, value=None):
+    if value is None:
+        r = subprocess.run(["wfx", "state", "get", "--workflow", key], capture_output=True, text=True)
+        return r.stdout.strip()
+    subprocess.run(["wfx", "state", "set", "--workflow", key, value], capture_output=True, text=True)
+
+
+def main():
+    found = load("findings.json", {"findings": []})
+    diag = {d["finding"]: d for d in load("diagnosis.json", {}).get("diagnoses", [])}
+    prs = {p["finding"]: p["url"] for p in load("prs.json", {}).get("prs", [])}
+    merged = set(load("merged.json", {}).get("merged", []))
+    blocked = {v["finding"]: v["reason"] for v in load("review.json", {}).get("verdicts", []) if v.get("verdict") == "block"}
+
+    if not found["findings"]:
+        print("healthy: nothing broken since", found.get("since", "the last look"))
+    person = []
+    for f in found["findings"]:
+        d = diag.get(f["id"], {})
+        cause = d.get("cause") or ("needs_secret" if f.get("needs_secret") else f["kind"])
+        what = f.get("workflow") or f.get("path")
+        if f["id"] in merged:
+            line = f"FIXED   {what} — merged {prs[f['id']]}"
+        elif f["id"] in prs:
+            line = f"PR      {what} — {prs[f['id']]} (awaiting merge)"
+        elif f["id"] in blocked:
+            line = f"BLOCKED {what} — reviewer: {blocked[f['id']]}"
+        else:
+            line = f"OPEN    {what} — {cause}"
+            if f.get("needs_secret"):
+                cmds = " && ".join(f"wfx env set {s} --project {f.get('project')}" for s in f["needs_secret"])
+                person.append(f"{what}: {cmds}")
+            elif d.get("person_action"):
+                person.append(f"{what}: {d['person_action']}")
+            elif cause == "transient":
+                person.append(f"{what}: re-run it (interrupted, not broken)")
+        print(line + (f"  x{f['count']}" if f.get("count", 1) > 1 else ""))
+    if person:
+        print("\nneeds a person:")
+        for p in person:
+            print("  - " + p)
+
+    if os.environ.get("DRY_RUN") == "true":
+        print("\ndry run: last_checked and handled left as they were")
+        return
+    handled = set(filter(None, state("handled").split(",")))
+    handled |= set(prs)
+    handled |= {f["id"] for f in found["findings"]
+                if f["kind"] in ("incomplete", "untracked", "load_problem") and f["id"] in diag and not diag[f["id"]].get("fix_now")}
+    if found.get("checked_at"):
+        state("last_checked", found["checked_at"])
+    state("handled", ",".join(sorted(handled)))
+
+
+if __name__ == "__main__":
+    main()
