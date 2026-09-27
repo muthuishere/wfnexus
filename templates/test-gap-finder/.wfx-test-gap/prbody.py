@@ -51,11 +51,21 @@ def build():
         L += [f"- `{t}`" for t in v["known_red"][:30]] + [""]
     if v.get("coverage_by_file"):
         L += ["Coverage by file: " + "; ".join(f"`{f}` {b}% → {a}%" for f, (b, a) in sorted(v["coverage_by_file"].items())), ""]
+    # covered = what survived triage's check (a claim whose test does not assert
+    # the scenario was sent back as a gap), not what the analysts claimed
+    cov = triage.get("covered") or [s for s in scen if s["status"] == "covered"]
+    demoted = sum(1 for r in rows if "does not assert" in (r.get("why") or "") or r.get("demoted"))
+    claimed = sum(1 for s in scen if s["status"] == "covered")
+    specs = sorted({s["file"] for s in scen if s["file"].endswith(".md") and s["file"].lower() != "readme.md"})
     L += ["## How the scenarios were found", "",
-          f"Every public function, method, class, branch, error path, boundary and README example was enumerated by code "
-          f"({surface} surface items), analysed file by file, and deduplicated against the existing tests: "
-          f"{sum(1 for s in scen if s['status'] == 'covered')} scenarios were already covered by a passing test, "
-          f"{len(rows)} were not. Each of those was triaged by a calibrated classifier; the unsure ones were decided by a person.", ""]
+          f"Every public function, method, class, branch, error path, boundary and README example"
+          + (f", and every rule in {', '.join('`' + x + '`' for x in specs)}," if specs else "")
+          + f" was enumerated by code ({surface} surface items), analysed file by file, and deduplicated against the "
+          f"existing tests: {len(cov)} scenarios are already pinned by a passing test"
+          + (f" ({claimed - len(cov)} more were claimed covered, but a classifier reading the test found it does not "
+             f"assert the scenario, so they were triaged as gaps)" if claimed > len(cov) else "")
+          + f"; {len(rows)} were not. Each of those was triaged by a calibrated classifier; the unsure ones were decided "
+          f"by a person.", ""]
     if v["findings"]:
         L += ["## Bug findings (tests kept, marked as expected failures)", ""] + [f"- {f}" for f in v["findings"]] + [""]
     L += ["## Scenarios written", "", "| id | kind | scenario | evidence | decided by | test | mutation |", "|---|---|---|---|---|---|---|"]
@@ -69,7 +79,6 @@ def build():
     for r in sorted([r for r in rows if r["verdict"] != "makes_sense"], key=lambda r: (r["verdict"], r["id"])):
         L.append(f"| {r['id']} | {r['verdict']} | {r['decided_by']} | {r['title'].replace('|', '/')[:100]} | "
                  f"{(r.get('human') or r['why']).replace('|', '/')[:160]} |")
-    cov = [s for s in scen if s["status"] == "covered"]
     if cov:
         L += ["", f"<details><summary>{len(cov)} scenarios already covered by an existing passing test</summary>", "",
               "| id | scenario | covered by |", "|---|---|---|"]
