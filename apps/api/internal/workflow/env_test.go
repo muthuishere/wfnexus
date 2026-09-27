@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -48,8 +49,24 @@ func TestShellPrefixNeverRendersASecret(t *testing.T) {
 func TestShellPrefixQuotesAwkwardLiterals(t *testing.T) {
 	got := ShellPrefix(map[string]string{"MSG": "it's fine"})
 	// The POSIX idiom: close the quote, an escaped quote, reopen.
-	if got != `MSG='it'\''s fine' ` {
+	if got != `export MSG='it'\''s fine' && ` {
 		t.Fatalf("bad quoting: %q", got)
+	}
+}
+
+// The step's env must reach EVERY command of a chain, not just the first.
+func TestShellPrefixReachesTheWholeChain(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh")
+	}
+	t.Setenv("WFX_TEST_REF", "from-ref")
+	prefix := ShellPrefix(map[string]string{"WHO": "doctor", "REF": "${WFX_TEST_REF}"})
+	out, err := exec.Command("sh", "-c", prefix+`cd . && printf '%s %s' "$WHO" "$REF"`).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "doctor from-ref" {
+		t.Fatalf("the second command of the chain got %q, want the step's env", out)
 	}
 }
 

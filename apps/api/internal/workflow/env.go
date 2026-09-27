@@ -99,7 +99,12 @@ func ShellPrefix(env map[string]string) string {
 	if len(env) == 0 {
 		return ""
 	}
+	// `export … &&`, not `K=v cmd`: a prefix assignment reaches only the FIRST
+	// command of a chain, so `cd fixes/x && git commit` ran git without the
+	// step's env — a workflow-set git identity was silently ignored and the
+	// commit took the checkout's configured user.
 	var b strings.Builder
+	b.WriteString("export ")
 	for _, k := range sortedKeys(env) {
 		v := env[k]
 		if envRef.MatchString(v) {
@@ -110,6 +115,7 @@ func ShellPrefix(env map[string]string) string {
 		}
 		b.WriteString(k + "=" + shellQuote(v) + " ")
 	}
+	b.WriteString("&& ")
 	return b.String()
 }
 
