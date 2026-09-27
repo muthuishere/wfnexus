@@ -89,7 +89,10 @@ def main():
         why = [x for x in (failed_proof.get(f["id"]) and "verify failed — " + failed_proof[f["id"]],
                            blocked.get(f["id"]) and "reviewer blocked — " + blocked[f["id"]]) if x]
         if why:
-            f["previous_review"] = " | ".join(why)
+            # every attempt starts from a fresh branch, so earlier points must
+            # stay in the brief or they come back; newest first, bounded
+            earlier = f.get("previous_review", "")
+            f["previous_review"] = (" | ".join(why) + (" || EARLIER ATTEMPTS: " + earlier if earlier else ""))[:6000]
     still = [f for f in found["findings"] if f["id"] not in prs and f["kind"] in ("run_failed", "transient")]
     state("open", json.dumps(still))
     if found.get("checked_at"):
