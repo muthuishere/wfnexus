@@ -1,0 +1,494 @@
+# test-gap-finder — find the behaviour no test pins, exhaustively; write tests only for what a
+# classifier or a person says is worth pinning; prove each one bites; one reviewable PR.
+#
+# THE SHAPE is code-remover's (templates/code-remover), reused on purpose:
+#   style → baseline → surface (inventory) → per-shard analysts (prove) → merge (checks)
+#   → triage (JEV + decision table) → HUMAN GATE (unsure ones + the plan) → write
+#   → validate (same ruler, + mutation) → adversarial review (different model)
+#   → write_pr → claims → dry_run_stop → HUMAN GATE (publish) → report
+#
+# WHAT MAKES IT DIFFERENT FROM "ask an agent to add tests"
+#   1. EXHAUSTIVE BY CODE, not by the model's diligence. surface.py enumerates every public
+#      function/method/class, every branch, raise/throw, catch, loop, null path, literal
+#      comparison and README example (Python ast, the repo's own TypeScript compiler, go/ast),
+#      each with an id and file:line, and marks the lines no test ever executed (coverage).
+#      Analysts work shard by shard (files balanced by item count) and must ACCOUNT for every id
+#      — a scenario, `covered` by a named test, or not-applicable with a reason. scenarios.py
+#      check refuses anything less; merge turns whatever is still unaccounted into a scenario a
+#      person sees. Nothing is skipped for lack of context, and nothing is dropped silently.
+#   2. DEDUPED AGAINST THE REAL SUITE. A `covered` claim must name a test that exists and was
+#      GREEN at baseline — a red test pins nothing, so it cannot cover anything.
+#   3. TRIAGE BY A CALIBRATED CLASSIFIER, table applied by code (triage.py): makes_sense only
+#      when JEV is sure; does_not_make_sense only when it is sure; everything else is `unsure`
+#      and waits for a person, who approves or rejects each one by id. Rejected and
+#      does_not_make_sense rows are listed in the PR with their reasons and never written.
+#   4. PROVEN, NOT CLAIMED. validate.py re-runs the whole suite with the baseline's ruler; only
+#      test files may change and no existing test line may be deleted; each new test must pass,
+#      or be a kept, marked BUG FINDING (never deleted to go green); and each passing test is
+#      run against a mutant of its target line — it must go red (`killed`) or it is disclosed
+#      as `survived`. Coverage before → after is quoted.
+#   5. A DIFFERENT MODEL reviews the tests for tautologies; the PR body is generated from the
+#      evidence files and re-checked; nothing is pushed until a person approves.
+#
+# Needs: git, gh (for the duplicate-PR check and publishing; GH_TOKEN in the env store when
+# the server runs with its own HOME), the repo's own toolchain (python3+pytest / node+npm /
+# go), and TYPESAFE_API_KEY or OPENROUTER_API_KEY for `wfx judge`.
+name: test-gap-finder
+template:
+  title: Test-gap finder — exhaustive missing-test scenarios, triaged, proven PR
+  category: development
+  summary: >-
+    Enumerates everything a test could pin (every public function, branch, error path,
+    boundary, README promise), finds which ones no test pins, has a calibrated classifier
+    and a person decide which are worth a test, writes them in the repo's own style, proves
+    each one fails on a mutant, and opens one PR listing every scenario and its verdict.
+  fill:
+    - "allow_red_baseline: true only if the suite is already red and you accept freezing those failures"
+    - "scope: one module (and spec_paths: its specs/ADRs) per run — exhaustive means every item, so keep the portion small"
+    - "max_tests: how many tests one PR may add (default 20; the riskiest go first)"
+    - "TYPESAFE_API_KEY or OPENROUTER_API_KEY in the env store for the calibrated verdicts"
+
+description: >-
+  Exhaustive test-gap finding. Code enumerates the whole testable surface with file:line and
+  coverage; analysts account for every item, shard by shard; scenarios already pinned by a
+  green test are marked covered; a calibrated classifier sorts the rest into makes_sense /
+  does_not_make_sense / unsure, and a person decides the unsure ones. Approved scenarios become
+  tests in the repo's own style on a branch, proven by the full suite and a mutation check,
+  reviewed by a different model, and published as one PR after a person approves.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  properties:
+    repo_path:          { type: string,  title: "Local repo path (the run works in its own worktree)" }
+    repo_url:           { type: string,  title: "…or a repo URL to clone" }
+    base_branch:        { type: string,  title: "Base to branch from and PR into (default: the repo's default branch)" }
+    scope:              { type: string,  title: "Only these paths (space-separated) — exhaustive works best on a module, not a whole monorepo" }
+    max_tests:          { type: integer, title: "At most this many new tests per PR", default: 20 }
+    spec_paths:         { type: string,  title: "Spec files to mine for scenarios (space-separated globs; default: OpenSpec specs and *spec*.md)" }
+    allow_red_baseline: { type: boolean, title: "Suite already red? Freeze those failures and carry on", default: false }
+    pr_prefix:          { type: string,  title: "PR title prefix (also the duplicate check)", default: "[test-gaps]" }
+    dry_run:            { type: boolean, title: "Dry run — commit on the run's branch, write the PR body, push nothing", default: true }
+    isolate:            { type: boolean, title: "Work in a throwaway git worktree", default: true }
+    extra_context:      { type: string,  title: "A person's answers at a pause (written by `wfx answer` / the UI form)", format: textarea }
+
+steps:
+  # 1 ── how does THIS repo test? ─────────────────────────────────────────────
+  - id: style
+    name: Learn the repo's test style (repo-navigator)
+    description: Framework, layout, naming convention, fixtures and helpers, and the exact command that runs the suite.
+    skills: [repo-navigator, test-author]
+    tools: [read, grep, glob, bash]
+    max_turns: 30
+    timeout_sec: 1200
+    soul: >-
+      You describe how a codebase already tests itself, exactly and with evidence. You copy its
+      habits; you do not bring your own.
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git push", "sed -i", "rm -", "pip install", "npm install -g"], reason: "the style step only reads (and may run the suite)" }
+      - { deny: write, reason: "the style step only reads" }
+    prompt: |
+      Work out how this repository tests itself, so new tests can be written that look like
+      they were always there. Read the test files, the CI workflows (.github/workflows), the
+      package/build files (package.json scripts, pyproject.toml, setup.cfg, pytest.ini,
+      tox.ini, go.mod, Makefile, Taskfile.yml) and the README.
+
+      Find, with a path:line for each claim:
+      - language, framework and assertion style (e.g. unittest.TestCase via pytest, chai
+        expect, Go table tests with t.Run);
+      - where tests live, the file naming pattern, and the TEST NAMING CONVENTION — quote at
+        least three real test names;
+      - fixtures, shared helpers, base classes and test data the tests reuse;
+      - `test_command`: ONE shell command, run from the repo root, that runs the WHOLE suite.
+        Include any environment it needs (e.g. `PYTHONPATH=src:tests python3 -m pytest tests`
+        when tests import the package from src/ without installing it). RUN IT to confirm it
+        collects and runs tests — a red result is fine, "no tests collected"/import errors of
+        every file are not. For Python it MUST be a `python3 -m pytest …` command (pytest also
+        runs unittest.TestCase suites; the test ids everywhere below are pytest node ids).
+        For npm projects `npm test` is right when that is what CI runs.
+      - `single_test_command`: the same, running ONE test, with `{test}` where the test id
+        goes (pytest node id `tests/x.py::Class::test_y`, Go `-run '^TestX$' ./pkg`), or
+        `{test_re}` for runners that select by a regex over the full title (mocha `--grep`).
+      - `source_dirs`: the library's own source directories (not tests, not examples).
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [language, framework, test_command, single_test_command, source_dirs, test_dirs, test_file_pattern, naming_convention, example_test_names, helpers, assertion_style, evidence]
+      properties:
+        language:            { type: string, enum: [python, typescript, javascript, go, shell, other] }
+        framework:           { type: string, enum: [pytest, unittest, mocha, jest, vitest, go-test, bats, other] }
+        test_command:        { type: string, description: "whole suite, from the repo root, env included" }
+        single_test_command: { type: string, description: "one test, with {test} or {test_re}" }
+        source_dirs:         { type: array, items: { type: string } }
+        test_dirs:           { type: array, items: { type: string } }
+        test_file_pattern:   { type: string, description: "e.g. tests/test_*.py, test/**/*.test.ts" }
+        naming_convention:   { type: string, description: "how test names read, e.g. test_<method>_<condition> / it('should …')" }
+        example_test_names:  { type: array, items: { type: string }, minItems: 3 }
+        helpers:
+          type: array
+          items:
+            type: object
+            required: [name, path, what]
+            properties:
+              name: { type: string }
+              path: { type: string }
+              what: { type: string }
+        assertion_style:     { type: string }
+        setup_notes:         { type: string, description: "anything a new test must do to run: env, cwd, fixtures, data files" }
+        evidence:            { type: array, items: { type: string }, description: "path:line for each claim above" }
+
+  # 2 ── the ruler, before anything changes ───────────────────────────────────
+  - id: baseline
+    name: Baseline suite, counts and coverage
+    description: Skip if a test-gap PR is open; branch; run the suite as the style step found it — per-test ids and line coverage. Red stops.
+    timeout_sec: 3600
+    run: |
+      printf '*\n' > .wfx-test-gap/.gitignore
+      cat > .wfx-test-gap/style.json <<'WFX_STYLE_EOF'
+      {{ json .Steps.style }}
+      WFX_STYLE_EOF
+      PR_PREFIX='{{ .Input.pr_prefix }}' ALLOW_RED='{{ .Input.allow_red_baseline }}' SCOPE='{{ .Input.scope }}' \
+      BRANCH="wfx/test-gap-$(printf %.8s '{{ .RunID }}')" \
+        python3 .wfx-test-gap/baseline.py
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Baseline failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 3 ── everything a test could pin, by code ──────────────────────────────────
+  - id: surface
+    name: Enumerate the testable surface
+    description: Every public function/method/class, branch, error path, boundary, null path, README example and spec scenario/rule, with file:line and coverage; sharded.
+    timeout_sec: 900
+    run: |
+      SHARDS=4 SPEC_PATHS='{{ .Input.spec_paths }}' python3 .wfx-test-gap/surface.py
+      c=$?; case $c in 0|11|12|13|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Surface enumeration failed — {{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+      # fewer files than shards: skip the shard steps nobody needs (they run 4 → 1)
+      - { field: exitCode, equals: 11, action: skip_to, skip_to: scenarios_1 }
+      - { field: exitCode, equals: 12, action: skip_to, skip_to: scenarios_2 }
+      - { field: exitCode, equals: 13, action: skip_to, skip_to: scenarios_3 }
+
+  # 4 ── the analysts: one step per shard (run 4 → 1), every item accounted for ──
+  - id: scenarios_4
+    name: Scenario analyst — shard 4
+    description: For each file in shard 4, a scenario (or covered-by, or n/a) for EVERY surface item; checked by code.
+    skills: [test-author, repo-navigator]
+    tools: [read, grep, glob, bash, write]
+    max_turns: 100
+    timeout_sec: 2400
+    soul: &analyst_soul >-
+      You are the tester who reads code the way an attacker would: every branch has two
+      sides, every input has an edge, every promise in the docs is a claim to check. You are
+      paid for completeness — an item you skip is a bug that ships.
+    guardrails: &analyst_guardrails
+      - { deny: bash, args_contain: ["git commit", "git checkout", "git reset", "git stash", "git push", "sed -i", "rm -"], reason: "analysts only read the repo; they write only .wfx-test-gap/scenarios/*.json" }
+    prompt: |
+      You are the scenario analyst for SHARD 4. Read `.wfx-test-gap/ANALYST.md` and follow it
+      exactly, starting with `python3 .wfx-test-gap/scenarios.py todo 4`.
+      This repo tests with {{ .Steps.style.framework }} ({{ .Steps.style.assertion_style }});
+      tests live in {{ .Steps.style.test_dirs }} and are named like {{ .Steps.style.example_test_names }}.
+    output_schema: &analyst_schema
+      type: object
+      additionalProperties: false
+      required: [files, summary]
+      properties:
+        summary: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            required: [file_id, file, gaps, covered, not_applicable, check]
+            properties:
+              file_id:        { type: string, description: "F<n>" }
+              file:           { type: string }
+              gaps:           { type: integer }
+              covered:        { type: integer }
+              not_applicable: { type: integer }
+              check:          { type: string, pattern: "^F[0-9]+ .+: OK — ", description: "the OK line `scenarios.py check F<n>` printed for this file, verbatim — a file that has not checked OK cannot be submitted" }
+
+  - id: scenarios_3
+    name: Scenario analyst — shard 3
+    description: For each file in shard 3, a scenario (or covered-by, or n/a) for EVERY surface item; checked by code.
+    skills: [test-author, repo-navigator]
+    tools: [read, grep, glob, bash, write]
+    max_turns: 100
+    timeout_sec: 2400
+    soul: *analyst_soul
+    guardrails: *analyst_guardrails
+    prompt: |
+      You are the scenario analyst for SHARD 3. Read `.wfx-test-gap/ANALYST.md` and follow it
+      exactly, starting with `python3 .wfx-test-gap/scenarios.py todo 3`.
+      This repo tests with {{ .Steps.style.framework }} ({{ .Steps.style.assertion_style }});
+      tests live in {{ .Steps.style.test_dirs }} and are named like {{ .Steps.style.example_test_names }}.
+    output_schema: *analyst_schema
+
+  - id: scenarios_2
+    name: Scenario analyst — shard 2
+    description: For each file in shard 2, a scenario (or covered-by, or n/a) for EVERY surface item; checked by code.
+    skills: [test-author, repo-navigator]
+    tools: [read, grep, glob, bash, write]
+    max_turns: 100
+    timeout_sec: 2400
+    soul: *analyst_soul
+    guardrails: *analyst_guardrails
+    prompt: |
+      You are the scenario analyst for SHARD 2. Read `.wfx-test-gap/ANALYST.md` and follow it
+      exactly, starting with `python3 .wfx-test-gap/scenarios.py todo 2`.
+      This repo tests with {{ .Steps.style.framework }} ({{ .Steps.style.assertion_style }});
+      tests live in {{ .Steps.style.test_dirs }} and are named like {{ .Steps.style.example_test_names }}.
+    output_schema: *analyst_schema
+
+  - id: scenarios_1
+    name: Scenario analyst — shard 1
+    description: For each file in shard 1, a scenario (or covered-by, or n/a) for EVERY surface item; checked by code.
+    skills: [test-author, repo-navigator]
+    tools: [read, grep, glob, bash, write]
+    max_turns: 100
+    timeout_sec: 2400
+    soul: *analyst_soul
+    guardrails: *analyst_guardrails
+    prompt: |
+      You are the scenario analyst for SHARD 1. Read `.wfx-test-gap/ANALYST.md` and follow it
+      exactly, starting with `python3 .wfx-test-gap/scenarios.py todo 1`.
+      This repo tests with {{ .Steps.style.framework }} ({{ .Steps.style.assertion_style }});
+      tests live in {{ .Steps.style.test_dirs }} and are named like {{ .Steps.style.example_test_names }}.
+    output_schema: *analyst_schema
+
+  # 5 ── nothing unaccounted, nothing pretending to be covered ─────────────────
+  - id: merge
+    name: Merge and dedupe against the suite
+    description: Every surface item accounted or turned into an `unaddressed` scenario; covered claims verified against GREEN baseline tests.
+    timeout_sec: 300
+    run: |
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "an analyst modified tracked files — analysts only read:"; git status --porcelain --untracked-files=no; exit 70
+      fi
+      python3 .wfx-test-gap/scenarios.py merge
+      c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Merge failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 6 ── triage: JEV + decision table; the unsure ones wait for a person ───────
+  - id: triage
+    name: Triage (JEV) — makes_sense / does_not_make_sense / unsure
+    description: wfx judge per gap scenario, decision table by code; unsure ones park the run until a person approves or rejects each by id.
+    timeout_sec: 900
+    run: |
+      cat > .wfx-test-gap/human.txt <<'WFX_HUMAN_EOF'
+      {{ .Input.extra_context }}
+      WFX_HUMAN_EOF
+      MAX_TESTS='{{ .Input.max_tests }}' python3 .wfx-test-gap/triage.py
+      c=$?; case $c in 0|20|78) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Triage failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
+      - { field: exitCode, equals: 20, action: needs_input, message: "{{ .Output.stdout }}" }
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 7 ── HUMAN GATE: the plan. Tests are written only after a person approves it. ──
+  - id: write
+    name: Write the approved tests (test-author)
+    description: One commit per scenario, in the repo's own style; a test that exposes a bug is kept and marked, never deleted.
+    requires_approval: true
+    skills: [test-author]
+    tools: [read, edit, write, grep, glob, bash]
+    max_turns: 120
+    timeout_sec: 3600
+    soul: >-
+      You write the tests a careful maintainer of THIS repo would write — their names, their
+      helpers, their assertions. A test that cannot fail is a liability; a test you never saw
+      fail is a rumour.
+    guardrails:
+      - { deny: bash, args_contain: ["git push", "gh pr", "git add -A", "git add --all", "git add .", "--no-verify", "git reset --hard", "git rebase", "git commit --amend", "sed -i"], reason: "one plain commit per scenario, test files only, never pushed" }
+    prompt: |
+      The approved plan: `.wfx-test-gap/plan.md` and `.wfx-test-gap/triage.json` (rows with
+      verdict `makes_sense` — ONLY those). You are on this run's branch, cut from {{ .BaseRef }}.
+
+      The repo's style (follow it exactly): framework {{ .Steps.style.framework }};
+      files {{ .Steps.style.test_file_pattern }} in {{ .Steps.style.test_dirs }}; names like
+      {{ .Steps.style.example_test_names }} ({{ .Steps.style.naming_convention }});
+      assertions: {{ .Steps.style.assertion_style }}; helpers: {{ json .Steps.style.helpers }}.
+      Setup: {{ .Steps.style.setup_notes }}
+      Whole suite: `{{ .Steps.style.test_command }}` · one test: `{{ .Steps.style.single_test_command }}`
+
+      Follow the test-author skill. For each approved row, in id order:
+      1. Read the code at its evidence line and the scenario's given_when_then/expected. Assert
+         what the code DOES; the test name says what breaks if it regresses.
+      2. Put the test in the existing test file for that module (or a new file following the
+         pattern). NEVER edit or delete an existing test, and never touch source files.
+      3. Run just that test. It must pass. Then watch it FAIL: change the target source line
+         (e.g. flip a comparison, drop a None check, change a raised type), run the test, see
+         red, and restore with `git checkout -- <source file>`. Record that mutation.
+      4. If the test fails because the CODE is wrong (not your test), keep it as a bug finding:
+         pytest `@pytest.mark.xfail(strict=True, reason="BUG: …")`, unittest
+         `@unittest.expectedFailure`, jest `test.failing`, otherwise skip it with a title
+         starting `BUG:` — never delete it, never weaken it to pass. status `bug_found`.
+      5. `git add <the test file>` and `git commit -m "test: <what it pins> (<scenario id>)"`.
+      `.wfx-test-gap/` must never be committed. Submit one entry per approved row, with the
+      exact `test_id` the single-test command accepts.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [tests, summary]
+      properties:
+        summary: { type: string }
+        tests:
+          type: array
+          items:
+            type: object
+            required: [scenario, status, test_id, test_file, why]
+            properties:
+              scenario:  { type: string, description: "the row id, e.g. F3-S02" }
+              status:    { type: string, enum: [written, bug_found, not_written] }
+              test_id:   { type: string, description: "exactly as the single-test command takes it" }
+              test_file: { type: string }
+              why:       { type: string, description: "what it pins; for bug_found the bug; for not_written why not" }
+              mutation:
+                type: object
+                description: "the source edit that made this test fail"
+                properties:
+                  file:     { type: string }
+                  line:     { type: integer }
+                  original: { type: string, description: "exact text on that line before" }
+                  mutated:  { type: string, description: "the text it was replaced with" }
+
+  # 8 ── prove it, with the same ruler as the baseline ─────────────────────────
+  - id: validate
+    name: Prove the tests (suite + mutation + coverage)
+    description: Only tests changed; nothing that passed now fails; each new test passes or is a kept bug finding; each must kill its mutant.
+    timeout_sec: 3600
+    run: |
+      cat > .wfx-test-gap/write.json <<'WFX_WRITE_EOF'
+      {{ json .Steps.write }}
+      WFX_WRITE_EOF
+      cat > .wfx-test-gap/human.txt <<'WFX_HUMAN_EOF'
+      {{ .Input.extra_context }}
+      WFX_HUMAN_EOF
+      BASE='{{ .BaseRef }}' python3 .wfx-test-gap/validate.py
+      c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "The branch did not prove out — {{ .Output.stdout }}" }
+      - { field: exitCode, equals: 20, action: needs_input, message: "{{ .Output.stdout }}" }
+
+  # 9 ── a different model looks for tests that pin nothing ─────────────────────
+  - id: review
+    name: Adversarial review on a different model (change-reviewer)
+    description: Are the tests meaningful — or tautological, over-mocked, asserting the implementation back at itself?
+    provider: haiku
+    skills: [change-reviewer]
+    tools: [read, grep, glob, bash]
+    max_turns: 40
+    timeout_sec: 1800
+    guardrails:
+      - { deny: bash, args_contain: ["git commit", "git push", "git checkout", "git reset", "sed -i"], reason: "the reviewer reads" }
+      - { deny: write, reason: "the reviewer reads" }
+    prompt: |
+      Review the tests added on this branch: `git diff {{ .BaseRef }}..HEAD` and
+      `git log --stat {{ .BaseRef }}..HEAD`. The approved scenarios are in
+      `.wfx-test-gap/triage.json`; the independent proof (suite before/after, per-test
+      result, mutation killed/survived) is `.wfx-test-gap/verify.json`.
+
+      Follow change-reviewer. For each new test, hunt specifically for: a TAUTOLOGY (asserts
+      what it just set up, or re-computes the implementation to compare against itself); an
+      assertion so loose it cannot fail (`assert result is not None`, `len(x) >= 0`); a
+      name that promises more than the assertion checks; a test that does not test its
+      scenario; mocking the unit under test; a mutation that `survived` (the test pinned
+      nothing); a bug_found test that is really a wrong expectation. Run the suite yourself
+      with `{{ .Steps.style.test_command }}`.
+      `approved: false` only for a blocker, and name the test.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [approved, verdict, findings]
+      properties:
+        approved: { type: boolean }
+        verdict:  { type: string }
+        findings:
+          type: array
+          items:
+            type: object
+            required: [severity, what]
+            properties:
+              severity: { type: string, enum: [blocker, major, minor, nit] }
+              what:     { type: string }
+              test:     { type: string }
+    gates:
+      - { field: approved, equals: false, action: needs_input, message: "The reviewer blocked the branch: {{ .Output.verdict }}" }
+
+  # 10 ── the PR body, from the evidence only, then re-checked ───────────────────
+  - id: write_pr
+    name: Write the PR body from the evidence
+    description: Before/after counts and coverage, every scenario with its verdict and who decided, findings, mutation results, commits.
+    timeout_sec: 300
+    run: |
+      cat > .wfx-test-gap/review.json <<'WFX_REVIEW_EOF'
+      {{ json .Steps.review }}
+      WFX_REVIEW_EOF
+      PR_PREFIX='{{ .Input.pr_prefix }}' python3 .wfx-test-gap/prbody.py || exit 70
+    gates:
+      - { field: exitCode, equals: 70, action: fail, message: "Could not write the PR body — {{ .Output.stderr }}" }
+
+  - id: claims
+    name: Re-check the body against the evidence
+    description: Every scenario id and verdict, the exact counts and coverage, every commit, every finding and surviving mutant.
+    timeout_sec: 120
+    run: |
+      python3 .wfx-test-gap/prbody.py --check
+      c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
+    gates:
+      - { field: exitCode, equals: 20, action: needs_input, message: "PR body does not match the evidence — {{ .Output.stdout }}" }
+      - { field: exitCode, equals: 70, action: fail, message: "Claim check failed — {{ .Output.stderr }}" }
+
+  - id: dry_run_stop
+    name: Stop here on a dry run
+    description: A dry run ends with the branch and the PR body — nothing is pushed.
+    run: '[ "{{ .Input.dry_run }}" = "false" ] && { echo "live run: continuing to the publish gate"; exit 0; } || { echo "dry run: stopping before any push"; exit 78; }'
+    gates:
+      - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+
+  # 11 ── HUMAN GATE 2: the only step that touches the outside world ─────────────
+  - id: publish
+    name: Push and open the PR (pr-publisher)
+    description: Push this run's branch and open the PR with the checked body.
+    requires_approval: true
+    skills: [pr-publisher]
+    tools: [read, bash]
+    max_turns: 15
+    guardrails:
+      - { deny: bash, args_contain: ["push --force", "push -f", "reset --hard", "git commit", "gh pr merge"], reason: "publish exactly what was approved" }
+    prompt: |
+      Publish this run's branch (`.wfx-test-gap/baseline.json` → `branch`) as a pull request,
+      following pr-publisher.
+      Base: {{ if .Input.base_branch }}{{ .Input.base_branch }}{{ else }}the repository's default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`){{ end }}.
+      Push with gh as the credential helper, so it works whatever HOME the server has:
+      `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin <branch>`
+      Title: the contents of `.wfx-test-gap/pr-title.txt`.
+      Body: `--body-file .wfx-test-gap/pr-body.md`. Read back the PR URL with `gh pr view <branch> --json url`.
+    output_schema:
+      type: object
+      additionalProperties: false
+      required: [published, pr_url]
+      properties:
+        published: { type: boolean }
+        pr_url:    { type: string }
+
+  # 12 ── always: what happened, where to look ───────────────────────────────────
+  - id: report
+    name: Report
+    description: Baseline, scenario counts, verdicts, proof and PR — the run's answer whatever path it took.
+    run: |
+      D=.wfx-test-gap
+      echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD)"
+      [ -f $D/baseline.json ] && python3 -c "import json;b=json.load(open('$D/baseline.json'));print('--- baseline:', b.get('skipped') or ('green' if b.get('suite_ok') else 'RED'), b.get('totals',''), 'coverage', b.get('coverage'), '%', ('known-red %d' % len(b['known_red'])) if b.get('known_red') else '')"
+      [ -f $D/scenarios.jsonl ] && python3 -c "import json,collections;s=[json.loads(l) for l in open('$D/scenarios.jsonl')];print('--- scenarios:', len(s), dict(collections.Counter(x['status'] for x in s)))"
+      [ -f $D/triage.json ] && python3 -c "import json,collections;t=json.load(open('$D/triage.json'));print('--- triage:', dict(collections.Counter(r['verdict'] for r in t['rows'])), 'human-decided:', [(r['id'], r['human']) for r in t['rows'] if r.get('human')])"
+      [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before', v['before'], 'after', v['after'], 'coverage', v['coverage_before'], '->', v['coverage_after'], 'mutation', v['mutation'], 'findings', v['findings'])"
+      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
+      {{ if .Steps.publish }}echo "--- PR: {{ .Steps.publish.pr_url }}"{{ end }}
+      exit 0

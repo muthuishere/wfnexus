@@ -678,6 +678,14 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID str
 	}
 	prior, _ := input["answers"].(string)
 	input["answers"] = strings.TrimSpace(prior + "\n\nQ: " + req.Prompt + "\nA: " + answer)
+	if len(st.Pending) == 0 {
+		// A gate-parked step reads its person's reply the way the UI form
+		// writes it: the bare reply in extra_context. `answers` also carries
+		// the gate's message, and a gate that shows reply EXAMPLES ("approve
+		// F3-S02 …") would read its own examples back as decisions.
+		extra, _ := input["extra_context"].(string)
+		input["extra_context"] = strings.TrimSpace(extra + "\n\n" + answer)
+	}
 	if err := e.store.UpdateRunInput(ctx, runID, mustJSON(input)); err != nil {
 		return err
 	}
