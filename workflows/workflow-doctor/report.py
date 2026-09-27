@@ -70,6 +70,10 @@ def main():
                 if f["kind"] in ("incomplete", "untracked", "load_problem") and f["id"] in diag and not diag[f["id"]].get("fix_now")}
     # what is still broken is carried to the next look, so moving last_checked
     # forward never drops an unfixed failure
+    # a reviewer's block is the next attempt's brief: carried with the finding
+    for f in found["findings"]:
+        if f["id"] in blocked:
+            f["previous_review"] = blocked[f["id"]]
     still = [f for f in found["findings"] if f["id"] not in prs and f["kind"] in ("run_failed", "transient")]
     state("open", json.dumps(still))
     if found.get("checked_at"):
