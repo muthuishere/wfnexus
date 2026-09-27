@@ -68,6 +68,10 @@ def main():
     handled |= set(prs)
     handled |= {f["id"] for f in found["findings"]
                 if f["kind"] in ("incomplete", "untracked", "load_problem") and f["id"] in diag and not diag[f["id"]].get("fix_now")}
+    # what is still broken is carried to the next look, so moving last_checked
+    # forward never drops an unfixed failure
+    still = [f for f in found["findings"] if f["id"] not in prs and f["kind"] in ("run_failed", "transient")]
+    state("open", json.dumps(still))
     if found.get("checked_at"):
         state("last_checked", found["checked_at"])
     state("handled", ",".join(sorted(handled)))

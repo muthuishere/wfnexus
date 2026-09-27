@@ -48,7 +48,15 @@ def main():
         sh(["git", "-C", repo, "fetch", "-q", "origin", base])
         wt = os.path.abspath(os.path.join("fixes", d["finding"]))
         branch = f"wfx/doctor-{d['finding']}"
-        sh(["git", "-C", repo, "worktree", "remove", "--force", wt])
+        # an earlier run may still hold this branch in its own worktree
+        _, listing = sh(["git", "-C", repo, "worktree", "list", "--porcelain"])
+        path = None
+        for line in listing.splitlines():
+            if line.startswith("worktree "):
+                path = line[len("worktree "):]
+            elif line == f"branch refs/heads/{branch}" and path:
+                sh(["git", "-C", repo, "worktree", "remove", "--force", path])
+        sh(["git", "-C", repo, "worktree", "prune"])
         sh(["git", "-C", repo, "branch", "-D", branch])
         code, msg = sh(["git", "-C", repo, "worktree", "add", "-q", "-b", branch, wt, f"origin/{base}"])
         if code != 0:

@@ -61,12 +61,46 @@ def untracked(root, rel):
     return r.returncode == 0 and not r.stdout.strip()
 
 
+def gather_evidence(f):
+    """Copy what the diagnosis needs INTO the workspace: the agent may not read
+    outside it. The workflow's folder (secrets left out) and the last failing
+    run's own record."""
+    import shutil
+    ev = os.path.join("evidence", f["id"])
+    os.makedirs(ev, exist_ok=True)
+    folder = f.get("path") or (os.path.join(f["source_dir"], f["workflow"].split("/")[-1])
+                               if f.get("source_dir") and f.get("workflow") else "")
+    if folder and os.path.isdir(folder):
+        secretish = re.compile(r"(^|/)(\.env[^/]*|vault|secrets?|credentials?[^/]*|.*\.pem|.*\.key)$", re.I)
+        for dirpath, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if d != "__pycache__" and not secretish.search(d)]
+            for name in files:
+                src = os.path.join(dirpath, name)
+                rel = os.path.relpath(src, folder)
+                if secretish.search(rel) or name.endswith((".pyc", ".jsonl")) or os.path.getsize(src) > 512_000:
+                    continue
+                dst = os.path.join(ev, "folder", rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+        f["evidence_folder"] = os.path.join(ev, "folder")
+    run = next((r for r in reversed(f.get("run_ids") or []) if r), None)
+    if run:
+        for name, cmd in (("run.txt", ["wfx", "show", run]), ("run.log", ["wfx", "logs", run])):
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            open(os.path.join(ev, name), "w").write(r.stdout[-200_000:])
+        f["evidence_run"] = os.path.join(ev, "run.log")
+
+
 def main():
     now = dt.datetime.now(dt.timezone.utc)
     since = state("last_checked")
     if not since:
         since = (now - dt.timedelta(hours=float(os.environ.get("SINCE_HOURS", "24")))).isoformat()
     handled = set(filter(None, state("handled").split(",")))
+    try:
+        carried = json.loads(state("open") or "[]")  # unresolved findings from earlier looks
+    except ValueError:
+        carried = []
 
     try:
         projects = get("/api/projects")
@@ -136,6 +170,11 @@ def main():
                 add("untracked", project=name, path=full, repo=root,
                     error="workflow folder is not in git", signature="untracked")
 
+    for f in carried:
+        if f.get("id") and f["id"] not in findings and f["id"] not in handled and f.get("kind") in ("run_failed", "transient"):
+            findings[f["id"]] = f  # still broken until a fix merges; a new run of it would re-add it anyway
+    for f in findings.values():
+        gather_evidence(f)
     out = {"checked_at": now.isoformat(), "since": since, "findings": list(findings.values())}
     json.dump(out, open("findings.json", "w"), indent=1)
     for f in out["findings"]:

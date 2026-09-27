@@ -72,9 +72,11 @@ steps:
         otherwise say what is missing.
       - untracked: a workflow folder not in git. Fixable: add it on a branch.
 
-      Evidence: `wfx show <run>`, `wfx logs <run>` (what the run did, then it
-      exits), the workflow's directory, and the repo. Never curl
-      /api/runs/<id>/events without `once=1`: it is a live stream and does not end. Never read a vault/ directory or a .env/credentials file.
+      Evidence is already in this workspace, because you may not read outside
+      it: ./evidence/<finding>/folder is the workflow's folder (secrets left
+      out), ./evidence/<finding>/run.txt and run.log are the failing run's steps
+      and activity. Cite them as file:line. Never curl /api/runs/<id>/events
+      without `once=1`: it is a live stream and does not end. Never read a vault/ directory or a .env/credentials file.
 
       fixable = true only for workflow_bug, platform_bug, and untracked, or an
       incomplete folder whose definition is clear. Rank fixable ones by count ×
