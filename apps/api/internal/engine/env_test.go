@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -122,4 +123,31 @@ func envHarness(t *testing.T) *harness {
 	return newHarness(t, &workflow.Definition{Name: "envwf", Steps: []workflow.Step{{
 		ID: "noop", Run: "true",
 	}}}, newFakeLLM(t), "")
+}
+
+// Under launchd the server has none of the operator's shell variables; a
+// classifier key held in `wfx env` must still reach the judge, which reads its
+// key only from the process environment by name. It ran keyless and TypeSafe
+// answered 403 while the key sat in the store (2026-09-27).
+func TestAClassifierKeyInTheStoreReachesTheJudge(t *testing.T) {
+	h := envHarness(t)
+	ctx := context.Background()
+	const name = "WFX_TEST_JUDGE_KEY_FROM_STORE"
+	t.Setenv(name, "") // unset in the process, as under launchd
+	os.Unsetenv(name)
+	if err := h.eng.SetEnvVar(ctx, store.ScopeSystem, "", name, "held-in-the-store", true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.eng.DeleteEnvVar(ctx, store.ScopeSystem, "", name) })
+
+	h.eng.keyFromStore(name)
+	if got := os.Getenv(name); got != "held-in-the-store" {
+		t.Fatalf("the judge would run keyless: env %s = %q", name, got)
+	}
+	// A key already in the process wins over the store.
+	t.Setenv(name, "from-the-process")
+	h.eng.keyFromStore(name)
+	if got := os.Getenv(name); got != "from-the-process" {
+		t.Fatalf("the store overrode the process: %q", got)
+	}
 }
