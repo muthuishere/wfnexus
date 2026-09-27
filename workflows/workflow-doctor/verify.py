@@ -70,10 +70,16 @@ def main():
     if not os.path.exists("fixes.json"):
         print("no fixes to verify")
         return 4
-    fixes = json.load(open("fixes.json")).get("fixes") or []
+    fixes = (json.load(open("fixes.json")) or {}).get("fixes") or []
     if not fixes:
         print("the fix step fixed nothing")
         return 4
+    # where each branch lives comes from prepare (a rule), not from the agent's report
+    trees = {w["finding"]: w for w in json.load(open("worktrees.json"))["worktrees"]} if os.path.exists("worktrees.json") else {}
+    for f in fixes:
+        f.update({k: v for k, v in trees.get(f["finding"], {}).items() if k in ("worktree", "branch", "base", "repo")})
+        f.setdefault("worktree", "")
+    json.dump({"fixes": fixes}, open("fixes.json", "w"), indent=1)
     results = [check(f) for f in fixes]
     json.dump({"results": results}, open("verify.json", "w"), indent=1)
     for r in results:

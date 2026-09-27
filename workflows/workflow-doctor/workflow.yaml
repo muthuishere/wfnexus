@@ -79,9 +79,8 @@ steps:
       fixable = true only for workflow_bug, platform_bug, and untracked, or an
       incomplete folder whose definition is clear. Rank fixable ones by count ×
       how much they block, and mark at most {{ .Input.max_fixes }} as `fix_now`.
-      Set has_fixes to true when any finding has fix_now; if dry_run is
-      {{ .Input.dry_run }} and that is true, set has_fixes to false.
-      Write exactly your submitted output to ./diagnosis.json as well.
+      Set has_fixes to true when any finding has fix_now. Submit only: the
+      platform hands your output to the next steps, do not write a file.
     output_schema:
       type: object
       additionalProperties: false
@@ -104,13 +103,37 @@ steps:
               smallest_fix: { type: string }
               person_action: { type: string }
 
-  # 3. The fix, in a worktree of the repo that owns it — never the person's checkout.
-  - id: fix
-    name: Fix each fix_now finding on its own branch
+  # 3a. A branch of the OWNING repo per fix, checked out inside this workspace.
+  - id: prepare
+    name: Check out a branch per fix
+    description: git worktree per fix_now finding at ./fixes/<finding>; untracked folders copied in, secrets left out.
     needs: [diagnose]
     when:
       - path: diagnose.has_fixes
         equals: true
+      - path: input.dry_run
+        equals: false
+    run: |
+      cat > diagnosis.json <<'WFX_JSON'
+      {{ json .Steps.diagnose }}
+      WFX_JSON
+      python3 ./prepare.py
+    timeout_sec: 300
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  # 3b. The fix — only inside those worktrees.
+  - id: fix
+    name: Fix each finding on its branch
+    needs: [prepare]
+    when:
+      - path: prepare.exitCode
+        equals: 0
     provider: claude-cli
     skills: [fix-author, test-author, workflow-author, repo-navigator]
     tools: [read, write, edit, grep, glob, bash]
@@ -120,27 +143,27 @@ steps:
         args_contain: ["git push", "gh pr", "wfx approve", "wfx env set", "git checkout main", "git reset --hard", "kamal", "docker "]
         reason: "fixes are committed on a branch in a worktree; pushing and merging are later, reviewed steps"
     prompt: |
-      Fix every diagnosis in ./diagnosis.json with fix_now = true, and nothing else.
+      Fix every diagnosis below with fix_now = true, and nothing else.
+      {{ json .Steps.diagnose.diagnoses }}
 
-      For each one, in the repo named by its `repo`:
-        base=$(git -C <repo> symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|origin/||'); base=${base:-main}
-        git -C <repo> fetch -q origin "$base"
-        git -C <repo> worktree add -q <repo>/../.wfx-doctor/<finding> -b wfx/doctor-<finding> "origin/$base"
-      and work ONLY inside that worktree. The person's own checkout is never touched.
+      Each has a branch of its owning repo checked out at ./fixes/<finding>
+      (see ./worktrees.json). Work ONLY there, with paths relative to this
+      workspace — `cd fixes/<finding>` — and commit there. Never cd to an
+      absolute path; everything you need is inside ./fixes/<finding>.
 
       - workflow_bug: the smallest change to the workflow or its scripts, then
         `wfx validate <path>/workflow.yaml` until it passes.
       - platform_bug: the smallest code change plus a regression test that FAILS
         without it (run it both ways), then the package's tests.
-      - untracked: copy the folder from the person's checkout into the worktree
-        at the same path, `wfx validate` it, and commit it. Never copy a .env,
-        a vault/ file or anything holding a secret value — check with
-        `sec seal <file> --check` where sec exists, or refuse the file.
+      - untracked: the folder is already copied into the worktree (worktrees.json
+        lists the files). `wfx validate` its workflow.yaml, fix only what stops
+        it validating, and commit it. If any copied file holds a secret value
+        (`sec seal <file> --check`), delete it from the worktree before committing.
       - incomplete: write the missing workflow.yaml from the folder's own
         scripts and the nearest complete sibling, and validate it.
 
       One commit per finding, message: what was broken, the evidence, the fix.
-      No Co-authored-by line. Write ./fixes.json as your submitted output.
+      No Co-authored-by line. Submit the fixes; do not write a file.
     output_schema:
       type: object
       additionalProperties: false
@@ -150,13 +173,9 @@ steps:
           type: array
           items:
             type: object
-            required: [finding, repo, worktree, branch, base, files, summary]
+            required: [finding, files, summary]
             properties:
               finding:  { type: string }
-              repo:     { type: string }
-              worktree: { type: string }
-              branch:   { type: string }
-              base:     { type: string }
               files:    { type: array, items: { type: string } }
               summary:  { type: string }
               test:     { type: string }
@@ -166,7 +185,14 @@ steps:
     name: Prove every fix
     description: wfx validate on every changed workflow; the Go suite where Go changed; a committed, clean branch. Exit 0 proven, 1 a fix failed, 4 nothing to verify.
     needs: [fix]
-    run: python3 ./verify.py
+    run: |
+      cat > diagnosis.json <<'WFX_JSON'
+      {{ json .Steps.diagnose }}
+      WFX_JSON
+      cat > fixes.json <<'WFX_JSON'
+      {{ json .Steps.fix }}
+      WFX_JSON
+      python3 ./verify.py
     timeout_sec: 1200
     output_schema:
       type: object
@@ -188,13 +214,15 @@ steps:
     tools: [read, grep, glob, bash]
     max_turns: 40
     prompt: |
-      ./fixes.json lists fixes, each on a branch in a worktree; ./verify.json
-      has what the checks proved. For each, read `git -C <worktree> diff <base>...HEAD`
-      against its diagnosis in ./diagnosis.json. Block it if it fixes a symptom
+      ./fixes.json lists fixes; ./worktrees.json says where each branch is
+      checked out (./fixes/<finding>); ./verify.json
+      has what the checks proved. For each, read `git diff origin/<base>...HEAD`
+      (cd into ./fixes/<finding> first,
+      relative path) against its diagnosis in ./diagnosis.json. Block it if it fixes a symptom
       not the cause, changes more than the finding needs, weakens a check, a
       guard or a test, or commits anything that looks like a secret. Otherwise
-      approve. Set any_approved to true if at least one is approved.
-      Write exactly your submitted output to ./review.json as well.
+      approve. Set any_approved to true if at least one is approved. Submit
+      only; do not write a file.
     output_schema:
       type: object
       additionalProperties: false
@@ -223,12 +251,13 @@ steps:
     tools: [read, bash]
     max_turns: 30
     prompt: |
-      For each fix in ./fixes.json whose verdict in the review step is approve
-      ({{ json .Steps.review.verdicts }}): push its branch from its worktree and
+      For each fix in ./fixes.json whose verdict below is approve: `cd
+      fixes/<finding>` (relative), `git push -u origin <branch>`, and
       open a PR against its base. Body: the finding, the diagnosis and its
       evidence (./diagnosis.json), what verify proved (./verify.json), the
-      reviewer's reason. Never add a Co-authored-by line.
-      Write ./prs.json as your submitted output.
+      reviewer's reason. Never add a Co-authored-by line. Submit the PRs; do
+      not write a file.
+      Verdicts: {{ json .Steps.review.verdicts }}
     output_schema:
       type: object
       additionalProperties: false
@@ -251,7 +280,13 @@ steps:
     when:
       - path: input.auto_merge
         equals: true
-    run: python3 ./merge.py
+      - path: publish.prs
+        exists: true
+    run: &merge |
+      cat > prs.json <<'WFX_JSON'
+      {{ json .Steps.publish }}
+      WFX_JSON
+      python3 ./merge.py
     timeout_sec: 300
     output_schema:
       type: object
@@ -268,8 +303,10 @@ steps:
     when:
       - path: input.auto_merge
         equals: false
+      - path: publish.prs
+        exists: true
     requires_approval: true
-    run: python3 ./merge.py
+    run: *merge
     timeout_sec: 300
     output_schema:
       type: object
@@ -282,8 +319,18 @@ steps:
   # 8. Always: what was done, what was not, and what a person must do.
   - id: report
     name: Report and remember
-    needs: [collect, diagnose, fix, verify, review, publish, merge_auto, merge_gated]
-    run: DRY_RUN={{ .Input.dry_run }} python3 ./report.py
+    needs: [collect, diagnose, prepare, fix, verify, review, publish, merge_auto, merge_gated]
+    run: |
+      cat > review.json <<'WFX_JSON'
+      {{ json .Steps.review }}
+      WFX_JSON
+      cat > prs.json <<'WFX_JSON'
+      {{ json .Steps.publish }}
+      WFX_JSON
+      cat > diagnosis.json <<'WFX_JSON'
+      {{ json .Steps.diagnose }}
+      WFX_JSON
+      DRY_RUN={{ .Input.dry_run }} python3 ./report.py
     timeout_sec: 120
     output_schema:
       type: object

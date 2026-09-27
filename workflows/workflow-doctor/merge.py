@@ -23,9 +23,9 @@ def main():
     if not os.path.exists("prs.json"):
         print("no pull requests to merge")
         return 0
-    prs = json.load(open("prs.json")).get("prs") or []
+    prs = (json.load(open("prs.json")) or {}).get("prs") or []
     findings = {f["id"]: f for f in json.load(open("findings.json"))["findings"]}
-    fixes = {f["finding"]: f for f in (json.load(open("fixes.json")).get("fixes") or [])} if os.path.exists("fixes.json") else {}
+    fixes = {f["finding"]: f for f in ((json.load(open("fixes.json")) or {}).get("fixes") or [])} if os.path.exists("fixes.json") else {}
     merged, ok = [], True
     for pr in prs:
         code, msg = sh(["gh", "pr", "merge", pr["url"], "--squash", "--delete-branch"])

@@ -14,7 +14,7 @@ import subprocess
 
 def load(name, default):
     try:
-        return json.load(open(name))
+        return json.load(open(name)) or default
     except Exception:
         return default
 
