@@ -29,7 +29,7 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 		if got != want {
 			t.Errorf("%+v: got %q, want %q", c.p, got, want)
 		}
-		if len(cfg.Env) != 1 || cfg.Model != "m" {
+		if cfg.Env[len(cfg.Env)-1] != "K=V" || cfg.Model != "m" {
 			t.Errorf("%+v: env/model not carried: %+v", c.p, cfg)
 		}
 	}
@@ -38,5 +38,20 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 func TestTheDoctorLooksForTheProgramAnAdapterReallyRuns(t *testing.T) {
 	if b := providerBinary(catalog.Provider{Kind: catalog.KindACP, Preset: "codex"}); b != "npx" {
 		t.Errorf("codex over ACP runs through npx, doctor looked for %q", b)
+	}
+}
+
+// opencode is driven as a model: its own tools must be off, or its build agent
+// does the task itself with its own bash and the step never finishes a turn.
+func TestOpencodeIsLaunchedWithItsOwnToolsDenied(t *testing.T) {
+	cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", []string{"K=V"})
+	env := strings.Join(cfg.Env, "\n")
+	for _, tool := range []string{`"bash":"deny"`, `"edit":"deny"`, `"read":"deny"`, `"webfetch":"deny"`} {
+		if !strings.Contains(env, tool) {
+			t.Errorf("opencode env lacks %s:\n%s", tool, env)
+		}
+	}
+	if cfg.Env[len(cfg.Env)-1] != "K=V" {
+		t.Error("the step's env must come after the adapter's, so it can override")
 	}
 }

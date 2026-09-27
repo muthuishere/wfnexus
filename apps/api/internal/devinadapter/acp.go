@@ -65,7 +65,17 @@ type ACPPreset struct {
 	Mode string
 	// Install is how a person gets the program, shown when it is missing.
 	Install string
+	// Env is added to the agent's environment before the step's own env.
+	Env []string
 }
+
+// opencodeAsAModel denies every tool opencode has of its own. wfnexus drives an
+// ACP agent as a MODEL: the step's tools are called by wfnexus and handed back
+// in the transcript. Left to itself opencode's build agent ran its own bash
+// instead and a step sat for 20+ minutes with no turn finished (2026-09-27).
+// Measured: a per-tool "deny" removes the tool from the model; `tools: false`
+// was ignored and a "*" deny made it answer nothing.
+var opencodeAsAModel = `OPENCODE_CONFIG_CONTENT={"permission":{"bash":"deny","edit":"deny","write":"deny","patch":"deny","read":"deny","glob":"deny","grep":"deny","list":"deny","webfetch":"deny","websearch":"deny","codesearch":"deny","task":"deny","todowrite":"deny","todoread":"deny","skill":"deny","question":"deny"}}`
 
 // ACPPresets are the agents wfnexus knows by name. Each was measured over real
 // stdio ACP (2026-09-27): all three advertise their models as a "model"
@@ -77,7 +87,7 @@ var ACPPresets = map[string]ACPPreset{
 		Install: "curl -fsSL https://cli.devin.ai/install.sh | bash"},
 	// opencode offers every provider it is configured for (~680), free ones included.
 	"opencode": {Bin: "opencode", Argv: []string{"acp"}, Mode: "build",
-		Install: "brew install sst/tap/opencode"},
+		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel}},
 	// codex speaks ACP through Zed's adapter; it uses codex's own login.
 	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
 		Install: "npm i -g @openai/codex && codex login"},
@@ -150,6 +160,11 @@ type ACPAgent struct {
 	chunks   strings.Builder
 
 	readErr chan error
+
+	// procMu guards proc on its own, so Close can kill the process while a
+	// turn holds mu — which is exactly when it needs to.
+	procMu sync.Mutex
+	proc   *os.Process
 
 	// models is what the agent advertised at session/new; current is the
 	// model the session is on after start.
@@ -234,6 +249,16 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 // Close stops the process. Safe to call more than once, and safe to call on an
 // agent that never started.
 func (a *ACPAgent) Close() error {
+	// Kill first, WITHOUT mu: a turn blocked in session/prompt holds mu, and
+	// waiting for it is what kept a cancelled step alive. The dead process
+	// closes stdout, the reader reports it, and the blocked call returns.
+	a.procMu.Lock()
+	if a.proc != nil {
+		_ = a.proc.Kill()
+		a.proc = nil
+	}
+	a.procMu.Unlock()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.started {
@@ -294,6 +319,9 @@ func (a *ACPAgent) start(ctx context.Context, workdir string) error {
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
 	a.cmd, a.stdin, a.started = cmd, stdin, true
+	a.procMu.Lock()
+	a.proc = cmd.Process
+	a.procMu.Unlock()
 	go a.read(stdout)
 
 	startCtx, cancel := context.WithTimeout(ctx, a.cfg.StartTimeout)

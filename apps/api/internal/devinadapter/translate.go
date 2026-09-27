@@ -153,16 +153,17 @@ func buildPrompt(requestBody []byte, bad string, cause error) string {
 	b.WriteString("\n</openai_request>\n\n")
 
 	b.WriteString(`<instructions>
-Answer that request as the model. Reply with ONLY the OpenAI response object, inside <openai_response> tags, and no prose outside them:
+Answer that request as the model. Reply with ONLY the assistant message object, inside <openai_response> tags, and no prose outside them:
 
 <openai_response>
-{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"your answer here"}}]}
+{"role":"assistant","content":"your answer here"}
 </openai_response>
 
 Rules:
 - The CALLER executes the functions in the request's "tools" — you cannot run them yourself, and you must NOT use any tools of your own to do the task.
-- To call functions, set finish_reason to "tool_calls" and put them in the message:
+- To call functions, put them in the message:
   {"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"NAME","arguments":{...}}}]}
+- Count your brackets: every { and [ you open must be closed before </openai_response>.
 - "content" is plain prose or null — NEVER structured data. Data a function takes goes in that call's "arguments". Describing a call in "content" does nothing; it is not a call.
 - Put ALL independently runnable calls in one array. Never guess a value that must come from another call's result — make the prerequisite call first and wait for it.
 - The request's "messages" already contain every call you have made and its result. Never repeat a call whose result is already there; use the result.

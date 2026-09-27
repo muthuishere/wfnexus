@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 )
@@ -204,5 +205,42 @@ for line in sys.stdin:
 	_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
 	if err == nil || !strings.Contains(err.Error(), "not supported on this plan") {
 		t.Fatalf("err = %v: the agent's reason was dropped", err)
+	}
+}
+
+// A model that never answers must not hold a cancelled step: Close, called
+// while the turn is blocked, ends it at once instead of after the timeout.
+func TestACPCloseInterruptsATurnTheModelNeverAnswers(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "silent")
+	os.WriteFile(bin, []byte(`#!/usr/bin/env python3
+import json,sys
+for line in sys.stdin:
+    m=json.loads(line); mid=m.get("id"); meth=m.get("method")
+    if meth=="session/prompt": continue   # never answers
+    r={"sessionId":"s"} if meth=="session/new" else {}
+    sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":mid,"result":r})+"\n"); sys.stdout.flush()
+`), 0o755)
+	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
+		done <- err
+	}()
+	time.Sleep(500 * time.Millisecond)
+	closed := make(chan struct{})
+	go func() { a.Close(); close(closed) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a turn with no answer returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not interrupt the blocked turn")
+	}
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close itself hung")
 	}
 }

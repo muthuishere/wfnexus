@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"github.com/muthuishere/wfnexus/apps/api/internal/judge"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,14 @@ func ReviewUnreviewed(why string) Review { return Review{Verdict: "unreviewed", 
 func (e *Engine) classifierConfigured() bool {
 	if e.classifierOpts != nil {
 		return true
+	}
+	if e.cfg.DefaultClassifier != "" {
+		entry, ok := e.catalog.Classifiers.Get(e.cfg.DefaultClassifier)
+		if !ok {
+			return false
+		}
+		_, keyEnv, err := judge.Options(entry)
+		return err == nil && (keyEnv == "" || os.Getenv(keyEnv) != "")
 	}
 	if e.cfg.ClassifierBaseURL == "" || e.cfg.ClassifierModel == "" {
 		return false

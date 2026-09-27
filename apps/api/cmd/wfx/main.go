@@ -1112,11 +1112,13 @@ func doctor() error {
 	}
 
 	if d.Default.Provider != "" {
+		// The endpoint below is not used by anything then, so it is not shown.
 		fmt.Printf("default provider %s  (WFX_DEFAULT_PROVIDER: steps without their own provider run here)\n", d.Default.Provider)
+	} else {
+		fmt.Printf("default model    %s\n", d.Default.Model)
+		fmt.Printf("                 %s (%s)\n", d.Default.BaseURL, d.Default.Style)
+		fmt.Printf("                 %s %s\n", d.Default.APIKeyEnv, tick(d.Default.KeySet, "set", "NOT SET"))
 	}
-	fmt.Printf("default model    %s\n", d.Default.Model)
-	fmt.Printf("                 %s (%s)\n", d.Default.BaseURL, d.Default.Style)
-	fmt.Printf("                 %s %s\n", d.Default.APIKeyEnv, tick(d.Default.KeySet, "set", "NOT SET"))
 	if len(d.Models) > 1 {
 		fmt.Printf("offered models   %s\n", strings.Join(d.Models, ", "))
 	}

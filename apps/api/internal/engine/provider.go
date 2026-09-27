@@ -216,6 +216,8 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) devinada
 	}
 	if pr, ok := devinadapter.ACPPresets[name]; ok {
 		cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
+		// The adapter's env first, the step's after, so a step can still override.
+		cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
 	} else {
 		cfg.Bin = name // an unknown preset is the program's name, spoken to as `<name> acp`
 	}

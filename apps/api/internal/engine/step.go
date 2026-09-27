@@ -130,6 +130,13 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
 	defer prov.Close()
+	// A cancelled or timed-out step must stop its agent NOW, not when the
+	// in-flight turn returns: an ACP turn waiting on a stalled model held the
+	// run's slot for its whole 15-minute timeout after the run was cancelled,
+	// so queued runs behind it never started (2026-09-27). Close is safe to
+	// call twice and from another goroutine.
+	stopOnCancel := context.AfterFunc(ctx, prov.Close)
+	defer stopOnCancel()
 
 	// Every MetricEvent still lands in the append-only event log; it is now
 	// ALSO folded into the step's aggregate and written on a bounded cadence,

@@ -116,8 +116,17 @@ func (e *Engine) classifierFor(step *workflow.Step) (*tn.Classifier, error) {
 	if e.classifierOpts != nil {
 		return tn.CreateClassifier(*e.classifierOpts)
 	}
-	if step != nil && step.Classifier != "" {
-		entry, err := e.catalog.Classifiers.Require(step.Classifier)
+	name := ""
+	if step != nil {
+		name = step.Classifier
+	}
+	// The operator's default classifier stands in for a step that names none,
+	// exactly as if it had; an unknown default is refused, not bypassed.
+	if name == "" {
+		name = e.cfg.DefaultClassifier
+	}
+	if name != "" {
+		entry, err := e.catalog.Classifiers.Require(name)
 		if err != nil {
 			return nil, err
 		}
