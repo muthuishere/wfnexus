@@ -62,6 +62,11 @@ def check(fix):
                 folders.add("/".join(parts[: i + 2]))
                 break
     for folder in sorted(folders):
+        # a file git ignores never reaches the PR, so a fresh checkout lacks it
+        # (seen: a stray exclude hid questions.yaml; the classifier had no config)
+        _, ignored = sh(["git", "status", "--porcelain", "--ignored", "--", folder], wt)
+        hidden = [l[3:] for l in ignored.splitlines() if l.startswith("!! ") and "__pycache__" not in l]
+        record(f"nothing in {folder} is git-ignored", not hidden, ", ".join(hidden))
         wf = os.path.join(folder, "workflow.yaml")
         if not os.path.isdir(os.path.join(wt, folder)):
             continue  # the branch removed the folder
