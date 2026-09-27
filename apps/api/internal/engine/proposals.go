@@ -121,11 +121,13 @@ func (e *Engine) classifierConfigured() bool {
 			return false
 		}
 		_, keyEnv, err := judge.Options(entry)
+		e.keyFromStore(keyEnv)
 		return err == nil && (keyEnv == "" || os.Getenv(keyEnv) != "")
 	}
 	if e.cfg.ClassifierBaseURL == "" || e.cfg.ClassifierModel == "" {
 		return false
 	}
+	e.keyFromStore(e.cfg.ClassifierAPIKeyEnv)
 	return e.cfg.ClassifierAPIKeyEnv == "" || os.Getenv(e.cfg.ClassifierAPIKeyEnv) != ""
 }
 

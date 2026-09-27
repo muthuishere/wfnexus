@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -130,18 +131,39 @@ func (e *Engine) classifierFor(step *workflow.Step) (*tn.Classifier, error) {
 		if err != nil {
 			return nil, err
 		}
-		opts, _, err := judge.Options(entry)
+		opts, keyEnv, err := judge.Options(entry)
 		if err != nil {
 			return nil, err
 		}
+		e.keyFromStore(keyEnv)
 		return tn.CreateClassifier(opts)
 	}
+	e.keyFromStore(e.cfg.ClassifierAPIKeyEnv)
 	return tn.CreateClassifier(tn.ClassifierOptions{
 		Style:     tn.StyleSystemOne,
 		BaseURL:   e.cfg.ClassifierBaseURL,
 		Model:     e.cfg.ClassifierModel,
 		APIKeyEnv: e.cfg.ClassifierAPIKeyEnv,
 	})
+}
+
+// keyFromStore makes a classifier key held in the platform's env store
+// visible to the classifier, which reads its key only from the process
+// environment by NAME. Under launchd the process has none of the operator's
+// shell variables, so every judge ran keyless and TypeSafe answered 403 while
+// the key sat in `wfx env` (2026-09-27). Only the system scope is used: a
+// judge is not a project's. The value is never logged or returned.
+func (e *Engine) keyFromStore(name string) {
+	if name == "" || os.Getenv(name) != "" {
+		return
+	}
+	sys, err := e.platformEnv(context.Background(), "")
+	if err != nil {
+		return
+	}
+	if v := sys[name]; v != "" {
+		_ = os.Setenv(name, v)
+	}
 }
 
 // decideGate reports whether a gate's condition is met by the answers.
