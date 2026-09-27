@@ -657,7 +657,10 @@ func follow(id string, once bool) error {
 		if s := render(ev.StepID, ev.Kind, ev.Payload); s != "" {
 			fmt.Println(s)
 		}
-		if ev.Kind == "run.status" {
+		// Following, the first terminal status ends it. Reading the whole
+		// history (once), keep going: a retried run has events after its
+		// first failure, and stopping there hid the retry entirely.
+		if ev.Kind == "run.status" && !once {
 			switch ev.Payload["status"] {
 			case "done", "failed", "cancelled", "awaiting_approval", "needs_input":
 				return nil

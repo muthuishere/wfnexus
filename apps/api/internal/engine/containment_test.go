@@ -149,6 +149,19 @@ func TestRelativePathsArePinnedToTheWorkspace(t *testing.T) {
 		t.Fatal("with no workspace there is nothing to pin")
 	}
 
+	// bash's workdir is a path too: a relative one must land in the workspace
+	got = pinPaths("bash", map[string]any{"command": "git diff", "workdir": "fixes/abc"}, ws)
+	if got == nil || got["workdir"] != filepath.Join(ws, "fixes/abc") || got["command"] != "git diff" {
+		t.Fatalf("relative bash workdir not pinned: %v", got)
+	}
+	rail := containmentGuardrail(ws)
+	if r := rail(tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": "ls", "workdir": "/etc"}}); r == "" {
+		t.Fatal("a bash workdir outside the workspace was allowed")
+	}
+	if r := rail(tn.BeforeToolEvent{Name: "bash", Args: map[string]any{"command": "ls", "workdir": "fixes/abc"}}); r != "" {
+		t.Fatalf("a relative bash workdir inside the workspace was denied: %s", r)
+	}
+
 	patch := "*** Begin Patch\n*** Add File: internal/x_test.go\n+package x\n*** End Patch"
 	got = pinPaths("apply_patch", map[string]any{"patchText": patch}, ws)
 	if got == nil || !strings.Contains(got["patchText"].(string), "*** Add File: "+filepath.Join(ws, "internal/x_test.go")) {
