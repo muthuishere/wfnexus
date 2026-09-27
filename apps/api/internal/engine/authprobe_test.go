@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
@@ -26,7 +27,16 @@ func writeFake(t *testing.T, dir, name, body string) {
 // task 2.5 — three binaries, three states. The authenticated one is ready,
 // the logged-out one is present (the check ran and said no), and the one
 // with no table entry is present with authentication not checked.
+// slowMachine gives a probe of a freshly written fake the time a loaded
+// machine needs to exec it the first time; what is tested is the verdict.
+func slowMachine(t *testing.T) {
+	old := authProbeTimeout
+	authProbeTimeout = 60 * time.Second
+	t.Cleanup(func() { authProbeTimeout = old })
+}
+
 func TestAProbeDistinguishesReadyFromPresent(t *testing.T) {
+	slowMachine(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("vendor fakes are shell scripts; Windows cannot exec them")
 	}
@@ -63,6 +73,7 @@ func TestAProbeDistinguishesReadyFromPresent(t *testing.T) {
 
 // A logged-in gh run prints a token. The probe must not keep it.
 func TestAGHProbeDoesNotRetainStdout(t *testing.T) {
+	slowMachine(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("vendor fakes are shell scripts; Windows cannot exec them")
 	}

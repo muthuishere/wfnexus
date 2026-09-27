@@ -118,7 +118,7 @@ func probeAuth(name, path string) authVerdict {
 	if !ok {
 		return authUnknown
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), authProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, spec.args...)
 	var stdout, stderr bytes.Buffer
@@ -140,3 +140,9 @@ func probeAuth(name, path string) authVerdict {
 	}
 	return spec.classify(code, stdout.String(), stderr.String())
 }
+
+// authProbeTimeout bounds one auth probe. A variable so tests, which exec
+// freshly written fake CLIs, can wait longer: macOS scans a new executable on
+// its first run, and on a loaded machine two such probes took 13s and one came
+// back unanswered — a workflow read that as a red suite (2026-09-27).
+var authProbeTimeout = 8 * time.Second
