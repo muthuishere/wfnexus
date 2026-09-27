@@ -2,6 +2,7 @@ package proposal
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -210,5 +211,62 @@ func TestARepositoryWithARemoteGetsAPushedBranchAndAPullRequest(t *testing.T) {
 	last := ghCalls[len(ghCalls)-1]
 	if strings.Join(last[:3], " ") != "pr close https://github.com/o/r/pull/7" {
 		t.Fatalf("reject did not close the PR: %v", ghCalls)
+	}
+}
+
+// pushedWithoutPR opens a proposal against a repository whose remote accepts
+// the push but whose gh fails — the state a real run reached with gh
+// unauthenticated: the branch is on the remote, the proposal has no PR.
+func pushedWithoutPR(t *testing.T) (Repo, string, *Opened) {
+	t.Helper()
+	r := soloRepo(t)
+	ctx := context.Background()
+	bare := t.TempDir()
+	mustGit(t, bare, "init", "-q", "--bare")
+	mustGit(t, r.Root, "remote", "add", "origin", bare)
+	mustGit(t, r.Root, "push", "-q", "-u", "origin", "main")
+
+	prev := Run
+	t.Cleanup(func() { Run = prev })
+	Run = func(ctx context.Context, dir, name string, args ...string) (string, error) {
+		if name == "gh" {
+			return "HTTP 401: Requires authentication", errors.New("exit status 1")
+		}
+		return prev(ctx, dir, name, args...)
+	}
+	o, err := r.Open(ctx, Change{Workflow: "hello", Kind: KindEdit, Message: "wfx: edit", WorkDir: t.TempDir(),
+		Apply: writeHello("name: hello\ny: 2\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.PRURL != "" || !strings.Contains(o.Note, "no pull request") {
+		t.Fatalf("opened = %+v", o)
+	}
+	if mustGit(t, bare, "branch", "--list", o.Branch) == "" {
+		t.Fatal("the proposal branch was not pushed")
+	}
+	return r, bare, o
+}
+
+func TestRejectingAPushedProposalWithNoPRDeletesTheRemoteBranch(t *testing.T) {
+	r, bare, o := pushedWithoutPR(t)
+	if err := r.Close(context.Background(), o.Branch, "", "nope"); err != nil {
+		t.Fatal(err)
+	}
+	if out := mustGit(t, bare, "branch", "--list", o.Branch); out != "" {
+		t.Fatalf("the rejected branch is still on the remote: %q", out)
+	}
+}
+
+func TestApprovingAPushedProposalWithNoPRLandsOnTheRemoteToo(t *testing.T) {
+	r, bare, o := pushedWithoutPR(t)
+	if err := r.Merge(context.Background(), o.Base, o.Branch, ""); err != nil {
+		t.Fatal(err)
+	}
+	if local, remote := mustGit(t, r.Root, "rev-parse", "main"), mustGit(t, bare, "rev-parse", "main"); local != remote {
+		t.Fatalf("the checkout's main (%s) is not what the remote has (%s): the next PR approve could not fast-forward", local, remote)
+	}
+	if out := mustGit(t, bare, "branch", "--list", o.Branch); out != "" {
+		t.Fatalf("the merged branch is still on the remote: %q", out)
 	}
 }

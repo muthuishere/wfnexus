@@ -318,7 +318,29 @@ func (r Repo) Merge(ctx context.Context, base, branch, prURL string) error {
 		return err
 	}
 	_, _ = git(ctx, r.Root, "branch", "-d", branch)
+	// A proposal can be pushed yet have no PR (gh was not authenticated, or
+	// the PR call failed). Merging it only locally would leave the checkout
+	// ahead of its upstream, and the next PR-backed approve would then fail its
+	// fast-forward pull. So when the base tracks a remote, the merge goes there
+	// too, and the pushed proposal branch is removed.
+	if remote := r.Remote(ctx); remote != "" {
+		if _, err := git(ctx, r.Root, "rev-parse", "--abbrev-ref", base+"@{upstream}"); err == nil {
+			if _, err := git(ctx, r.Root, "push", remote, base); err != nil {
+				return fmt.Errorf("merged into the local %s, but pushing it failed: %w", base, err)
+			}
+		}
+		r.deleteRemoteBranch(ctx, remote, branch)
+	}
 	return nil
+}
+
+// deleteRemoteBranch removes a proposal branch from the remote when it is
+// there. Best effort: a branch that is already gone is the goal, not an error.
+func (r Repo) deleteRemoteBranch(ctx context.Context, remote, branch string) {
+	if _, err := git(ctx, r.Root, "ls-remote", "--exit-code", "--heads", remote, branch); err != nil {
+		return
+	}
+	_, _ = git(ctx, r.Root, "push", remote, "--delete", branch)
 }
 
 // cleanMatching clears working-copy changes under the workflows directory that
@@ -359,6 +381,9 @@ func (r Repo) Close(ctx context.Context, branch, prURL, reason string) error {
 		if _, err := Run(ctx, r.Root, "gh", args...); err != nil {
 			return err
 		}
+	} else if remote := r.Remote(ctx); remote != "" {
+		// Pushed, but no PR was opened: the branch on the remote is ours to remove.
+		r.deleteRemoteBranch(ctx, remote, branch)
 	}
 	if r.branchExists(ctx, branch) {
 		if _, err := git(ctx, r.Root, "branch", "-D", branch); err != nil {
