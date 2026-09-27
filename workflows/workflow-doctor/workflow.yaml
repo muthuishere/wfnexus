@@ -250,7 +250,9 @@ steps:
       relative path) against its diagnosis in ./diagnosis.json. Block it if it fixes a symptom
       not the cause, changes more than the finding needs, weakens a check, a
       guard or a test, or commits anything that looks like a secret. Otherwise
-      approve. Set any_approved to true if at least one is approved. Submit
+      approve — but only on what you read: every verdict must list, in
+      `evidence`, the diff hunks you checked as file:line. "verify.json says
+      ok" is not a review; verify proves it runs, you judge whether it is right. Set any_approved to true if at least one is approved. Submit
       only; do not write a file.
     output_schema:
       type: object
@@ -262,11 +264,12 @@ steps:
           type: array
           items:
             type: object
-            required: [finding, verdict, reason]
+            required: [finding, verdict, reason, evidence]
             properties:
-              finding: { type: string }
-              verdict: { type: string, enum: [approve, block] }
-              reason:  { type: string }
+              finding:  { type: string }
+              verdict:  { type: string, enum: [approve, block] }
+              reason:   { type: string }
+              evidence: { type: array, minItems: 1, items: { type: string } }
 
   # 6. The approved fixes become pull requests.
   - id: publish
