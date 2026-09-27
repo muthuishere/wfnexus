@@ -33,7 +33,7 @@ describe('the UI a person actually downloads', () => {
     const list = await waitFor(() => { const l = document.querySelector('.wflist'); expect(l).toBeTruthy(); return l as HTMLElement })
     await within(list).findByText('deterministic')
     await within(list).findByText('failing')
-    const nav = document.querySelector('.top nav') as HTMLElement
+    const nav = document.querySelector('.side nav') as HTMLElement
     expect(within(nav).queryByText('All runs')).toBeNull()
     expect(within(nav).queryByText('Builder')).toBeNull()
     expect(within(nav).queryByText('Workflows')).toBeNull()
@@ -57,7 +57,7 @@ describe('the UI a person actually downloads', () => {
     const templates = await api.templates()
     expect(templates.length).toBeGreaterThan(0)
     const r = await api.copyTemplate(templates[0].name, 'first-one', 'started-here')
-    expect(r.path).toContain('started-here')
+    expect((r as { path: string }).path).toContain('started-here')
     const p = await api.project('started-here')
     expect(p.workflows).toContain('first-one')
   })
@@ -127,7 +127,7 @@ describe('the UI a person actually downloads', () => {
     go('#/projects/local/deterministic')
     // A workflow that has run opens on its runs, named by what they are about.
     await screen.findByText('drill-down placement')
-    expect(screen.getByRole('tab', { name: /Runs/ }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: /History/ }).getAttribute('aria-selected')).toBe('true')
     cleanup()
 
     go(`#/projects/local/deterministic/runs/${run.id}`)

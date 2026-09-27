@@ -3,6 +3,8 @@ import { api, type Template } from '../api'
 import FileList from '../components/FileList'
 import { href } from '../lib/routes'
 import Crumbs from '../components/Crumbs'
+import { ProposedNotice } from '../components/Changes'
+import { isProposal, type Proposal } from '../lifecycle'
 import { labelOf, useCategories } from '../lib/categories'
 
 /** The gallery: workflows that exist to be copied.
@@ -93,19 +95,25 @@ export default function TemplatesPage({ project }: { project?: string }) {
 function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?: string; onCopied: () => void; onError: (s: string) => void }) {
   const [as, setAs] = useState(t.name)
   const [busy, setBusy] = useState(false)
+  const [proposal, setProposal] = useState<Proposal>()
 
   const copy = () => {
     setBusy(true)
     // Into the project the gallery was opened from; from the top-level
     // gallery, the platform's own.
     api.copyTemplate(t.name, as.trim(), project)
-      .then(r => { location.hash = href.edit(project || 'local', r.name); onCopied() })
+      .then(r => {
+        // Into a repo, a copy is a proposed change, not a written file.
+        if (isProposal(r)) { setProposal(r); return }
+        location.hash = href.edit(project || 'local', r.name); onCopied()
+      })
       .catch(e => onError(String(e.message || e)))
       .finally(() => setBusy(false))
   }
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
+      {proposal && <ProposedNotice proposal={proposal} />}
       <div className="subhead">
         <h2>{t.title}</h2>
         {t.needsSkills && <span className="pill">skills to add</span>}

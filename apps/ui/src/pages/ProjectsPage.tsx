@@ -4,6 +4,7 @@ import { href } from '../lib/routes'
 import { useWaiting } from '../lib/waiting'
 import { labelOf, useCategories } from '../lib/categories'
 import { ago } from '../lib/time'
+import ConnectRepo from '../components/ConnectRepo'
 
 /** The dashboard, and the top of the hierarchy: project → workflow → runs.
  *
@@ -17,6 +18,7 @@ export default function ProjectsPage() {
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
   const [adding, setAdding] = useState(false)
+  const [connecting, setConnecting] = useState(false)
   const waiting = useWaiting()
   const cats = useCategories()
   const groups = useMemo(() => {
@@ -50,13 +52,15 @@ export default function ProjectsPage() {
           <button className="ghost" onClick={() => api.reload()
             .then(w => { setNote(`Reloaded — ${w.length} workflow(s).`); load() })
             .catch(e => setErr(e instanceof Error ? e.message : String(e)))}>Reload from disk</button>
-          <button onClick={() => setAdding(a => !a)}>{adding ? 'Cancel' : 'New project'}</button>
+          <button className="ghost" onClick={() => { setConnecting(c => !c); setAdding(false) }}>{connecting ? 'Cancel' : 'Connect a repo'}</button>
+          <button onClick={() => { setAdding(a => !a); setConnecting(false) }}>{adding ? 'Cancel' : 'New project'}</button>
         </div>
       </div>
 
       {err && <div className="banner err">{err}</div>}
       {note && <div className="banner ok">{note}</div>}
       {adding && <NewProject onError={setErr} />}
+      {connecting && <ConnectRepo onDone={load} />}
 
       {/* A list, not a table: a person comes here to pick one and open it.
           Everything else about a project is on its own page. */}
