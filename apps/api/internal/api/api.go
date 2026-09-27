@@ -160,6 +160,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/workflows/validate", s.validateWorkflow)
 		r.Get("/mcp", s.listMcp)
 		r.Get("/providers", s.listProviders)
+		r.Get("/providers/{name}/models", s.providerModels)
+		r.Get("/adapters", s.listAdapters)
 		r.Get("/classifiers", s.listClassifiers)
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
@@ -372,6 +374,24 @@ func (s *Server) listMcp(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) listProviders(w http.ResponseWriter, _ *http.Request) {
 	c := s.eng.Catalog()
 	writeJSON(w, 200, map[string]any{"entries": c.Providers.List(), "skipped": c.Providers.Skips()})
+}
+
+// providerModels asks an acp provider's agent, live, which models it offers.
+func (s *Server) providerModels(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	m, err := s.eng.ProviderModels(ctx, urlName(r, "name"))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+// listAdapters is every agent wfnexus can drive over ACP, and whether it is
+// installed here.
+func (s *Server) listAdapters(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, s.eng.Adapters())
 }
 
 func (s *Server) listClassifiers(w http.ResponseWriter, _ *http.Request) {

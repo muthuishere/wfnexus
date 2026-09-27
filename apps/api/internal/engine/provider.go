@@ -186,6 +186,33 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 	}, nil
 }
 
+// acpConfig is the one place an acp registry entry becomes an adapter config,
+// shared by a step's turns and by `wfx models`. An explicit command is run
+// exactly as written, with the model chosen over the protocol; the devin
+// preset keeps devin's own --model flag and implicit acp subcommand.
+func acpConfig(p catalog.Provider, model, workdir string, env []string) devinadapter.ACP {
+	cfg := devinadapter.ACP{
+		Model: model, Cwd: workdir, Env: env,
+		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
+	}
+	if len(p.Command) > 0 {
+		cfg.Bin = p.Command[0]
+		cfg.Argv = append(append([]string{}, p.Command[1:]...), p.Args...)
+		return cfg
+	}
+	cfg.ExtraArgs = append([]string{}, p.Args...)
+	name := p.Preset
+	if name == "" {
+		name = "devin"
+	}
+	if pr, ok := devinadapter.ACPPresets[name]; ok {
+		cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
+	} else {
+		cfg.Bin = name // an unknown preset is the program's name, spoken to as `<name> acp`
+	}
+	return cfg
+}
+
 // localAgent builds the backend that executes one turn: a persistent ACP
 // process, or a fresh one-shot command per turn.
 func localAgent(p catalog.Provider, model, workdir string, env []string) (devinadapter.Agent, func(), error) {
@@ -198,19 +225,7 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 	if p.Kind == catalog.KindACP {
 		// One ACP process is one conversation, so it is per-step, not shared:
 		// two steps on one session would interleave into the same transcript.
-		bin, extra := p.Preset, append([]string{}, p.Args...)
-		if len(p.Command) > 0 {
-			bin, extra = p.Command[0], append(append([]string{}, p.Command[1:]...), p.Args...)
-		}
-		// "devin" is the adapter's own default binary, and NewACP spells it
-		// itself; an empty preset means the same thing.
-		if bin == "devin" {
-			bin = ""
-		}
-		a := devinadapter.NewACP(devinadapter.ACP{
-			Bin: bin, Model: model, Cwd: workdir, ExtraArgs: extra,
-			StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
-		})
+		a := devinadapter.NewACP(acpConfig(p, model, workdir, env))
 		return a, func() { _ = a.Close() }, nil
 	}
 
