@@ -257,3 +257,44 @@ func TestDriftListsAnUncommittedWorkflowAndTurnsItIntoAProposal(t *testing.T) {
 		t.Fatalf("after approving the drift the checkout is still dirty:\n%s", st)
 	}
 }
+
+func TestDecidedProposalShowsDiffAfterBranchDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action string
+		status string
+	}{
+		{name: "merged", action: "approve", status: "merged"},
+		{name: "rejected", action: "reject", status: "rejected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := proposalServer(t, true)
+			marker := "visible in decided proposal"
+			code, out := f.do(t, "PUT", "/api/workflows/hello?project=demo", f.editedHello(t, marker), "ana")
+			if code != 202 {
+				t.Fatalf("save = %d %v", code, out)
+			}
+			proposal := out["proposal"].(map[string]any)
+			id := proposal["id"].(string)
+			body := map[string]any{"actor": "bo"}
+			code, decided := f.do(t, "POST", "/api/proposals/"+id+"/"+tc.action, body, "")
+			if code != 200 {
+				t.Fatalf("decide = %d %v", code, decided)
+			}
+			if branch := runGit(t, f.repo, "branch", "--list", "wfx/*"); branch != "" {
+				t.Fatalf("proposal branch survived: %s", branch)
+			}
+			code, got := f.do(t, "GET", "/api/proposals/"+id, nil, "")
+			if code != 200 {
+				t.Fatalf("get decided proposal = %d %v", code, got)
+			}
+			gotProposal := got["proposal"].(map[string]any)
+			if gotProposal["status"] != tc.status || gotProposal["commit"] == "" {
+				t.Fatalf("decided proposal = %v", gotProposal)
+			}
+			if diff := got["diff"].(string); !strings.Contains(diff, marker) {
+				t.Fatalf("decided proposal diff does not contain %q: %q", marker, diff)
+			}
+		})
+	}
+}

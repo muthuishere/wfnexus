@@ -281,6 +281,10 @@ func (r Repo) Diff(ctx context.Context, base, branch string) (string, error) {
 	return git(ctx, r.Root, "diff", base+"..."+branch)
 }
 
+func (r Repo) CommitDiff(ctx context.Context, commit string) (string, error) {
+	return git(ctx, r.Root, "show", "--format=", "--patch", commit)
+}
+
 // Merge lands an approved proposal. With a PR it is `gh pr merge` and then
 // a pull of the tracked checkout; without one, a local merge into the
 // checkout's branch (solo mode).
