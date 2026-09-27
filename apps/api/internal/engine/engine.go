@@ -440,6 +440,7 @@ func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string,
 }
 
 func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errMsg string) {
+	errMsg = redactText(errMsg, e.redactions.get(runID))
 	if err := e.store.UpdateRun(context.WithoutCancel(ctx), runID, status, step, errMsg); err != nil {
 		log.Printf("engine: update run: %v", err)
 	}
@@ -447,6 +448,9 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 }
 
 func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) {
+	if p.Error != nil {
+		p.Error = str(redactText(*p.Error, e.redactions.get(runID)))
+	}
 	if e.store == nil {
 		// The platform owns the step row; the worker only reports what happened.
 		if p.Status != nil {

@@ -39,7 +39,12 @@ steps:
 
       Establish the project's test command and whether the suite is green right
       now; a suite that is already red is not something you caused, and the next
-      step needs to know. Then call submit_output.
+      step needs to know. A full suite can take minutes: run it through bash with
+      "timeout": 900000 (15 minutes), not the default. A command that TIMED OUT
+      did not fail — it did not finish. Never report suite_green false from a
+      timeout; re-run with a longer timeout or on the target package, and report
+      red only when a test actually failed (a FAIL line, a non-zero exit with
+      failures). Then call submit_output.
     output_schema:
       type: object
       additionalProperties: false

@@ -99,6 +99,20 @@ func (r *runSecrets) forget(runID uuid.UUID) {
 	delete(r.byID, runID)
 }
 
+// redactText replaces every sensitive value of the run in a plain string —
+// the step and run error text, which does not pass through emit. An agent's
+// rejected reply is quoted in its error, and a model can echo a secret it saw.
+func redactText(text string, secrets []secretValue) string {
+	for _, sv := range secrets {
+		for _, form := range secretForms(sv.value) {
+			if form != "" {
+				text = strings.ReplaceAll(text, form, "[redacted:"+sv.name+"]")
+			}
+		}
+	}
+	return text
+}
+
 // redactEvent returns payload with every sensitive value of the run replaced.
 // It goes through JSON so it reaches every string at every depth, whatever the
 // payload's Go type.
