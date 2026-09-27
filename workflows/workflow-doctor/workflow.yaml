@@ -237,7 +237,7 @@ steps:
     # A different model family from the fixer, over an API key: a CLI seat hit
     # its usage limit mid-run (run 11), and automating a subscription seat is
     # what the registry's terms notes warn against.
-    provider: gpt
+    provider: gpt5
     skills: [pr-reviewer, change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40
@@ -288,13 +288,15 @@ steps:
       open a PR against its base. Body: the finding, the diagnosis and its
       evidence (./diagnosis.json), what verify proved (./verify.json), the
       reviewer's reason. Never add a Co-authored-by line. Submit the PRs; do
-      not write a file.
+      not write a file. Set any_published to true only if at least one PR was
+      actually opened.
       Verdicts: {{ json .Steps.review.verdicts }}
     output_schema:
       type: object
       additionalProperties: false
-      required: [prs]
+      required: [prs, any_published]
       properties:
+        any_published: { type: boolean }
         prs:
           type: array
           items:
@@ -312,8 +314,8 @@ steps:
     when:
       - path: input.auto_merge
         equals: true
-      - path: publish.prs
-        exists: true
+      - path: publish.any_published
+        equals: true   # an empty list of PRs is not something to merge
     run: &merge |
       cat > prs.json <<'WFX_JSON'
       {{ json .Steps.publish }}
@@ -340,8 +342,8 @@ steps:
     when:
       - path: input.auto_merge
         equals: false
-      - path: publish.prs
-        exists: true
+      - path: publish.any_published
+        equals: true   # an empty list of PRs is not something to merge
     requires_approval: true
     run: *merge
     timeout_sec: 300

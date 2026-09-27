@@ -134,6 +134,16 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 	sample := sampleInput(def, input)
 	out.Input = sample
 
+	// What a real run's steps would see from the platform's env store. A dry run
+	// that checked only this process's environment called a key missing that
+	// every real run received (OPENROUTER_API_KEY, reported FATAL for weeks).
+	// Only the names are used here — whether a value is present, never what it is.
+	project := def.Source
+	if project == "" {
+		project = "local"
+	}
+	stored, _ := e.platformEnv(context.Background(), project)
+
 	fail := func(p DryProblem) {
 		if p.Fatal {
 			out.OK = false
@@ -176,7 +186,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		if ds.Kind == "prompt" {
 			ds.RunsOn = s.RunsOn
 			if e.servesLocally(s.RunsOn) {
-				prov, err := e.resolveLLM(s, "")
+				prov, err := e.resolveLLMWithEnv(s, "", workflow.MergeEnv(stored, s.Env))
 				if err != nil {
 					fail(DryProblem{Step: s.ID, Field: "provider", Message: err.Error(), Fatal: true})
 				} else {
@@ -190,7 +200,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 				// Caught here, where it costs nothing, and named as what it is.
 				if s.Provider != "" {
 					if p, err := e.catalog.Providers.Require(s.Provider); err == nil {
-						if c := checkProvider(p); !c.Ready {
+						if c := checkProviderWith(p, stored); !c.Ready {
 							fail(DryProblem{Step: s.ID, Field: "provider", Message: c.Problem, Fatal: true})
 						} else if c.Detail != "" {
 							ds.Shell = c.Detail // where the program actually is
@@ -263,7 +273,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			if e.servesLocally(s.RunsOn) {
 				var missing []string
 				for _, k := range keys {
-					if _, ok := os.LookupEnv(k); !ok {
+					if _, ok := os.LookupEnv(k); !ok && stored[k] == "" {
 						missing = append(missing, k)
 					}
 				}

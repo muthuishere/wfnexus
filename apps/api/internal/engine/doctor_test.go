@@ -47,3 +47,17 @@ func TestAnUnknownVendorIsOfferedNoLoginCommand(t *testing.T) {
 		t.Fatalf("the claude preset lost its login pointer: %q", cmd)
 	}
 }
+
+// A key in the platform's env store is a key a run will get: the check that
+// read only this process's environment called every OpenRouter provider NOT
+// READY while every real run used it.
+func TestProviderKeyFromTheEnvStoreCounts(t *testing.T) {
+	t.Setenv("WFX_TEST_STORE_ONLY_KEY", "")
+	p := catalog.Provider{Name: "gpt5", Kind: catalog.KindHTTP, BaseURL: "https://example.invalid/v1", APIKeyEnv: "WFX_TEST_STORE_ONLY_KEY"}
+	if checkProviderWith(p, nil).Ready {
+		t.Fatal("no key anywhere must be not ready")
+	}
+	if c := checkProviderWith(p, map[string]string{"WFX_TEST_STORE_ONLY_KEY": "present"}); !c.Ready {
+		t.Fatalf("a stored key was not counted: %s", c.Problem)
+	}
+}
