@@ -119,6 +119,21 @@ export type SkippedSkill = { location: string; reason: string }
 export type SkillRegistry = { roots: string[]; skills: Skill[]; skipped: SkippedSkill[] }
 export type BuiltinTool = { name: string; description: string }
 
+// ── skill sources: git repositories of skills, pinned to a ref ─────────────
+export type RefKind = 'branch' | 'tag' | 'commit'
+export type SkillSourceInfo = {
+  name: string; url: string; ref: string; refKind: RefKind; branch?: string
+  path: string; commit: string; syncedAt: string
+  skills: string[]; count: number
+  clashes?: { skill: string; ownedBy: string; location: string }[]
+}
+export type SkillSourceReport = {
+  source: SkillSourceInfo; added: string[]; removed: string[]; updated: string[]
+  pinned?: boolean; message: string
+}
+export type SkillFile = { name: string; description: string; path: string; content: string; loaded: boolean }
+export type RemoteRefs = { branches: string[]; tags: string[]; current: string }
+
 // ── the provider / classifier / mcp registries ─────────────────────────────
 // Every entry is a NAME a step can use (ADR 0011). `apiKeyEnv` is the name of
 // an environment variable and NEVER a value — the UI must never render or
@@ -337,6 +352,19 @@ export const api = {
       body: JSON.stringify({ definition }),
     })),
   skills: () => j<SkillRegistry>(fetch('/api/skills')),
+  skillSources: () => j<SkillSourceInfo[]>(fetch('/api/skill-sources')),
+  importSkillSource: (body: { url: string; ref?: string; path?: string; name?: string }) =>
+    j<SkillSourceReport>(post('/api/skill-sources', body)),
+  setSkillSourceRef: (name: string, ref: string) =>
+    j<SkillSourceReport>(fetch(`/api/skill-sources/${encodeURIComponent(name)}/ref`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ref }),
+    })),
+  refreshSkillSource: (name: string) =>
+    j<SkillSourceReport>(post(`/api/skill-sources/${encodeURIComponent(name)}/refresh`)),
+  removeSkillSource: (name: string) =>
+    j<SkillSourceReport>(fetch(`/api/skill-sources/${encodeURIComponent(name)}`, { method: 'DELETE' })),
+  skillSourceSkills: (name: string) => j<SkillFile[]>(fetch(`/api/skill-sources/${encodeURIComponent(name)}/skills`)),
+  skillSourceRefs: (name: string) => j<RemoteRefs>(fetch(`/api/skill-sources/${encodeURIComponent(name)}/refs`)),
 
   /** The env store: system-wide, and per project. Values go in; only names
    *  come back for anything marked secret. */

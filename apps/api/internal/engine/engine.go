@@ -152,7 +152,7 @@ func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 // skill and the step that uses it land in one hot reload. Workflows are
 // validated against the fresh registry; a bad reload changes nothing.
 func (e *Engine) ReloadDefinitions() error {
-	reg := skills.Load(e.skillRoots()...)
+	reg := skills.LoadRoots(e.skillRoots()...)
 	cat, err := catalog.Load(e.cfg.RegistriesPath, e.cfg.McpConfig)
 	if err != nil {
 		return err
@@ -171,7 +171,7 @@ func (e *Engine) ReloadDefinitions() error {
 	}
 	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
 	if e.adoptBundleRoots() {
-		reg = skills.Load(e.skillRoots()...)
+		reg = skills.LoadRoots(e.skillRoots()...)
 		defs, skips, err = workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
 	}
 	if err != nil {
@@ -209,12 +209,20 @@ func (e *Engine) adoptBundleRoots() bool {
 	return added
 }
 
-// skillRoots is every root the registry is built from, bundle roots first.
-func (e *Engine) skillRoots() []string {
+// skillRoots is every root the registry is built from, bundle roots first and
+// imported git skill sources LAST: importing a repository of skills never
+// changes what an existing skill name resolves to (skillsources.go).
+func (e *Engine) skillRoots() []skills.Root {
 	e.mu.Lock()
-	roots := append([]string(nil), e.bundleRoots...)
+	var roots []skills.Root
+	for _, d := range e.bundleRoots {
+		roots = append(roots, skills.Root{Dir: d})
+	}
 	e.mu.Unlock()
-	return append(roots, skills.DefaultRoots(e.cfg.SkillsDir)...)
+	for _, d := range skills.DefaultRoots(e.cfg.SkillsDir) {
+		roots = append(roots, skills.Root{Dir: d})
+	}
+	return append(roots, e.skillSourceRoots()...)
 }
 
 // BundleRootDirFor is where a machine keeps its pulled bundles, derivable

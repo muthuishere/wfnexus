@@ -1,0 +1,77 @@
+---
+title: Import skills from git
+description: Load every skill in a GitHub (or any git) repository into the server's skill registry, pinned to a branch, tag or commit you can change later.
+---
+
+A **skill source** is a git repository of skills. Import one and every directory under its
+`path` that holds a `SKILL.md` becomes a skill the server's steps can name. The source is pinned
+to a **ref** you choose — a branch, a tag or a commit — and you can switch it later.
+
+```bash
+wfx skills import https://github.com/muthuishere/wfnexus --ref main --path skills
+wfx skills sources                         # url, ref, commit, skill count and names
+wfx skills ref wfnexus v1.2.0              # switch to a tag (or a branch, or a commit)
+wfx skills refresh wfnexus                 # pull again — only a branch moves
+wfx skills show wfnexus                    # the skills it brings
+wfx skills remove wfnexus                  # unload them and delete the checkout
+```
+
+`--branch` is accepted as another spelling of `--ref`, and `wfx skills branch` of `wfx skills ref`.
+`--path` defaults to `skills`; `.` takes the whole repository. `--name` defaults to the repository's name.
+
+In the web UI the same actions live on the **Skill registry** page: *Import from GitHub*, a table of
+sources, and per source *Sync*, *Change ref* (a list of the remote's branches and tags, or any commit
+id) and *Remove*. Clicking a source lists its skills with each `SKILL.md`, read-only.
+
+## What a ref means
+
+| Ref | Recorded as | `refresh` |
+|---|---|---|
+| a branch (`main`) | `branch` + the commit it resolved to | fetches the branch and reloads |
+| a tag (`v1.2.0`) | `tag` + its commit | a no-op that says the source is pinned |
+| a commit (`3f2a9c1…`, short or full) | `commit` | a no-op that says the source is pinned |
+
+Every import, switch, refresh and remove reports the skills **added**, **removed** and **updated**
+(a changed `SKILL.md`). A switch that fails — a ref the remote does not have, a ref where `path` does
+not exist — leaves the source where it was.
+
+## Name clashes
+
+The first root to define a skill name keeps it: the platform's own skills, then `~/.claude/skills`
+and `~/.agents/skills`, then imported sources in name order. Importing a repository therefore
+never changes what an existing skill name does. A clash is reported on the import and on
+`wfx skills sources`, and the losing copy is listed as shadowed — never silently swapped in.
+
+## Private repositories
+
+For a `https://github.com/…` URL the server uses `GH_TOKEN` (else `GITHUB_TOKEN`) from the
+platform env store's system level (`wfx env set GH_TOKEN`, which reads the value without echoing it). It reaches git through environment
+configuration, never the command line or the URL, and is never printed.
+
+## Safety
+
+- `path` must stay inside the repository; `../x` and absolute paths are refused.
+- The URL must be `https://`, `http://`, `ssh://`, `git://`, `file://`, scp-style (`git@host:org/repo`)
+  or an absolute local path. `ext::` and other transport helpers, which run commands, are refused.
+- A ref may contain only letters, digits and `. _ / + -`, cannot start with a dash and cannot contain `..`.
+- git runs with argv, never a shell string, with prompts off and hooks pointed nowhere. Symlinks are
+  checked out as plain files, so a `SKILL.md` cannot point outside the checkout.
+- A skill's files are data. Nothing from an imported repository runs at import time.
+- A checkout over 100 MB, or with more than 500 skills under `path`, is refused.
+
+The list lives in `skill-sources.json` in the server's work dir, and each checkout in
+`<work dir>/skill-sources/<name>` — machine state beside the imported projects in `sources/`.
+
+## API
+
+All under the registry permissions: `registry:read` for `GET`, `registry:write` for the rest.
+
+| Method | Path | Body |
+|---|---|---|
+| `GET` | `/api/skill-sources` | |
+| `POST` | `/api/skill-sources` | `{"url", "ref", "path", "name"}` |
+| `PUT` | `/api/skill-sources/{name}/ref` | `{"ref"}` |
+| `POST` | `/api/skill-sources/{name}/refresh` | |
+| `DELETE` | `/api/skill-sources/{name}` | |
+| `GET` | `/api/skill-sources/{name}/skills` | |
+| `GET` | `/api/skill-sources/{name}/refs` | |

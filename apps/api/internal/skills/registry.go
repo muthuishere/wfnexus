@@ -80,8 +80,39 @@ func sourceLabel(root string) string {
 // so the registry sees exactly what an agent would load — same frontmatter
 // parsing, same skip reasons.
 func Load(roots ...string) *Registry {
-	r := &Registry{roots: existing(roots), byName: map[string]Skill{}}
-	for _, root := range r.roots {
+	labeled := make([]Root, 0, len(roots))
+	for _, r := range roots {
+		labeled = append(labeled, Root{Dir: r})
+	}
+	return LoadRoots(labeled...)
+}
+
+// Root is one discovery root with the label its skills carry. An empty Label
+// falls back to the path-derived one ("project", "claude", "agents"); a skill
+// source imported from git labels its root with the source's name, so every
+// skill it brings stays tagged with where it came from.
+type Root struct {
+	Dir   string
+	Label string
+}
+
+// LoadRoots is Load with explicit labels. Precedence is still order: the first
+// root that defines a name owns it, and later same-named skills are recorded
+// as Shadowed — reported, never silently swapped in.
+func LoadRoots(roots ...Root) *Registry {
+	r := &Registry{byName: map[string]Skill{}}
+	var use []Root
+	for _, rt := range roots {
+		if len(existing([]string{rt.Dir})) == 1 {
+			use = append(use, rt)
+			r.roots = append(r.roots, rt.Dir)
+		}
+	}
+	for _, rt := range use {
+		root, label := rt.Dir, rt.Label
+		if label == "" {
+			label = sourceLabel(root)
+		}
 		inv := tn.ListSkills(tn.LoadSkillsOptions{Dirs: []string{root}})
 		for _, s := range inv.Skills {
 			if prev, ok := r.byName[s.Name]; ok {
@@ -92,7 +123,7 @@ func Load(roots ...string) *Registry {
 			}
 			r.byName[s.Name] = Skill{
 				Name: s.Name, Description: s.Description, Root: root,
-				Location: s.Location, Source: sourceLabel(root),
+				Location: s.Location, Source: label,
 			}
 		}
 		for _, sk := range inv.Skipped {

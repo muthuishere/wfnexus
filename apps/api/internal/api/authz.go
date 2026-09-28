@@ -61,16 +61,18 @@ func DefaultRoles() map[string][]string {
 // else, is the whole rule — a per-route vocabulary would be a list nobody
 // keeps current, and a route that fell off it would silently be unguarded.
 var resourcePerms = map[string][2]string{
-	"workflows":   {PermWorkflowsRead, PermWorkflowsWrite},
-	"dryrun":      {PermWorkflowsRead, PermWorkflowsRead},
-	"proposals":   {PermWorkflowsRead, PermWorkflowsWrite},
-	"templates":   {PermWorkflowsRead, PermWorkflowsWrite},
-	"runs":        {PermRunsRead, PermRunsWrite},
-	"skills":      {PermRegistryRead, PermRegistryWrite},
-	"tools":       {PermRegistryRead, PermRegistryWrite},
-	"mcp":         {PermRegistryRead, PermRegistryWrite},
-	"providers":   {PermRegistryRead, PermRegistryWrite},
-	"classifiers": {PermRegistryRead, PermRegistryWrite},
+	"workflows": {PermWorkflowsRead, PermWorkflowsWrite},
+	"dryrun":    {PermWorkflowsRead, PermWorkflowsRead},
+	"proposals": {PermWorkflowsRead, PermWorkflowsWrite},
+	"templates": {PermWorkflowsRead, PermWorkflowsWrite},
+	"runs":      {PermRunsRead, PermRunsWrite},
+	"skills":    {PermRegistryRead, PermRegistryWrite},
+	// Git repositories of skills: importing one changes the registry.
+	"skill-sources": {PermRegistryRead, PermRegistryWrite},
+	"tools":         {PermRegistryRead, PermRegistryWrite},
+	"mcp":           {PermRegistryRead, PermRegistryWrite},
+	"providers":     {PermRegistryRead, PermRegistryWrite},
+	"classifiers":   {PermRegistryRead, PermRegistryWrite},
 	// Asking the server's classifier spends its key, so it is a run-level
 	// action, not a registry read.
 	"judge":      {PermRunsWrite, PermRunsWrite},
@@ -90,13 +92,13 @@ var resourcePerms = map[string][2]string{
 	"users":      {PermAdminRead, PermAdminWrite},
 	"roles":      {PermAdminRead, PermAdminWrite},
 	// How a subject is obtained, and what it may always ask about itself.
-	"device":  {PermPublic, PermPublic},
-	"health":  {PermPublic, PermPublic},
-	"whoami":  {PermPublic, PermPublic},
-	"tokens":  {PermPublic, PermPublic},
+	"device": {PermPublic, PermPublic},
+	"health": {PermPublic, PermPublic},
+	"whoami": {PermPublic, PermPublic},
+	"tokens": {PermPublic, PermPublic},
 	// Browser sessions (session.go). The link handler demands a user subject
 	// itself; /auth/session is how a subject is obtained.
-	"auth": {PermPublic, PermPublic},
+	"auth":    {PermPublic, PermPublic},
 	"install": {PermRegistryRead, PermRegistryWrite},
 }
 

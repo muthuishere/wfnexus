@@ -152,6 +152,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 		r.Get("/skills", s.listSkills)
+		s.skillSourceRoutes(r)
 		r.Get("/tools", s.listTools)
 		r.Get("/workflows", s.listWorkflows)
 		r.Post("/workflows/reload", s.reloadWorkflows)
