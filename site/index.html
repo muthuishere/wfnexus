@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wfnexus — Claude builds a workflow</title>
+<meta name="description" content="A real Claude Code session builds a multi-step wfnexus workflow, runs it on a free model, stops at a human approval gate, and publishes it.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f6fb; --surface: #ffffff; --text: #17151f; --muted: #5d5872; --line: #e3e0ee;
+    --accent: #7c5cff; --accent-soft: #efeaff; --ok: #1f9d55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f0d17; --surface: #17141f; --text: #eeeaf8; --muted: #a39cbc; --line: #2a2538;
+      --accent: #a78bfa; --accent-soft: #221b36; --ok: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 48px 16px 80px; }
+  .eyebrow { font: 600 13px/1 "JetBrains Mono", monospace; color: var(--accent); letter-spacing: .04em; }
+  h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.05; margin: 12px 0 12px; font-weight: 800; letter-spacing: -.02em; }
+  .lede { color: var(--muted); font-size: 18px; max-width: 720px; margin: 0 0 28px; }
+  .player { background: #000; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 20px 60px -30px rgba(124,92,255,.45); }
+  video { display: block; width: 100%; height: auto; }
+  .chapters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 40px; padding: 0; list-style: none; }
+  .chapters button { font: 500 14px/1 Inter, sans-serif; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 10px 14px; cursor: pointer; }
+  .chapters button:hover, .chapters button.on { border-color: var(--accent); background: var(--accent-soft); }
+  .chapters b { font-family: "JetBrains Mono", monospace; color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  h2 { font-size: 22px; margin: 48px 0 16px; }
+  pre { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; font: 14px/1.6 "JetBrains Mono", monospace; }
+  .honest li { margin: 6px 0; color: var(--muted); }
+  .honest li b { color: var(--text); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 14px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">wfnexus · real session · no voice, subtitles on</div>
+  <h1>Describe it. Claude builds it. You approve it.</h1>
+  <p class="lede">A real Claude Code session, recorded unedited except for speed. Priya asks for her Friday release-notes chore as a workflow. Claude builds a five-step wfnexus workflow, runs it on a free model, stops at a human approval gate, and publishes it to the team's git registry.</p>
+
+  <div class="player">
+    <video id="v" controls playsinline preload="metadata" poster="poster.jpg">
+      <source src="demo.mp4" type="video/mp4">
+    </video>
+  </div>
+
+  <ul class="chapters" id="ch">
+    <li><button data-t="7.2"><b>0:07</b>The ask</button></li>
+    <li><button data-t="27.2"><b>0:27</b>Claude builds the workflow</button></li>
+    <li><button data-t="84.6"><b>1:24</b>Real problems, fixed live</button></li>
+    <li><button data-t="126.8"><b>2:06</b>The run</button></li>
+    <li><button data-t="159"><b>2:39</b>The approval gate</button></li>
+    <li><button data-t="224.2"><b>3:44</b>Written, committed, published</button></li>
+  </ul>
+
+  <h2>What the workflow does</h2>
+  <div class="grid">
+    <div class="card"><h3>1 · Gather</h3><p>The week's commits from <code>git log</code>, no merges.</p></div>
+    <div class="card"><h3>2 · Classify</h3><p>Each commit labelled feature, fix, security, breaking or internal by a calibrated classifier (jev-1.13).</p></div>
+    <div class="card"><h3>3 · Draft</h3><p>Customer-facing notes written by an agent on a free model. Internal commits left out.</p></div>
+    <div class="card"><h3>4 · Review</h3><p>A second agent checks every claim against the actual commit. 6 of 6 backed.</p></div>
+    <div class="card"><h3>5 · Gate, then publish</h3><p>Nothing is written until a human approves. Then <code>RELEASE_NOTES.md</code> is committed.</p></div>
+  </div>
+
+  <h2>Run it yourself</h2>
+<pre>wfx adapters                      # devin, opencode, codex — which are installed
+wfx models opencode-acp --free    # free models the agent offers
+wfx run release-notes -f          # run it, follow the log
+wfx approve &lt;run&gt; --step publish  # the human gate</pre>
+
+  <h2>What the session also showed (unscripted)</h2>
+  <ul class="honest">
+    <li><b>Claude wrote the YAML itself.</b> The <code>wfx</code> CLI has no commands for building steps yet.</li>
+    <li><b>The classifier's OpenRouter route returned 403;</b> Claude switched to TypeSafe direct and re-ran.</li>
+    <li><b>The server kept a stale copy</b> of the workflow after <code>wfx apply</code>; Claude found and removed it.</li>
+    <li><b>The published tag came out as <code>vv1.0.0</code>.</b> A doubled "v" we still have to fix.</li>
+  </ul>
+
+  <footer>wfnexus · <a href="https://github.com/muthuishere/wfnexus">github.com/muthuishere/wfnexus</a></footer>
+</main>
+<script>
+  const v = document.getElementById('v');
+  const buttons = [...document.querySelectorAll('#ch button')];
+  buttons.forEach(b => b.addEventListener('click', () => { v.currentTime = +b.dataset.t; v.play(); }));
+  v.addEventListener('timeupdate', () => {
+    let cur = null;
+    for (const b of buttons) if (v.currentTime >= +b.dataset.t) cur = b;
+    buttons.forEach(b => b.classList.toggle('on', b === cur));
+  });
+</script>
+</body>
+</html>
