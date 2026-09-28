@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/proposal"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -226,6 +227,18 @@ func (e *Engine) CreateProject(ctx context.Context, name, folder string) (workfl
 		// on CI and green on a laptop.
 		if out, err := exec.CommandContext(ctx, "git", "init", "-q", "-b", "main", dir).CombinedOutput(); err != nil {
 			return workflow.Source{}, fmt.Errorf("git init %s: %v: %s", dir, err, strings.TrimSpace(string(out)))
+		}
+	}
+	// A repository with no commit is not git-native yet: proposals branch from
+	// HEAD, so the first save of a brand-new project wrote straight to disk
+	// with no review. One empty root commit makes every save, the first one
+	// included, a proposal. Only when there is no commit at all: an existing
+	// folder's history is never touched.
+	if err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "-q", "HEAD").Run(); err != nil {
+		if out, err := exec.CommandContext(ctx, "git", "-C", dir,
+			"-c", "user.name="+proposal.AuthorName, "-c", "user.email="+proposal.AuthorEmail,
+			"commit", "-q", "--allow-empty", "-m", "wfx: new project "+name).CombinedOutput(); err != nil {
+			return workflow.Source{}, fmt.Errorf("first commit in %s: %v: %s", dir, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return e.ImportRepo(ctx, name, dir, "")

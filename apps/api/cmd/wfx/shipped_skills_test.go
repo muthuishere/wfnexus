@@ -54,4 +54,4 @@ func TestTheLifecycleSkillsAreShipped(t *testing.T) {
 }
 
 // shippedLifecycleSkills is the demo path, one skill per stage.
-var shippedLifecycleSkills = []string{"wfnexus-setup", "workflow-author", "approval-desk"}
+var shippedLifecycleSkills = []string{"wfnexus-setup", "workflow-author", "wfnexus-deploy", "approval-desk"}
