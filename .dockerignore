@@ -1,0 +1,17 @@
+# The image is built from source (infra/Dockerfile); none of this is an input.
+.git
+.claude
+.codex
+.opencode
+.ctxoptimize
+**/node_modules
+apps/ui/dist
+site
+spikes
+docs
+openspec
+tests
+examples
+# Secrets never enter a build context.
+.env
+*.env

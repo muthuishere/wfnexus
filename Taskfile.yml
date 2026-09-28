@@ -29,9 +29,9 @@ tasks:
   # ---- run it ---------------------------------------------------------------
   infra:up:
     desc: Postgres (5460) + MinIO (9030 api, 9031 console)
-    cmds: [docker compose up -d]
+    cmds: [docker compose -f infra/dev/docker-compose.yml up -d]
   infra:down:
-    cmds: [docker compose down]
+    cmds: [docker compose -f infra/dev/docker-compose.yml down]
   infra:psql:
     desc: A psql shell on the platform database
     cmds: [docker exec -it bfp-postgres psql -U bfp -d bfp]

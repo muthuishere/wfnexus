@@ -1,22 +1,70 @@
+# wfnexus on one machine: `docker compose up -d`
+#
+#   wfx-server   API, engine, UI, the wfx CLI, opencode, and the shipped
+#                skills/ and templates/  -> http://localhost:${WFX_PORT:-8090}
+#   postgres     its database (not published to the host)
+#
+# Settings come from .env beside this file (start from compose.env.example);
+# nothing below is baked into the image. With no .env at all it still boots,
+# on the FREE defaults: agent steps on opencode-acp (opencode Zen free models,
+# no key, no login, running inside the container) and the jev-direct
+# classifier (which does need TYPESAFE_API_KEY — set it with `wfx env set`).
+#
+# First boot: the server binds :8090 inside the container, which is not
+# loopback, so it REFUSES to serve an unauthenticated API. It creates an admin,
+# prints its token ONCE to its log, and exits; `restart` brings it back with
+# authentication required. `skills/wfnexus-setup` does the login from there.
+#
+# The developer infra (Postgres + MinIO for `task api`) is infra/dev/.
+name: ${WFX_PROJECT_NAME:-wfnexus}
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: bfp-postgres
     environment:
-      POSTGRES_USER: bfp
-      POSTGRES_PASSWORD: bfp
-      POSTGRES_DB: bfp
-    ports: ["127.0.0.1:5460:5432"]
-    volumes: [bfp-pg:/var/lib/postgresql/data]
-  minio:
-    image: minio/minio:latest
-    container_name: bfp-minio
-    command: server /data --console-address ":9001"
+      POSTGRES_USER: wfx
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-wfx}
+      POSTGRES_DB: wfx
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wfx"]
+      interval: 3s
+      retries: 30
+    restart: unless-stopped
+
+  wfx-server:
+    build: { context: ., dockerfile: infra/Dockerfile }
+    image: wfnexus/wfx-server:local
+    depends_on:
+      postgres: { condition: service_healthy }
     environment:
-      MINIO_ROOT_USER: bfp
-      MINIO_ROOT_PASSWORD: bfpbfpbfp
-    ports: ["127.0.0.1:9030:9000", "127.0.0.1:9031:9001"]
-    volumes: [bfp-minio:/data]
-volumes:
-  bfp-pg:
-  bfp-minio:
+      WFX_MODE: server
+      DATABASE_URL: postgres://wfx:${PG_PASSWORD:-wfx}@postgres:5432/wfx?sslmode=disable
+      # No MinIO in this stack: artifacts go to a folder on the data volume.
+      WFX_ARTIFACT_DRIVER: folder
+      WFX_ARTIFACT_DIR: /data/artifacts
+      # What workers and `wfx login` are told to reach. Set it when this sits
+      # behind another name or port.
+      WFX_PUBLIC_URL: ${WFX_PUBLIC_URL:-http://localhost:${WFX_PORT:-8090}}
+      # The free defaults. Change them in .env, not here.
+      WFX_DEFAULT_PROVIDER: ${WFX_DEFAULT_PROVIDER:-opencode-acp}
+      WFX_DEFAULT_CLASSIFIER: ${WFX_DEFAULT_CLASSIFIER:-jev-direct}
+      # Empty = generated on first boot and shown by `wfx workers`.
+      WFX_RUNNER_TOKEN: ${WFX_RUNNER_TOKEN:-}
+      # Keys, by name. Prefer `wfx env set NAME` (encrypted in the database,
+      # handed to the steps that name them); these are for a .env that has them.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports: ["${WFX_BIND:-127.0.0.1}:${WFX_PORT:-8090}:8090"]
+    volumes:
+      - data:/data
+      - opencode:/home/wfx/.local/share/opencode
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/api/health >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      start_period: 10s
+      retries: 40
+    restart: unless-stopped
+
+volumes: { pg: , data: , opencode: }

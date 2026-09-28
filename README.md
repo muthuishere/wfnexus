@@ -197,10 +197,51 @@ access you must say so.** There is no authentication yet (see [Status](#status))
 interface of the machine. Set `WFX_ADDR=:8090` to listen everywhere; the containers and the k8s
 manifests state it themselves. Do not do it on a network you share until auth lands.
 
+### With Docker Compose, on free models
+
+From a checkout, on any machine with Docker:
+
+```bash
+cp compose.env.example .env      # optional; every line has a default
+docker compose up -d             # wfx-server + Postgres -> http://localhost:8090
+```
+
+Or let an agent do all of it: the `wfnexus-setup` skill (`skills/wfnexus-setup`) runs
+[`scripts/setup.sh`](skills/wfnexus-setup/scripts/setup.sh), which checks Docker, brings the stack
+up, waits for health, installs the skills, logs you in, stores your keys, lists the free models,
+runs `wfx doctor`, and ends with `READY <url>` or `BLOCKED: <stage>`.
+
+What it is, and what it is honest about:
+
+- **One image** (`infra/Dockerfile`): the server, the UI, the `wfx` CLI, the shipped `skills/` and
+  `templates/`, and **opencode** (pinned). Agent steps run *inside the container* on the default
+  provider `opencode-acp`, whose free models (opencode Zen, `wfx models opencode-acp --free`) need
+  **no key and no login**; this was verified from a fresh container with no credentials. For a paid
+  model, `docker compose exec wfx-server opencode auth login`; the login lives on the `opencode`
+  volume. Any other agent CLI (claude, codex, devin) is not in the image: run those steps on a
+  `wfx-runner` worker on a machine that has them (`wfx workers` prints the join line).
+- **Free defaults from `.env`**, not baked in: `WFX_DEFAULT_PROVIDER=opencode-acp`,
+  `WFX_DEFAULT_CLASSIFIER=jev-direct`. `jev-direct` needs `TYPESAFE_API_KEY`.
+- **Keys**: `wfx env set TYPESAFE_API_KEY` (read without echo, stored encrypted, handed only to the
+  steps that name it). A key written into `.env` works too, but it becomes part of the server
+  process's environment, which every step inherits, so the env store is the better home.
+- **Authentication is on.** The server binds `:8090` in the container, which is not loopback, so the
+  first boot creates an admin, prints its token once to `docker compose logs wfx-server`, and exits;
+  `restart: unless-stopped` brings it back with authentication required. Then
+  `wfx login --url http://localhost:8090` and approve the code with that token (the setup script
+  does this without printing it).
+- **`wfx` inside a step** (`wfx judge`, `wfx state`) reaches the server through `WFX_API`, which the
+  server sets for every step. On an authenticated server the step also needs `WFX_API_TOKEN` in the
+  env store; the setup script mints a separate login for it.
+- The port is published on `127.0.0.1` only. `WFX_BIND=0.0.0.0` lets workers on other machines
+  join. A second stack beside the first needs its own `WFX_PROJECT_NAME` and `WFX_PORT`.
+- The secrets key is on the `data` volume (`/data/secret.key`), so the env store survives
+  `docker compose up --build`. `docker compose down -v` deletes it along with everything else.
+
 ### Working on the repo
 
 ```bash
-task infra:up     # Postgres :5460, MinIO :9030 (console :9031)
+task infra:up     # Postgres :5460, MinIO :9030 (console :9031)  (infra/dev/docker-compose.yml)
 task api          # :8090 — WFX_MODE=server, so it meets that Postgres and bucket
 task ui           # :5173 — Vite dev server, proxies /api
 ```
