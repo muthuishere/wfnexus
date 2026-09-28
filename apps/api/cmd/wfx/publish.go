@@ -31,7 +31,7 @@ func publish(args []string) error {
 		return fmt.Errorf("usage: wfx publish <file.yaml> --version <semver> [--to <git remote>] [--as name] [--project p] [--tag t]")
 	}
 	path := args[0]
-	version := flagOf(args, "--version", "")
+	version := normalizeVersion(flagOf(args, "--version", ""))
 	if version == "" {
 		return fmt.Errorf("--version is required: a published version is immutable, so it has to be named")
 	}
@@ -261,4 +261,16 @@ func duplicateVersion(name, version, remote, tag string, out []byte, e error) er
 			name, version, remote, tag)
 	}
 	return fmt.Errorf("git push to %s: %v: %s", remote, e, strings.TrimSpace(text))
+}
+
+// normalizeVersion accepts `v1.0.0` as well as `1.0.0` and returns the bare
+// form. The version is stored bare and the git tag adds its own `v`, so a
+// person typing the conventional `v1.0.0` must not get the tag `w/vv1.0.0`
+// or a tree at workflows/w/v1.0.0/ that no bare `@1.0.0` pull would find.
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) > 1 && (v[0] == 'v' || v[0] == 'V') && v[1] >= '0' && v[1] <= '9' {
+		return v[1:]
+	}
+	return v
 }

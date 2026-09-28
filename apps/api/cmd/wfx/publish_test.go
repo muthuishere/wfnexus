@@ -382,3 +382,36 @@ func TestPublishRefusesAUsesOnlyWorkflowBecauseTheTaskWouldNotTravel(t *testing.
 		t.Errorf("a refused publish left a tag: %q", out)
 	}
 }
+
+// `--version v1.0.0` is the conventional spelling; it must publish the same
+// thing `--version 1.0.0` does — tag w/v1.0.0, never w/vv1.0.0.
+func TestAVPrefixedVersionIsNormalised(t *testing.T) {
+	tempContexts(t)
+	gitIdentity(t)
+	home := publishHome(t)
+	remote := bareRepo(t)
+
+	if err := publish([]string{workflowFile(t, home, plainWorkflow), "--version", "v1.0.0", "--to", remote}); err != nil {
+		t.Fatalf("publishing v1.0.0: %v", err)
+	}
+	tags := git(t, "", "git", "--git-dir", remote, "tag")
+	if strings.Contains(tags, "vv") || !strings.Contains(tags, "w/v1.0.0") {
+		t.Fatalf("want tag w/v1.0.0, got %q", tags)
+	}
+	files := git(t, "", "git", "--git-dir", remote, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(files, "workflows/w/1.0.0/manifest.json") {
+		t.Fatalf("tree not at the bare version path:\n%s", files)
+	}
+	// And the bare spelling of the same version is now a duplicate.
+	if err := publish([]string{workflowFile(t, home, plainWorkflow), "--version", "1.0.0", "--to", remote}); err == nil {
+		t.Fatal("1.0.0 after v1.0.0 was accepted: they are the same version")
+	}
+}
+
+func TestNormalizeVersion(t *testing.T) {
+	for in, want := range map[string]string{"v1.0.0": "1.0.0", "V2.1.0": "2.1.0", "1.0.0": "1.0.0", " v3.0.0 ": "3.0.0", "vnext": "vnext", "": ""} {
+		if got := normalizeVersion(in); got != want {
+			t.Errorf("normalizeVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
