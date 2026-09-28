@@ -193,7 +193,7 @@ func usage() {
   wfx retry <run-id> [--step id]   re-run from a step
   wfx cancel <run-id>
   wfx registry [skills|tools|providers|classifiers|mcp]
-  wfx skills import <git-url> [--ref <branch|tag|sha>] [--path skills/] [--name n]  import a git repo of skills (--branch = --ref)
+  wfx skills import <git-url> [--ref r] [--path skills/] [--name n]  import a git repo of skills; r is a branch, tag or commit (--branch = --ref)
   wfx skills sources               skill sources: url, ref, commit, skill count and names
   wfx skills ref <source> <ref>    switch a source to another branch, tag or commit (alias: branch)
   wfx skills refresh <source>      pull a branch source again; a tag or commit is pinned
