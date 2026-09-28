@@ -3,16 +3,16 @@
 export const demo = {
 	video: 'demo.mp4',
 	poster: 'poster.jpg',
-	eyebrow: 'wfnexus · real session · no voice, subtitles on',
-	title: 'Describe it. Claude builds it. You approve it.',
+	eyebrow: 'wfnexus · one real Claude Code session · no voice, subtitles on',
+	title: 'Install. Build. Deploy. Approve.',
 	lede:
-		"A real Claude Code session, unedited except for speed. Priya wants her Friday release-notes chore turned into a workflow. Claude builds a five-step wfnexus workflow, runs it on a free model, stops at a human approval gate, and publishes it to the team's git registry.",
+		"One real Claude Code session, about 22 minutes, cut to 10 by speeding up the waiting. Every stage is driven by an agent skill: wfnexus-setup installs the Docker stack on free models, workflow-author builds Priya's Friday release-notes workflow, wfnexus-deploy publishes and schedules it, and approval-desk puts every change in front of her. She rejects a draft, a fix goes through review, the agent finds a real bug in the skill's own example, and v1.0.2 ships.",
 	chapters: [
-		{ t: 7.2, label: '0:07', title: 'The ask' },
-		{ t: 27.2, label: '0:27', title: 'Claude builds the workflow' },
-		{ t: 84.6, label: '1:24', title: 'Real problems, fixed live' },
-		{ t: 126.8, label: '2:06', title: 'The run' },
-		{ t: 159, label: '2:39', title: 'The approval gate' },
-		{ t: 224.2, label: '3:44', title: 'Written, committed, published' },
+		{ t: 5, label: '0:05', title: 'Install (wfnexus-setup)' },
+		{ t: 96.5, label: '1:36', title: 'Build the workflow (workflow-author)' },
+		{ t: 224.4, label: '3:44', title: 'Deploy to the team server (wfnexus-deploy)' },
+		{ t: 310.3, label: '5:10', title: 'The approval gate (approval-desk)' },
+		{ t: 392.8, label: '6:32', title: 'Reject, fix, re-ship' },
+		{ t: 542.8, label: '9:02', title: 'Approved: the notes as committed' },
 	],
 };
