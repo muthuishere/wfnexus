@@ -144,7 +144,7 @@ func usage() {
   wfx workflow reject <id> --reason "why"  close its PR and delete its branch
   wfx workflow drift [--project p] workflows changed on disk but never committed
   wfx workflow drift --propose <w> [--project p]  open a proposal from that on-disk change
-  wfx apply <file.yaml>            validate and install a workflow
+  wfx apply <file.yaml> [--project p]  validate and install a workflow; a git-backed project gets a proposal
   wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
@@ -298,6 +298,26 @@ type wf struct {
 	MaxParallel int    `json:"maxParallel"`
 	Steps       []step `json:"steps"`
 	Path        string `json:"path"`
+	On          struct {
+		Schedule []workflow.Schedule `json:"schedule"`
+	} `json:"on"`
+}
+
+// scheduleLines is what a server will fire this workflow on, with the next
+// time each entry fires: "is it scheduled" answered from the server's own copy,
+// not from the file on your disk. Cron is UTC by definition (triggers.go).
+func scheduleLines(s []workflow.Schedule, now time.Time) []string {
+	var out []string
+	for _, e := range s {
+		c, err := workflow.ParseCron(e.Cron)
+		if err != nil {
+			out = append(out, fmt.Sprintf("schedule   %s  (invalid: %v)", e.Cron, err))
+			continue
+		}
+		next := c.Next(now.UTC())
+		out = append(out, fmt.Sprintf("schedule   %s  next %s", e.Cron, next.Format("Mon 2006-01-02 15:04 UTC")))
+	}
+	return out
 }
 
 func listWorkflows() error {
@@ -327,7 +347,11 @@ func showWorkflow(name string) error {
 	if err := call("GET", "/api/workflows/"+url.PathEscape(name), nil, &w); err != nil {
 		return err
 	}
-	fmt.Printf("%s — %s\n%s\n\n", w.Name, firstLine(w.Description), w.Path)
+	fmt.Printf("%s — %s\n%s\n", w.Name, firstLine(w.Description), w.Path)
+	for _, l := range scheduleLines(w.On.Schedule, time.Now()) {
+		fmt.Println(l)
+	}
+	fmt.Println()
 	for i, s := range w.Steps {
 		marks := []string{}
 		if s.RequiresApp {
@@ -413,13 +437,54 @@ func apply(args []string, install bool) error {
 		fmt.Printf("%s is valid\n", name)
 		return nil
 	}
+	// --project saves into that project. A git-backed project answers with a
+	// PROPOSAL (a branch and a commit, a PR when the repo has a remote)
+	// instead of a write, and that is what gets printed: saying "installed"
+	// for a change still waiting on review would be the one lie this verb
+	// must not tell.
 	var res struct {
-		Path string `json:"path"`
+		Path      string `json:"path"`
+		Unchanged bool   `json:"unchanged"`
+		Proposal  *struct {
+			ID            string   `json:"id"`
+			Project       string   `json:"project"`
+			Kind          string   `json:"kind"`
+			Branch        string   `json:"branch"`
+			PRURL         string   `json:"prUrl"`
+			ReviewVerdict string   `json:"reviewVerdict"`
+			ReviewScore   *float64 `json:"reviewScore"`
+			Status        string   `json:"status"`
+		} `json:"proposal"`
 	}
-	if err := call("PUT", "/api/workflows/"+url.PathEscape(name), map[string]any{"definition": def}, &res); err != nil {
+	savePath := "/api/workflows/" + url.PathEscape(name)
+	if p := flagOf(args, "--project", ""); p != "" {
+		savePath += "?project=" + url.QueryEscape(p)
+	}
+	if err := call("PUT", savePath, map[string]any{"definition": def}, &res); err != nil {
 		return err
 	}
-	fmt.Printf("installed %s → %s\n", name, res.Path)
+	switch {
+	case res.Proposal != nil:
+		p := res.Proposal
+		fmt.Printf("proposed %s %s in %s — proposal %s on branch %s (%s)\n", p.Kind, name, p.Project, p.ID, p.Branch, p.Status)
+		if p.PRURL != "" {
+			fmt.Printf("  pull request %s\n", p.PRURL)
+		}
+		if p.ReviewVerdict != "" && p.ReviewVerdict != "unreviewed" {
+			score := ""
+			if p.ReviewScore != nil {
+				score = fmt.Sprintf(" (%.2f)", *p.ReviewScore)
+			}
+			fmt.Printf("  classifier review: %s%s\n", p.ReviewVerdict, score)
+		}
+		if p.Status == "pending" {
+			fmt.Printf("  approve: wfx workflow approve %s\n", p.ID)
+		}
+	case res.Unchanged:
+		fmt.Printf("%s is unchanged — nothing to propose\n", name)
+	default:
+		fmt.Printf("installed %s → %s\n", name, res.Path)
+	}
 	return nil
 }
 
