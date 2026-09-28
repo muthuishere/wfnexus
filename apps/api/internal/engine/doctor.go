@@ -5,6 +5,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -133,9 +134,13 @@ func (e *Engine) Doctor() Doctor {
 	if dp := e.cfg.DefaultProvider; dp != "" {
 		if p, ok := e.catalog.Providers.Get(dp); !ok {
 			d.Problems = append(d.Problems, "the default provider "+dp+" is not in the registry, so any step that names no provider will be refused")
-		} else if c := checkProviderWith(p, sysEnv); !c.Ready {
+		} else if c := checkProviderWith(p, sysEnv); !c.Ready && c.State != bundle.StatePresent {
 			d.Problems = append(d.Problems, "the default provider "+dp+" is not ready ("+c.Problem+"), so any step that names no provider will fail")
 		}
+		// PRESENT is the same note here as in the provider list below: the
+		// binary is installed and its login could not be checked. It used to be
+		// a problem with an empty reason, "not ready ()", for the one state
+		// the list itself says does not block a run.
 	} else if !d.Default.KeySet {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
@@ -179,7 +184,9 @@ func (e *Engine) Doctor() Doctor {
 		}
 		if keyEnv != "" {
 			entry.Detail = keyEnv
-			if os.Getenv(keyEnv) == "" {
+			// A key in the env store counts: it is where the judge's key comes
+			// from at run time (keyFromStore), exactly as for providers.
+			if os.Getenv(keyEnv) == "" && sysEnv[keyEnv] == "" {
 				entry.Ready, entry.Problem = false, keyEnv+" is not set"
 			}
 		}
@@ -280,6 +287,14 @@ func checkProviderWith(p catalog.Provider, stored map[string]string) DoctorProvi
 			out.Ready, out.State = false, bundle.StateMissing
 			out.Problem = "no preset named " + p.Preset + " and no explicit command"
 		}
+		if lookErr == nil && out.State != bundle.StateMissing && freeWithoutLogin(p, bin) {
+			// opencode's free models (opencode Zen, "...-free") answer with no
+			// account at all, verified from a fresh container with no
+			// credentials. There is no login to check, so none is missing.
+			out.Ready, out.State = true, bundle.StateReady
+			out.Detail = path + " (free model, no login needed)"
+			return out
+		}
 		if lookErr == nil && out.State != bundle.StateMissing {
 			out.Login = presetLogin(p)
 			switch probeAuth(bin, path) {
@@ -297,6 +312,15 @@ func checkProviderWith(p catalog.Provider, stored map[string]string) DoctorProvi
 	}
 	out.Ready, out.State, out.Problem = false, bundle.StateMissing, "unknown kind "+string(p.Kind)
 	return out
+}
+
+// freeWithoutLogin is an opencode provider pinned to one of opencode Zen's free
+// models, which need no credential. Anything else still gets the auth probe.
+func freeWithoutLogin(p catalog.Provider, bin string) bool {
+	if filepath.Base(bin) != "opencode" {
+		return false
+	}
+	return strings.HasPrefix(p.Model, "opencode/") && strings.HasSuffix(p.Model, "-free")
 }
 
 // providerBinary is the program a local provider would actually execute.

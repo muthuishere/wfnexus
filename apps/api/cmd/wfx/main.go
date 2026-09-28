@@ -647,11 +647,29 @@ func follow(id string, once bool) error {
 	if once {
 		q += "&once=1"
 	}
-	res, err := http.Get(base() + "/api/runs/" + url.PathEscape(id) + "/events" + q)
+	// Through the resolved context, with its credential: a bare GET was a 401
+	// on every authenticated server, and the empty body read as "no activity"
+	// with exit 0, so `wfx logs` and `wfx run -f` showed nothing at all.
+	target, err := resolveContext("")
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("GET", target.url+"/api/runs/"+url.PathEscape(id)+"/events"+q, nil)
+	if err != nil {
+		return err
+	}
+	if target.token != "" {
+		req.Header.Set("Authorization", "Bearer "+target.token)
+	}
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		raw, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("%s: %s", res.Status, strings.TrimSpace(string(raw)))
+	}
 	sc := bufio.NewScanner(res.Body)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024)
 	for sc.Scan() {
