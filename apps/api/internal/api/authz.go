@@ -71,12 +71,15 @@ var resourcePerms = map[string][2]string{
 	"mcp":         {PermRegistryRead, PermRegistryWrite},
 	"providers":   {PermRegistryRead, PermRegistryWrite},
 	"classifiers": {PermRegistryRead, PermRegistryWrite},
-	"adapters":    {PermRegistryRead, PermRegistryWrite},
-	"registries":  {PermRegistryRead, PermRegistryWrite},
-	"models":      {PermRegistryRead, PermRegistryWrite},
-	"doctor":      {PermRegistryRead, PermRegistryWrite},
-	"sources":     {PermProjectsRead, PermProjectsWrite},
-	"projects":    {PermProjectsRead, PermProjectsWrite},
+	// Asking the server's classifier spends its key, so it is a run-level
+	// action, not a registry read.
+	"judge":      {PermRunsWrite, PermRunsWrite},
+	"adapters":   {PermRegistryRead, PermRegistryWrite},
+	"registries": {PermRegistryRead, PermRegistryWrite},
+	"models":     {PermRegistryRead, PermRegistryWrite},
+	"doctor":     {PermRegistryRead, PermRegistryWrite},
+	"sources":    {PermProjectsRead, PermProjectsWrite},
+	"projects":   {PermProjectsRead, PermProjectsWrite},
 	// The closed list projects and templates choose from: reading it is
 	// reading projects; it has no write route.
 	"categories": {PermProjectsRead, PermProjectsWrite},

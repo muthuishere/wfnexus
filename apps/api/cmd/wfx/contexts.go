@@ -182,6 +182,12 @@ func resolveContext(urlFlag string) (resolved, error) {
 		if ctx, ok := c.Contexts[r.name]; ok && normalizeURL(ctx.URL) == r.url {
 			r.token = ctx.Token
 		}
+		// A workflow step has no contexts file. On a server that requires
+		// authentication it is GIVEN a credential by name — `wfx env set
+		// WFX_API_TOKEN <token> --secret` — rather than inheriting one.
+		if r.token == "" {
+			r.token = os.Getenv("WFX_API_TOKEN")
+		}
 		return r, nil
 	}
 	if c.Current != "" {

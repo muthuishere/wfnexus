@@ -163,6 +163,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/providers/{name}/models", s.providerModels)
 		r.Get("/adapters", s.listAdapters)
 		r.Get("/classifiers", s.listClassifiers)
+		r.Post("/judge", s.judgeItems)
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
@@ -522,8 +523,8 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 //     or points at a local checkout used in place.
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name   string `json:"name"`
-		Repo   string `json:"repo"`
+		Name     string `json:"name"`
+		Repo     string `json:"repo"`
 		Branch   string `json:"branch"`
 		Create   bool   `json:"create"`
 		Category string `json:"category"`

@@ -110,6 +110,14 @@ func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.St
 	run := e.mountEnv(runID)
 	if workdir != "" {
 		run = workflow.MergeEnv(run, RunEnv(runID.String(), step.ID, e.projectOfRun(ctx, runID), workdir))
+		// The way back to THIS server, so `wfx judge`, `wfx state` and friends
+		// run by a step talk to the platform that started it rather than to
+		// whatever the step's machine defaults to. Explicit, because the
+		// server's own WFX_* configuration is scrubbed from what runs inherit.
+		// A worker sets the same name to the URL it joined (wfx-runner).
+		if u := e.SelfURL(); u != "" {
+			run = workflow.MergeEnv(run, map[string]string{"WFX_API": u})
+		}
 	}
 	env := workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env)
 	// Every sensitive value this step can see is registered BEFORE the step

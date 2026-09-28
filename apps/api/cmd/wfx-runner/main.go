@@ -481,7 +481,10 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	if err != nil {
 		return result{Error: err.Error()}
 	}
-	c.Env = append(os.Environ(), stepEnv...)
+	// WFX_API is the server this worker joined, so a `wfx` command in the step
+	// talks back to it; it sits before the step's env so a workflow that sets
+	// it still wins.
+	c.Env = append(append(os.Environ(), "WFX_API="+cfg.URL), stepEnv...)
 	// WFX_RUN_ID / STEP_ID / PROJECT / WORKSPACE came through the cascade
 	// above, where they are also available to a LOCAL step. Only the runner's
 	// own name is particular to being here.

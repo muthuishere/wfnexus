@@ -59,7 +59,7 @@ type judgeResult struct {
 const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --state <text>)
           [--classifier <name> | --backend typesafe|openrouter | --url <base>]
           [--model m] [--key-env VAR] [--header K=V]... [--param k=v]...
-          [--timeout sec] [--retries n] [--parallel 8] [--bands 0.30,0.70]
+          [--timeout sec] [--retries n] [--parallel 8] [--bands 0.30,0.70] [--local]
 
   questions.yaml   the shape of a workflow's decide.questions:
                      dead:
@@ -82,6 +82,11 @@ const judgeUsage = `wfx judge -q <questions.yaml> (--items <file.jsonl|-> | --st
   --param k=v      extra request-body field (JSON values typed)
   --timeout/--retries  per request, as toolnexus ClassifierOptions
   Every option maps one-to-one onto toolnexus ClassifierOptions.
+
+  With WFX_API set (a workflow step always has it) and none of --backend/--url/
+  --model/--key-env/--header/--param/--timeout/--retries, the items are judged
+  ON THAT SERVER with its registry and its key: --classifier names the server's
+  entry, and no --classifier means the server's default. --local judges here.
 
 Writes one JSON line per item to stdout, in input order, each noul with its band
 (no | uncertain | yes). A summary goes to stderr.`
@@ -116,18 +121,28 @@ func cmdJudge(args []string) error {
 		parallel = 1
 	}
 
+	start := time.Now()
+	var results []judgeResult
+	var cost float64
+	var costKnown bool
+	var backend string
+	if judgeOnServer(args) {
+		backend, results, cost, costKnown, err = judgeRemote(args, questions, items, bands, parallel)
+		if err != nil {
+			return err
+		}
+		return reportJudged(results, backend, start, cost, costKnown)
+	}
+
 	c, backend, err := judgeClassifier(args)
 	if err != nil {
 		return err
 	}
 
-	results := make([]judgeResult, len(items))
-	var cost float64
-	var costKnown bool
+	results = make([]judgeResult, len(items))
 	var mu sync.Mutex
 	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
-	start := time.Now()
 	for i, it := range items {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -155,7 +170,64 @@ func cmdJudge(args []string) error {
 		}(i, it)
 	}
 	wg.Wait()
+	return reportJudged(results, backend, start, cost, costKnown)
+}
 
+// judgeOnServer says whether this invocation should ask the server's
+// classifier rather than build one here. It does when WFX_API names a server —
+// which is what a workflow step has — and nothing on the command line points
+// at a different endpoint. A step does not inherit the server's registry or
+// its classifier key (and must not), so asking the server is the only way a
+// step's `wfx judge --classifier jev` means the jev the server has.
+// --local forces the in-process path.
+func judgeOnServer(args []string) bool {
+	if os.Getenv("WFX_API") == "" || hasFlag(args, "--local") {
+		return false
+	}
+	if os.Getenv("WFX_JUDGE_BASE_URL") != "" {
+		return false
+	}
+	for _, f := range []string{"--backend", "--url", "--model", "--key-env", "--header", "--param", "--timeout", "--retries"} {
+		if hasFlag(args, f) {
+			return false
+		}
+	}
+	return true
+}
+
+// judgeRemote posts the questions and items to the server in batches.
+func judgeRemote(args []string, questions map[string]workflow.Question, items []judgeItem, bands judge.Bands, parallel int) (string, []judgeResult, float64, bool, error) {
+	name := flagOf(args, "--classifier", "")
+	label := "server " + base()
+	if name != "" {
+		label = name + " on " + base()
+	}
+	var all []judgeResult
+	var cost float64
+	var costKnown bool
+	const batch = 500
+	for i := 0; i < len(items); i += batch {
+		end := min(i+batch, len(items))
+		var out struct {
+			Results []judgeResult `json:"results"`
+			CostUSD *float64      `json:"costUsd"`
+		}
+		body := map[string]any{"classifier": name, "questions": questions, "items": items[i:end],
+			"bands": bands, "parallel": parallel}
+		if err := call("POST", "/api/judge", body, &out); err != nil {
+			return "", nil, 0, false, fmt.Errorf("judging on %s: %w (use --local to judge in this process)", base(), err)
+		}
+		all = append(all, out.Results...)
+		if out.CostUSD != nil {
+			cost += *out.CostUSD
+			costKnown = true
+		}
+	}
+	return label, all, cost, costKnown, nil
+}
+
+func reportJudged(results []judgeResult, backend string, start time.Time, cost float64, costKnown bool) error {
+	items := results
 	enc := json.NewEncoder(os.Stdout)
 	failed, uncertain := 0, 0
 	for _, r := range results {
