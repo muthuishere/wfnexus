@@ -1,0 +1,114 @@
+---
+title: Workflows and steps
+description: The workflow YAML — steps that are agents or shell nodes, output schemas, gates, budgets, guardrails, and graph ordering.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A workflow is one YAML file. It is loaded by `internal/workflow`, whose `Definition` and `Step`
+structs are the schema, and it is run by `internal/engine`. Nobody is expected to write the YAML
+by hand: the [workflow-author skill](/wfnexus/skills/) generates it inside your agent session. The
+file is the **receipt**. It is readable, diffable and reviewable.
+
+## The file
+
+| Key | What it is |
+|---|---|
+| `name`, `description` | Identity. |
+| `input_schema` | JSON Schema for the run's inputs (`wfx run <w> -i k=v`). |
+| `on` | Triggers: `workflow_dispatch`, `schedule` (with `cron` and `input`), and `repository_dispatch` (with `types`). Without it, the workflow can only be started by hand. |
+| `env`, `mount`, `runs-on` | The environment (a value can name a variable such as `${GITHUB_PAT}` instead of holding it), host mounts (read-only by default), and the default runner label. |
+| `steps` | The steps. You can also use `jobs:` in GitHub Actions shape; jobs are flattened into steps at load time. |
+| `template` | Makes the file a [template](/wfnexus/templates/): `title`, `summary`, `category`, `fill`. |
+| `max_parallel` | How many steps run at once in a graph. 0 means 4. |
+
+## A step is an agent, or a shell node
+
+**Agent step:** a `prompt`, a scoped set of `skills` and `tools`, and an `output_schema`.
+
+```yaml
+- id: validate
+  soul: >-
+    You are a triage engineer, sceptical by default.
+  skills: [validate-bug, repo-navigator]
+  tools: [read, grep, glob, bash]
+  budget: { max_turns: 15, max_tool_calls: 40, max_wall_sec: 300 }
+  prompt: |
+    Bug title: {{ .Input.title }}
+  output_schema:
+    type: object
+    required: [valid, summary]
+    properties:
+      valid:   { type: boolean }
+      summary: { type: string }
+  gates:
+    - field: valid
+      equals: false
+      action: needs_input
+      message: "Need more information"
+```
+
+The contract is enforced **inside the loop**. `submit_output` is a tool, and when validation
+fails the error goes back to the model as a tool result, so the model fixes it in the same turn
+and the run does not die. The engine never moves to the next step on output that did not validate.
+
+**Shell step:** `run:` makes a step a deterministic node with no model. Its output is fixed:
+`{ok, exitCode, stdout, stderr}`. A step has either `run` or `prompt`, never both. `shell:` picks
+one of bash, sh, pwsh, powershell or cmd.
+
+## Step keys
+
+| Group | Keys |
+|---|---|
+| Identity | `id`, `name`, `description`, `prompt`, `system`, `soul` |
+| Capability | `skills`, `tools` (built-ins: `read`, `write`, `edit`, `bash`, `grep`, `glob`, `apply_patch`, `webfetch`, `todowrite`, `question`, plus `ask_human`), `mcp`, `team` |
+| Contract | `output_schema`, `gates`, `max_attempts`, `retry` (`max_attempts`, `backoff_sec`: re-runs the whole step, so it must be idempotent) |
+| Limits | `budget`, `max_turns`, `timeout_sec`, `guardrails` |
+| People | `requires_approval` (pause **before** the step), `ask_human` (as a tool) |
+| Classifier | `decide` (typed questions before the agent), `judge` (a pure decision node), `classifier` |
+| Placement | `provider`, `model`, `runs-on`, `env` |
+| Graph | `needs`, `consumes`, `produces`, `when` |
+| Memory | `state` (see [State and memory](/wfnexus/concepts/state-and-memory/)) |
+
+## Gates
+
+A gate reads the step's validated output and decides what happens next:
+
+```yaml
+gates:
+  - { field: exitCode, equals: 70, action: fail }
+  - { field: exitCode, equals: 78, action: skip_to, skip_to: report }
+  - { field: valid, equals: false, action: needs_input, message: "…" }
+```
+
+There are three actions: `needs_input` pauses the run for a person, `fail` stops it, and
+`skip_to` jumps to a later step. `decide:` has its own gates, which use classifier scores
+(`below`, `at_least`, `is`). See [Classifiers](/wfnexus/concepts/classifiers/).
+
+## Budgets and guardrails
+
+`budget` caps one step: `max_turns`, `max_tokens`, `max_tool_calls`, `max_wall_sec`,
+`max_children`, `max_concurrent`, `max_depth`, and `compact_at_tokens` (0 turns compaction off).
+
+`guardrails` deny tool calls. Each entry has a `deny` (a tool name, or `*`), an optional
+`args_contain` and a `reason`, and the first deny that matches wins. This is from the
+`code-remover` template:
+
+```yaml
+guardrails:
+  - deny: bash
+    args_contain: ["git push", "gh pr", "git add -A", "--no-verify", "git reset --hard"]
+    reason: "one plain commit per approved removal, staged with git add -u, never pushed"
+```
+
+## Order: a list, or a graph
+
+Steps run in order by default. If any step declares `needs`, the workflow becomes a DAG, and
+steps whose needs are met run in parallel, up to `max_parallel`. `consumes` and `produces` let
+`internal/planner` work out the order from data, and `when` skips a step whose condition is false.
+
+<Aside type="tip" title="Prove it before it runs">
+	`wfx validate <file>` checks the file without writing anything. `wfx dryrun <workflow>` answers
+	"would it run here?" with no model call, no repo access and no writes: it resolves providers,
+	skills, tools and templates.
+</Aside>

@@ -1,0 +1,47 @@
+{
+  "_comment": "Names the prose leans on, checked by scripts/verify-symbols.mjs. go: identifier must appear in that package's non-test Go. yamlKeys: must be a yaml tag in internal/workflow. paths: must exist. commits: must exist in this repo.",
+  "go": [
+    { "symbol": "Definition", "in": "apps/api/internal/workflow" },
+    { "symbol": "Step", "in": "apps/api/internal/workflow" },
+    { "symbol": "Gate", "in": "apps/api/internal/workflow" },
+    { "symbol": "Budget", "in": "apps/api/internal/workflow" },
+    { "symbol": "Guardrail", "in": "apps/api/internal/workflow" },
+    { "symbol": "Decide", "in": "apps/api/internal/workflow" },
+    { "symbol": "DefaultBands", "in": "apps/api/internal/judge" },
+    { "symbol": "ScrubServerEnv", "in": "apps/api/internal/config" },
+    { "symbol": "ScrubServerEnv", "in": "apps/api/main.go" },
+    { "symbol": "ACPPresets", "in": "apps/api/internal/devinadapter" },
+    { "symbol": "ACPModeBypass", "in": "apps/api/internal/devinadapter" },
+    { "symbol": "isFree", "in": "apps/api/internal/devinadapter" },
+    { "symbol": "BranchName", "in": "apps/api/internal/proposal" },
+    { "symbol": "Drift", "in": "apps/api/internal/proposal" },
+    { "symbol": "Merge", "in": "apps/api/internal/proposal" },
+    { "symbol": "Close", "in": "apps/api/internal/proposal" },
+    { "symbol": "ReviewProposal", "in": "apps/api/internal/engine" },
+    { "symbol": "stateNameFor", "in": "apps/api/internal/engine" },
+    { "symbol": "minRedactLen", "in": "apps/api/internal/engine" },
+    { "symbol": "secretEnvFile", "in": "apps/api/internal/engine" },
+    { "symbol": "submit_output", "in": "apps/api/internal/engine" },
+    { "symbol": "SessionPerTurn", "in": "apps/api/internal/devinadapter" }
+  ],
+  "yamlKeys": [
+    "name", "description", "input_schema", "on", "runs-on", "env", "mount", "steps", "jobs", "template", "max_parallel",
+    "id", "prompt", "system", "soul", "skills", "tools", "mcp", "team", "output_schema", "gates", "max_attempts", "retry",
+    "budget", "max_turns", "timeout_sec", "guardrails", "requires_approval", "ask_human", "decide", "judge", "classifier",
+    "provider", "model", "needs", "consumes", "produces", "when", "state", "run", "shell",
+    "field", "equals", "action", "skip_to", "message",
+    "max_tokens", "max_tool_calls", "max_wall_sec", "max_children", "max_concurrent", "max_depth", "compact_at_tokens",
+    "deny", "args_contain", "reason", "questions", "below", "at_least", "is", "backoff_sec"
+  ],
+  "paths": [
+    "install.sh", "install.ps1", "registries.json", "docs/ROADMAP.md", "Taskfile.yml",
+    "apps/api/cmd/wfx", "apps/api/cmd/wfx-runner", "apps/ui/src/App.tsx",
+    "apps/api/internal/engine/redact.go", "apps/api/internal/engine/state.go", "apps/api/internal/workflow/categories.go",
+    "workflows/mock-demo.yaml", "workflows/bug-fix.yaml"
+  ],
+  "commits": ["e4ddf7d", "b8cb19e", "2168123"],
+  "extraCommands": [
+    { "command": "help", "evidence": "args[0] == \"help\"" },
+    { "command": "project categories", "evidence": "args[0] == \"categories\"" }
+  ]
+}

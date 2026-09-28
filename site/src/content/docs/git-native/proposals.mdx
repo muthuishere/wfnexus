@@ -1,0 +1,62 @@
+---
+title: Proposals
+description: In a git project every workflow save or delete becomes a branch and a pull request, reviewed by a classifier and approved or rejected by a person. Drift catches edits made outside wfnexus.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+In a project whose workflows folder is a git repository, **a workflow change is a git change.**
+Saving or deleting a workflow, from the UI or the API, does not write the file in place. Instead
+`internal/proposal` opens a **proposal**:
+
+1. It cuts a branch named `wfx/edit-<workflow>-<unix-ts>` (with `-2`, `-3`… added on a clash) in
+   its own `git worktree`, and commits the change there as `wfx`.
+2. If the repo has a remote (`origin` when it exists), it runs `git push -u` and then
+   `gh pr create`. The PR body says who proposed the change and what validation said.
+3. It asks a classifier to review the diff (see below), and records the verdict on the proposal.
+
+If the push fails, the proposal stays local and says so. If `gh` fails, the proposal notes
+"pushed, but no pull request was opened". A project that is a plain directory, not a git repo,
+is still written directly.
+
+<Aside type="note" title="Solo mode">
+	A repository with no remote still gets a branch, so the change is still reviewable. Approving it
+	merges the branch locally.
+</Aside>
+
+## Commands
+
+```bash
+wfx workflow proposals [--project p] [--workflow w]   # pending changes (branches / PRs)
+wfx workflow approve <id>                             # merge it; the project's checkout pulls
+wfx workflow reject <id> --reason "why"               # close its PR and delete its branch
+wfx workflow drift [--project p]                      # workflows changed on disk, never committed
+wfx workflow drift --propose <w> [--project p]        # open a proposal from that on-disk change
+```
+
+**Approve** with a PR runs `gh pr merge --merge --delete-branch`, fetches, and brings the
+checkout up to the remote base. Without a PR it runs a local `git merge --no-edit`, deletes the
+branch, and pushes the base if it tracks a remote. Either way the catalog reloads.
+
+**Reject** requires a reason; the CLI refuses an empty one. With a PR it runs
+`gh pr close --delete-branch --comment "Rejected: <reason>"`. It then deletes the local branch,
+and the remote branch too if it was pushed.
+
+## Classifier review
+
+Each proposal is reviewed by a classifier: `WFX_DEFAULT_CLASSIFIER`, the same one
+[`decide:`](/wfnexus/concepts/classifiers/) uses. It gets the diff and the validation result and
+returns `approve`, `reject` or `unreviewed` (unreviewed when no classifier is configured), plus a
+reason and a score.
+
+The review is **advisory**. Auto-approval happens only when `WFX_PROPOSAL_AUTO_APPROVE` is above 0,
+the verdict is `approve`, and the score is at or above that threshold. The default is 0, which is
+off. An auto-approval is recorded with `wfx-classifier` as the approver, and if the merge fails
+the proposal stays pending.
+
+## Drift
+
+Someone can edit `.wfx/workflows/nightly.yaml` in their editor and never commit it.
+`wfx workflow drift` lists every workflow with uncommitted or untracked changes under the
+workflows folder. It is read-only. `--propose <workflow>` turns exactly that on-disk change into a
+proposal, so it goes through the same review.

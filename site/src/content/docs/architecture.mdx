@@ -1,0 +1,71 @@
+---
+title: Architecture
+description: How a run flows — from a person or agent, through wfx and wfx-server, out to providers and the classifier, through a human gate, into git.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<img src="/wfnexus/run-flow.svg" alt="How a wfnexus run flows: an agent or a person uses wfx; wfx-server runs steps on providers and asks a classifier; a human gate approves; the change lands in git." width="960" height="300" style="width:100%;height:auto" />
+
+The loop above is an SVG, 12 seconds long. There is also a
+[full-screen animated version](/wfnexus/run-flow.html), made with the `diagram-motion` skill's
+`motion canvas`, and a video fallback:
+
+<video autoplay loop muted playsinline style="width:100%;border-radius:12px;border:1px solid var(--sl-color-hairline)">
+	<source src="/wfnexus/run-flow.mp4" type="video/mp4" />
+	<img src="/wfnexus/run-flow.gif" alt="How a wfnexus run flows (animated)" />
+</video>
+
+## The path of a run
+
+1. **A person or an agent asks.** This happens in the UI, or through `wfx` from a terminal or from
+   Claude or Codex via the [agent skills](/wfnexus/skills/).
+2. **`wfx` calls `wfx-server`** over its REST and SSE API (`internal/api`). The CLI resolves the
+   host from `--url`, then `$WFX_API`, then the current context, then `http://127.0.0.1:8090`.
+3. **The engine runs the steps** (`internal/engine`). It runs one toolnexus agent per agent step,
+   or a shell node for `run:`, ordered as a list or a graph (`internal/planner`), with state in
+   SQLite or Postgres (`internal/store`).
+4. **Each step resolves its provider** from the catalog (`internal/catalog`, loaded from
+   `registries.json`): an `http` model, a `cli` agent, or an `acp` agent through
+   `internal/devinadapter` (devin, opencode, codex). A step can go to another machine through a
+   [worker](/wfnexus/concepts/workers/).
+5. **The classifier decides** where a question has a typed answer (`internal/judge`): `decide:`
+   before an agent, `judge:` as a step, or `wfx judge` in a shell step. Uncertain verdicts go to a
+   person.
+6. **A human gate** pauses the run (`requires_approval`, `needs_input`, `ask_human`) until
+   someone runs `wfx approve`, `wfx reject` or `wfx answer`. `internal/notify` tells them.
+7. **Git keeps the receipt.** Templates publish their work as a branch and a PR. A change to the
+   workflow itself becomes a [proposal](/wfnexus/git-native/proposals/) (`internal/proposal`). A
+   finished workflow ships as a bundle (`internal/bundle`) with `wfx publish` to a host or to a git
+   remote.
+
+## The binaries
+
+| Binary | Built from | Role |
+|---|---|---|
+| `wfx-server` | `apps/api` | The engine, the API and the embedded UI (`apps/ui`). `WFX_MODE=local` uses SQLite and a folder; `server` uses Postgres and S3. |
+| `wfx` | `apps/api/cmd/wfx` | The CLI. See the [reference](/wfnexus/reference/cli/). |
+| `wfx-runner` | `apps/api/cmd/wfx-runner` | An outbound-only worker. |
+
+## Packages
+
+| Package | Purpose |
+|---|---|
+| `internal/api` | The REST and SSE surface the UI and the CLI use. |
+| `internal/engine` | Executes runs: steps, gates, decide, state, redaction, schedules, workers. |
+| `internal/workflow` | Loads the YAML and renders prompts. |
+| `internal/planner` | Derives execution order from `consumes` / `produces`. |
+| `internal/catalog` | Providers, classifiers and MCP servers: everything a step can name. |
+| `internal/devinadapter` | Makes an ACP agent CLI usable as a model. |
+| `internal/judge` | Typed questions to classifier calls, and the verdict bands. |
+| `internal/proposal` | A workflow change becomes a git change. |
+| `internal/secrets` | AES-GCM seal and open for the env store. |
+| `internal/skills` | The `SKILL.md` registry. |
+| `internal/bundle` | The published unit: a workflow plus its skills and MCP servers. |
+| `internal/notify` | Delivers a pause to a person. |
+| `internal/store` | Persistence (SQLite or Postgres). |
+
+<Aside type="note" title="Checked, not drawn from memory">
+	Every `internal/…` name on this site is checked against `apps/api/internal` on each build by
+	`site/scripts/verify-symbols.mjs`, and so are the chips in the animation.
+</Aside>

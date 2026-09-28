@@ -1,0 +1,74 @@
+---
+title: Providers and models
+description: One workflow, many backends — http models, cli agents, and acp agents (devin, opencode, codex); free opencode models and what they are good for; WFX_DEFAULT_PROVIDER and WFX_DEFAULT_CLASSIFIER.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The unit that travels is the workflow, not the runtime. The same YAML can run a step on any of
+three kinds of provider, all declared in `registries.json` and resolved by `internal/catalog`:
+
+| Kind | What it is | Examples from the registry |
+|---|---|---|
+| `http` | An OpenAI-compatible chat endpoint. The credential is an env var **name** (`apiKeyEnv`), never a value. | `openrouter`, `anthropic`, `groq`, `ollama-http`, `lmstudio`, `vllm` |
+| `cli` | A local agent CLI driven one prompt at a time. | `claude-cli`, `codex-cli`, `copilot-cli`, `opencode` |
+| `acp` | A local agent spoken to over the Agent Client Protocol. | `devin`, `opencode-acp`, `codex-acp` |
+
+The [provider registry](/wfnexus/providers/registry/) page lists every entry, generated from the
+file. A step picks one with `provider:` and optionally a `model:`.
+
+## Defaults
+
+- **`WFX_DEFAULT_PROVIDER`**: the provider for every step that names none. `wfx doctor` prints
+  it on its first line and flags it when it is not ready.
+- **`WFX_DEFAULT_CLASSIFIER`**: the classifier for `decide:` steps that name none, and for
+  [proposal](/wfnexus/git-native/proposals/) reviews.
+
+Both are server configuration, and `ScrubServerEnv` removes them from the environment a run sees.
+See [Env store and secrets](/wfnexus/concepts/env-and-secrets/).
+
+## ACP adapters: devin, opencode, codex
+
+`internal/devinadapter` makes a local agent CLI usable as a model. There are three presets
+(`ACPPresets`):
+
+| Adapter | Command | Mode | Provider |
+|---|---|---|---|
+| devin | `devin acp` (model via `--model`) | bypass | `devin` |
+| opencode | `opencode acp` (model over the protocol, a fresh session per turn) | build | `opencode-acp` |
+| codex | `npx -y @zed-industries/codex-acp` | full-access | `codex-acp` |
+
+```bash
+wfx adapters                     # each adapter, whether it is installed, and how to install it
+wfx models opencode-acp          # the models the agent offers, asked live
+wfx models opencode-acp --free   # only the free ones
+```
+
+The platform's own loop executes the tools, because that is the only place a step's tool
+allowlist and guardrails apply. The adapter therefore **refuses the agent's own native tools** by
+default. When a turn ends empty after refusals, the adapter hands the platform the equivalent
+call instead (read, grep, glob, bash), but only for tools the step offers. An edit, a fetch or a
+sub-task has no safe equivalent and stays refused.
+
+## Free models
+
+`--free` does not guess. A model counts as free only if its id ends in `-free` (opencode Zen) or
+`:free` (OpenRouter). The `opencode-acp` entry defaults to a free model,
+`opencode/space-bunny-free`, which needs no key. Its registry description records why: it was the
+fastest of the free models that scored 7 out of 7 on a commit-classification check on 2026-09-27.
+
+<Aside type="caution" title="What free models are good for">
+	Free models work well for **short workflows of about 2 to 5 steps** with small, typed outputs.
+	The five-step release-notes workflow in the [demo](/wfnexus/demo/) ran on one. They are **not**
+	a good fit for large fan-out steps (an exhaustive analyst per shard, hundreds of items), and
+	the recorded evidence says why:
+
+	- On citenexus, free models behind opencode reached for opencode's own tools first: **55 native
+	  attempts in 50 sessions for 5 useful turns**, and the step died from running out of repairs.
+	  This is what led to the refused-tool translation described above.
+	- In a long step, opencode's session grew until its own compaction ran and the process died
+	  eight turns in. This is why the opencode preset now uses a fresh session per turn.
+
+	For the heavy templates (`code-remover`, `test-gap-finder`, `spec-drift-finder`), use a paid
+	model or a CLI agent for the fan-out steps. Keep free models for the cheap steps.
+</Aside>

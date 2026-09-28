@@ -1,0 +1,43 @@
+---
+title: Projects, workflows, runs
+description: The UI and the CLI are a drill-down — projects, then a project's workflows, then a workflow's runs.
+---
+
+Everything in wfnexus lives in a hierarchy: a **project** (a repository with `.wfx/workflows/`)
+holds **workflows**, and a workflow holds **runs**. There are no global lists of runs, and there
+is no builder at the top level. The UI is a drill-down, and each level is one hash route in
+`apps/ui/src/App.tsx`:
+
+| Route | What you see |
+|---|---|
+| `#/projects` | Every project, its category, and its workflows and run activity. |
+| `#/projects/:p` | One project's workflows. |
+| `#/projects/:p/+new` | Start a workflow in this project. |
+| `#/projects/:p/:w` | One workflow: its steps and recent runs. |
+| `#/projects/:p/:w/edit` | Edit it. When the project is a git repo, the save becomes a [proposal](/wfnexus/git-native/proposals/). |
+| `#/projects/:p/:w/run` | Start a run with its inputs. |
+| `#/projects/:p/:w/runs/:id` | One run, step by step, with the agent's tool calls streamed live over SSE. |
+
+The top navigation also has **Templates**, **Skills & tools**, **Workers** and **System**.
+
+## The same thing from the CLI
+
+```bash
+wfx projects                                  # every project: workflows and run activity
+wfx project add ~/code/api --as api --category development
+wfx workflows                                 # list workflows
+wfx workflows show <name>                     # every step's harness: skills, tools, team, budget, gates
+wfx runs --project api --workflow nightly     # recent runs, newest first
+wfx show <run-id>                             # a run, step by step
+wfx logs <run-id> -f                          # the activity log
+wfx retry <run-id> --step <id>                # re-run from a step
+wfx cancel <run-id>
+```
+
+## Categories
+
+A project says what kind of work it does. `wfx project categories` lists the ids and
+`wfx project set <name> --category <id>` sets one. There are 17 of them, defined in
+`internal/workflow/categories.go`: development, debugging-ops, security, data, product-design,
+support, sales, marketing, finance, legal, hr, operations, healthcare, research, education,
+public-sector and general.

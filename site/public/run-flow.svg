@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" role="img" aria-labelledby="t d" font-family="Inter, system-ui, sans-serif">
+  <title id="t">How a wfnexus run flows</title>
+  <desc id="d">An agent or a person uses the wfx CLI or UI; wfx-server (engine, catalog, proposal) runs steps on providers (http, cli, acp: devin, opencode, codex) and asks the classifier (TypeSafe jev); a human gate approves; the change lands in git as a branch and PR. 12 second loop.</desc>
+  <style>
+    .card { fill: #fff; stroke: #ddd6fe; stroke-width: 1.5; }
+    .hub { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2; }
+    .t { font-size: 15px; font-weight: 700; fill: #17151f; }
+    .s { font-size: 11px; fill: #5d5872; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; fill: #6d28d9; }
+    .e { fill: none; stroke: #c4b5fd; stroke-width: 2; }
+    .flow { fill: none; stroke: #7c3aed; stroke-width: 2; stroke-dasharray: 6 8; animation: dash 1s linear infinite; }
+    .dot { fill: #7c3aed; }
+    .pill { fill: #ede9fe; }
+    @keyframes dash { to { stroke-dashoffset: -14; } }
+    @media (prefers-color-scheme: dark) {
+      .card { fill: #1c1a24; stroke: #3b2f5c; }
+      .hub { fill: #221b36; stroke: #a78bfa; }
+      .t { fill: #eeeaf8; } .s { fill: #a39cbc; } .m { fill: #c4b5fd; }
+      .e { stroke: #4c3a80; } .flow { stroke: #a78bfa; } .dot { fill: #a78bfa; } .pill { fill: #2e1065; }
+    }
+  </style>
+
+  <!-- edges -->
+  <path id="p1" class="e" d="M130 150 H175"/>
+  <path id="p2" class="e" d="M285 150 H330"/>
+  <path id="p3" class="e" d="M490 135 C530 100 540 70 575 70"/>
+  <path id="p4" class="e" d="M490 165 C530 200 540 230 575 230"/>
+  <path id="p5" class="e" d="M725 70 C755 70 760 120 785 140"/>
+  <path id="p6" class="e" d="M725 230 C755 230 760 180 785 160"/>
+  <path id="p7" class="e" d="M860 185 V215"/>
+  <path class="flow" d="M130 150 H175 M285 150 H330 M490 135 C530 100 540 70 575 70 M490 165 C530 200 540 230 575 230 M725 70 C755 70 760 120 785 140 M725 230 C755 230 760 180 785 160 M860 185 V215"/>
+
+  <!-- A run travelling through: agent → wfx → server → providers → gate (waits) → git, while the
+       classifier answers. Drawn BEFORE the nodes, so the run passes behind each box. -->
+  <circle class="dot" r="6">
+    <animateMotion dur="12s" repeatCount="indefinite" keyPoints="0;0.08;0.16;0.28;0.44;0.56;0.56;0.66;1;1" keyTimes="0;0.06;0.12;0.2;0.35;0.5;0.72;0.8;0.95;1" calcMode="linear"
+      path="M75 150 H230 H410 C470 160 540 230 645 230 C750 230 760 170 860 150 V150 V242"/>
+  </circle>
+  <circle class="dot" r="4" opacity="0.7">
+    <animateMotion dur="12s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.18;0.45;1" calcMode="linear"
+      path="M410 150 C470 140 540 70 645 70 C750 70 760 130 860 150"/>
+  </circle>
+
+  <!-- nodes -->
+  <rect class="card" x="20" y="120" width="110" height="60" rx="10"/>
+  <text class="t" x="34" y="146">Agent</text><text class="s" x="34" y="164">or a person</text>
+
+  <rect class="card" x="175" y="120" width="110" height="60" rx="10"/>
+  <text class="t" x="189" y="146">wfx</text><text class="s" x="189" y="164">CLI or UI</text>
+
+  <rect class="hub" x="330" y="105" width="160" height="90" rx="45"/>
+  <text class="t" x="410" y="140" text-anchor="middle">wfx-server</text>
+  <text class="m" x="410" y="158" text-anchor="middle">internal/engine</text>
+  <text class="m" x="410" y="172" text-anchor="middle">catalog · proposal</text>
+
+  <rect class="card" x="575" y="35" width="150" height="70" rx="10"/>
+  <text class="t" x="589" y="60">Classifier</text><text class="s" x="589" y="77">decide: · TypeSafe jev</text>
+  <text class="m" x="589" y="93">internal/judge</text>
+
+  <rect class="card" x="575" y="190" width="150" height="80" rx="10"/>
+  <text class="t" x="589" y="213">Providers</text><text class="s" x="589" y="229">http · cli · acp</text>
+  <rect class="pill" x="585" y="238" width="38" height="18" rx="9"/><text class="m" x="590" y="251">devin</text>
+  <rect class="pill" x="627" y="238" width="50" height="18" rx="9"/><text class="m" x="631" y="251">opencode</text>
+  <rect class="pill" x="681" y="238" width="38" height="18" rx="9"/><text class="m" x="685" y="251">codex</text>
+
+  <rect class="card" x="785" y="115" width="165" height="70" rx="10">
+    <animate attributeName="stroke" values="#ddd6fe;#ddd6fe;#7c3aed;#7c3aed;#ddd6fe" keyTimes="0;0.55;0.62;0.8;1" dur="12s" repeatCount="indefinite"/>
+  </rect>
+  <text class="t" x="799" y="141">Human gate</text><text class="s" x="799" y="159">approve · reject · answer</text>
+
+  <rect class="card" x="785" y="215" width="165" height="55" rx="10"/>
+  <text class="t" x="799" y="239">git</text><text class="s" x="799" y="257">branch + PR · registry</text>
+
+</svg>

@@ -1,0 +1,45 @@
+---
+title: Agent skills
+description: How Claude Code and Codex build, run and approve wfnexus workflows through agent skills — the skills/ directory and the wfx commands they drive.
+---
+
+wfnexus has two kinds of skill, and they are the same kind of file (`SKILL.md`):
+
+1. **Skills a step uses.** A step's `skills: [validate-bug, repo-navigator]` scopes what that
+   step's agent knows. `internal/skills` is the registry that resolves them, and `wfx registry skills`
+   lists what the server can see.
+2. **Skills your own agent uses to drive wfnexus.** Claude Code or Codex reads these skills and
+   calls `wfx` itself: to author a workflow, to find workflows worth building, or to clear the
+   approval queue.
+
+```bash
+wfx install --skills     # copy every skill into ~/.claude and ~/.agents
+wfx install --list       # what this platform ships
+```
+
+## The skills that drive wfx
+
+| Skill | Ask your agent | What it does with `wfx` |
+|---|---|---|
+| `workflow-author` | *"automate this as a workflow"* | Interviews you, drafts the YAML, proves it with `wfx dryrun`, installs it with `wfx apply`, and can `wfx publish` it. |
+| `workflow-recipes` | *"I want to know when X starts failing"* | Matches the job to a proven recipe (prod watch, alert triage, dead-code removal, docs drift…), asks only that recipe's questions, then validates and dry-runs. |
+| `workflow-scout` | *"what workflows should we build here?"* | Turns a repo's recurring manual work into ranked candidates, each checked against a 7-point bar. |
+| `approval-desk` | *"what is waiting on me?"* | Lists paused runs and resolves them with `wfx approve`, `wfx reject` and `wfx answer`. |
+
+Most of the rest of `skills/` are **step skills**, which the templates give to their agents:
+
+- `code-remover` uses `usage-prover`, `safe-remover`, `change-reviewer` and `cleanup-pr-writer`.
+- `test-gap-finder` uses `test-author` and `change-reviewer`.
+- `docs-drift-fixer` uses `doc-syncer`.
+- `spec-drift-finder` uses `doc-syncer`, `fix-author` and `change-reviewer`.
+- The watch and triage templates use `prod-signal-triage` (and `approval-desk`).
+- `workflows/bug-fix.yaml` uses `validate-bug`, `reproduce-bug`, `fix-author`, `pr-reviewer` and `pr-publisher`.
+
+`repo-navigator` and `pr-publisher` appear throughout. The [skill catalogue](/wfnexus/skills/catalogue/) lists
+every one, generated from its `SKILL.md`.
+
+## What a session looks like
+
+The [demo](/wfnexus/demo/) is a real one. Claude hears the ask, writes the workflow, fixes the
+problems it hits (a 403 from one classifier route, a stale copy on the server), runs it with
+`wfx run … -f`, stops at the gate, and publishes after `wfx approve`.

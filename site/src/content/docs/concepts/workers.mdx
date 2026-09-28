@@ -1,0 +1,34 @@
+---
+title: Workers
+description: Run steps on other machines — wfx-runner joins the pool over an outbound connection, and steps pick a machine with runs-on labels.
+---
+
+By default every step runs in the server's own process. When a step needs another machine
+(Windows, a GPU, a box with `devin` logged in), a **worker** runs it there.
+
+```bash
+wfx workers              # machines in the pool, and the line that adds another
+wfx workers rm <id>      # forget a machine
+wfx workers rotate       # new join token; machines already joined keep working
+```
+
+`wfx workers` prints the join line. On the other machine:
+
+```bash
+wfx-runner join --url https://wfx.example.com --token wfx_… --labels windows,devin
+wfx-runner run
+```
+
+The runner is **outbound only**. It connects to the server and asks for work, so no inbound
+port needs to be opened on the worker. A step goes to a matching worker when its `runs-on`
+(or the workflow's) names a label:
+
+```yaml
+steps:
+  - id: build-windows
+    runs-on: windows
+    run: ./build.ps1
+    shell: pwsh
+```
+
+The server side is the `/api/workers` endpoints: join, claim, heartbeat and job events.

@@ -1,10 +1,28 @@
-name: pages
+name: Deploy docs to GitHub Pages
 
-# The public site: site/ as-is (a static page and the demo video), no build.
+# The public site: site/ is an Astro Starlight project (mirrors muthuishere/toolnexus's docs
+# workflow). Every build runs the gates first — verify-symbols, coverage-gate, and `wfx help`
+# against the generated CLI reference — so a page cannot name a command, env var, package,
+# template or skill that is not on this commit. Pull requests run the gates and the build;
+# only a push to main deploys.
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths:
+      - 'site/**'
+      - 'templates/**'
+      - 'skills/**'
+      - 'registries.json'
+      - 'apps/api/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'templates/**'
+      - 'skills/**'
+      - 'registries.json'
+      - 'apps/api/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -12,21 +30,46 @@ permissions:
   pages: write
   id-token: write
 
+# Allow one concurrent deployment; don't cancel an in-progress one.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the "real result" pages cite commits; verify-symbols checks they exist
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - name: Site gates (verify-symbols, coverage, wfx help, build)
+        run: bash tests/run-all.sh
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/dist
+
   deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
       - id: deployment
         uses: actions/deploy-pages@v4

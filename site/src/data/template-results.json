@@ -1,0 +1,13 @@
+{
+  "_comment": "One real, recorded result per template. Every entry must cite a commit (checked by verify-symbols.mjs: the commit must exist in this repo) and may cite a PR URL. No entry means the page says no run is recorded.",
+  "templates": {
+    "spec-drift-finder": {
+      "commits": ["62d8df7", "4a9520f"],
+      "text": "- **hand-drawn-diagrams:** the run published [muthuishere/hand-drawn-diagrams#4](https://github.com/muthuishere/hand-drawn-diagrams/pull/4), titled *“[spec-drift] 1 code fix(es), 2 spec update(s) from 94 checked requirements”*, and it was merged (commit `62d8df7`: “Proven live: hand-drawn-diagrams PR #4”).\n- **citenexus:** a run over **698 requirements** failed at publish with GitHub's *“Body is too long”*. The PR body is now trimmed to fit GitHub's 65,536-character limit: conforming rows are dropped first, and the full table is kept in `pr-body-full.md` (commit `4a9520f`)."
+    },
+    "test-gap-finder": {
+      "commits": ["497a7f1", "d2643e8"],
+      "text": "- It was run for real on **python-streams, hand-drawn-diagrams and citenexus**. Those runs changed the template itself: a `scope` input (one module plus its specs per run), and no `PYTHONPATH` injection, which had shadowed the installed project and broken 2 citenexus tests (commit `497a7f1`).\n- On one run the analysts claimed **118** scenarios were “already covered”. Triage's classifier read each named test and sent **9** back as gaps, because the test did not actually assert the scenario. The PR body now quotes the verified **109** and says why each claim was rejected (commit `d2643e8`)."
+    }
+  }
+}
