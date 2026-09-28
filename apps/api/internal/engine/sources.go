@@ -283,9 +283,8 @@ func (e *Engine) ForgetRepo(name string) error {
 // cloneOrUpdate clones, or fetches into an existing clone.
 func cloneOrUpdate(ctx context.Context, dir, url, branch string) error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		cmd := exec.CommandContext(ctx, "git", "-C", dir, "pull", "--ff-only")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git pull in %s: %v: %s", dir, err, strings.TrimSpace(string(out)))
+		if _, err := gitIn(ctx, nil, "-C", dir, "pull", "--ff-only"); err != nil {
+			return fmt.Errorf("in %s: %w", dir, err)
 		}
 		return nil
 	}
@@ -297,10 +296,34 @@ func cloneOrUpdate(ctx context.Context, dir, url, branch string) error {
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, url, dir)
-	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone: %v: %s", err, strings.TrimSpace(string(out)))
+	_, err := gitIn(ctx, nil, args...)
+	return err
+}
+
+// gitIn is the one way this package runs git against a repository it did not
+// write: argv only (never a shell string), no prompts, and only the transports
+// a person names on purpose — ext:: and friends run commands (remoteref.go).
+// extraEnv is appended to the process environment and is how a credential
+// reaches git without ever appearing in argv, a log line, or an error.
+func gitIn(ctx context.Context, extraEnv []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ALLOW_PROTOCOL=https:http:ssh:git:file",
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		verb := ""
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") && a != "" && !strings.Contains(a, "/") && !strings.Contains(a, "=") {
+				verb = a
+				break
+			}
+		}
+		return string(out), fmt.Errorf("git %s: %v: %s", verb, err, strings.TrimSpace(string(out)))
 	}
-	return nil
+	return string(out), nil
 }
 
 // isLocalPath distinguishes a path from a URL. An scp-style git remote

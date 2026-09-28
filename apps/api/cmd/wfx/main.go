@@ -87,6 +87,8 @@ func run(args []string) error {
 		return act(first(rest), "cancel", nil)
 	case "registry":
 		return registry(first(rest))
+	case "skills":
+		return skillsCmd(rest)
 	case "doctor":
 		return doctor()
 	case "adapters":
@@ -191,6 +193,12 @@ func usage() {
   wfx retry <run-id> [--step id]   re-run from a step
   wfx cancel <run-id>
   wfx registry [skills|tools|providers|classifiers|mcp]
+  wfx skills import <git-url> [--ref r] [--path skills/] [--name n]  import a git repo of skills; r is a branch, tag or commit (--branch = --ref)
+  wfx skills sources               skill sources: url, ref, commit, skill count and names
+  wfx skills ref <source> <ref>    switch a source to another branch, tag or commit (alias: branch)
+  wfx skills refresh <source>      pull a branch source again; a tag or commit is pinned
+  wfx skills remove <source>       unload its skills and delete the checkout
+  wfx skills show <source>         a source's skills
 
 The API is --url, then $WFX_API, then the current context, then
 http://127.0.0.1:8090. Contexts live in ~/.config/wfx/contexts.json (0600).

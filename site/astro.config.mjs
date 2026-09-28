@@ -76,6 +76,7 @@ export default defineConfig({
 					items: [
 						{ label: 'How agents use wfx', slug: 'skills' },
 						{ label: 'Skill catalogue', slug: 'skills/catalogue' },
+						{ label: 'Import skills from git', slug: 'skills/import-from-git' },
 					],
 				},
 				{
