@@ -40,6 +40,7 @@ every one, generated from its `SKILL.md`.
 
 ## What a session looks like
 
-The [demo](/wfnexus/demo/) is a real one. Claude hears the ask, writes the workflow, fixes the
-problems it hits (a 403 from one classifier route, a stale copy on the server), runs it with
-`wfx run … -f`, stops at the gate, and publishes after `wfx approve`.
+The [demo](/wfnexus/demo/) is a real one, end to end: `wfnexus-setup` installs the stack,
+`workflow-author` builds the workflow and fixes what its first run exposes, `wfnexus-deploy`
+publishes and schedules it, and `approval-desk` puts every change in front of a person, who
+rejects a draft, approves a fix, and ships v1.0.2.

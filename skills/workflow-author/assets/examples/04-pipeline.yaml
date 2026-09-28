@@ -111,7 +111,7 @@ steps:
       - deny: bash
         args_contain: ["push --force", "push -f"]
         reason: "force-pushing is never part of publishing a fix"
-    prompt: "Approved: {{ .Steps.review.verdict }}\n\nCommit on a branch off {{ default .Input.base_branch \"main\" }}."
+    prompt: "Approved: {{ .Steps.review.verdict }}\n\nCommit on a branch off {{ default \"main\" .Input.base_branch }}."
     output_schema:
       type: object
       additionalProperties: false

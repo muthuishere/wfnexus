@@ -199,7 +199,7 @@ steps:
     prompt: |
       Approved: {{ .Steps.review.verdict }}
 
-      Commit the change on a branch off {{ default .Input.base_branch "main" }}
+      Commit the change on a branch off {{ default "main" .Input.base_branch }}
       and report what you did. This template stops at the branch — add the push
       or the PR command your shop uses.
     output_schema:
