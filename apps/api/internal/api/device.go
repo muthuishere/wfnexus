@@ -209,6 +209,12 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 		deviceError(w, http.StatusBadRequest, "expired_token", "the code expired before it was approved")
 		return
 	}
+	if dc.ClientID == browserLinkClient || dc.ClientID == uiClient {
+		// A browser's code becomes a cookie at /auth/browser or
+		// /api/auth/session, never a bearer value handed to a script.
+		deviceError(w, http.StatusBadRequest, "invalid_grant", "this code is redeemed by a browser, not here")
+		return
+	}
 	switch dc.Status {
 	case "denied":
 		_ = s.store.DeleteDeviceCodeByUserCode(ctx, dc.UserCode)
@@ -347,6 +353,14 @@ func (s *Server) subjectOf(r *http.Request) *Subject {
 		return sub
 	}
 	tok := bearer(r)
+	if tok == "" {
+		// A browser signed in to the UI approves with its session, so
+		// /device needs no pasted token there. Same CSRF rule as the
+		// middleware: a cookie counts only on a same-origin request.
+		if c := sessionCookie(r); c != "" && sameOrigin(r) {
+			tok = c
+		}
+	}
 	if tok == "" {
 		return nil
 	}

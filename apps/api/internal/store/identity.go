@@ -309,6 +309,18 @@ func (s *Store) DeleteDeviceCodeByUserCode(ctx context.Context, userCode string)
 	return err
 }
 
+// ClaimDeviceCode deletes a code and reports whether THIS call was the one
+// that deleted it. Two racing redemptions of the same single-use code cannot
+// both see true, which a read-then-delete could not promise.
+func (s *Store) ClaimDeviceCode(ctx context.Context, userCode string) (bool, error) {
+	res, err := s.exec(ctx, `DELETE FROM device_codes WHERE user_code=$1`, userCode)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
 // PurgeExpiredDeviceCodes keeps the table from becoming a graveyard of codes
 // nobody ever typed.
 func (s *Store) PurgeExpiredDeviceCodes(ctx context.Context) error {

@@ -107,6 +107,8 @@ func run(args []string) error {
 		return login(rest)
 	case "logout":
 		return logout(rest)
+	case "ui", "open":
+		return uiCmd(rest)
 	case "context", "contexts":
 		return contextCmd(rest)
 	case "version", "--version", "-v":
@@ -150,7 +152,9 @@ func usage() {
   wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
   wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
+  wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
   wfx logout [--url <host>]        revoke this host's token and forget it locally
+  wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
   wfx context [list|use|rm <host>] several hosts, side by side; * marks the current one
   wfx publish <file.yaml> --version v  push a workflow and its skills to the host
   wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)

@@ -63,6 +63,9 @@ func postDevice(host, path string, body map[string]string, out any) error {
 }
 
 func login(args []string) error {
+	if code := flagOf(args, "--approve", ""); code != "" {
+		return approveCode(args, code)
+	}
 	host := normalizeURL(flagOf(args, "--url", ""))
 	if host == "" {
 		// Without --url there is nothing to log in TO; the default loopback
@@ -114,6 +117,7 @@ func login(args []string) error {
 				return err
 			}
 			fmt.Printf("Logged in to %s as %s.\n", hostKey(host), or(user, "?"))
+			fmt.Println("Open the web UI signed in: wfx ui")
 			return nil
 		case answer.Error == "authorization_pending":
 			// §3.5: keep waiting, at the interval the server set.

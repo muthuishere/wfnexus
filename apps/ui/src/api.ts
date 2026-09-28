@@ -197,6 +197,9 @@ export type DoctorEntry = {
  *    not merely satisfied, so the UI shows no login chrome at all.
  *  - {authenticated:false, loopback:false} — off loopback, no credential.
  *  - {authenticated:true, kind, name, role, project} — a resolved subject. */
+/** The browser's half of a device grant: the code to show, and how to pace. */
+export type SignInStart = { device_code: string; user_code: string; interval: number; expires_in: number }
+
 export type WhoAmI = {
   authenticated: boolean
   loopback?: boolean
@@ -205,7 +208,8 @@ export type WhoAmI = {
 
 // A 401 is handled ONCE, here, rather than by every page: any call that comes
 // back unauthenticated notifies the listeners, and the shell explains that
-// login happens in the terminal. There is deliberately no browser login flow.
+// login is approved from the terminal (ADR 0017, 0022). The browser never
+// collects a credential: it shows a code, or it is opened signed in by `wfx ui`.
 type Unauthenticated = (message: string) => void
 const unauthListeners = new Set<Unauthenticated>()
 /** Subscribe to "the server said 401". Returns an unsubscribe. */
@@ -302,6 +306,18 @@ export const api = {
   /** Asked once on load. It never 401s on a loopback install with no users —
    *  it answers {authenticated:false, loopback:true} instead. */
   whoami: () => j<WhoAmI>(fetch('/api/whoami')),
+  /** Start the browser's device grant (ADR 0022): a code the person approves
+   *  from a signed-in terminal with `wfx login --approve <code>`. */
+  startSignIn: () => j<SignInStart>(post('/api/device/code', { client_id: 'wfx-ui', hostname: 'browser' })),
+  /** One poll of that grant. 200 means the server set the session cookie;
+   *  a 400 carries the RFC 8628 state (authorization_pending, slow_down, …). */
+  pollSignIn: async (deviceCode: string): Promise<string> => {
+    const res = await post('/api/auth/session', { device_code: deviceCode })
+    if (res.ok) return 'signed_in'
+    return (await res.json().catch(() => ({}))).error || 'error'
+  },
+  /** Revoke this browser's token and clear its cookie. */
+  signOut: () => j(fetch('/api/tokens/self', { method: 'DELETE' })),
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),

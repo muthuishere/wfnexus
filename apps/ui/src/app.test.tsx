@@ -256,7 +256,7 @@ describe('login state', () => {
     expect(container.textContent).not.toMatch(/sign in/i)
   })
 
-  test('a 401 from any call explains, once, that login happens in the terminal', async () => {
+  test('a 401 from any call shows the sign-in card, pointing at the terminal', async () => {
     const seen: string[] = []
     const off = onUnauthenticated(m => seen.push(m))
     // Any call, not a login-specific one: the handling is central.
@@ -274,7 +274,36 @@ describe('login state', () => {
     try {
       render(<Identity />)
       const panel = await screen.findByRole('alert')
+      // The one-step path for a person on the server's machine, and the
+      // first-login hint for a terminal that has no context yet.
+      expect(panel.textContent).toContain('wfx ui')
       expect(panel.textContent).toContain(`wfx login --url ${location.origin}`)
+    } finally {
+      globalThis.fetch = restore
+    }
+  })
+
+  test('the sign-in card shows a device code to approve from the terminal', async () => {
+    // Off loopback: whoami says "no credential", and the card starts the
+    // browser's device grant (client_id wfx-ui) and shows its code.
+    const restore = globalThis.fetch
+    const asked: string[] = []
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      asked.push(`${init?.method ?? 'GET'} ${url} ${init?.body ?? ''}`)
+      const body = url === '/api/whoami'
+        ? { authenticated: false, loopback: false }
+        : url === '/api/device/code'
+          ? { device_code: 'dc', user_code: 'BCDF-GHJK', interval: 60, expires_in: 900 }
+          : { error: 'authorization_pending' }
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: url === '/api/auth/session' ? 400 : 200, headers: { 'Content-Type': 'application/json' },
+      }))
+    }) as unknown as typeof fetch
+    try {
+      render(<Identity />)
+      const panel = await screen.findByRole('alert')
+      await waitFor(() => expect(panel.textContent).toContain('wfx login --approve BCDF-GHJK'))
+      expect(asked.some(a => a.startsWith('POST /api/device/code') && a.includes('wfx-ui'))).toBe(true)
     } finally {
       globalThis.fetch = restore
     }

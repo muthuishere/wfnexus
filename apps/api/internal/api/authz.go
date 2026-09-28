@@ -94,6 +94,9 @@ var resourcePerms = map[string][2]string{
 	"health":  {PermPublic, PermPublic},
 	"whoami":  {PermPublic, PermPublic},
 	"tokens":  {PermPublic, PermPublic},
+	// Browser sessions (session.go). The link handler demands a user subject
+	// itself; /auth/session is how a subject is obtained.
+	"auth": {PermPublic, PermPublic},
 	"install": {PermRegistryRead, PermRegistryWrite},
 }
 
