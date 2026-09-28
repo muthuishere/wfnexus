@@ -48,6 +48,18 @@ With no configuration at all, the server runs on SQLite and a local folder.
    and artifacts go in a folder beside it. `WFX_MODE=server` switches to Postgres and S3/MinIO.
    `WFX_ADDR=:8090` listens on every interface.
 
+   On loopback there is no login: open `http://127.0.0.1:8090`. Any other bind, including the
+   Docker compose install, requires one. Sign the CLI in once with `wfx login --url <host>`,
+   then open the UI signed in:
+
+   ```bash
+   wfx ui --url http://localhost:8090   # one-time link, valid 60 seconds, then a session cookie
+   ```
+
+   The link works once, and no token is ever put in it. For a browser on another machine, the
+   UI's sign-in card shows a code. Approve it from a signed-in terminal with
+   `wfx login --approve <code>`. **Sign out** in the top bar revokes that browser's token.
+
 3. **Check what is wired.**
 
    ```bash

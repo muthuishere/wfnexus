@@ -13,6 +13,18 @@ model that answers, with no money spent. You finish with exactly one of:
 
 Never end on "should be working". The script checks every stage; report what it said.
 
+With READY, always tell the person how to open the UI **signed in**. The compose server
+requires login (its requests arrive over the docker bridge, not loopback), so the bare
+URL shows a sign-in card. The command is:
+
+```sh
+wfx ui --url http://localhost:<port>    # opens a one-time, 60-second sign-in link
+```
+
+It uses the CLI login the script just made, sets an HttpOnly session cookie, and lands
+on `/`. From a browser on another machine, the sign-in card shows a code; approve it from
+this terminal with `wfx login --approve <code>`.
+
 ## Run it
 
 From a wfnexus checkout (clone `https://github.com/muthuishere/wfnexus` first if

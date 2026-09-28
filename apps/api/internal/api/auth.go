@@ -84,6 +84,10 @@ var publicAPIPaths = map[string]bool{
 	// not a subject yet — it is how one is obtained, the same reason join
 	// carries its token in the body.
 	"/api/workers/providers": true,
+	// The browser's half of the device grant (session.go): the UI polls here
+	// with the device code it was issued, exactly as /device/token is polled,
+	// and is answered with a session cookie instead of a bearer value.
+	"/api/auth/session": true,
 }
 
 // requireSubject resolves the bearer to a user or a worker.
@@ -94,6 +98,20 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			return
 		}
 		tok := bearer(r)
+		// The browser's credential (session.go). Read ONLY when there is no
+		// Authorization header, so a CLI or worker bearer always wins, and
+		// only after the CSRF check: a cookie is sent by the browser on the
+		// page's behalf, a bearer is not.
+		viaCookie := false
+		if tok == "" {
+			if c := sessionCookie(r); c != "" {
+				if !sameOrigin(r) {
+					writeErr(w, http.StatusForbidden, errors.New("cross-origin request refused"))
+					return
+				}
+				tok, viaCookie = c, true
+			}
+		}
 		if tok != "" {
 			sub, err := s.resolveSubject(r.Context(), tok)
 			if err == nil {
@@ -101,7 +119,12 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 				return
 			}
 			// A presented-but-unknown credential is a refusal even on
-			// loopback: the caller asserted an identity and it is not one.
+			// loopback: the caller asserted an identity and it is not one. A
+			// dead session cookie is also cleared, so the next load of the
+			// UI is a clean sign-in rather than the same 401 forever.
+			if viaCookie {
+				clearSessionCookie(w, r)
+			}
 			writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
 			return
 		}
@@ -110,7 +133,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated: run `wfx login --url <host>`"))
+		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated: run `wfx ui` (or `wfx login --url <host>`)"))
 	})
 }
 
@@ -144,6 +167,10 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 	if !ok || sub.Kind != SubjectUser {
 		writeErr(w, http.StatusUnauthorized, errors.New("no user token to revoke"))
 		return
+	}
+	// A browser signing out: the cookie goes whether or not the row does.
+	if bearer(r) == "" && sessionCookie(r) != "" {
+		clearSessionCookie(w, r)
 	}
 	if err := s.store.RevokeUserTokenByHash(r.Context(), sub.TokenHash); err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("token not found"))

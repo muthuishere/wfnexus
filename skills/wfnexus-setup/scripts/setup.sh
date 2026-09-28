@@ -195,6 +195,10 @@ if printf '%s\n' "$doc" | grep -q 'default provider .* not'; then
 fi
 ok "doctor: default provider ready ($(printf '%s\n' "$doc" | grep -c '✗') optional entries not configured; run wfx doctor for all)"
 
+# The server requires login (requests reach it over the docker bridge, not
+# loopback), so a bare URL opens the sign-in card. `wfx ui` opens it signed in
+# with a one-time, 60-second link; no token is ever in the URL.
+note "open the UI signed in:  wfx ui --url $URL"
 if [ -n "$missing" ] && printf '%s\n' "$missing" | grep -q TYPESAFE_API_KEY; then
   printf 'READY %s  (agent steps ready on free models; decide:/judge need TYPESAFE_API_KEY)\n' "$URL"
 else

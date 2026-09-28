@@ -122,6 +122,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/device/verify", s.deviceVerify)
 		r.Get("/whoami", s.whoami)
 		r.Delete("/tokens/self", s.revokeSelf)
+		// Browser sessions (session.go): the UI's own device-grant poll, and
+		// the one-time sign-in link `wfx ui` asks for.
+		r.Post("/auth/session", s.browserSession)
+		r.Post("/auth/link", s.browserLink)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
@@ -231,6 +235,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	// specific route wins. It is served by the API rather than the UI bundle
 	// because a login must work on a host where the UI was never built.
 	r.Get("/device", s.devicePage)
+	// Where a one-time link from `wfx ui` lands: it becomes a cookie and a
+	// redirect to /, never a page that shows anything.
+	r.Get("/auth/browser", s.browserRedeem)
 	r.Get("/*", s.ui)
 	return r
 }
