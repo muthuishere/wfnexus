@@ -1,0 +1,91 @@
+---
+title: wfnexus
+description: A developer-friendly workflow platform for coding agents. Steps are agent skills with typed output, wired as a graph, with state that persists between runs, human gates, and git as the record.
+template: splash
+hero:
+  tagline: A workflow platform for coding agents, built for developers. Each step is an agent with its own skills and a typed output contract. Steps form a graph, state persists between runs, a person approves where the workflow says so, and every change is a git branch.
+  image:
+    html: '<img src="/wfnexus/run-flow.svg" alt="How a wfnexus run flows: an agent or a person uses wfx; wfx-server runs steps on providers and asks a classifier; a human gate approves; the change lands in git." width="960" height="300" style="max-width:100%;height:auto" />'
+  actions:
+    - text: Quickstart
+      link: /wfnexus/quickstart/
+      icon: right-arrow
+    - text: Watch the demo
+      link: /wfnexus/demo/
+      icon: seti:video
+      variant: minimal
+    - text: Templates
+      link: /wfnexus/templates/
+      icon: right-arrow
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/muthuishere/wfnexus
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import DemoPlayer from '../../components/DemoPlayer.astro';
+
+## What wfnexus is
+
+wfnexus is to coding agents what n8n is to SaaS APIs, but it is aimed at developers. Its
+three building blocks are **agent skills**, **graph steps** and **state and memory**.
+
+A workflow is one YAML file. Each step is one of two things:
+
+- a **prompt** with a scoped set of skills and tools and a **JSON-schema output contract**, or
+- a deterministic **`run:`** shell node.
+
+The engine runs each step as a [toolnexus](https://github.com/muthuishere/toolnexus) agent. It
+does not move on until the step's output validates against its schema. It saves every step's
+state, and it stops for a human wherever the workflow says to.
+
+It is **not a bug-fix product.** The repository started as a bug-fixer, and `templates/bug-fixer.yaml`
+is still one template among eleven. ADR 0010 in the [roadmap](https://github.com/muthuishere/wfnexus/blob/main/docs/ROADMAP.md)
+records the decision: *a workflow platform, not a bug fixer*.
+
+```bash
+wfx templates                              # starting points: dead-code removal, spec drift, prod watch…
+wfx new test-gap-finder --as my-tests      # copy one into a workflow of your own
+wfx dryrun my-tests                        # would it run here? no model, no repo, no writes
+wfx run my-tests -i repo_path=. -f         # run it and follow the log
+wfx approve <run-id>                       # the human gate
+```
+
+<CardGrid>
+	<Card title="Steps are agents with contracts" icon="puzzle">
+		A step is a prompt, a scoped set of skills and tools, and an `output_schema`. Validation
+		runs **inside** the agent loop: `submit_output` is a tool, so a validation failure goes back
+		to the model as a tool result and the model fixes it in the same turn.
+	</Card>
+	<Card title="Any backend" icon="setting">
+		The same workflow can run on an HTTP model (OpenRouter, ollama and others), a CLI agent (`claude`, `codex`,
+		`opencode`) or an ACP agent (devin, opencode, codex). The shipped registry has 30 providers.
+	</Card>
+	<Card title="Calibrated classifiers" icon="approve-check">
+		`decide:` asks typed questions of a small calibrated classifier (TypeSafe jev) before an
+		agent runs. Its verdicts come in three bands: **no**, **uncertain** and **yes**. An
+		uncertain verdict goes to a person.
+	</Card>
+	<Card title="Git is the record" icon="github">
+		When a project lives in git, every save or delete of a workflow becomes a branch and a pull
+		request. A classifier reviews it, and a person approves or rejects it.
+	</Card>
+</CardGrid>
+
+## Watch it built
+
+A real Claude Code session, unedited except for speed. Claude builds a five-step workflow, runs
+it on a free model, stops at a human approval gate, and publishes it. See the
+[demo page](/wfnexus/demo/) for chapters and for what went wrong along the way.
+
+<DemoPlayer />
+
+## Where to go next
+
+- **New here:** read the [Quickstart](/wfnexus/quickstart/), then [Workflows and steps](/wfnexus/concepts/workflows-and-steps/).
+- **Letting an agent do it all:** see [Get started with an agent](/wfnexus/agent-start/).
+- **Want a working workflow today:** browse the [Templates](/wfnexus/templates/). Each page is generated from its YAML.
+- **Driving it from Claude or Codex:** see [Agent skills](/wfnexus/skills/).
+- **How it fits together:** see [Architecture](/wfnexus/architecture/).

@@ -1,0 +1,111 @@
+---
+title: Quickstart
+description: Build the binaries, start wfx-server, check the wiring with wfx doctor, and do a first run that needs no model and no key.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+wfnexus is three binaries:
+
+- **`wfx-server`** is the engine, the API and the UI, all in one binary.
+- **`wfx`** is the CLI.
+- **`wfx-runner`** is an optional worker for other machines.
+
+With no configuration at all, the server runs on SQLite and a local folder.
+
+<Aside type="caution" title="No published release yet">
+	The repository ships `install.sh` and `install.ps1`, which download a release and check its
+	checksum. No GitHub release has been published yet, so for now build from source, as shown
+	below. Once a release exists,
+	`curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh` will be
+	the one-liner.
+</Aside>
+
+<Steps>
+
+1. **Build.** You need Go, Node and [Task](https://taskfile.dev).
+
+   ```bash
+   git clone https://github.com/muthuishere/wfnexus && cd wfnexus
+   task build        # bin/wfx-server, bin/wfx, bin/wfx-runner
+   ```
+
+   `task build` first builds the UI and stages it, the templates, the skills and
+   `registries.json` into the server binary with `go:embed`. A downloaded `wfx-server` therefore
+   works with nothing beside it.
+
+   You can also build `wfx` alone with
+   `go install github.com/muthuishere/wfnexus/apps/api/cmd/wfx@latest`. This does **not** work
+   for the server, because its embedded UI is staged by the build and is not committed.
+
+2. **Start the server.**
+
+   ```bash
+   ./bin/wfx-server          # http://127.0.0.1:8090 — loopback only
+   ```
+
+   The default is `WFX_MODE=local`: state goes in SQLite at `~/.local/share/wfnexus/wfnexus.db`,
+   and artifacts go in a folder beside it. `WFX_MODE=server` switches to Postgres and S3/MinIO.
+   `WFX_ADDR=:8090` listens on every interface.
+
+3. **Check what is wired.**
+
+   ```bash
+   wfx doctor
+   ```
+
+   `doctor` prints the default provider, the platform and shell, and every provider and
+   classifier marked ✓ or ✗ with the reason. The reason names a variable, never a value, for
+   example `ANTHROPIC_API_KEY is not set`. It ends with a list of problems: each one is a step
+   that would fail when it runs. Here is an excerpt from a real machine:
+
+   ```text
+   Default provider opencode-acp  (WFX_DEFAULT_PROVIDER: steps without their own provider run here)
+
+   providers (30)
+     ✓ claude-cli     cli    /Users/…/.local/bin/claude
+     ✓ devin          acp    /opt/homebrew/bin/devin
+     ✗ groq           http   openai/gpt-oss-120b  https://api.groq.com/openai/v1
+         GROQ_API_KEY is not set
+   classifiers (4)
+     ✗ jev            openrouter typesafe/jev-1.13  OPENROUTER_API_KEY
+     ✓ recorded       static
+   ```
+
+4. **Do a first run with no model and no key.** `workflows/mock-demo.yaml` runs on the built-in
+   `mock` provider and stops for a human before its `act` step, so you can try the approval path
+   for free:
+
+   ```bash
+   wfx run mock-demo -f       # follows the log; pauses before `act`
+   wfx approve <run-id>       # or: wfx reject <run-id> -m "why"
+   wfx show <run-id>          # the run, step by step
+   ```
+
+5. **Point it at a real model.** Store a key in the encrypted env store (it is never echoed),
+   or use a free model over ACP:
+
+   ```bash
+   wfx env set OPENROUTER_API_KEY      # reads the value without echoing it
+   wfx adapters                        # devin, opencode, codex: which are installed
+   wfx models opencode-acp --free      # the free models opencode offers, asked live
+   ```
+
+   See [Providers and models](/wfnexus/providers/).
+
+6. **Give your agent the skills.** Claude Code and Codex build workflows through agent skills:
+
+   ```bash
+   wfx install --skills       # every skill into ~/.claude and ~/.agents
+   ```
+
+   Then ask your agent something like *"take this off my plate as a wfnexus workflow"*. See
+   [Agent skills](/wfnexus/skills/).
+
+</Steps>
+
+## Next
+
+- Start from a [template](/wfnexus/templates/): `wfx new <template> --as <name>`, then `wfx dryrun <name>`.
+- Read [Workflows and steps](/wfnexus/concepts/workflows-and-steps/) for the YAML.
+- Every command is in the [CLI reference](/wfnexus/reference/cli/).

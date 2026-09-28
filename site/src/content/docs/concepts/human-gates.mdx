@@ -1,0 +1,33 @@
+---
+title: Human gates
+description: Where a run stops for a person — approve, reject, or answer — and how to resolve it from the CLI, the UI, or an agent.
+---
+
+A run stops and waits for a person in three cases:
+
+| Trigger | Where it is declared | How to resume |
+|---|---|---|
+| `requires_approval: true` | on a step: the run pauses **before** it | `wfx approve <run-id>` or `wfx reject <run-id> -m "why"` |
+| A gate with `action: needs_input` | on a step's `gates` or `decide.gates` | `wfx answer <run-id> -m "text"` |
+| The agent calls `ask_human` | `tools: [ask_human]` on a step | `wfx answer <run-id> -m "text"` |
+
+```bash
+wfx approve <run-id> --as priya      # approve the step waiting on a human
+wfx reject  <run-id> -m "not this week"
+wfx answer  <run-id> -m "the failing call is parse(\"\")"
+```
+
+The HTTP API behind these is `POST /api/runs/{id}/approve`, `/reject` and `/answer`. The UI's run
+page shows the same buttons. `internal/notify` delivers a pause to wherever the person is.
+
+## Templates put the gate before anything leaves
+
+Every heavy [template](/wfnexus/templates/) stops before it writes or pushes. For example,
+`code-remover` waits for approval before `remove` and again before `publish`, and `test-gap-finder`
+waits before writing tests and before publishing. Each template page lists its gates, generated
+from its YAML.
+
+## From an agent
+
+The [approval-desk skill](/wfnexus/skills/catalogue/) lets Claude or Codex answer *"what is waiting
+on me?"*. It lists the paused runs and resolves them with the same three commands.

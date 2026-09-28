@@ -1,0 +1,93 @@
+---
+// The demo video with clickable chapters. Everything it shows comes from src/data/demo.ts.
+import { demo } from '../data/demo';
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<div class="wfx-demo">
+	<p class="eyebrow">{demo.eyebrow}</p>
+	<div class="player">
+		<video id="wfx-demo-video" controls playsinline preload="metadata" poster={base + demo.poster}>
+			<source src={base + demo.video} type="video/mp4" />
+		</video>
+	</div>
+	<ul class="chapters" id="wfx-demo-chapters">
+		{demo.chapters.map((c) => (
+			<li>
+				<button type="button" data-t={c.t}>
+					<b>{c.label}</b>
+					{c.title}
+				</button>
+			</li>
+		))}
+	</ul>
+</div>
+
+<script>
+	const v = document.getElementById('wfx-demo-video') as HTMLVideoElement | null;
+	const buttons = [...document.querySelectorAll<HTMLButtonElement>('#wfx-demo-chapters button')];
+	if (v) {
+		buttons.forEach((b) =>
+			b.addEventListener('click', () => {
+				v.currentTime = Number(b.dataset.t);
+				v.play();
+			}),
+		);
+		v.addEventListener('timeupdate', () => {
+			let cur: HTMLButtonElement | null = null;
+			for (const b of buttons) if (v.currentTime >= Number(b.dataset.t)) cur = b;
+			buttons.forEach((b) => b.classList.toggle('on', b === cur));
+		});
+	}
+</script>
+
+<style>
+	.eyebrow {
+		font: 600 0.8rem/1 var(--sl-font-mono);
+		color: var(--sl-color-text-accent);
+		letter-spacing: 0.04em;
+	}
+	.player {
+		background: #000;
+		border-radius: 14px;
+		overflow: hidden;
+		border: 1px solid var(--sl-color-hairline);
+		box-shadow: 0 20px 60px -30px rgba(109, 40, 217, 0.45);
+	}
+	video {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+	.chapters {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin: 16px 0 8px;
+		padding: 0;
+		list-style: none;
+	}
+	.chapters li {
+		margin: 0;
+	}
+	.chapters button {
+		font: 500 0.875rem/1 var(--sl-font);
+		color: var(--sl-color-white);
+		background: var(--sl-color-gray-6);
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 999px;
+		padding: 10px 14px;
+		cursor: pointer;
+	}
+	.chapters button:hover,
+	.chapters button.on {
+		border-color: var(--sl-color-accent);
+		background: var(--sl-color-accent-low);
+	}
+	.chapters b {
+		font-family: var(--sl-font-mono);
+		color: var(--sl-color-text-accent);
+		font-weight: 600;
+		margin-right: 6px;
+	}
+</style>

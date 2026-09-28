@@ -1,0 +1,54 @@
+---
+title: State and memory
+description: What a workflow remembers between runs — four separate scopes (step, workflow, project, global), written from a step's output and read in templates.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A step's output belongs to one run. **State** is what persists *across* runs: a watermark, the
+last heartbeat, the id of the issue already filed. It lives in `internal/engine/state.go` and
+has four scopes, from narrowest to widest:
+
+| Scope | Read in a template as | Shared by |
+|---|---|---|
+| step | `{{ .Step.x }}` | this step of this workflow, across runs |
+| workflow | `{{ .Workflow.x }}` | this workflow, across runs |
+| project | `{{ .Project.x }}` | every workflow in this repository |
+| global | `{{ .Global.x }}` | everything on this platform |
+
+These are **four namespaces, not a cascade.** `.Step.last_id` never falls back to
+`.Workflow.last_id`. A silent fallback would turn "nobody has written this yet" into "here is
+somebody else's value", which is the worst answer for a workflow resuming from a watermark it
+never set.
+
+## Writing it
+
+A step's `state:` block maps a scope to keys, and each value is a template rendered against the
+step's own accepted output. This is from `templates/prod-watch`:
+
+```yaml
+state:
+  project:
+    prod-watch.heartbeat: "{{ .Output.stdout }}"
+```
+
+A step never names which workflow or project it writes to. The run already knows.
+
+## From the CLI
+
+```bash
+wfx state list --workflow <w>          # what this workflow remembers between runs
+wfx state set --workflow <w> k v       # also --step, --project, --global
+wfx state get --step k                 # one value; empty when never written
+```
+
+<Aside type="caution" title="State is not a secret store">
+	State values are stored as plaintext in the database. Put credentials in the
+	[env store](/wfnexus/concepts/env-and-secrets/), which is encrypted.
+</Aside>
+
+## Memory
+
+Longer-lived agent memory, meaning conversation memory and a persona or "agent home", is
+**pending**. It is listed in `docs/ROADMAP.md` and has not shipped. What ships today is the state
+described above.

@@ -1,0 +1,33 @@
+---
+title: Get started with an agent
+description: Which agent skill drives each stage — install, build, deploy, run and approve — so Claude Code or Codex can take you from nothing to a running workflow.
+---
+
+import AgentStages from '../../components/AgentStages.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+You do not have to learn the YAML or the CLI first. Every stage of the journey has an agent skill
+behind it, and your agent (Claude Code, Codex, or anything that reads `SKILL.md` files) uses
+`wfx` through those skills.
+
+<AgentStages />
+
+<Aside type="note" title="Status is read from the repository">
+	A skill is marked **coming** when `skills/<name>/SKILL.md` does not exist on `main`. The table is
+	rebuilt on every deploy, so a skill changes to **available** once it lands. Until then, follow
+	the [Quickstart](/wfnexus/quickstart/) for install, and use `wfx apply` or `wfx publish` for
+	deploy (see the [CLI reference](/wfnexus/reference/cli/)).
+</Aside>
+
+## Put the skills where your agent looks
+
+```bash
+wfx install --skills       # every skill into ~/.claude and ~/.agents
+```
+
+After that, ask in plain words. *"Take my Friday release-notes chore off my plate"* starts the
+build stage. *"What is waiting on me?"* starts approval. The [Demo video](/wfnexus/demo/) shows the
+build, run and approve stages in a real session.
+
+See [Agent skills](/wfnexus/skills/) for how the skills use `wfx`, and the
+[skill catalogue](/wfnexus/skills/catalogue/) for every skill that ships.

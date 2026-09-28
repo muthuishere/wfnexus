@@ -1,0 +1,24 @@
+{
+  "title": "How a wfnexus run flows",
+  "subtitle": ["A person or an agent asks; wfx-server runs typed steps; a human gates; git keeps the receipt."],
+  "chips": ["internal/engine", "internal/catalog", "internal/proposal", "internal/devinadapter", "internal/judge"],
+  "footnote": "Package names checked against apps/api/internal by site/scripts/verify-symbols.mjs.",
+  "nodes": [
+    { "id": "who", "title": "Agent", "detail": "or a person", "kind": "card" },
+    { "id": "cli", "title": "wfx CLI", "detail": "or the UI", "kind": "card" },
+    { "id": "server", "title": "wfx-server", "detail": "engine · catalog · proposal", "kind": "hub" },
+    { "id": "providers", "title": "Providers", "detail": "http · cli · acp", "kind": "loop", "pills": ["devin", "opencode", "codex"] },
+    { "id": "judge", "title": "Classifier", "detail": "TypeSafe jev", "kind": "card" },
+    { "id": "gate", "title": "Gate", "detail": "a human approves", "kind": "card" },
+    { "id": "git", "title": "git", "detail": "branch + PR", "kind": "card" }
+  ],
+  "edges": [
+    { "from": "who", "to": "cli", "label": "ASKS" },
+    { "from": "cli", "to": "server", "label": "RUN" },
+    { "from": "server", "to": "providers", "label": "STEPS" },
+    { "from": "server", "to": "judge", "label": "DECIDE" },
+    { "from": "providers", "to": "gate", "label": "TYPED OUTPUT" },
+    { "from": "judge", "to": "gate", "label": "UNCERTAIN" },
+    { "from": "gate", "to": "git", "label": "APPROVED" }
+  ]
+}

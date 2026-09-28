@@ -1,0 +1,76 @@
+---
+title: Classifiers
+description: decide, judge and wfx judge — typed questions answered by a calibrated classifier (TypeSafe jev), sorted into no, uncertain and yes.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An agent is the wrong tool for a yes-or-no question. It is slow, it is expensive, and its
+confidence means nothing. wfnexus asks a **calibrated classifier** instead (`internal/judge`).
+Each question gets a score, and code sorts the score into a band:
+
+| Score | Band | What happens |
+|---|---|---|
+| below 0.30 | **no** | Decided. |
+| 0.30 – 0.70 | **uncertain** | Goes to a person. |
+| above 0.70 | **yes** | Decided. |
+
+Those are `DefaultBands` (`Low: 0.30, High: 0.70`) in `internal/judge`. The uncertain middle is
+the point: a person sees the cases the classifier is unsure about, and nothing else.
+
+## Three ways to ask
+
+**`decide:` on an agent step.** This is a classifier pass that runs *before* the agent, and its
+gates can halt or route the run for a fraction of a cent. From `workflows/bug-fix.yaml`:
+
+```yaml
+decide:
+  state: |
+    Bug title: {{ .Input.title }}
+    {{ .Input.description }}
+  questions:
+    is_security:
+      type: noul
+      instructions: Is this report describing a security problem?
+    fixability:
+      type: score
+      levels: ["no chance: …", "possible: …", "likely: …", "certain: …"]
+  gates:
+    - { question: is_security, at_least: 0.6, action: fail }
+    - { question: fixability, below: 1.0, action: needs_input }
+```
+
+A question has one of three types: `noul` (yes, no, or uncertain), `choice` (with `options`) and
+`score` (2 to 10 `levels`).
+
+**`judge:` as a step.** The same machinery as a pure decision node, with no agent and no tools.
+
+**`wfx judge` in a shell step.** This is what the heavy [templates](/wfnexus/templates/) do.
+The step runs one question file over a JSONL file of items and gets calibrated verdicts per
+item, which code then applies as a decision table:
+
+```bash
+wfx judge -q questions.yaml --items candidates.jsonl
+```
+
+## Which classifier
+
+Classifiers are entries in `registries.json`, next to the providers:
+
+| Entry | Backend | Notes |
+|---|---|---|
+| `jev` | `openrouter` | `typesafe/jev-1.13` over OpenRouter. Calibrated, about 700 ms. |
+| `jev-direct` | `typesafe` | The same judge against TypeSafe's own API (`TYPESAFE_API_KEY`). |
+| `chat-judge` | `llm` | A chat model answering the same questions. It is **not** calibrated: a compatibility exit, not an equivalent. |
+| `recorded` | `static` | Replays a recorded corpus, with no network. This is what tests use. |
+
+A step picks one with `classifier:`. A step that names none gets **`WFX_DEFAULT_CLASSIFIER`**,
+which is also the one used to review [proposals](/wfnexus/git-native/proposals/).
+`WFX_CLASSIFIER_MODEL` defaults to `typesafe/jev-1.13`. Run `wfx doctor` to see which
+classifiers are ready.
+
+<Aside type="note" title="In the demo">
+	In the [demo](/wfnexus/demo/), the classifier's OpenRouter route returned a 403 and Claude
+	switched to TypeSafe direct (`jev-direct`). This is the reason the registry has two routes to
+	the same judge.
+</Aside>

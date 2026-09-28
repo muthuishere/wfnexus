@@ -1,0 +1,35 @@
+---
+title: Demo video
+description: A real Claude Code session builds a five-step wfnexus workflow, runs it on a free model, stops at a human approval gate, and publishes it.
+---
+
+import DemoPlayer from '../../components/DemoPlayer.astro';
+import { demo } from '../../data/demo';
+
+<p>{demo.lede}</p>
+
+<DemoPlayer />
+
+## What the workflow does
+
+1. **Gather.** It collects the week's commits from `git log`, leaving out merges.
+2. **Classify.** A calibrated classifier (jev-1.13) labels each commit as feature, fix, security, breaking or internal.
+3. **Draft.** An agent on a free model writes customer-facing notes. Internal commits are left out.
+4. **Review.** A second agent checks every claim against the actual commit. All six claims were backed.
+5. **Gate, then publish.** Nothing is written until a human approves. Then `RELEASE_NOTES.md` is committed.
+
+## Run it yourself
+
+```bash
+wfx adapters                      # devin, opencode, codex: which are installed
+wfx models opencode-acp --free    # the free models the agent offers
+wfx run release-notes -f          # run it, follow the log
+wfx approve <run-id>              # the human gate
+```
+
+## What else the session showed (unscripted)
+
+- **Claude wrote the YAML itself.** The `wfx` CLI has no commands for building steps yet.
+- **The classifier's OpenRouter route returned 403.** Claude switched to TypeSafe direct and re-ran.
+- **The server kept a stale copy** of the workflow after `wfx apply`. Claude found it and removed it.
+- **The published tag came out as `vv1.0.0`.** The doubled "v" still has to be fixed.

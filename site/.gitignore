@@ -1,0 +1,29 @@
+# build output
+dist/
+# generated types
+.astro/
+
+# dependencies
+node_modules/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# environment variables
+.env
+.env.production
+
+# macOS-specific files
+.DS_Store
+
+# generated on every build by scripts/generate-pages.mjs, never committed
+src/content/docs/templates/
+src/content/docs/skills/catalogue.mdx
+src/content/docs/reference/cli.mdx
+src/content/docs/providers/registry.mdx
+# diagram/build.mjs scratch
+diagram/.rec/

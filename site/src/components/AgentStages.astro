@@ -1,0 +1,36 @@
+---
+// The install → build → deploy → run journey, one skill per stage. A skill's status is read
+// from the repo at build time (skills/<name>/SKILL.md exists → available), never hand-set.
+import fs from 'node:fs';
+import path from 'node:path';
+import { stages } from '../data/agent-stages';
+
+const repoRoot = path.resolve(process.cwd(), '..');
+const rows = stages.map((s) => ({
+	...s,
+	available: fs.existsSync(path.join(repoRoot, 'skills', s.skill, 'SKILL.md')),
+}));
+---
+
+<table>
+	<thead>
+		<tr><th>Stage</th><th>Skill</th><th>Status</th><th>What it does</th><th>Ask your agent</th></tr>
+	</thead>
+	<tbody>
+		{rows.map((r) => (
+			<tr>
+				<td><strong>{r.stage}</strong></td>
+				<td>
+					{r.available ? (
+						<a href={`https://github.com/muthuishere/wfnexus/blob/main/skills/${r.skill}/SKILL.md`}><code>{r.skill}</code></a>
+					) : (
+						<code>{r.skill}</code>
+					)}
+				</td>
+				<td>{r.available ? 'available' : 'coming'}</td>
+				<td set:html={r.does.replace(/`([^`]+)`/g, '<code>$1</code>')} />
+				<td><em>“{r.ask}”</em></td>
+			</tr>
+		))}
+	</tbody>
+</table>
