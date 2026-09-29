@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +35,9 @@ func publish(args []string) error {
 	version := normalizeVersion(flagOf(args, "--version", ""))
 	if version == "" {
 		return fmt.Errorf("--version is required: a published version is immutable, so it has to be named")
+	}
+	if !semver.MatchString(version) {
+		return fmt.Errorf("--version %q is not semver: use MAJOR.MINOR.PATCH, optionally with -prerelease or +build (e.g. 1.2.0, 1.2.0-rc.1)", version)
 	}
 
 	// A publish has to go SOMEWHERE. There is no local-only or degraded mode:
@@ -262,6 +266,15 @@ func duplicateVersion(name, version, remote, tag string, out []byte, e error) er
 	}
 	return fmt.Errorf("git push to %s: %v: %s", remote, e, strings.TrimSpace(text))
 }
+
+// semver is semver.org's own grammar (MAJOR.MINOR.PATCH, no leading zeros,
+// optional -prerelease and +build), checked after the `v` is stripped. A
+// version is a git tag and a tree path for good, so "latest" or "1.0" slipping
+// in once is a name nobody can take back — and a pull by `@1.0.0` would never
+// find it.
+var semver = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)` +
+	`(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?` +
+	`(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$`)
 
 // normalizeVersion accepts `v1.0.0` as well as `1.0.0` and returns the bare
 // form. The version is stored bare and the git tag adds its own `v`, so a
