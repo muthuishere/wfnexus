@@ -23,39 +23,23 @@ import (
 // the numbers. A step that goes quiet stops writing because nothing accrued.
 const flushEvery = time.Second
 
-// pricing is a provider's per-million-token price, and whether we KNOW it.
-//
-// Known=false is not zero. ADR 0020: a missing price must render as *unknown*,
-// never as $0.00, because $0.00 is the true and load-bearing answer for a local
-// CLI provider and it has to stay trustworthy.
+// pricing is the per-million-token price a step is charged at, and whether we
+// KNOW it. Known=false is not zero (ADR 0020). Source says where the number came
+// from — `default` is an approximate seed price, the UI marks it so.
 type pricing struct {
 	InPerM  float64
 	OutPerM float64
 	Known   bool
+	Source  string
 }
 
-// priceOf reads the price off a registry provider entry (ADR 0011: the registry
-// is the one place a step names a backend, so the price belongs there too).
-//
-// A `cli` or `acp` provider is a program on this machine. It bills no tokens,
-// so its cost is a KNOWN zero — and that zero is the number a local-first
-// runtime can show that a hosted product structurally cannot.
-func priceOf(p catalog.Provider) pricing {
-	if p.PricePerMIn != nil || p.PricePerMOut != nil {
-		return pricing{InPerM: deref0(p.PricePerMIn), OutPerM: deref0(p.PricePerMOut), Known: true}
-	}
-	switch p.Kind {
-	case catalog.KindCLI, catalog.KindACP:
-		return pricing{Known: true}
-	}
-	return pricing{}
-}
-
-func deref0(f *float64) float64 {
-	if f == nil {
-		return 0
-	}
-	return *f
+// priceOf prices a call to model on provider p against table (catalog.PriceFor). A `cli` or
+// `acp` provider is a program on this machine and bills no tokens: a KNOWN
+// zero — the number a local-first runtime can show that a hosted product
+// structurally cannot.
+func priceOf(p catalog.Provider, model string, table map[string]catalog.Price) pricing {
+	pr, src, ok := catalog.PriceFor(p, model, table)
+	return pricing{InPerM: pr.In, OutPerM: pr.Out, Known: ok, Source: src}
 }
 
 // cost is the money for a token pair, and false when no price is known.
@@ -197,6 +181,7 @@ func (u *usageAccum) snapshotLocked() (map[string]any, int) {
 		out["costUsd"] = round6(c)
 		out["pricePerMIn"] = u.price.InPerM
 		out["pricePerMOut"] = u.price.OutPerM
+		out["priceSource"] = u.price.Source
 	} else {
 		// Tokens without a price. Said in the data, so a UI can render
 		// "unknown" rather than inventing a zero.

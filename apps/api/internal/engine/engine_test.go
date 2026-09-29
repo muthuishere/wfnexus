@@ -372,3 +372,6 @@ func TestConcurrentRunsAreBoundedByTheSlotLimit(t *testing.T) {
 		t.Fatalf("slot limit is 1 but %d runs executed at once", maxSeen)
 	}
 }
+
+// The real store must carry the price table, or prices silently stay read-only.
+var _ priceStore = (*store.Store)(nil)

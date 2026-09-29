@@ -228,3 +228,14 @@ type Job struct {
 	LeasedAt   *time.Time      `json:"leasedAt,omitempty"`
 	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
 }
+
+// ModelPrice is one row of the price table (ADR 0020): what a model family
+// costs per MILLION tokens, in USD. Seeded is true while the row still holds the
+// approximate number shipped in the binary rather than one a person set.
+type ModelPrice struct {
+	Model     string    `json:"model"`
+	In        float64   `json:"in"`
+	Out       float64   `json:"out"`
+	Seeded    bool      `json:"seeded"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}

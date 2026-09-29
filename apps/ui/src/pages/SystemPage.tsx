@@ -5,6 +5,7 @@ import {
 import { Field, Section } from '../components/builder/Bits'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import EnvStore from '../components/EnvStore'
+import PriceTable from '../components/PriceTable'
 
 /** SystemPage answers one question: if a step named this right now, would it run?
  *
@@ -23,6 +24,7 @@ export default function SystemPage() {
   const [skipped, setSkipped] = useState<Skipped[]>([])
   const [err, setErr] = useState('')
   const [note, setNote] = useState('')
+  const [editing, setEditing] = useState<Provider>()
 
   const load = useCallback(() => {
     setErr('')
@@ -114,8 +116,12 @@ export default function SystemPage() {
         title="Providers" entries={doc.providers} rows={providers}
         hint="A provider is where a step's turns come from. `http` is an endpoint; `cli` and `acp` are a program on this machine, which needs no key because the CLI holds its own."
         onDelete={name => act(`Removed provider ${name}.`, () => api.deleteProvider(name))}
+        price={name => priceOfEntry(providers.find(p => p.name === name))}
+        onEdit={name => setEditing(providers.find(p => p.name === name))}
       />
-      <ProviderForm models={doc.models} onSave={p => act(`Saved provider ${p.name}.`, () => api.saveProvider(p))} />
+      <ProviderForm key={editing?.name || ''} initial={editing} models={doc.models}
+        onSave={p => act(`Saved provider ${p.name}.`, () => api.saveProvider(p))} />
+      <PriceTable />
 
       <EntryTable
         title="Classifiers" entries={doc.classifiers} rows={classifiers}
@@ -176,12 +182,22 @@ export default function SystemPage() {
 /** EntryTable joins the declared entry with the doctor's verdict on it, because
  *  neither half is useful alone: the entry says what was asked for, the verdict
  *  says whether this machine can deliver it. */
-function EntryTable({ title, entries, rows, hint, onDelete }: {
+/** A provider's price as the table shows it: in / out per million tokens. */
+function priceOfEntry(p?: Provider) {
+  if (!p) return ''
+  if (p.kind !== 'http') return '$0 · local'
+  if (p.pricePerMIn === undefined && p.pricePerMOut === undefined) return 'model prices ↓'
+  return `$${p.pricePerMIn ?? 0} / $${p.pricePerMOut ?? 0}`
+}
+
+function EntryTable({ title, entries, rows, hint, onDelete, price, onEdit }: {
   title: string
   entries: DoctorEntry[]
   rows: Array<{ name: string; description?: string }>
   hint: string
   onDelete: (name: string) => void
+  price?: (name: string) => string
+  onEdit?: (name: string) => void
 }) {
   const describe = new Map(rows.map(r => [r.name, r.description || '']))
 
@@ -194,6 +210,11 @@ function EntryTable({ title, entries, rows, hint, onDelete }: {
     { key: 'name', header: 'Name', width: 150, value: e => e.name, cell: e => <span className="mono" style={{ fontWeight: 500 }}>{e.name}</span> },
     { key: 'kind', header: 'Kind', width: 110, value: e => e.kind, cell: e => <span className="pill">{e.kind}</span> },
     { key: 'model', header: 'Model', width: 210, value: e => e.model || '', cell: e => e.model ? <span className="mono muted">{e.model}</span> : <span className="muted">—</span> },
+    ...(price ? [{
+      key: 'price', header: 'Price in / out per 1M', width: 150,
+      value: (e: DoctorEntry) => price(e.name),
+      cell: (e: DoctorEntry) => <span className="mono muted">{price(e.name)}</span>,
+    }] : []),
     {
       key: 'detail', header: 'Where it resolves to',
       value: e => e.problem || e.detail || '',
@@ -206,12 +227,13 @@ function EntryTable({ title, entries, rows, hint, onDelete }: {
         </>),
     },
     {
-      key: 'actions', header: '', width: 90, align: 'right', sortable: false,
-      cell: e => (
+      key: 'actions', header: '', width: onEdit ? 150 : 90, align: 'right', sortable: false,
+      cell: e => (<>
+        {onEdit && <button className="ghost small" onClick={ev => { ev.stopPropagation(); onEdit(e.name) }}>Edit</button>}
         <button className="ghost small danger-text" onClick={ev => {
           ev.stopPropagation()
           if (confirm(`Remove ${e.name}? A workflow still naming it will fail to load — which is deliberate, so you find out now.`)) onDelete(e.name)
-        }}>Remove</button>),
+        }}>Remove</button></>),
     },
   ]
 
@@ -233,13 +255,14 @@ function EntryTable({ title, entries, rows, hint, onDelete }: {
   )
 }
 
-function ProviderForm({ models, onSave }: { models: string[]; onSave: (p: Provider) => void }) {
-  const [p, setP] = useState<Provider>({ name: '', kind: 'http', style: 'openai', apiKeyEnv: 'OPENROUTER_API_KEY' })
+function ProviderForm({ models, onSave, initial }: { models: string[]; onSave: (p: Provider) => void; initial?: Provider }) {
+  const [p, setP] = useState<Provider>(initial || { name: '', kind: 'http', style: 'openai', apiKeyEnv: 'OPENROUTER_API_KEY' })
+  const num = (v: string) => (v === '' ? undefined : +v)
   const set = (patch: Partial<Provider>) => setP({ ...p, ...patch })
   const local = p.kind === 'cli' || p.kind === 'acp'
   return (
     <div className="card">
-      <h3>Add or replace a provider</h3>
+      <h3>{initial ? `Edit provider ${initial.name}` : 'Add or replace a provider'}</h3>
       <div className="grid2">
         <Field label="Name" hint="What a step writes in `provider:`.">
           <input value={p.name} onChange={e => set({ name: e.target.value })} placeholder="haiku" />
@@ -268,6 +291,15 @@ function ProviderForm({ models, onSave }: { models: string[]; onSave: (p: Provid
           <Field label="API key variable"
             hint="The NAME of an environment variable — never a key. A value pasted here is refused by the API, because this file is meant to be committable.">
             <input className="mono" value={p.apiKeyEnv || ''} onChange={e => set({ apiKeyEnv: e.target.value })} placeholder="OPENROUTER_API_KEY" />
+          </Field>
+          <Field label="Price override per 1M tokens, USD · in / out"
+            hint="Usually empty: the model is priced from Model prices below. Set it only when THIS endpoint charges differently for the model — a discount, a gateway markup.">
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="number" step="any" min="0" value={p.pricePerMIn ?? ''} placeholder="in"
+                onChange={e => set({ pricePerMIn: num(e.target.value) })} />
+              <input type="number" step="any" min="0" value={p.pricePerMOut ?? ''} placeholder="out"
+                onChange={e => set({ pricePerMOut: num(e.target.value) })} />
+            </div>
           </Field>
         </>}
         {local && <>

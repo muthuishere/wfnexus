@@ -39,6 +39,8 @@ type Engine struct {
 	defs    map[string]*workflow.Definition
 	skills  *skills.Registry
 	catalog *catalog.Catalog
+	// priceTab is the model_prices table in memory (prices.go).
+	priceTab priceTable
 	// sourceSkips records workflow sources that did not load — a broken file in
 	// one imported repository must not stop the platform booting, so it is
 	// recorded and reported rather than fatal.
@@ -110,6 +112,7 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 	} else {
 		log.Printf("engine: env store unavailable: %v", err)
 	}
+	e.loadPrices(context.Background())
 	return e
 }
 

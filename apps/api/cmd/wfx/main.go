@@ -125,6 +125,8 @@ func run(args []string) error {
 		return envCmd(rest)
 	case "state":
 		return stateCmd(rest)
+	case "prices":
+		return pricesCmd(rest)
 	case "templates", "template":
 		return templates(rest)
 	case "new":
@@ -169,6 +171,9 @@ func usage() {
   wfx state list --workflow        what this workflow remembers between runs
   wfx state set --workflow k v     remember it (also --step, --project, --global)
   wfx state get --step k           one value; empty when never written
+  wfx prices                       what each model costs per 1M tokens (approx until set)
+  wfx prices set MODEL IN OUT      set it, e.g. claude-sonnet 3 15; MODEL * is the fallback
+  wfx prices rm MODEL              drop it; a built-in family returns to its default
   wfx templates [name]             starting points to copy — the shape, minus your skills
   wfx new <template> --as <name>   copy one into a workflow of your own
   wfx adapters                     agents wfnexus drives over ACP (devin, opencode, codex) and whether each is installed

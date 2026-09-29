@@ -72,7 +72,8 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Style:   tn.ClientStyle(e.cfg.LLMStyle),
 			Model:   model,
 			APIKey:  os.Getenv(e.cfg.LLMAPIKeyEnv),
-		}, Label: model, Close: noClose}, nil
+		}, Label: model, Close: noClose,
+			Price: priceOf(catalog.Provider{Kind: catalog.KindHTTP, BaseURL: e.cfg.LLMBaseURL}, model, e.prices())}, nil
 	}
 
 	p, err := e.catalog.Providers.Require(step.Provider)
@@ -134,7 +135,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Style:   tn.ClientStyle(p.Style),
 			Model:   model,
 			APIKey:  key,
-		}, Label: p.Name + "/" + model, Close: noClose, Price: priceOf(p)}, nil
+		}, Label: p.Name + "/" + model, Close: noClose, Price: priceOf(p, model, e.prices())}, nil
 
 	case catalog.KindCLI, catalog.KindACP:
 		// The step's env reaches the CLI as well. An agent CLI is a program on
@@ -191,7 +192,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Transport: ad.Transport(),
 		Label:     p.Name + "/" + label,
 		Close:     closeAgent,
-		Price:     priceOf(p),
+		Price:     priceOf(p, model, nil), // cli/acp: always a known $0.00
 	}, nil
 }
 

@@ -9,7 +9,7 @@ import type { Event, Step, StepRun } from '../api'
 export type Usage = {
   totalTokens?: number; promptTokens?: number; completionTokens?: number
   llmCalls?: number; toolCalls?: number; elapsedMs?: number
-  costUsd?: number; costUnknown?: boolean
+  costUsd?: number; costUnknown?: boolean; priceSource?: string
   models?: Record<string, { calls: number; promptTokens: number; completionTokens: number; ms: number }>
 }
 
@@ -68,6 +68,9 @@ export function Cost({ usage, big }: { usage?: Usage; big?: boolean }) {
   const n = usage.costUsd ?? 0
   if (n === 0)
     return <span className={`${c} free`} title="a model on this machine — nothing was billed">{money(0)} <i>free</i></span>
+  // `default` is the seed list price, not what this account pays: say so.
+  if (usage.priceSource === 'default')
+    return <span className={c} title="approximate — no model family matched, so the fallback (*) price was charged; set one in System → Model prices">≈{money(n)}</span>
   return <span className={c}>{money(n)}</span>
 }
 

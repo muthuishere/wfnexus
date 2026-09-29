@@ -143,6 +143,9 @@ export type Provider = {
   name: string; kind: ProviderKind; description?: string
   baseUrl?: string; style?: string; model?: string; apiKeyEnv?: string
   preset?: string; command?: string[]; args?: string[]; repairs?: number; timeoutSec?: number
+  /** USD per million tokens (ADR 0020): an override for THIS endpoint. Empty
+   *  means the model is priced from the model_prices table. */
+  pricePerMIn?: number; pricePerMOut?: number
 }
 /** A classifier registry entry — toolnexus ClassifierOptions, field for field.
  *  `backend` may be empty when `baseUrl` is given: the JEV wire at that URL. */
@@ -279,6 +282,10 @@ export type Template = {
   path?: string
 }
 
+/** One row of the price table: a model FAMILY (a prefix of the model id) and
+ *  what it costs per million tokens. `*` is the fallback for unmatched models. */
+export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
+
 /** One entry of the platform's env store. A secret arrives with NO value: the
  *  only path a value takes out of the database is into the process that runs a
  *  step. A non-secret is ordinary configuration and is shown. */
@@ -377,6 +384,16 @@ export const api = {
     j(fetch(project
       ? `/api/projects/${encodeURIComponent(project)}/env/${encodeURIComponent(key)}`
       : `/api/env/${encodeURIComponent(key)}`, { method: 'DELETE' })),
+
+  /** The price table (ADR 0020): USD per million tokens by model family.
+   *  Seeded with approximate list prices; `seeded` means nobody set it yet. */
+  prices: () => j<{ prices: ModelPrice[]; fallbackKey: string }>(fetch('/api/prices')),
+  setPrice: (p: { model: string; in: number; out: number }) =>
+    j<{ ok: boolean }>(fetch('/api/prices', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    })),
+  deletePrice: (model: string) =>
+    j(fetch(`/api/prices?model=${encodeURIComponent(model)}`, { method: 'DELETE' })),
 
   /** The state store. `workflowState` is the workflow page's view: this
    *  workflow's memory, each of its steps', and the global namespace. */
