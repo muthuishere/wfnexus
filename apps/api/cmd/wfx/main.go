@@ -97,6 +97,8 @@ func run(args []string) error {
 		return providerModels(rest)
 	case "dryrun":
 		return dryRun(rest)
+	case "eval":
+		return cmdEval(rest)
 	case "import":
 		return importRepo(rest)
 	case "projects", "project":
@@ -187,6 +189,7 @@ func usage() {
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
+  wfx eval <workflow> --corpus f.yaml --providers a,b [--json]  the portability matrix: same workflow, N backends, pass/tokens/$
   wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes
   wfx projects                     every project: workflows and run activity
   wfx project add <repo> [--as n] [--category c]  add a repo that has .wfx/workflows/
