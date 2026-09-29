@@ -40,7 +40,7 @@
     },
     "codex-acp": {
       "kind": "acp",
-      "description": "OpenAI Codex over the Agent Client Protocol, through Zed's @zed-industries/codex-acp adapter (run with npx). Uses codex's own login (`codex login`). Advertises gpt-5.5, gpt-5.4, gpt-5.4-mini… as a model option; measured live 2026-09-27. gpt-5.5 because a ChatGPT-account login refuses the others it advertises (gpt-5.4-mini: \"not supported when using Codex with a ChatGPT account\", measured 2026-09-27); an API-key login can pick any.",
+      "description": "OpenAI Codex over the Agent Client Protocol, through Zed's @zed-industries/codex-acp adapter (run with npx). Uses codex's own login (`codex login`). Advertises gpt-5.5, gpt-5.4, gpt-5.4-mini… as a model option; measured live 2026-09-27. gpt-5.5 because a ChatGPT-account login refuses the others it advertises (gpt-5.4-mini: \"not supported when using Codex with a ChatGPT account\", measured 2026-09-27); an API-key login can pick any. TERMS: the same as codex-cli — it runs on whatever codex is logged in with. A ChatGPT-account login is a subscription seat driven by a program, and OpenAI's terms were not read (see codex-cli), so none is asserted; an API-key login is billed per token under OpenAI's API terms.",
       "preset": "codex",
       "model": "gpt-5.5",
       "repairs": 2,
@@ -136,7 +136,7 @@
     },
     "grok-cli": {
       "kind": "cli",
-      "description": "Grok CLI headless (-p) — xAI agent on this machine, billed to the Grok login",
+      "description": "Grok CLI headless (-p) — xAI agent on this machine, billed to the Grok login. TERMS: UNVERIFIED — it runs on your own Grok/xAI login and no xAI terms were read for this entry, so none is asserted; check xAI's terms before letting a pipeline drive a personal seat.",
       "command": [
         "/Users/muthuishere/.grok/bin/grok",
         "-p",
@@ -238,7 +238,7 @@
     },
     "opencode-acp": {
       "kind": "acp",
-      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key): space-bunny-free was the fastest of the free models that scored 7/7 on a commit-classification check (10s; ling/muse 21s, mimo 37s, nemotron-ultra 76s; longcat returned invalid JSON, nemotron-lightning hung) on 2026-09-27. `wfx models opencode-acp --free` lists them all.",
+      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key): space-bunny-free was the fastest of the free models that scored 7/7 on a commit-classification check (10s; ling/muse 21s, mimo 37s, nemotron-ultra 76s; longcat returned invalid JSON, nemotron-lightning hung) on 2026-09-27. `wfx models opencode-acp --free` lists them all. TERMS: opencode itself is MIT. The credential is whatever opencode is configured with: the free Zen models need no key and run on opencode's hosted service; any other provider carries that provider's terms (see opencode).",
       "preset": "opencode",
       "model": "opencode/space-bunny-free",
       "repairs": 2,
