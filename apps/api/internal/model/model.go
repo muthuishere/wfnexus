@@ -42,8 +42,11 @@ type Run struct {
 	// queued. CreatedAt is only when the row was written, so a consumer that
 	// wants elapsed time needs this one (migration 000011).
 	StartedAt *time.Time `json:"startedAt"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	// TriggeredBy is WHO started the run — a subject, a claimed actor, or
+	// `trigger:<kind>` (migration 000016). Segregation of duties reads it.
+	TriggeredBy string    `json:"triggeredBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type StepRun struct {

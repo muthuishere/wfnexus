@@ -1,6 +1,6 @@
 # ADR 0021 — A pause names who may answer
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-24
 
 ## Context
@@ -163,3 +163,36 @@ Three rules, in order of how badly they are usually got wrong.
   and whether that survives segregation of duties.
 - **Templating.** What a notification actually says. It will be asked for on
   first contact with a real Slack channel, and it is not this decision.
+
+## Implemented 2026-09-29
+
+What shipped:
+
+- **One resolve path.** `Engine.Resolve(ctx, runID, stepID, tn.Answer, Actor)`;
+  `Approve`, `Reject`, `AnswerQuestion` and `ProvideInput` are thin wrappers
+  over it, so the HTTP endpoints and `wfx` are unchanged. A form travels in
+  `Answer.Data["input"]`, a reject reason in `Answer.Data["reason"]`;
+  `Answer.Ok`/`Reason` survive into the step row.
+- **Every resolution names its actor.** Including `/input`, which took none. The
+  audit fact (`resolved_by`, `resolved_at`, `resolution`, `resolution_reason`)
+  is on the step, and the run page reads it from there rather than the log.
+- **Named approvers.** `approvers:` on a step — user names and `role:<name>` —
+  shape-checked at load, enforced at resolve time against the authenticated
+  subject; a stranger gets a 403 naming who may answer. The unauthenticated
+  loopback has no identity to check and is recorded as a claim.
+- **Segregation of duties.** `workflow_runs.triggered_by` (migrations 000016 /
+  sqlite 000010) and an opt-in `prevent_self_approval: true` on a step.
+- **Notify** through the registry-declared notifier; **ask** by naming
+  `ask_human` in `tools:`.
+
+Still open:
+
+- **Hook-raised pauses.** A `BeforeToolCall` hook returning a `Request` is not
+  wired, so a dangerous tool call can be denied but not escalated.
+- **The toolnexus `pending` stream event** (`StreamEvent{Type:"pending"}`) is
+  still not consumed; the notifier fires from the engine's own park instead.
+- The deprecated `ask_human: true` boolean stays until the workflows using it
+  have moved to `tools:`.
+- Approvers and self-approval are per **step**; a single `needs_input` gate
+  cannot yet name approvers different from its step's. Approver names are not
+  checked against the user store at load (a missing user simply never matches).
