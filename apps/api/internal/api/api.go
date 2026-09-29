@@ -1055,7 +1055,7 @@ func actorOf(r *http.Request, b stepBody) engine.Actor {
 	}
 	if sub, ok := SubjectFrom(r.Context()); ok {
 		// A subject is never inferred: somebody authenticated as them.
-		return engine.Actor{ID: sub.Name, Via: via}
+		return engine.Actor{ID: sub.Name, Via: via, Authenticated: true, Role: sub.Role}
 	}
 	// Unauthenticated: the claim is the client's, and so is its honesty about
 	// whether a person typed it. Trusting the flag is fine precisely because the
@@ -1075,6 +1075,16 @@ func requireActor(w http.ResponseWriter, by engine.Actor) bool {
 	return false
 }
 
+// resolveErr answers a failed resolution: 403 when the actor is not one of the
+// step's approvers (a refusal on WHO), 400 for anything wrong with the request.
+func resolveErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, engine.ErrNotApprover) {
+		writeErr(w, http.StatusForbidden, err)
+		return
+	}
+	writeErr(w, 400, err)
+}
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
 	if !ok {
@@ -1085,7 +1095,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.Approve(r.Context(), id, b.StepID, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1101,7 +1111,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.Reject(r.Context(), id, b.StepID, b.Reason, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1117,7 +1127,7 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.ProvideInput(r.Context(), id, b.Input, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1136,7 +1146,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.AnswerQuestion(r.Context(), id, b.StepID, ans, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

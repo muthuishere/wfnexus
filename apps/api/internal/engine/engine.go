@@ -560,6 +560,12 @@ type Actor struct {
 	// Only meaningful on the UNAUTHENTICATED path. An authenticated subject wins
 	// over a claimed actor (see api.actorOf), and a subject is never inferred.
 	Inferred bool
+	// Authenticated is true when ID is an ADR 0017 subject rather than a claim.
+	// Only an authenticated actor can be checked against a step's approvers:
+	// a claimed name is exactly what a forger would type.
+	Authenticated bool
+	// Role is the authenticated subject's role, matched by `role:<name>`.
+	Role string
 }
 
 func (a Actor) String() string {
@@ -619,6 +625,9 @@ func (e *Engine) Resolve(ctx context.Context, runID uuid.UUID, stepID string, an
 	if err != nil {
 		return err
 	}
+	if err := e.mayAnswer(runID, stepID, by); err != nil {
+		return err
+	}
 	form, isForm := ans.Data[AnswerInput].(map[string]any)
 	switch {
 	case st.Status == "awaiting_approval":
@@ -640,6 +649,45 @@ func (e *Engine) Resolve(ctx context.Context, runID uuid.UUID, stepID string, an
 	default:
 		return e.answerQuestion(ctx, runID, stepID, ans, by)
 	}
+}
+
+// mayAnswer enforces a step's `approvers:` (ADR 0021, "who may answer").
+//
+// The unauthenticated loopback is let through: there is no identity to check,
+// only a claim, and refusing it would make approvers a config that breaks the
+// one-person install. The claim is still recorded — and marked as a claim —
+// by the audit patch, exactly as before.
+func (e *Engine) mayAnswer(runID uuid.UUID, stepID string, by Actor) error {
+	step := e.stepDef(runID, stepID)
+	if step == nil || len(step.Approvers) == 0 || !by.Authenticated {
+		return nil
+	}
+	for _, a := range step.Approvers {
+		if a == by.ID || (by.Role != "" && a == "role:"+by.Role) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: step %s may be answered only by %s; %s (role %q) is not one of them",
+		ErrNotApprover, stepID, strings.Join(step.Approvers, ", "), by.ID, by.Role)
+}
+
+// ErrNotApprover is a refusal on WHO, not on the request: the API answers it
+// with 403 rather than 400.
+var ErrNotApprover = errors.New("not an approver")
+
+// stepDef is the definition of a run's step, or nil when the workflow has
+// since been removed — in which case there is no policy left to enforce.
+func (e *Engine) stepDef(runID uuid.UUID, stepID string) *workflow.Step {
+	run, err := e.store.GetRun(context.Background(), runID)
+	if err != nil {
+		return nil
+	}
+	def := e.defs[run.Workflow]
+	if def == nil {
+		return nil
+	}
+	_, s := def.Step(stepID)
+	return s
 }
 
 // Approve unblocks a step that is awaiting approval and continues the run.

@@ -51,6 +51,8 @@ export type Step = {
   consumes?: string[]; produces?: string[]
   skills: string[]; tools: string[]; mcp?: string[]
   outputSchema: JSONSchema; requiresApproval?: boolean; gates?: Gate[]
+  /** who may answer this step's pauses: user names and `role:<name>` (ADR 0021) */
+  approvers?: string[]
   maxTurns?: number; maxAttempts?: number; timeoutSec?: number; model?: string
   // added by the agent-harness work — may be absent on an older API
   soul?: string; budget?: Budget; guardrails?: Guardrail[]; team?: TeamMember[]

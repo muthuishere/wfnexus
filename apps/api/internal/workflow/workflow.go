@@ -151,6 +151,14 @@ type Step struct {
 	// RequiresApproval pauses the run BEFORE this step until a human approves.
 	RequiresApproval bool   `yaml:"requires_approval,omitempty" json:"requiresApproval,omitempty"`
 	Gates            []Gate `yaml:"gates,omitempty" json:"gates,omitempty"`
+	// Approvers names who may answer ANY pause this step raises — its approval
+	// gate, a needs_input gate, an ask_human question (ADR 0021). An entry is a
+	// user name or `role:<name>` (ADR 0017's roles). Empty ⇒ anyone the API
+	// already lets resolve — at one scale the author is the only person there.
+	// Enforced at resolve time against the AUTHENTICATED subject; the
+	// unauthenticated loopback has no identity to check and is recorded as a
+	// claim, as before.
+	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty"`
 
 	// Judge makes this step a pure DECISION NODE: typed classifier questions on
 	// a small model, no agent, no tools. It produces its answers as facts, so a
@@ -498,6 +506,9 @@ func (d *Definition) validate(cat Catalog) error {
 		if err := s.validateDecide(d.Name); err != nil {
 			return err
 		}
+		if err := validateApprovers(d.Name, s.ID, s.Approvers); err != nil {
+			return err
+		}
 		if s.Retry != nil && s.Retry.MaxAttempts < 1 {
 			return fmt.Errorf("%s/%s: retry.max_attempts must be >= 1 — an unbounded retry is a runaway", d.Name, s.ID)
 		}
@@ -528,6 +539,29 @@ func (d *Definition) validate(cat Catalog) error {
 		return err
 	}
 	return d.validatePlan()
+}
+
+// validateApprovers checks the SHAPE of an approvers list at load time. Whether
+// a named user or role exists is the store's business and can change after the
+// file is loaded, so it is not checked here — an approver that does not exist
+// simply never matches, and the refusal names who was expected.
+func validateApprovers(wf, stepID string, approvers []string) error {
+	seen := map[string]bool{}
+	for _, a := range approvers {
+		a = strings.TrimSpace(a)
+		switch {
+		case a == "":
+			return fmt.Errorf("%s/%s: approvers has an empty entry", wf, stepID)
+		case strings.HasPrefix(a, "role:") && strings.TrimSpace(strings.TrimPrefix(a, "role:")) == "":
+			return fmt.Errorf("%s/%s: approver %q names no role (want role:<name>)", wf, stepID, a)
+		case strings.ContainsAny(a, " \t"):
+			return fmt.Errorf("%s/%s: approver %q has whitespace — a user name, or role:<name>", wf, stepID, a)
+		case seen[a]:
+			return fmt.Errorf("%s/%s: approver %q is listed twice", wf, stepID, a)
+		}
+		seen[a] = true
+	}
+	return nil
 }
 
 // validatePlan refuses a plan that cannot work before anything runs: a fact
