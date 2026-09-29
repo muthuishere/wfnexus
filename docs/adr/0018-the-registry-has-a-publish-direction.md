@@ -1,6 +1,6 @@
 # ADR 0018 — The registry has a publish direction
 
-- **Status:** proposed — **the storage half superseded 2026-09-25**, see
+- **Status:** accepted — **the storage half superseded 2026-09-25**, see
   [Superseded in part](#superseded-in-part-2026-09-25) at the end. The decision text
   below is left as it was written.
 - **Date:** 2026-09-24
@@ -166,3 +166,18 @@ Superseded:
 Still open, and not closed by the replacement: **signing and verification** (git can
 sign a commit and a tag; whether we *verify* one is not decided — see
 `docs/not-now.md`), and **dependency resolution between assets**.
+
+## Implemented 2026-09-29
+
+Shipped:
+- `wfx publish` to a host or to a git remote (`--to`), one bundle builder and
+  one set of refusals for both: unresolvable references and literal
+  credentials (`bundle.CheckNoLiteralCredential`, run inside `bundle.Build`
+  before any clone or commit — tested against a local bare repo).
+- `--version` must be semver (MAJOR.MINOR.PATCH, optional -pre/+build, a
+  leading `v` stripped); anything else is refused before anything is sent.
+- Published versions are immutable: a duplicate tag is refused by the remote.
+
+Still open:
+- Task 9a: importing a published bundle.
+- The `kind` argument: publish only builds `workflow` bundles today.

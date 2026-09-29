@@ -1,6 +1,6 @@
 # ADR 0017 — Identity is the device grant
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-24
 
 ## Context
@@ -98,3 +98,17 @@ how a single-machine default becomes an exposed production install.
   policy; the audit log schema (who ran, who approved, what it saw); SSO user
   provisioning and group-to-role mapping. Each is open, and each is a smaller
   question once the subject exists.
+
+## Implemented 2026-09-29
+
+Shipped:
+- The device grant (`wfx login` / `/device`) and browser sessions as the way a
+  person gets an identity; every `/api` request resolves a subject, with
+  loopback the only place a missing one is tolerated.
+- Authentication behind `auth.Authenticator` (`apps/api/internal/auth/authenticator.go`),
+  used by subject resolution and device approval. `auth.Local` — users and
+  hashed tokens in our own database — is the only implementation.
+
+Still open:
+- OIDC and LDAP implementations of the interface.
+- Token lifetime, refresh and revocation policy (still "not decided here").
