@@ -1,6 +1,6 @@
 # ADR 0019 — Evals are the proof of portability, not a quality feature
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-24
 
 ## Context
@@ -135,3 +135,36 @@ the other is the mistake to avoid.
   open. This is the hardest unsolved part and it is not being hand-waved.
 - **CI integration.** Whether evals run on a schedule, on publish, or on a tag,
   and against which budget. Distribution (pivot §5.1) has to exist first.
+
+## Implemented 2026-09-29
+
+**Shipped:**
+
+- **Corpus + assertions** — `apps/api/internal/eval`: a YAML corpus (workflow,
+  cases with input, expected end status, assertions) and assertions as JSON
+  predicates over a step's persisted typed output: `eq ne contains matches
+  exists gte lte in`, dotted paths, `#` for a length. No model call. Validated
+  before anything runs.
+- **Runner** — every case on every named provider, sequentially; per cell:
+  status, each assertion's verdict and the value it saw, turns, prompt and
+  completion tokens, cost from the ADR 0020 usage aggregate (unknown stays `?`),
+  wall time. It runs in-process on the real engine against a throwaway SQLite
+  store. The backend seam is `Engine.UseProvider` — every agent step pinned to
+  one registry provider, the workflow YAML untouched.
+- **`wfx eval <workflow> --corpus f.yaml --providers a,b,c [--json]`** — the
+  matrix (rows = cases, columns = providers) with a totals block; any failing
+  cell exits non-zero. In-process like `wfx judge`, not via the server: the
+  runs are samples, and the row must come from the evaluator's own machine.
+- The `mock` provider now reports a known `$0.00` rather than an unknown price.
+- Example: `examples/evals/mock-demo.eval.yaml`; docs: `internal/eval/README.md`.
+
+**Still open:**
+
+- **The publish gate** — `wfx publish --eval <corpus>` refusing a workflow whose
+  matrix row fails. The runner and exit code are ready for it; the policy (which
+  providers, what pass rate) is not decided.
+- **A CI job** running evals on a schedule or tag, and its budget.
+- **Variance** — one run per cell; repeats and near-budget reporting remain the
+  open question above. The matrix does not yet show turns against `max_turns`.
+- **`step.Classifier` selecting a backend at run time** — not needed by the
+  assertions shipped here (none call a model), so not done.
