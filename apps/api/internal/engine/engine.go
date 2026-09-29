@@ -658,8 +658,15 @@ func (e *Engine) Resolve(ctx context.Context, runID uuid.UUID, stepID string, an
 // one-person install. The claim is still recorded — and marked as a claim —
 // by the audit patch, exactly as before.
 func (e *Engine) mayAnswer(runID uuid.UUID, stepID string, by Actor) error {
-	step := e.stepDef(runID, stepID)
-	if step == nil || len(step.Approvers) == 0 || !by.Authenticated {
+	run, step := e.stepDef(runID, stepID)
+	if step == nil || !by.Authenticated {
+		return nil
+	}
+	if step.PreventSelfApproval && run.TriggeredBy != "" && run.TriggeredBy == by.ID {
+		return fmt.Errorf("%w: step %s requires a different approver — %s started this run and may not answer it (prevent_self_approval)",
+			ErrNotApprover, stepID, by.ID)
+	}
+	if len(step.Approvers) == 0 {
 		return nil
 	}
 	for _, a := range step.Approvers {
@@ -675,19 +682,20 @@ func (e *Engine) mayAnswer(runID uuid.UUID, stepID string, by Actor) error {
 // with 403 rather than 400.
 var ErrNotApprover = errors.New("not an approver")
 
-// stepDef is the definition of a run's step, or nil when the workflow has
-// since been removed — in which case there is no policy left to enforce.
-func (e *Engine) stepDef(runID uuid.UUID, stepID string) *workflow.Step {
+// stepDef is a run and the definition of its step; the step is nil when the
+// workflow has since been removed — in which case there is no policy left to
+// enforce.
+func (e *Engine) stepDef(runID uuid.UUID, stepID string) (*model.Run, *workflow.Step) {
 	run, err := e.store.GetRun(context.Background(), runID)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	def := e.defs[run.Workflow]
 	if def == nil {
-		return nil
+		return run, nil
 	}
 	_, s := def.Step(stepID)
-	return s
+	return run, s
 }
 
 // Approve unblocks a step that is awaiting approval and continues the run.

@@ -159,6 +159,11 @@ type Step struct {
 	// unauthenticated loopback has no identity to check and is recorded as a
 	// claim, as before.
 	Approvers []string `yaml:"approvers,omitempty" json:"approvers,omitempty"`
+	// PreventSelfApproval is segregation of duties — GitHub environments'
+	// "prevent self-review": whoever started the run may not answer this
+	// step's pauses. Opt-in, because at one scale the author is the only
+	// person there. Enforced for authenticated actors, like Approvers.
+	PreventSelfApproval bool `yaml:"prevent_self_approval,omitempty" json:"preventSelfApproval,omitempty"`
 
 	// Judge makes this step a pure DECISION NODE: typed classifier questions on
 	// a small model, no agent, no tools. It produces its answers as facts, so a

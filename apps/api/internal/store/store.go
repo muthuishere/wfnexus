@@ -169,11 +169,11 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 	return r, err
 }
 
-const runCols = `id, project, workflow, status, input, current_step, base_ref, error, started_at, created_at, updated_at`
+const runCols = `id, project, workflow, status, input, current_step, base_ref, error, started_at, triggered_by, created_at, updated_at`
 
 func scanRun(row rowScanner) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.StartedAt, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.StartedAt, &r.TriggeredBy, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -306,6 +306,13 @@ func (s *Store) UpdateRun(ctx context.Context, id uuid.UUID, status, currentStep
 
 func (s *Store) UpdateRunInput(ctx context.Context, id uuid.UUID, input json.RawMessage) error {
 	_, err := s.exec(ctx, `UPDATE workflow_runs SET input=$2, updated_at=now() WHERE id=$1`, id, jsonArg(input))
+	return err
+}
+
+// SetTriggeredBy records who started a run. Set once, right after the row is
+// created, by the path that knows who asked for it.
+func (s *Store) SetTriggeredBy(ctx context.Context, id uuid.UUID, by string) error {
+	_, err := s.exec(ctx, `UPDATE workflow_runs SET triggered_by=$2 WHERE id=$1`, id, by)
 	return err
 }
 

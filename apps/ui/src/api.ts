@@ -52,7 +52,7 @@ export type Step = {
   skills: string[]; tools: string[]; mcp?: string[]
   outputSchema: JSONSchema; requiresApproval?: boolean; gates?: Gate[]
   /** who may answer this step's pauses: user names and `role:<name>` (ADR 0021) */
-  approvers?: string[]
+  approvers?: string[]; preventSelfApproval?: boolean
   maxTurns?: number; maxAttempts?: number; timeoutSec?: number; model?: string
   // added by the agent-harness work — may be absent on an older API
   soul?: string; budget?: Budget; guardrails?: Guardrail[]; team?: TeamMember[]
@@ -95,7 +95,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string

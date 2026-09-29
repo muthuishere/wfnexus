@@ -763,6 +763,15 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	// Who started it, for segregation of duties (ADR 0021). The subject when
+	// there is one; on the loopback, whatever X-WFX-Actor claims, which may be
+	// nothing — a run is not refused for lacking an author.
+	by := actorOf(r, stepBody{Actor: r.Header.Get("X-WFX-Actor")})
+	if err := s.store.SetTriggeredBy(r.Context(), run.ID, by.ID); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	run.TriggeredBy = by.ID
 	s.eng.Start(run.ID)
 	// The SAME envelope GET /api/runs/{id} answers with. POST used to return the
 	// run FLAT, so a client had to know that `createRun().id` and
