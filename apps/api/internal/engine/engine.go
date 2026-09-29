@@ -61,6 +61,9 @@ type Engine struct {
 	classifierOpts *tn.ClassifierOptions
 	// transport overrides the LLM HTTP transport (tests script it).
 	transport http.RoundTripper
+	// providerOverride, when set, runs every agent step on this registry
+	// provider instead of the one it names (provider.go, UseProvider).
+	providerOverride string
 	// remote resolves a REMOTE `use:` — a git repository and a ref — into the
 	// task a workflow expands. Nil ⇒ remote references are unavailable, which
 	// is the one-person path: a workflow whose every `use:` is a bare task
