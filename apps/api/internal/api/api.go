@@ -1112,7 +1112,11 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.eng.ProvideInput(r.Context(), id, b.Input); err != nil {
+	by := actorOf(r, b)
+	if !requireActor(w, by) {
+		return
+	}
+	if err := s.eng.ProvideInput(r.Context(), id, b.Input, by); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

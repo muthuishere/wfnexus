@@ -484,7 +484,7 @@ export const api = {
     j<RunDetail>(post(`/api/workflows/${wf}/runs`, input)).then((d) => d.run),
   approve: (id: string, stepId: string) => j(post(`/api/runs/${id}/approve`, { stepId, actor: actor() })),
   reject: (id: string, stepId: string, reason: string) => j(post(`/api/runs/${id}/reject`, { stepId, reason, actor: actor() })),
-  input: (id: string, input: any) => j(post(`/api/runs/${id}/input`, { input })),
+  input: (id: string, input: any) => j(post(`/api/runs/${id}/input`, { input, actor: actor() })),
   retry: (id: string, stepId: string) => j(post(`/api/runs/${id}/retry`, { stepId })),
   cancel: (id: string) => j(post(`/api/runs/${id}/cancel`)),
   events: (id: string, after: number, onEvent: (e: Event) => void) => {

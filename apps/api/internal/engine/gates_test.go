@@ -61,10 +61,16 @@ func TestNeedsInputGatePausesThenResumes(t *testing.T) {
 	}
 
 	// the human answers
-	if err := h.eng.ProvideInput(context.Background(), run.ID, map[string]any{"extra_context": "v2.1, logs attached"}); err != nil {
+	if err := h.eng.ProvideInput(context.Background(), run.ID, map[string]any{"extra_context": "x"}, Actor{}); err == nil {
+		t.Fatal("input with no actor must be refused")
+	}
+	if err := h.eng.ProvideInput(context.Background(), run.ID, map[string]any{"extra_context": "v2.1, logs attached"}, Actor{ID: "alice", Via: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	run = h.wait(run.ID)
+	if st := h.steps(run.ID)["triage"]; st.ResolvedBy != "alice (via test)" || st.Resolution != "answered" || st.ResolvedAt == nil {
+		t.Fatalf("input resolver not recorded: by=%q resolution=%q", st.ResolvedBy, st.Resolution)
+	}
 	if run.Status != "done" {
 		t.Fatalf("after input run = %s (%s)", run.Status, run.Error)
 	}

@@ -712,7 +712,14 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID str
 }
 
 // ProvideInput merges answers into the run input and re-runs from the step that asked.
-func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[string]any) error {
+//
+// It is a resolve path like the others, so it names its actor and leaves the
+// same audit fact on the step: a form answered from the UI is a decision
+// somebody made, and "answered by nobody" is the record ADR 0021 exists to stop.
+func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[string]any, by Actor) error {
+	if err := by.validate(); err != nil {
+		return err
+	}
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -728,7 +735,15 @@ func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[
 	if err := e.store.UpdateRunInput(ctx, runID, mustJSON(input)); err != nil {
 		return err
 	}
-	return e.Retry(ctx, runID, run.CurrentStep)
+	stepID := run.CurrentStep
+	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "input provided by " + by.String()})
+	// Written after the retry for the same reason as AnswerQuestion: Retry
+	// resets the step row, and would erase an audit fact written before it.
+	if err := e.Retry(ctx, runID, stepID); err != nil {
+		return err
+	}
+	e.setStep(ctx, runID, stepID, resolution(by, "answered", ""))
+	return nil
 }
 
 // Retry re-runs from stepID (inclusive), discarding later step state.
