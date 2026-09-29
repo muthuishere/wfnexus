@@ -1,6 +1,6 @@
 # ADR 0020 — Cost is a first-class output
 
-- **Status:** proposed
+- **Status:** accepted (budget enforcement and an OTEL export stay open)
 - **Date:** 2026-09-24
 
 ## Context
