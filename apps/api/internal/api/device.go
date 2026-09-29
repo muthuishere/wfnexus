@@ -335,14 +335,7 @@ func (s *Server) approvingUser(ctx context.Context, sub *Subject, named string) 
 	if name == "" {
 		name = "local"
 	}
-	if u, err := s.store.UserByName(ctx, name); err == nil {
-		return u, nil
-	}
-	u := &store.User{Name: name, DisplayName: name, Role: "admin"}
-	if err := s.store.CreateUser(ctx, u); err != nil {
-		return nil, err
-	}
-	return u, nil
+	return s.authn.ApprovingUser(ctx, name)
 }
 
 // subjectOf resolves a credential presented on a route the middleware lets

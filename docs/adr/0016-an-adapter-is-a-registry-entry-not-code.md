@@ -1,6 +1,6 @@
 # ADR 0016 — An adapter is a registry entry, not code
 
-- **Status:** proposed
+- **Status:** accepted, evals via 0019
 - **Date:** 2026-09-24
 
 ## Context
@@ -93,3 +93,20 @@ Every decision in this repo now has to hold at all three.
 - `cli` and `acp` still depend on the devin adapter parked behind the
   `toolnexus_inprocess` build tag (ADR 0011, issue #95). This ADR does not
   change that.
+
+## Implemented 2026-09-29
+
+Shipped:
+- cli and acp entries are registry data: presets (devin, claude, copilot for
+  cli; devin, opencode, codex for acp) or an explicit `command`.
+- An unknown preset is refused, never guessed — for acp too now (it used to
+  run `<name> acp`). The catalog skips such an entry at load, naming the known
+  presets; the engine refuses it again at resolve as a backstop.
+- Every local cli/acp entry in `registries.json` states the credential it
+  spends and what is known of the vendor's terms, saying "unverified" where
+  no terms were read.
+
+Still open:
+- Comparative evals of the backends — ADR 0019.
+- The in-process transport stays behind the `toolnexus_inprocess` build tag
+  until a toolnexus release carries issue #95.

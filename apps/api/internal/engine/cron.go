@@ -159,6 +159,11 @@ func (e *Engine) StartTriggered(ctx context.Context, name string, trigger workfl
 	if err != nil {
 		return err
 	}
+	// Nobody pressed a button: the trigger is the principal, so no person can
+	// be refused approval as its author.
+	if err := e.store.SetTriggeredBy(ctx, run.ID, "trigger:"+string(trigger)); err != nil {
+		return err
+	}
 	e.Start(run.ID)
 	return nil
 }

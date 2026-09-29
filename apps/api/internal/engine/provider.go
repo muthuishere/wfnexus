@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -49,7 +50,28 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 	return e.resolveLLMWithEnv(step, workdir, step.Env)
 }
 
+// UseProvider runs every agent step of every run on this engine on the named
+// registry provider, whatever the step itself names — and drops the step's
+// `model:`, which selects within the provider it was written for and means
+// nothing inside another one.
+//
+// It is the seam an eval needs (ADR 0019): the SAME workflow, unchanged, run
+// once per backend. Changing the YAML per backend would make the matrix
+// compare N different workflows; the override keeps the workflow constant and
+// varies only the model, which is the claim being tested. It is engine-wide on
+// purpose — an eval builds one engine per provider — so no run-level state or
+// API surface grows for it, and a server engine never calls it.
+//
+// A name that is not in the registry is refused by Require below, at the step,
+// exactly as a misspelt `provider:` would be.
+func (e *Engine) UseProvider(name string) { e.providerOverride = name }
+
 func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string) (resolved, error) {
+	if e.providerOverride != "" {
+		s := *step
+		s.Provider, s.Model = e.providerOverride, ""
+		step = &s
+	}
 	// No provider named, but the operator named a default one: the step runs
 	// on it exactly as if it had said so — `model:` selects within it, and a
 	// default that does not resolve is refused, never quietly swapped for the
@@ -72,7 +94,8 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Style:   tn.ClientStyle(e.cfg.LLMStyle),
 			Model:   model,
 			APIKey:  os.Getenv(e.cfg.LLMAPIKeyEnv),
-		}, Label: model, Close: noClose}, nil
+		}, Label: model, Close: noClose,
+			Price: priceOf(catalog.Provider{Kind: catalog.KindHTTP, BaseURL: e.cfg.LLMBaseURL}, model, e.prices())}, nil
 	}
 
 	p, err := e.catalog.Providers.Require(step.Provider)
@@ -95,7 +118,9 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			BaseURL: url,
 			Style:   tn.ClientStyle("openai"),
 			Model:   "mock",
-		}, Label: "mock", Close: noClose}, nil
+			// A KNOWN zero, not an unknown: the mock calls nothing and bills
+			// nothing, and an eval matrix should say $0.00 for it, not "?".
+		}, Label: "mock", Close: noClose, Price: pricing{Known: true, Source: "mock"}}, nil
 	case catalog.KindHTTP:
 		model := p.Model
 		// `model:` beside a provider selects a model WITHIN that provider — a
@@ -134,7 +159,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Style:   tn.ClientStyle(p.Style),
 			Model:   model,
 			APIKey:  key,
-		}, Label: p.Name + "/" + model, Close: noClose, Price: priceOf(p)}, nil
+		}, Label: p.Name + "/" + model, Close: noClose, Price: priceOf(p, model, e.prices())}, nil
 
 	case catalog.KindCLI, catalog.KindACP:
 		// The step's env reaches the CLI as well. An agent CLI is a program on
@@ -191,7 +216,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Transport: ad.Transport(),
 		Label:     p.Name + "/" + label,
 		Close:     closeAgent,
-		Price:     priceOf(p),
+		Price:     priceOf(p, model, nil), // cli/acp: always a known $0.00
 	}, nil
 }
 
@@ -199,7 +224,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 // shared by a step's turns and by `wfx models`. An explicit command is run
 // exactly as written, with the model chosen over the protocol; the devin
 // preset keeps devin's own --model flag and implicit acp subcommand.
-func acpConfig(p catalog.Provider, model, workdir string, env []string) devinadapter.ACP {
+func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinadapter.ACP, error) {
 	cfg := devinadapter.ACP{
 		Model: model, Cwd: workdir, Env: env, SessionPerTurn: p.SessionPerTurn,
 		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
@@ -207,22 +232,29 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) devinada
 	if len(p.Command) > 0 {
 		cfg.Bin = p.Command[0]
 		cfg.Argv = append(append([]string{}, p.Command[1:]...), p.Args...)
-		return cfg
+		return cfg, nil
 	}
 	cfg.ExtraArgs = append([]string{}, p.Args...)
 	name := p.Preset
 	if name == "" {
 		name = "devin"
 	}
-	if pr, ok := devinadapter.ACPPresets[name]; ok {
-		cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
-		// The adapter's env first, the step's after, so a step can still override.
-		cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
-		cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
-	} else {
-		cfg.Bin = name // an unknown preset is the program's name, spoken to as `<name> acp`
+	pr, ok := devinadapter.ACPPresets[name]
+	if !ok {
+		// Refused rather than guessed, the same rule cli follows. Running an
+		// unknown name as `<name> acp` meant a typo'd preset started some other
+		// binary — or none — and failed as a protocol error far from its cause.
+		// The catalog refuses this at load too; this is the backstop for an
+		// entry assembled in code.
+		return cfg, fmt.Errorf("provider %q: no acp preset named %q — presets are %s; "+
+			"for any other ACP agent give an explicit `command` in the registry",
+			p.Name, name, strings.Join(devinadapter.ACPPresetNames(), ", "))
 	}
-	return cfg
+	cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
+	// The adapter's env first, the step's after, so a step can still override.
+	cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
+	cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
+	return cfg, nil
 }
 
 // localAgent builds the backend that executes one turn: a persistent ACP
@@ -237,7 +269,11 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 	if p.Kind == catalog.KindACP {
 		// One ACP process is one conversation, so it is per-step, not shared:
 		// two steps on one session would interleave into the same transcript.
-		a := devinadapter.NewACP(acpConfig(p, model, workdir, env))
+		cfg, err := acpConfig(p, model, workdir, env)
+		if err != nil {
+			return nil, nil, err
+		}
+		a := devinadapter.NewACP(cfg)
 		return a, func() { _ = a.Close() }, nil
 	}
 

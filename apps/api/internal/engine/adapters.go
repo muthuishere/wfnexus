@@ -82,7 +82,11 @@ func (e *Engine) ProviderModels(ctx context.Context, name string) (ProviderModel
 	defer os.RemoveAll(dir)
 	// Listing never selects: a configured model the agent lacks must be
 	// reported, not turned into a failure to list.
-	a := devinadapter.NewACP(acpConfig(p, "", dir, env))
+	cfg, err := acpConfig(p, "", dir, env)
+	if err != nil {
+		return ProviderModels{}, err
+	}
+	a := devinadapter.NewACP(cfg)
 	defer a.Close()
 	ms, cur, err := a.Models(ctx, dir)
 	if err != nil {

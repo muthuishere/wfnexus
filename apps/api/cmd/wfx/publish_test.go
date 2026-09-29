@@ -415,3 +415,20 @@ func TestNormalizeVersion(t *testing.T) {
 		}
 	}
 }
+
+// A version becomes a tag and a tree path for good, so a non-semver one is
+// refused before anything is read or sent.
+func TestPublishRefusesANonSemverVersion(t *testing.T) {
+	tempContexts(t)
+	for _, v := range []string{"vnext", "1.0", "1.0.0.0", "01.0.0", "latest", "1.0.0-"} {
+		err := publish([]string{"w.yaml", "--version", v, "--to", "unused"})
+		if err == nil || !strings.Contains(err.Error(), "semver") {
+			t.Errorf("--version %q: %v", v, err)
+		}
+	}
+	for _, v := range []string{"1.2.3", "v1.2.3", "0.0.1-rc.1", "1.0.0-alpha+build.5", "2.0.0+20260929"} {
+		if !semver.MatchString(normalizeVersion(v)) {
+			t.Errorf("%q should be accepted", v)
+		}
+	}
+}

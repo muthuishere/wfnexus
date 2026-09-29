@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
@@ -52,6 +53,11 @@ type Server struct {
 
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
+
+	// authn answers "which person is this" for subject resolution and device
+	// approval (ADR 0017). Local users are the only implementation; the field
+	// exists so the next one is a constructor change, not a handler rewrite.
+	authn auth.Authenticator
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -84,7 +90,8 @@ func isLoopback(addr string) bool {
 // bound anywhere else it is not. That is a property of the code rather than a
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter()}
+	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(),
+		authn: auth.Local{Store: st}}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -191,6 +198,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/state", s.setState)
 		r.Delete("/state/{key}", s.deleteState)
 		r.Get("/workflows/{name}/state", s.workflowState)
+		// The price table: what each model family costs (ADR 0020).
+		r.Get("/prices", s.listPrices)
+		r.Put("/prices", s.setPrice)
+		r.Delete("/prices", s.deletePrice)
 		r.Get("/sources", s.listSources)
 
 		// Workers — the machines that have joined the pool.
@@ -759,6 +770,15 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	// Who started it, for segregation of duties (ADR 0021). The subject when
+	// there is one; on the loopback, whatever X-WFX-Actor claims, which may be
+	// nothing — a run is not refused for lacking an author.
+	by := actorOf(r, stepBody{Actor: r.Header.Get("X-WFX-Actor")})
+	if err := s.store.SetTriggeredBy(r.Context(), run.ID, by.ID); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	run.TriggeredBy = by.ID
 	s.eng.Start(run.ID)
 	// The SAME envelope GET /api/runs/{id} answers with. POST used to return the
 	// run FLAT, so a client had to know that `createRun().id` and
@@ -1051,7 +1071,7 @@ func actorOf(r *http.Request, b stepBody) engine.Actor {
 	}
 	if sub, ok := SubjectFrom(r.Context()); ok {
 		// A subject is never inferred: somebody authenticated as them.
-		return engine.Actor{ID: sub.Name, Via: via}
+		return engine.Actor{ID: sub.Name, Via: via, Authenticated: true, Role: sub.Role}
 	}
 	// Unauthenticated: the claim is the client's, and so is its honesty about
 	// whether a person typed it. Trusting the flag is fine precisely because the
@@ -1071,6 +1091,16 @@ func requireActor(w http.ResponseWriter, by engine.Actor) bool {
 	return false
 }
 
+// resolveErr answers a failed resolution: 403 when the actor is not one of the
+// step's approvers (a refusal on WHO), 400 for anything wrong with the request.
+func resolveErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, engine.ErrNotApprover) {
+		writeErr(w, http.StatusForbidden, err)
+		return
+	}
+	writeErr(w, 400, err)
+}
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
 	if !ok {
@@ -1081,7 +1111,7 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.Approve(r.Context(), id, b.StepID, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1097,7 +1127,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.Reject(r.Context(), id, b.StepID, b.Reason, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1108,8 +1138,12 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.eng.ProvideInput(r.Context(), id, b.Input); err != nil {
-		writeErr(w, 400, err)
+	by := actorOf(r, b)
+	if !requireActor(w, by) {
+		return
+	}
+	if err := s.eng.ProvideInput(r.Context(), id, b.Input, by); err != nil {
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -1128,7 +1162,7 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.AnswerQuestion(r.Context(), id, b.StepID, ans, by); err != nil {
-		writeErr(w, 400, err)
+		resolveErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

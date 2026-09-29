@@ -38,6 +38,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -137,6 +138,18 @@ var ACPPresets = map[string]ACPPreset{
 	// codex speaks ACP through Zed's adapter; it uses codex's own login.
 	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
 		Install: "npm i -g @openai/codex && codex login"},
+}
+
+// ACPPresetNames lists the presets in a stable order, for an error that has to
+// name the way out: a refusal that says only "unknown" sends the author
+// reading source to learn what the right words were.
+func ACPPresetNames() []string {
+	names := make([]string, 0, len(ACPPresets))
+	for n := range ACPPresets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ACP configures an ACPAgent.

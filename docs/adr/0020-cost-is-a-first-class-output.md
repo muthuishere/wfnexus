@@ -1,6 +1,6 @@
 # ADR 0020 — Cost is a first-class output
 
-- **Status:** proposed
+- **Status:** accepted (budget enforcement and an OTEL export stay open)
 - **Date:** 2026-09-24
 
 ## Context
@@ -105,3 +105,21 @@ nobody reads.
 - **Whether a budget hard-stops a run or only warns.** A hard stop kills work
   mid-flight with a half-written worktree; a warning nobody reads is not
   enforcement. Named as open.
+
+## Addendum 2026-09-29 — where prices come from
+
+The pricing-table question is answered as **a seeded table the operator owns**:
+
+- `apps/api/internal/catalog/prices.json`, embedded in the binary, holds
+  APPROXIMATE list prices per model family plus a `fallback`.
+- On boot it seeds the `model_prices` table (migration 000015 / sqlite 000009),
+  inserting only missing families — an edit is never overwritten. `seeded`
+  marks a row still holding the shipped number.
+- The operator edits it three ways, one API: `wfx prices [set|rm]`, System →
+  Model prices, `GET/PUT/DELETE /api/prices` (permission `registry:*`).
+  Removing a built-in family resets it to the shipped default.
+- A model id is priced by its longest family prefix; no match charges the `*`
+  row. So an `http` step never reports "cost unknown". `cli`/`acp` providers,
+  loopback endpoints and `:free` models are a known $0.00. A provider's own
+  `pricePerMIn/Out` still overrides, for its own model only.
+- With no database, the embedded seed is the table, read-only.

@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "APPROXIMATE list prices, USD per MILLION tokens, keyed by model FAMILY (a prefix of the model id's last path segment; the longest key wins).",
+    "This file only SEEDS the model_prices table on boot, inserting families the table does not have. Change a price with `wfx prices set`, the System page, or PUT /api/prices — not here.",
+    "A paid model no family matches is charged the `fallback` price, so no step reports cost unknown."
+  ],
+  "fallback": {"in": 1, "out": 4},
+  "prices": {
+    "claude-opus":             {"in": 5, "out": 25},
+    "claude-sonnet":           {"in": 3, "out": 15},
+    "claude-haiku":            {"in": 1, "out": 5},
+    "gpt-5":                   {"in": 1.25, "out": 10},
+    "gpt-5-mini":              {"in": 0.25, "out": 2},
+    "gpt-5-nano":              {"in": 0.05, "out": 0.4},
+    "gpt-4.1":                 {"in": 2, "out": 8},
+    "gpt-4.1-mini":            {"in": 0.4, "out": 1.6},
+    "gpt-4.1-nano":            {"in": 0.1, "out": 0.4},
+    "gpt-4o":                  {"in": 2.5, "out": 10},
+    "gpt-4o-mini":             {"in": 0.15, "out": 0.6},
+    "o3":                      {"in": 2, "out": 8},
+    "o4-mini":                 {"in": 1.1, "out": 4.4},
+    "gpt-oss-120b":            {"in": 0.15, "out": 0.6},
+    "gpt-oss-20b":             {"in": 0.05, "out": 0.2},
+    "gemini-2.5-pro":          {"in": 1.25, "out": 10},
+    "gemini-2.5-flash":        {"in": 0.3, "out": 2.5},
+    "gemini-2.5-flash-lite":   {"in": 0.1, "out": 0.4},
+    "gemini-2.0-flash":        {"in": 0.1, "out": 0.4},
+    "grok-4":                  {"in": 3, "out": 15},
+    "grok-3-mini":             {"in": 0.3, "out": 0.5},
+    "grok-code-fast":          {"in": 0.2, "out": 1.5},
+    "deepseek":                {"in": 0.28, "out": 0.42},
+    "mistral-large":           {"in": 2, "out": 6},
+    "mistral-medium":          {"in": 0.4, "out": 2},
+    "mistral-small":           {"in": 0.1, "out": 0.3},
+    "codestral":               {"in": 0.3, "out": 0.9},
+    "llama-3.3-70b":           {"in": 0.88, "out": 0.88},
+    "llama-3.1-8b":            {"in": 0.2, "out": 0.2},
+    "llama-v3p1-8b":           {"in": 0.2, "out": 0.2},
+    "kimi-k2":                 {"in": 0.6, "out": 2.5},
+    "glm-4":                   {"in": 0.6, "out": 2.2}
+  }
+}

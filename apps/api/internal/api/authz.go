@@ -79,6 +79,8 @@ var resourcePerms = map[string][2]string{
 	"adapters":   {PermRegistryRead, PermRegistryWrite},
 	"registries": {PermRegistryRead, PermRegistryWrite},
 	"models":     {PermRegistryRead, PermRegistryWrite},
+	// What each model costs: configuration next to the providers it prices.
+	"prices": {PermRegistryRead, PermRegistryWrite},
 	"doctor":     {PermRegistryRead, PermRegistryWrite},
 	"sources":    {PermProjectsRead, PermProjectsWrite},
 	"projects":   {PermProjectsRead, PermProjectsWrite},

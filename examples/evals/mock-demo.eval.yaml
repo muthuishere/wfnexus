@@ -1,0 +1,23 @@
+# An eval corpus for workflows/mock-demo.yaml (ADR 0019).
+#
+#   wfx eval mock-demo --corpus examples/evals/mock-demo.eval.yaml --providers mock
+#
+# Add a real backend to the list (`--providers mock,ollama-http,sonnet`) and the
+# same cases run on it unchanged: every agent step is pinned to that provider.
+# Assertions read each step's VALIDATED typed output — no model judges anything.
+#
+# mock-demo stops before `act` for a human, and an eval never approves on
+# anyone's behalf, so the honest end state is awaiting_approval.
+workflow: mock-demo
+cases:
+  - name: survey-reports-a-graded-finding
+    status: awaiting_approval
+    assert:
+      - {step: survey, path: severity, op: in, value: [low, medium, high]}
+      - {step: survey, path: finding, op: exists}
+      - {step: survey, path: "finding.#", op: gte, value: 1}
+      - {step: act, op: exists, value: false}   # the gate held
+  - name: finding-is-not-blank
+    status: awaiting_approval
+    assert:
+      - {step: survey, path: finding, op: matches, value: "\\S"}   # not blank

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type Event, type RunDetail, type Step } from '../api'
+import { api, type Event, type RunDetail, type Step, type StepRun } from '../api'
 import EventLog from '../components/EventLog'
 import DecisionPanel from '../components/DecisionPanel'
 import ApprovalBanner from '../components/ApprovalBanner'
@@ -26,13 +26,28 @@ import RunTimeline, { Cost, dur, money, tokens, type Usage } from '../components
 
 const PAUSED = ['awaiting_approval', 'needs_input']
 
-/** "approved by muthu@deemwar.com (via api)" — the engine's own audit line
- *  (engine.go), and the only place WHO resolved a pause is recorded. */
-function resolution(events: Event[]): { verb: string; who: string } | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const m = /^(approved|rejected|answered) by ([^(]+?)\s*\(via/.exec(String(events[i].payload?.text ?? ''))
-    if (m) return { verb: m[1], who: m[2] }
+/** The most recent pause resolution on this run, read from the step ROWS —
+ *  resolvedBy/resolvedAt/resolution are the engine's audit fact (ADR 0021).
+ *  It used to be scraped from the "approved by …" log line, which only told
+ *  approve/reject/answer apart by wording and lost the reason and the time. */
+export function resolutionOf(steps: StepRun[]): StepRun | undefined {
+  let last: StepRun | undefined
+  for (const s of steps) {
+    if (!s.resolvedBy || !s.resolvedAt) continue
+    if (!last || Date.parse(s.resolvedAt) > Date.parse(last.resolvedAt!)) last = s
   }
+  return last
+}
+
+/** One step's resolution, as the people reading an audit want it said. */
+function Resolved({ s }: { s: StepRun }) {
+  return (
+    <>
+      <b>{s.resolution || 'resolved'}</b> by <span className="mono">{s.resolvedBy}</span>
+      {s.resolvedAt && <span className="muted"> · {new Date(s.resolvedAt).toLocaleString()}</span>}
+      {s.resolutionReason && <span> — {s.resolutionReason}</span>}
+    </>
+  )
 }
 
 export default function RunPage({ id }: { id: string }) {
@@ -100,7 +115,7 @@ export default function RunPage({ id }: { id: string }) {
   const halted = byId[run.currentStep]
   const haltedDef = stepDefs.find(s => s.id === run.currentStep)
   const finalUrl = Object.values(byId).find(s => s.output?.pr_url)?.output?.pr_url as string | undefined
-  const resolved = PAUSED.includes(run.status) ? undefined : resolution(events)
+  const resolved = PAUSED.includes(run.status) ? undefined : resolutionOf(d?.steps || [])
   const pausedSince = events.find(e =>
     e.kind === 'step.status' && e.stepId === run.currentStep && PAUSED.includes(e.payload?.status))?.createdAt
     || run.updatedAt
@@ -143,7 +158,7 @@ export default function RunPage({ id }: { id: string }) {
         </>)}
 
       {resolved && (
-        <div className="banner ok"><b>{resolved.verb}</b> by <span className="mono">{resolved.who}</span></div>)}
+        <div className="banner ok"><span className="mono">{resolved.stepId}</span>: <Resolved s={resolved} /></div>)}
 
       {run.status === 'failed' && (
         <div className="banner err"><b>Run failed</b> at <span className="mono">{run.currentStep}</span>: {run.error}
@@ -193,6 +208,7 @@ export default function RunPage({ id }: { id: string }) {
                   : tokens((curRun?.usage as Usage)?.totalTokens)}
               </span>
             </div>
+            {curRun?.resolvedBy && <div className="banner ok" style={{ marginTop: 10 }}><Resolved s={curRun} /></div>}
             {curRun?.error && <div className="banner err" style={{ marginTop: 10 }}>{curRun.error}</div>}
             {curRun?.output && <><h3 style={{ marginTop: 14 }}>Validated output</h3><pre>{JSON.stringify(curRun.output, null, 2)}</pre></>}
             <h3 style={{ marginTop: 14 }}>Output contract</h3>

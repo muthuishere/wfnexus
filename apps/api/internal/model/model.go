@@ -42,8 +42,11 @@ type Run struct {
 	// queued. CreatedAt is only when the row was written, so a consumer that
 	// wants elapsed time needs this one (migration 000011).
 	StartedAt *time.Time `json:"startedAt"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	// TriggeredBy is WHO started the run — a subject, a claimed actor, or
+	// `trigger:<kind>` (migration 000016). Segregation of duties reads it.
+	TriggeredBy string    `json:"triggeredBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type StepRun struct {
@@ -227,4 +230,15 @@ type Job struct {
 	CreatedAt  time.Time       `json:"createdAt"`
 	LeasedAt   *time.Time      `json:"leasedAt,omitempty"`
 	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
+}
+
+// ModelPrice is one row of the price table (ADR 0020): what a model family
+// costs per MILLION tokens, in USD. Seeded is true while the row still holds the
+// approximate number shipped in the binary rather than one a person set.
+type ModelPrice struct {
+	Model     string    `json:"model"`
+	In        float64   `json:"in"`
+	Out       float64   `json:"out"`
+	Seeded    bool      `json:"seeded"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }

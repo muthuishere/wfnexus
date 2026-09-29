@@ -39,28 +39,28 @@ func TestUsageAccumCostMatchesTheHandComputedRun(t *testing.T) {
 // provider with no price is unknown, not free. ADR 0020 turns on that
 // distinction.
 func TestPriceOfFreeVersusUnknown(t *testing.T) {
-	if pr := priceOf(catalog.Provider{Kind: catalog.KindCLI}); !pr.Known {
+	if pr := priceOf(catalog.Provider{Kind: catalog.KindCLI}, "", nil); !pr.Known {
 		t.Fatal("a cli provider must report a KNOWN $0.00")
 	}
-	if pr := priceOf(catalog.Provider{Kind: catalog.KindACP}); !pr.Known {
+	if pr := priceOf(catalog.Provider{Kind: catalog.KindACP}, "", nil); !pr.Known {
 		t.Fatal("an acp provider must report a KNOWN $0.00")
 	}
-	if pr := priceOf(catalog.Provider{Kind: catalog.KindHTTP}); pr.Known {
+	if pr := priceOf(catalog.Provider{Kind: catalog.KindHTTP}, "", nil); pr.Known {
 		t.Fatal("an http provider with no price must be UNKNOWN, not free")
 	}
-	pr := priceOf(catalog.Provider{Kind: catalog.KindHTTP, PricePerMIn: f64(3), PricePerMOut: f64(15)})
+	pr := priceOf(catalog.Provider{Kind: catalog.KindHTTP, PricePerMIn: f64(3), PricePerMOut: f64(15)}, "", nil)
 	if c, ok := pr.cost(1_000_000, 0); !ok || c != 3 {
 		t.Fatalf("cost = %v ok=%v, want 3", c, ok)
 	}
 
-	free := newUsageAccum(priceOf(catalog.Provider{Kind: catalog.KindCLI}), func(map[string]any, int) {})
+	free := newUsageAccum(priceOf(catalog.Provider{Kind: catalog.KindCLI}, "", nil), func(map[string]any, int) {})
 	free.record(tn.MetricEvent{Event: "llm", Status: "ok", Model: "claude-cli", PromptTokens: 99999})
 	snap, _ := free.final()
 	if snap["costUsd"].(float64) != 0 {
 		t.Fatalf("a cli step must cost exactly 0, got %v", snap["costUsd"])
 	}
 
-	unknown := newUsageAccum(priceOf(catalog.Provider{Kind: catalog.KindHTTP}), func(map[string]any, int) {})
+	unknown := newUsageAccum(priceOf(catalog.Provider{Kind: catalog.KindHTTP}, "", nil), func(map[string]any, int) {})
 	unknown.record(tn.MetricEvent{Event: "llm", Status: "ok", Model: "x", PromptTokens: 10})
 	snap, _ = unknown.final()
 	if _, ok := snap["costUsd"]; ok {

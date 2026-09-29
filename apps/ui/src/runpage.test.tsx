@@ -2,7 +2,8 @@ import { test, expect, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { Cost, correctionsOf, dur, tokens } from './components/RunTimeline'
 import { readableCommand } from './components/EventLog'
-import type { Event } from './api'
+import type { Event, StepRun } from './api'
+import { resolutionOf } from './pages/RunPage'
 
 afterEach(() => cleanup())
 
@@ -63,4 +64,18 @@ test('durations and token counts stay readable at run scale', () => {
   expect(dur(41_000)).toBe('41s')
   expect(dur(176_000)).toBe('2m 56s')
   expect(tokens(1_424_154)).toBe('1.42M')
+})
+
+// ADR 0021: who resolved a pause is read from the step rows, not a log line —
+// and the LATEST resolution wins when a run paused more than once.
+test('the resolution shown is the latest one recorded on a step row', () => {
+  const steps = [
+    { stepId: 'triage', resolvedBy: 'ada (via ui)', resolvedAt: '2026-09-29T10:00:00Z', resolution: 'answered' },
+    { stepId: 'publish', resolvedBy: 'bob (via cli)', resolvedAt: '2026-09-29T11:00:00Z', resolution: 'rejected', resolutionReason: 'wrong base' },
+    { stepId: 'fix' },
+  ] as unknown as StepRun[]
+  const r = resolutionOf(steps)
+  expect(r?.stepId).toBe('publish')
+  expect(r?.resolutionReason).toBe('wrong base')
+  expect(resolutionOf([{ stepId: 'x' } as unknown as StepRun])).toBeUndefined()
 })

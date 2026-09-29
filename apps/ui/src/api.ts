@@ -51,6 +51,8 @@ export type Step = {
   consumes?: string[]; produces?: string[]
   skills: string[]; tools: string[]; mcp?: string[]
   outputSchema: JSONSchema; requiresApproval?: boolean; gates?: Gate[]
+  /** who may answer this step's pauses: user names and `role:<name>` (ADR 0021) */
+  approvers?: string[]; preventSelfApproval?: boolean
   maxTurns?: number; maxAttempts?: number; timeoutSec?: number; model?: string
   // added by the agent-harness work — may be absent on an older API
   soul?: string; budget?: Budget; guardrails?: Guardrail[]; team?: TeamMember[]
@@ -93,7 +95,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
@@ -143,6 +145,9 @@ export type Provider = {
   name: string; kind: ProviderKind; description?: string
   baseUrl?: string; style?: string; model?: string; apiKeyEnv?: string
   preset?: string; command?: string[]; args?: string[]; repairs?: number; timeoutSec?: number
+  /** USD per million tokens (ADR 0020): an override for THIS endpoint. Empty
+   *  means the model is priced from the model_prices table. */
+  pricePerMIn?: number; pricePerMOut?: number
 }
 /** A classifier registry entry — toolnexus ClassifierOptions, field for field.
  *  `backend` may be empty when `baseUrl` is given: the JEV wire at that URL. */
@@ -279,6 +284,10 @@ export type Template = {
   path?: string
 }
 
+/** One row of the price table: a model FAMILY (a prefix of the model id) and
+ *  what it costs per million tokens. `*` is the fallback for unmatched models. */
+export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
+
 /** One entry of the platform's env store. A secret arrives with NO value: the
  *  only path a value takes out of the database is into the process that runs a
  *  step. A non-secret is ordinary configuration and is shown. */
@@ -378,6 +387,16 @@ export const api = {
       ? `/api/projects/${encodeURIComponent(project)}/env/${encodeURIComponent(key)}`
       : `/api/env/${encodeURIComponent(key)}`, { method: 'DELETE' })),
 
+  /** The price table (ADR 0020): USD per million tokens by model family.
+   *  Seeded with approximate list prices; `seeded` means nobody set it yet. */
+  prices: () => j<{ prices: ModelPrice[]; fallbackKey: string }>(fetch('/api/prices')),
+  setPrice: (p: { model: string; in: number; out: number }) =>
+    j<{ ok: boolean }>(fetch('/api/prices', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    })),
+  deletePrice: (model: string) =>
+    j(fetch(`/api/prices?model=${encodeURIComponent(model)}`, { method: 'DELETE' })),
+
   /** The state store. `workflowState` is the workflow page's view: this
    *  workflow's memory, each of its steps', and the global namespace. */
   workflowState: (name: string) =>
@@ -467,7 +486,7 @@ export const api = {
     j<RunDetail>(post(`/api/workflows/${wf}/runs`, input)).then((d) => d.run),
   approve: (id: string, stepId: string) => j(post(`/api/runs/${id}/approve`, { stepId, actor: actor() })),
   reject: (id: string, stepId: string, reason: string) => j(post(`/api/runs/${id}/reject`, { stepId, reason, actor: actor() })),
-  input: (id: string, input: any) => j(post(`/api/runs/${id}/input`, { input })),
+  input: (id: string, input: any) => j(post(`/api/runs/${id}/input`, { input, actor: actor() })),
   retry: (id: string, stepId: string) => j(post(`/api/runs/${id}/retry`, { stepId })),
   cancel: (id: string) => j(post(`/api/runs/${id}/cancel`)),
   events: (id: string, after: number, onEvent: (e: Event) => void) => {

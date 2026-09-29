@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -190,5 +192,26 @@ func TestAnACPCommandIsArgvNotAPromptTemplate(t *testing.T) {
 	}
 	if len(c.Providers.Skips()) != 2 {
 		t.Fatalf("skips = %v", c.Providers.Skips())
+	}
+}
+
+// An acp entry naming a preset nobody knows is skipped at load with the known
+// presets named, rather than registered and guessed at run time.
+func TestAnUnknownACPPresetIsRefusedAtLoad(t *testing.T) {
+	dir := t.TempDir()
+	js := `{"providers":{
+	  "ok":  {"kind":"acp","preset":"opencode"},
+	  "bad": {"kind":"acp","preset":"gemini"}
+	}}`
+	c, err := Load(write(t, dir, "registries.json", js), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Providers.Len() != 1 || c.Providers.Names()[0] != "ok" {
+		t.Fatalf("registered %v", c.Providers.Names())
+	}
+	skips := fmt.Sprint(c.Providers.Skips())
+	if !strings.Contains(skips, "gemini") || !strings.Contains(skips, "opencode") {
+		t.Fatalf("skip should name the preset and the known ones: %s", skips)
 	}
 }
