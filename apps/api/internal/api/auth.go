@@ -145,8 +145,8 @@ func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, erro
 		return nil, errors.New("unauthenticated")
 	}
 	hash := auth.HashToken(tok)
-	if s.store != nil {
-		if u, t, err := s.store.UserByTokenHash(ctx, hash); err == nil {
+	if s.authn != nil {
+		if u, t, err := s.authn.UserByToken(ctx, tok); err == nil {
 			project := u.Project
 			if t.Project != "" {
 				project = t.Project

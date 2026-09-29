@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
@@ -52,6 +53,11 @@ type Server struct {
 
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
+
+	// authn answers "which person is this" for subject resolution and device
+	// approval (ADR 0017). Local users are the only implementation; the field
+	// exists so the next one is a constructor change, not a handler rewrite.
+	authn auth.Authenticator
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -84,7 +90,8 @@ func isLoopback(addr string) bool {
 // bound anywhere else it is not. That is a property of the code rather than a
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter()}
+	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(),
+		authn: auth.Local{Store: st}}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
