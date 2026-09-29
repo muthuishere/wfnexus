@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -200,7 +201,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 // shared by a step's turns and by `wfx models`. An explicit command is run
 // exactly as written, with the model chosen over the protocol; the devin
 // preset keeps devin's own --model flag and implicit acp subcommand.
-func acpConfig(p catalog.Provider, model, workdir string, env []string) devinadapter.ACP {
+func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinadapter.ACP, error) {
 	cfg := devinadapter.ACP{
 		Model: model, Cwd: workdir, Env: env, SessionPerTurn: p.SessionPerTurn,
 		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
@@ -208,22 +209,29 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) devinada
 	if len(p.Command) > 0 {
 		cfg.Bin = p.Command[0]
 		cfg.Argv = append(append([]string{}, p.Command[1:]...), p.Args...)
-		return cfg
+		return cfg, nil
 	}
 	cfg.ExtraArgs = append([]string{}, p.Args...)
 	name := p.Preset
 	if name == "" {
 		name = "devin"
 	}
-	if pr, ok := devinadapter.ACPPresets[name]; ok {
-		cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
-		// The adapter's env first, the step's after, so a step can still override.
-		cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
-		cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
-	} else {
-		cfg.Bin = name // an unknown preset is the program's name, spoken to as `<name> acp`
+	pr, ok := devinadapter.ACPPresets[name]
+	if !ok {
+		// Refused rather than guessed, the same rule cli follows. Running an
+		// unknown name as `<name> acp` meant a typo'd preset started some other
+		// binary — or none — and failed as a protocol error far from its cause.
+		// The catalog refuses this at load too; this is the backstop for an
+		// entry assembled in code.
+		return cfg, fmt.Errorf("provider %q: no acp preset named %q — presets are %s; "+
+			"for any other ACP agent give an explicit `command` in the registry",
+			p.Name, name, strings.Join(devinadapter.ACPPresetNames(), ", "))
 	}
-	return cfg
+	cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
+	// The adapter's env first, the step's after, so a step can still override.
+	cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
+	cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
+	return cfg, nil
 }
 
 // localAgent builds the backend that executes one turn: a persistent ACP
@@ -238,7 +246,11 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 	if p.Kind == catalog.KindACP {
 		// One ACP process is one conversation, so it is per-step, not shared:
 		// two steps on one session would interleave into the same transcript.
-		a := devinadapter.NewACP(acpConfig(p, model, workdir, env))
+		cfg, err := acpConfig(p, model, workdir, env)
+		if err != nil {
+			return nil, nil, err
+		}
+		a := devinadapter.NewACP(cfg)
 		return a, func() { _ = a.Close() }, nil
 	}
 

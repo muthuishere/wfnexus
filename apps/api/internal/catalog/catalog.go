@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
 )
 
@@ -336,6 +337,15 @@ func validateProvider(p Provider) error {
 		// discovered as an agent answering the first question forever.
 		if p.Kind == KindACP && hasPlaceholder {
 			return fmt.Errorf("an acp command is argv, not a prompt template: the prompt travels over the protocol, so {{prompt}}/{{file}} do not belong in %q", joined)
+		}
+		// An unknown acp preset is refused at load, not at the first run: the
+		// engine no longer guesses `<name> acp` for a name it does not know,
+		// so an entry like that could only ever fail later, further from here.
+		if p.Kind == KindACP && len(p.Command) == 0 {
+			if _, ok := devinadapter.ACPPresets[p.Preset]; !ok {
+				return fmt.Errorf("no acp preset named %q — presets are %s; for any other ACP agent give an explicit command",
+					p.Preset, strings.Join(devinadapter.ACPPresetNames(), ", "))
+			}
 		}
 	case "":
 		return fmt.Errorf("kind is required (http, cli or acp)")

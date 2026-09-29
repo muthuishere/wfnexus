@@ -23,7 +23,10 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 		{catalog.Provider{Kind: catalog.KindACP, Command: []string{"gemini", "--experimental-acp"}}, "gemini", "--experimental-acp", ""},
 	}
 	for _, c := range cases {
-		cfg := acpConfig(c.p, "m", "/w", []string{"K=V"})
+		cfg, err := acpConfig(c.p, "m", "/w", []string{"K=V"})
+		if err != nil {
+			t.Fatal(err)
+		}
 		got := cfg.Bin + " | " + strings.Join(cfg.Argv, " ") + " | " + cfg.ModelFlag
 		want := c.bin + " | " + c.argv + " | " + c.modelFlag
 		if got != want {
@@ -41,13 +44,13 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 // The opencode preset opens a fresh session per turn; devin (unmeasured)
 // keeps its old behaviour; any entry can opt in with sessionPerTurn.
 func TestTheOpencodePresetStartsAFreshSessionEachTurn(t *testing.T) {
-	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", nil); !cfg.SessionPerTurn {
+	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", nil); !cfg.SessionPerTurn {
 		t.Error("the opencode preset must open a fresh session per turn")
 	}
-	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "devin"}, "m", "/w", nil); cfg.SessionPerTurn {
+	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "devin"}, "m", "/w", nil); cfg.SessionPerTurn {
 		t.Error("devin must keep its long-lived session")
 	}
-	if cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Command: []string{"x"}, SessionPerTurn: true}, "m", "/w", nil); !cfg.SessionPerTurn {
+	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Command: []string{"x"}, SessionPerTurn: true}, "m", "/w", nil); !cfg.SessionPerTurn {
 		t.Error("a registry entry's sessionPerTurn must reach the adapter")
 	}
 }
@@ -61,7 +64,7 @@ func TestTheDoctorLooksForTheProgramAnAdapterReallyRuns(t *testing.T) {
 // opencode is driven as a model: its own tools must be off, or its build agent
 // does the task itself with its own bash and the step never finishes a turn.
 func TestOpencodeIsLaunchedWithItsOwnToolsDenied(t *testing.T) {
-	cfg := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", []string{"K=V"})
+	cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", []string{"K=V"})
 	env := strings.Join(cfg.Env, "\n")
 	for _, tool := range []string{`"bash":"deny"`, `"edit":"deny"`, `"read":"deny"`, `"webfetch":"deny"`} {
 		if !strings.Contains(env, tool) {
@@ -70,5 +73,20 @@ func TestOpencodeIsLaunchedWithItsOwnToolsDenied(t *testing.T) {
 	}
 	if cfg.Env[len(cfg.Env)-1] != "K=V" {
 		t.Error("the step's env must come after the adapter's, so it can override")
+	}
+}
+
+// An unknown acp preset is refused, naming the presets that exist. It used to
+// be run as `<name> acp`, so a typo started the wrong binary and failed as a
+// protocol error instead of a registry one.
+func TestAnUnknownACPPresetIsRefusedNotGuessed(t *testing.T) {
+	_, err := acpConfig(catalog.Provider{Name: "gem", Kind: catalog.KindACP, Preset: "gemini"}, "m", "/w", nil)
+	if err == nil {
+		t.Fatal("an unknown acp preset was guessed")
+	}
+	for _, want := range []string{"gemini", "devin", "opencode", "codex", "command"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
 	}
 }
