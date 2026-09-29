@@ -50,7 +50,28 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 	return e.resolveLLMWithEnv(step, workdir, step.Env)
 }
 
+// UseProvider runs every agent step of every run on this engine on the named
+// registry provider, whatever the step itself names — and drops the step's
+// `model:`, which selects within the provider it was written for and means
+// nothing inside another one.
+//
+// It is the seam an eval needs (ADR 0019): the SAME workflow, unchanged, run
+// once per backend. Changing the YAML per backend would make the matrix
+// compare N different workflows; the override keeps the workflow constant and
+// varies only the model, which is the claim being tested. It is engine-wide on
+// purpose — an eval builds one engine per provider — so no run-level state or
+// API surface grows for it, and a server engine never calls it.
+//
+// A name that is not in the registry is refused by Require below, at the step,
+// exactly as a misspelt `provider:` would be.
+func (e *Engine) UseProvider(name string) { e.providerOverride = name }
+
 func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string) (resolved, error) {
+	if e.providerOverride != "" {
+		s := *step
+		s.Provider, s.Model = e.providerOverride, ""
+		step = &s
+	}
 	// No provider named, but the operator named a default one: the step runs
 	// on it exactly as if it had said so — `model:` selects within it, and a
 	// default that does not resolve is refused, never quietly swapped for the
@@ -97,7 +118,9 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			BaseURL: url,
 			Style:   tn.ClientStyle("openai"),
 			Model:   "mock",
-		}, Label: "mock", Close: noClose}, nil
+			// A KNOWN zero, not an unknown: the mock calls nothing and bills
+			// nothing, and an eval matrix should say $0.00 for it, not "?".
+		}, Label: "mock", Close: noClose, Price: pricing{Known: true, Source: "mock"}}, nil
 	case catalog.KindHTTP:
 		model := p.Model
 		// `model:` beside a provider selects a model WITHIN that provider — a
