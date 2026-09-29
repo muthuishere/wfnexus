@@ -591,8 +591,27 @@ func resolution(a Actor, resolution, reason string) model.StepPatch {
 	}
 }
 
-// Approve unblocks a step that is awaiting approval and continues the run.
-func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string, by Actor) error {
+// Answer.Data keys Resolve reads beyond toolnexus' own RelayOutputKey (the
+// free-text answer to a question).
+const (
+	// AnswerInput carries a form's fields (map[string]any), merged into the run
+	// input — what the /input endpoint sends.
+	AnswerInput = "input"
+	// AnswerReason carries a human's free-text reason for a refusal. It is kept
+	// apart from Answer.Reason, which is toolnexus' closed vocabulary
+	// (declined|cancelled|expired) and must stay machine-readable.
+	AnswerReason = "reason"
+)
+
+// Resolve is THE resolve path (ADR 0021): every way a person answers a pause —
+// approve, reject, answer a question, fill a form — arrives here as one
+// tn.Answer from one Actor. That is what makes "who may answer" enforceable in
+// one place rather than four, and why Ok/Reason are never thrown away.
+//
+// What the answer MEANS is decided by what the step is waiting on, not by the
+// caller: an approval gate reads Ok as approve/reject; a question or a
+// needs_input gate reads the payload.
+func (e *Engine) Resolve(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
 	if err := by.validate(); err != nil {
 		return err
 	}
@@ -600,9 +619,63 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string, by
 	if err != nil {
 		return err
 	}
-	if st.Status != "awaiting_approval" {
+	form, isForm := ans.Data[AnswerInput].(map[string]any)
+	switch {
+	case st.Status == "awaiting_approval":
+		if ans.Ok {
+			return e.approve(ctx, runID, stepID, by)
+		}
+		reason, _ := ans.Data[AnswerReason].(string)
+		if reason == "" {
+			reason = ans.Reason
+		}
+		return e.reject(ctx, runID, stepID, reason, by)
+	case isForm:
+		return e.provideInput(ctx, runID, stepID, form, by)
+	case ans.Ok && ans.Data == nil:
+		// A bare "yes" is an approval, and only an approval gate takes one.
+		// Refused rather than read as an empty answer, which would silently
+		// re-run a step nobody was asked about.
 		return fmt.Errorf("step %s is %s, not awaiting_approval", stepID, st.Status)
+	default:
+		return e.answerQuestion(ctx, runID, stepID, ans, by)
 	}
+}
+
+// Approve unblocks a step that is awaiting approval and continues the run.
+func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string, by Actor) error {
+	return e.Resolve(ctx, runID, stepID, tn.Answer{Ok: true}, by)
+}
+
+// Reject refuses an approval gate; the run is cancelled with the reason.
+func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason string, by Actor) error {
+	return e.Resolve(ctx, runID, stepID,
+		tn.Answer{Ok: false, Reason: "declined", Data: map[string]any{AnswerReason: reason}}, by)
+}
+
+// AnswerQuestion resolves a step that suspended on ask_human, or a needs_input
+// gate, with a free-text answer (Data[tn.RelayOutputKey]).
+func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
+	return e.Resolve(ctx, runID, stepID, ans, by)
+}
+
+// ProvideInput merges a form into the run input and re-runs the step that
+// asked — the run's current step.
+func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[string]any, by Actor) error {
+	if err := by.validate(); err != nil {
+		return err
+	}
+	run, err := e.store.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if answers == nil {
+		answers = map[string]any{}
+	}
+	return e.Resolve(ctx, runID, run.CurrentStep, tn.Answer{Ok: true, Data: map[string]any{AnswerInput: answers}}, by)
+}
+
+func (e *Engine) approve(ctx context.Context, runID uuid.UUID, stepID string, by Actor) error {
 	p := resolution(by, "approved", "")
 	p.Status = str("approved")
 	e.setStep(ctx, runID, stepID, p)
@@ -614,10 +687,7 @@ func (e *Engine) Approve(ctx context.Context, runID uuid.UUID, stepID string, by
 	return nil
 }
 
-func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason string, by Actor) error {
-	if err := by.validate(); err != nil {
-		return err
-	}
+func (e *Engine) reject(ctx context.Context, runID uuid.UUID, stepID, reason string, by Actor) error {
 	p := resolution(by, "rejected", reason)
 	p.Status = str("rejected")
 	p.Error = str(reason)
@@ -627,7 +697,7 @@ func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason str
 	return nil
 }
 
-// AnswerQuestion resolves a step that suspended on ask_human.
+// answerQuestion resolves a step that suspended on ask_human.
 //
 // It deliberately does NOT call Runtime.Resume: that replays the whole turn
 // from the original prompt with an empty history, re-running tools and paying
@@ -635,10 +705,7 @@ func (e *Engine) Reject(ctx context.Context, runID uuid.UUID, stepID, reason str
 // anyway (spikes/03). The step is our durability boundary, so the answer is
 // folded into the run input and the step re-runs from its prompt — which is
 // also why steps must be idempotent in effect.
-func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
-	if err := by.validate(); err != nil {
-		return err
-	}
+func (e *Engine) answerQuestion(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
 	st, err := e.store.GetStep(ctx, runID, stepID)
 	if err != nil {
 		return err
@@ -711,15 +778,12 @@ func (e *Engine) AnswerQuestion(ctx context.Context, runID uuid.UUID, stepID str
 	return nil
 }
 
-// ProvideInput merges answers into the run input and re-runs from the step that asked.
+// provideInput merges answers into the run input and re-runs from the step that asked.
 //
 // It is a resolve path like the others, so it names its actor and leaves the
 // same audit fact on the step: a form answered from the UI is a decision
 // somebody made, and "answered by nobody" is the record ADR 0021 exists to stop.
-func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[string]any, by Actor) error {
-	if err := by.validate(); err != nil {
-		return err
-	}
+func (e *Engine) provideInput(ctx context.Context, runID uuid.UUID, stepID string, answers map[string]any, by Actor) error {
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -735,7 +799,6 @@ func (e *Engine) ProvideInput(ctx context.Context, runID uuid.UUID, answers map[
 	if err := e.store.UpdateRunInput(ctx, runID, mustJSON(input)); err != nil {
 		return err
 	}
-	stepID := run.CurrentStep
 	e.emit(ctx, runID, stepID, "log", map[string]any{"text": "input provided by " + by.String()})
 	// Written after the retry for the same reason as AnswerQuestion: Retry
 	// resets the step row, and would erase an audit fact written before it.
