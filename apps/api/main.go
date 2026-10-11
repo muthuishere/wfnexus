@@ -243,6 +243,11 @@ func main() {
 		log.Printf("  interrupted %d run(s) left running by the last shutdown — marked failed, retryable", n)
 	}
 
+	// A finished run's checkout is ~60 MB; old ones are only disk (engine/rundirs.go).
+	if n := eng.SweepRunDirs(ctx); n > 0 {
+		log.Printf("  swept %d run directory(ies) older than 24h", n)
+	}
+
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)
 	for _, d := range workflow.Sorted(defs) {

@@ -519,6 +519,7 @@ func (e *Engine) Start(runID uuid.UUID) {
 			log.Printf("engine: run %s: %v", runID, err)
 			e.setRun(ctx, runID, "failed", "", err.Error())
 		}
+		e.cleanupFinished(runID)
 	}()
 }
 
@@ -530,6 +531,11 @@ func (e *Engine) Cancel(ctx context.Context, runID uuid.UUID) {
 		cancel()
 	}
 	e.setRun(ctx, runID, "cancelled", "", "")
+	if cancel == nil {
+		// Not executing (e.g. paused on an approval), so nothing else will
+		// clean up after it. A running one cleans up as its goroutine exits.
+		e.removeRunDir(runID)
+	}
 }
 
 // Actor is WHO resolved a pause (ADR 0021).
