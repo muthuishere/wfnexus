@@ -64,7 +64,8 @@ func TestAFinishedRunLosesItsCheckout(t *testing.T) {
 }
 
 // At boot, run directories older than a day go unless the run is still live;
-// newer ones, unknown runs and non-run directories stay.
+// newer ones, unknown runs and everything that is not a UUID-named run
+// directory (sources/, projects/, sources.json, ...) stay.
 func TestTheBootSweepRemovesOnlyOldDirsOfOverRuns(t *testing.T) {
 	ctx := context.Background()
 	e, st, work := runDirEngine(t)
@@ -78,17 +79,40 @@ func TestTheBootSweepRemovesOnlyOldDirsOfOverRuns(t *testing.T) {
 	oldPaused := mk("awaiting_approval", 48*time.Hour)
 	newFailed := mk("failed", time.Hour)
 	unknown := runDir(t, work, uuid.New(), 48*time.Hour)
-	sources := filepath.Join(work, "sources")
-	_ = os.MkdirAll(sources, 0o755)
+	// Everything at the top of WorkDir that is not a run: the per-project base
+	// clones (sources/ — deleted by hand on 2026-10-11, which broke every
+	// project run), other state dirs, and the registries. All old, all kept.
 	old := time.Now().Add(-48 * time.Hour)
-	_ = os.Chtimes(sources, old, old)
+	keep := []string{}
+	for _, d := range []string{"sources/reqsume-gh/.git", "projects/p", "proposals", "skill-sources/s"} {
+		_ = os.MkdirAll(filepath.Join(work, d), 0o755)
+		top := filepath.Join(work, strings.Split(d, "/")[0])
+		_ = os.Chtimes(top, old, old)
+		keep = append(keep, top, filepath.Join(work, d))
+	}
+	for _, f := range []string{"sources.json", "projects.json"} {
+		p := filepath.Join(work, f)
+		_ = os.WriteFile(p, []byte("[]"), 0o644)
+		_ = os.Chtimes(p, old, old)
+		keep = append(keep, p)
+	}
+	// a file named like a run is not a run directory either
+	stray := filepath.Join(work, uuid.New().String())
+	_ = os.WriteFile(stray, nil, 0o644)
+	_ = os.Chtimes(stray, old, old)
+	keep = append(keep, stray)
 
 	if n := e.SweepRunDirs(ctx); n != 2 {
 		t.Fatalf("swept %d, want 2", n)
 	}
-	for p, want := range map[string]bool{oldFailed: false, oldDone: false, oldPaused: true, newFailed: true, unknown: true, sources: true} {
+	for p, want := range map[string]bool{oldFailed: false, oldDone: false, oldPaused: true, newFailed: true, unknown: true} {
 		if exists(p) != want {
 			t.Errorf("%s: exists=%v, want %v", filepath.Base(p), exists(p), want)
+		}
+	}
+	for _, p := range keep {
+		if !exists(p) {
+			t.Errorf("the sweep removed %s, which is not a run directory", strings.TrimPrefix(p, work+"/"))
 		}
 	}
 }
