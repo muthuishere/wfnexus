@@ -218,6 +218,13 @@ steps:
           action: fail
           message: The claim classifier could not run (TYPESAFE_API_KEY / OPENROUTER_API_KEY in the env store?) — the brief was saved marked NOT VERIFIED.
       run: |
+        # The drafting model often submits the brief without also writing the
+        # file (3 failed runs, 2026-10-12); the submitted object IS the draft.
+        if [ ! -s draft.json ]; then
+        cat > draft.json <<'WFX_DRAFT_EOF'
+        {{ json .Steps.draft }}
+        WFX_DRAFT_EOF
+        fi
         python3 verify.py --name daily-brief --save-dir "{{ .Input.save_dir }}" --private
     - id: settle
       name: Record the run; is delivery wanted?

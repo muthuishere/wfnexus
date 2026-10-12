@@ -144,9 +144,22 @@ class Evidence:
             lines.append(f"- {s['name']}: {s['status']} ({s['count']})"
                          + (f" — {s.get('reason','')} FIX: {s.get('fix','')}" if s["status"] != "ok" else ""))
         lines += ["", "## items (cite the ref in [brackets] exactly)"]
-        for ref, it in self.doc["items"].items():
-            lines.append(f"[{ref}] " + json.dumps({k: v for k, v in it.items() if k != "body"},
-                                                   ensure_ascii=False, default=str)[:900])
+        # Size cap: a 96 KB digest left the drafting model no room to write
+        # draft.json (3 failed runs, 2026-10-12). Lines are shorter, and past
+        # DIGEST_MAX_BYTES the rest is counted, not listed: evidence.json still
+        # holds every item for a line that needs more.
+        budget = int(os.environ.get("DIGEST_MAX_BYTES", "32000"))
+        used = sum(len(l.encode()) + 1 for l in lines)
+        items = list(self.doc["items"].items())
+        for i, (ref, it) in enumerate(items):
+            line = f"[{ref}] " + json.dumps({k: v for k, v in it.items() if k != "body"},
+                                            ensure_ascii=False, default=str)[:400]
+            if used + len(line.encode()) + 1 > budget:
+                lines.append(f"(+{len(items) - i} more items not listed here: size cap; "
+                             "they are in evidence.json by ref)")
+                break
+            lines.append(line)
+            used += len(line.encode()) + 1
         with open(path, "w") as f:
             f.write("\n".join(lines) + "\n")
 
