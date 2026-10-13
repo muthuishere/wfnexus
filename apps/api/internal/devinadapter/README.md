@@ -79,6 +79,15 @@ claude -p --tools "" --disable-slash-commands --no-session-persistence --model <
 - Terms: see the `claude-cli` entry in `registries.json` — automated use of a
   subscription seat; the `anthropic` http provider is the API-key path.
 
+#### `claude-headless` and `devin-headless` (shipped in `registries.json`)
+
+Two ready-made `kind: cli` entries: `claude-headless` (preset `claude`, model
+`sonnet`) and `devin-headless` (preset `devin`, a fresh `devin -p` per turn).
+Both are the model only — the agent loop, tools and skills are the in-built
+toolnexus loop described above, exactly as for `claude-cli`. There is no
+"native loop" mode where the CLI runs its own tools; that is deliberate, so
+every step stays under the host's guardrails.
+
 ### 2. The response contract
 
 A one-shot CLI has no tool-call channel, so it is handed the **verbatim** OpenAI

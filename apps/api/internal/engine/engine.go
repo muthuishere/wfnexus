@@ -534,7 +534,8 @@ func (e *Engine) Cancel(ctx context.Context, runID uuid.UUID) {
 	if cancel == nil {
 		// Not executing (e.g. paused on an approval), so nothing else will
 		// clean up after it. A running one cleans up as its goroutine exits.
-		e.removeRunDir(runID)
+		e.endRunDir(runID)
+		e.pruneArtifacts()
 	}
 }
 
@@ -1123,10 +1124,15 @@ func (e *Engine) prepareWorkspace(ctx context.Context, runID uuid.UUID, input ma
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		return dir, nil
 	}
+	_, statErr := os.Stat(dir)
+	fresh := statErr != nil // a retried run whose directory went with its end
 	url, _ := input["repo_url"].(string)
 	if url == "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
+		}
+		if fresh {
+			return dir, e.restoreOrNote(ctx, runID, dir)
 		}
 		return dir, nil
 	}
@@ -1143,7 +1149,22 @@ func (e *Engine) prepareWorkspace(ctx context.Context, runID uuid.UUID, input ma
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone: %v: %s", err, out)
 	}
-	return dir, nil
+	if base, ok := e.artifactBase(runID); ok && base != "" {
+		if out, err := exec.CommandContext(ctx, "git", "-C", dir, "checkout", "-q", "--detach", base).CombinedOutput(); err != nil {
+			e.emit(ctx, runID, "", "log", map[string]any{"text": fmt.Sprintf("restore: base %s not in the clone (%v): %s", base, err, bytes.TrimSpace(out))})
+		}
+	}
+	return dir, e.restoreOrNote(ctx, runID, dir)
+}
+
+// restoreOrNote replays the run's artifact onto a fresh workspace, or notes on
+// the run that a resumed run had none left to replay.
+func (e *Engine) restoreOrNote(ctx context.Context, runID uuid.UUID, dir string) error {
+	if _, ok := e.artifactBase(runID); !ok {
+		e.noteMissingArtifact(ctx, runID)
+		return nil
+	}
+	return e.restoreArtifact(ctx, runID, dir)
 }
 
 // worktree gives each run its own git worktree of a local repo, so concurrent
@@ -1158,6 +1179,12 @@ func (e *Engine) worktree(ctx context.Context, runID uuid.UUID, repo string, inp
 	if base == "" {
 		base = "HEAD"
 	}
+	// A retried run whose directory went with its end: cut the worktree at the
+	// commit the artifact was measured from, then replay its changes.
+	art, hasArt := e.artifactBase(runID)
+	if hasArt && art != "" {
+		base = art
+	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", err
 	}
@@ -1169,7 +1196,7 @@ func (e *Engine) worktree(ctx context.Context, runID uuid.UUID, repo string, inp
 		return repo, nil
 	}
 	e.emit(ctx, runID, "", "log", map[string]any{"text": "worktree " + dir + " from " + base})
-	return dir, nil
+	return dir, e.restoreOrNote(ctx, runID, dir)
 }
 
 // gitRev resolves HEAD in dir; "" when it is not a git repo. Recorded once per

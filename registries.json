@@ -38,6 +38,21 @@
       "repairs": 2,
       "timeoutSec": 900
     },
+    "claude-headless": {
+      "kind": "cli",
+      "description": "`claude -p` (sonnet) as the model, headless: one turn per call, prompt on stdin, no built-in tools, no slash commands, no session persistence — the step's tools and skills run in wfnexus's in-built toolnexus loop, never inside claude. Same subscription-seat TERMS caveat as claude-cli; for unattended automation use the API-key http provider instead.",
+      "preset": "claude",
+      "model": "sonnet",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
+    "devin-headless": {
+      "kind": "cli",
+      "description": "`devin -p` as the model, headless: a fresh process per turn, prompt by --prompt-file, the step's tools and skills run in wfnexus's in-built toolnexus loop. Slower than the `devin` acp entry (no long-lived process) but needs no ACP session. Same TERMS caveat as `devin`: one seat, one human.",
+      "preset": "devin",
+      "repairs": 2,
+      "timeoutSec": 900
+    },
     "codex-acp": {
       "kind": "acp",
       "description": "OpenAI Codex over the Agent Client Protocol, through Zed's @zed-industries/codex-acp adapter (run with npx). Uses codex's own login (`codex login`). Advertises gpt-5.5, gpt-5.4, gpt-5.4-mini… as a model option; measured live 2026-09-27. gpt-5.5 because a ChatGPT-account login refuses the others it advertises (gpt-5.4-mini: \"not supported when using Codex with a ChatGPT account\", measured 2026-09-27); an API-key login can pick any. TERMS: the same as codex-cli — it runs on whatever codex is logged in with. A ChatGPT-account login is a subscription seat driven by a program, and OpenAI's terms were not read (see codex-cli), so none is asserted; an API-key login is billed per token under OpenAI's API terms.",

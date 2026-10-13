@@ -66,9 +66,10 @@ type Config struct {
 	// queued. Each run drives several agents and a repo worktree, so this is the
 	// knob that keeps a burst of reports from thrashing the machine.
 	MaxConcurrentRuns int
-	// FailedRunRetentionDays is how long a failed run keeps its checkout so
-	// Retry can reuse the earlier steps' edits; after that the sweep removes it.
-	FailedRunRetentionDays int
+	// RunArtifactsKeep is how many ended-run artifacts (WorkDir/artifacts/
+	// <runID>.tar.gz — a run's changes, not its checkout) are kept; older ones
+	// are pruned. Retry of a pruned run starts from a fresh checkout.
+	RunArtifactsKeep int
 	// RunnerLabels are the labels THIS process serves itself. A step whose
 	// `runs-on` names one of them runs here, in process, exactly as before
 	// workers existed; anything else is queued for a worker that holds the
@@ -252,14 +253,14 @@ func LoadWithFile(path string) (Config, error) {
 		DefaultProvider:   env("WFX_DEFAULT_PROVIDER", f.Model.Provider),
 		DefaultClassifier: env("WFX_DEFAULT_CLASSIFIER", f.Classifier.Name),
 
-		MaxConcurrentRuns:      envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),
-		FailedRunRetentionDays: envInt("WFX_FAILED_RUN_RETENTION_DAYS", orInt(f.FailedRunRetentionDays, 3)),
-		RunnerLabels:           splitList(env("WFX_RUNNER_LABELS", or(join(f.Runners.Labels), "local"))),
-		RunnerToken:            env("WFX_RUNNER_TOKEN", f.Runners.Token),
-		SecretKeyEnv:           env("WFX_SECRET_KEY_ENV", or(f.Secrets.KeyEnv, "WFX_SECRET_KEY")),
-		SecretKeyPath:          env("WFX_SECRET_KEY_PATH", or(f.Secrets.KeyPath, filepath.Join(home, ".config", "wfnexus", "secret.key"))),
-		PublicURL:              strings.TrimRight(env("WFX_PUBLIC_URL", f.PublicURL), "/"),
-		LLMAPIKeyEnv:           env("WFX_LLM_API_KEY_ENV", or(f.Model.APIKeyEnv, "OPENROUTER_API_KEY")),
+		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),
+		RunArtifactsKeep:  envInt("WFX_RUN_ARTIFACTS_KEEP", orInt(f.RunArtifactsKeep, 20)),
+		RunnerLabels:      splitList(env("WFX_RUNNER_LABELS", or(join(f.Runners.Labels), "local"))),
+		RunnerToken:       env("WFX_RUNNER_TOKEN", f.Runners.Token),
+		SecretKeyEnv:      env("WFX_SECRET_KEY_ENV", or(f.Secrets.KeyEnv, "WFX_SECRET_KEY")),
+		SecretKeyPath:     env("WFX_SECRET_KEY_PATH", or(f.Secrets.KeyPath, filepath.Join(home, ".config", "wfnexus", "secret.key"))),
+		PublicURL:         strings.TrimRight(env("WFX_PUBLIC_URL", f.PublicURL), "/"),
+		LLMAPIKeyEnv:      env("WFX_LLM_API_KEY_ENV", or(f.Model.APIKeyEnv, "OPENROUTER_API_KEY")),
 
 		ClassifierBaseURL:   env("WFX_CLASSIFIER_BASE_URL", or(f.Classifier.BaseURL, "https://openrouter.ai/api/v1")),
 		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", or(f.Classifier.Model, "typesafe/jev-1.13")),
