@@ -405,3 +405,47 @@ func TestLiveOpencodeACP(t *testing.T) {
 	}
 	t.Logf("second prompt in %.1fs: %.80q", time.Since(start).Seconds(), strings.TrimSpace(out2))
 }
+
+// Live: the claude preset end to end — the step's skill is loaded through the
+// host's `skill` tool and its rule changes the structured answer.
+//
+//	CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v ./internal/devinadapter/
+func TestLiveClaudeSkills(t *testing.T) {
+	if os.Getenv("CLAUDE_LIVE") != "1" {
+		t.Skip("set CLAUDE_LIVE=1 to run against the real claude CLI")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skipf("claude not on PATH: %v", err)
+	}
+	var got *Triage
+	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{
+		Builtins:   false,
+		SkillsDir:  []string{"./testdata/skills"},
+		ExtraTools: []toolnexus.Tool{submitTool(&got)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := devinadapter.New(devinadapter.Options{
+		Agent:   devinadapter.Claude(devinadapter.CLI{Model: "haiku"}),
+		Workdir: t.TempDir(),
+		Timeout: 5 * time.Minute,
+		Trace: func(ex devinadapter.Exchange) {
+			t.Logf("turn %d reply:\n%s", ex.Turn, ex.Reply)
+		},
+	})
+	opts := a.InProcessOptions()
+	opts.MaxTurns = 6
+	opts.SystemPrompt = "You triage software bugs. Load the bug-triage skill, follow it exactly, then call submit_answer."
+	res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), liveBugReport, tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatalf("no structured answer; status=%s turns=%d text=%q", res.Status, res.Turns, res.Text)
+	}
+	t.Logf("answer: %+v (tool calls: %d)", *got, res.ToolCallCount)
+	if got.Severity != "high" && got.Severity != "critical" {
+		t.Errorf("skill's severity rule not applied: got %q", got.Severity)
+	}
+}

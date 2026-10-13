@@ -49,6 +49,36 @@ Two implementations ship:
 `Copilot` are presets rather than special cases. `AgentFunc` covers anything
 that is not a local process (an SSH hop, a queue, a fixture).
 
+#### `claude -p` as a step provider
+
+Registry entry (the step's `model` overrides `model` here; omit both for the
+account default):
+
+```json
+"claude-cli": { "kind": "cli", "preset": "claude", "model": "sonnet", "repairs": 2, "timeoutSec": 900 }
+```
+
+Each turn runs, in the step workdir:
+
+```
+claude -p --tools "" --disable-slash-commands --no-session-persistence --model <model>   # prompt on stdin
+```
+
+- **Prompt on stdin**, not argv: no length limit, no quoting.
+- **`--tools ""`**: claude's own tools are off. Tools *and skills* are the
+  host's — toolnexus puts the step's skill catalogue and a `skill` tool in the
+  request, claude answers with a `skill` tool call, the host returns SKILL.md.
+  So steps run under wfnexus guardrails, and nothing ever waits on a permission
+  prompt (no `--dangerously-skip-permissions` needed). Skills are deliberately
+  NOT materialized into `.claude/skills/`: that path would run outside the
+  host's loop.
+- **`--disable-slash-commands`** keeps the operator's personal `~/.claude`
+  skills out of the step.
+- Live check: `CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v ./internal/devinadapter/`
+  (haiku, loads the `bug-triage` skill, 3 turns, ~24s).
+- Terms: see the `claude-cli` entry in `registries.json` — automated use of a
+  subscription seat; the `anthropic` http provider is the API-key path.
+
 ### 2. The response contract
 
 A one-shot CLI has no tool-call channel, so it is handed the **verbatim** OpenAI

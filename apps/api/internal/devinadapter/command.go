@@ -69,6 +69,10 @@ type CommandAgent struct {
 	// apply; give a concrete path. Falls back to stdout when the file is
 	// missing or empty.
 	OutputFile string
+	// Stdin, when true, feeds the prompt text on standard input. It has the
+	// prompt file's advantages (no argv length limit, no quoting) for a CLI
+	// that has no prompt-file flag but reads stdin, like `claude -p`.
+	Stdin bool
 }
 
 // Devin is the CLI preset for `devin`. The prompt travels by --prompt-file, so
@@ -87,9 +91,25 @@ func Devin(c CLI) *CommandAgent {
 	}
 }
 
+// ClaudeArgs is the fixed part of the `claude` preset's argv:
+//
+//   - -p: print mode, one turn, no TTY.
+//   - --tools "": no built-in tools. The adapter's contract has the model
+//     answer with tool calls the HOST executes (skills included — toolnexus
+//     puts the step's skill catalogue and its `skill` tool in the request), so
+//     claude's own Bash/Edit would only act outside the step's guardrails. It
+//     also settles the headless permission question: with nothing to approve
+//     nothing blocks on a prompt, and no bypass flag is needed.
+//   - --disable-slash-commands: the operator's personal ~/.claude skills stay
+//     out of a workflow step; the step's own skills arrive in the request.
+//   - --no-session-persistence: a turn is not a resumable chat session.
+//
+// The prompt itself goes on stdin (CommandAgent.Stdin), never argv.
+var ClaudeArgs = []string{"-p", "--tools", "", "--disable-slash-commands", "--no-session-persistence"}
+
 // Claude is the CLI preset for `claude -p`.
 func Claude(c CLI) *CommandAgent {
-	args := []string{"-p", PlaceholderPrompt}
+	args := append([]string{}, ClaudeArgs...)
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}
@@ -99,6 +119,7 @@ func Claude(c CLI) *CommandAgent {
 		Args:      append(args, c.ExtraArgs...),
 		Env:       c.Env,
 		ModelFlag: c.modelFlag("--model"),
+		Stdin:     true,
 	}
 }
 
@@ -179,6 +200,9 @@ func (c *CommandAgent) Execute(ctx context.Context, t Turn) (string, error) {
 
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
 	cmd.Dir = t.Workdir
+	if c.Stdin {
+		cmd.Stdin = strings.NewReader(t.Prompt)
+	}
 	if len(c.Env) > 0 {
 		cmd.Env = append(os.Environ(), c.Env...)
 	}
