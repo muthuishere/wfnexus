@@ -1,47 +1,57 @@
+# Managed by the wfnexus workflow builder.
+# Hand edits are fine; the builder round-trips through the same loader.
 name: local-model
-description: >-
-  One step whose MODEL is a program on this machine — a coding-agent CLI or an
-  ACP process — instead of an HTTP endpoint. Everything else about the step is
-  unchanged: the same agent loop, the same tools, the same typed hand-off. This
-  is the workflow that proves a `cli` / `acp` provider actually executes.
-
+description: 'One step whose MODEL is a program on this machine — a coding-agent CLI or an ACP process — instead of an HTTP endpoint. Everything else about the step is unchanged: the same agent loop, the same tools, the same typed hand-off. This is the workflow that proves a `cli` / `acp` provider actually executes.'
 input_schema:
-  type: object
-  properties:
-    question:
-      type: string
-      title: "What to ask it about the repository"
-      default: "What does this repository do, in one sentence?"
-
+    properties:
+        question:
+            default: What does this repository do, in one sentence?
+            title: What to ask it about the repository
+            type: string
+    type: object
 steps:
-  - id: ask-local
-    name: Ask the local agent
-    description: Run one step on a local CLI as the model.
-    # The one line that makes this step run on a local process instead of an
-    # HTTP endpoint. Swap it for copilot-cli, opencode or devin — nothing else
-    # in this file changes, because nothing else in a step depends on where its
-    # turns come from.
-    provider: openrouter
-    soul: >-
-      You answer from the repository in front of you, briefly, and you do not
-      speculate about code you have not read.
-    tools: [read, grep, glob, bash]
-    budget: { max_turns: 12, max_tool_calls: 30, max_wall_sec: 900 }
-    guardrails:
-      - deny: "*"
-        args_contain: ["git push", "gh pr", "git commit"]
-        reason: this step only reads the repository
-    prompt: |
-      Repository: {{ .WorkDir }}
+    - id: ask-local
+      name: Ask the local agent
+      description: Run one step on a local CLI as the model.
+      prompt: |
+        Repository: {{ .WorkDir }}
 
-      {{ .Input.question }}
+        {{ .Input.question }}
 
-      Read enough of the repository to answer honestly, then call
-      submit_output. Name the files you actually looked at.
-    output_schema:
-      type: object
-      additionalProperties: false
-      required: [answer, files_read]
-      properties:
-        answer:     { type: string }
-        files_read: { type: array, items: { type: string } }
+        Read enough of the repository to answer honestly, then call
+        submit_output. Name the files you actually looked at.
+      skills: []
+      tools:
+        - read
+        - grep
+        - glob
+        - bash
+      output_schema:
+        additionalProperties: false
+        properties:
+            answer:
+                type: string
+            files_read:
+                items:
+                    type: string
+                type: array
+        required:
+            - answer
+            - files_read
+        type: object
+      max_turns: 30
+      max_attempts: 3
+      soul: You answer from the repository in front of you, briefly, and you do not speculate about code you have not read.
+      budget:
+        max_turns: 12
+        max_tool_calls: 30
+        max_wall_sec: 900
+      guardrails:
+        - deny: '*'
+          args_contain:
+            - git push
+            - gh pr
+            - git commit
+          reason: this step only reads the repository
+      provider: claude-headless
+max_parallel: 4
