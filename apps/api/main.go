@@ -245,8 +245,9 @@ func main() {
 
 	// A finished run's checkout is ~60 MB; old ones are only disk (engine/rundirs.go).
 	if n := eng.SweepRunDirs(ctx); n > 0 {
-		log.Printf("  swept %d run directory(ies) older than 24h", n)
+		log.Printf("  swept %d old run directory(ies)", n)
 	}
+	eng.StartRunDirSweeper(ctx)
 
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)

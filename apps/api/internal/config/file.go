@@ -107,6 +107,8 @@ type File struct {
 
 	// MaxConcurrentRuns bounds how many runs execute at once.
 	MaxConcurrentRuns int `yaml:"maxConcurrentRuns,omitempty"`
+	// FailedRunRetentionDays is how long a failed run keeps its checkout.
+	FailedRunRetentionDays int `yaml:"failedRunRetentionDays,omitempty"`
 
 	// Secrets is the env store's key. Only the variable NAME or a path — the
 	// key is never a value in this file, for the same reason as the model key.

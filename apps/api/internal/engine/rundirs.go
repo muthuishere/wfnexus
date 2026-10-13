@@ -16,11 +16,48 @@ import (
 // (57 GB, 2026-10-11). Two cleanups keep it bounded:
 //
 //   - when a run ends done or cancelled, its directory goes at once;
-//   - at boot, any run directory untouched for runDirMaxAge whose run is not
-//     still live goes too. That catches failed runs (kept so Retry still has
-//     the edits of the earlier steps) and anything a crash left behind.
+//   - at boot and then every runDirSweepEvery, any run directory untouched
+//     for runDirMaxAge whose run is not still live goes too. A failed run is
+//     kept longer (cfg.FailedRunRetentionDays, default 3) so Retry still has
+//     the edits of the earlier steps. That also catches what a crash left.
+//
+// Only the boot sweep ran at first, so a server up for weeks grew again
+// (21 GB, 2026-10-13).
 
-const runDirMaxAge = 24 * time.Hour
+const (
+	runDirMaxAge     = 24 * time.Hour
+	runDirSweepEvery = time.Hour
+)
+
+// failedRetention is how long a failed run keeps its directory.
+func (e *Engine) failedRetention() time.Duration {
+	if d := e.cfg.FailedRunRetentionDays; d > 0 {
+		return time.Duration(d) * 24 * time.Hour
+	}
+	return 3 * 24 * time.Hour
+}
+
+// StartRunDirSweeper runs SweepRunDirs every runDirSweepEvery until ctx ends.
+func (e *Engine) StartRunDirSweeper(ctx context.Context) {
+	e.startRunDirSweeper(ctx, runDirSweepEvery)
+}
+
+func (e *Engine) startRunDirSweeper(ctx context.Context, every time.Duration) {
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if n := e.SweepRunDirs(ctx); n > 0 {
+					log.Printf("engine: swept %d old run directory(ies)", n)
+				}
+			}
+		}
+	}()
+}
 
 // liveStatuses are runs that may still use their directory.
 var liveStatuses = map[string]bool{"queued": true, "running": true, "awaiting_approval": true, "needs_input": true}
@@ -55,8 +92,9 @@ func (e *Engine) cleanupFinished(runID uuid.UUID) {
 	}
 }
 
-// SweepRunDirs removes run directories older than runDirMaxAge whose run
-// is readable and not live. Returns how many it removed.
+// SweepRunDirs removes run directories older than runDirMaxAge (a failed
+// run's: older than failedRetention) whose run is readable and not live.
+// Returns how many it removed.
 func (e *Engine) SweepRunDirs(ctx context.Context) int {
 	if e.store == nil || e.cfg.WorkDir == "" {
 		return 0
@@ -65,7 +103,8 @@ func (e *Engine) SweepRunDirs(ctx context.Context) int {
 	if err != nil {
 		return 0
 	}
-	cutoff := time.Now().Add(-runDirMaxAge)
+	now := time.Now()
+	cutoff, failedCutoff := now.Add(-runDirMaxAge), now.Add(-e.failedRetention())
 	n := 0
 	for _, ent := range entries {
 		id, err := uuid.Parse(ent.Name())
@@ -81,6 +120,9 @@ func (e *Engine) SweepRunDirs(ctx context.Context) int {
 		run, err := e.store.GetRun(ctx, id)
 		if err != nil || liveStatuses[run.Status] {
 			continue
+		}
+		if run.Status == "failed" && info.ModTime().After(failedCutoff) {
+			continue // still retryable
 		}
 		e.removeRunDir(id)
 		n++

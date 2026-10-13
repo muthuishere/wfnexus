@@ -63,8 +63,8 @@ func TestAFinishedRunLosesItsCheckout(t *testing.T) {
 	}
 }
 
-// At boot, run directories older than a day go unless the run is still live;
-// newer ones, unknown runs and everything that is not a UUID-named run
+// At boot, run directories older than a day go unless the run is still live
+// or failed within the retention window (3 days by default); newer ones, unknown runs and everything that is not a UUID-named run
 // directory (sources/, projects/, sources.json, ...) stay.
 func TestTheBootSweepRemovesOnlyOldDirsOfOverRuns(t *testing.T) {
 	ctx := context.Background()
@@ -74,7 +74,8 @@ func TestTheBootSweepRemovesOnlyOldDirsOfOverRuns(t *testing.T) {
 		_ = st.UpdateRun(ctx, r.ID, status, "", "")
 		return runDir(t, work, r.ID, age)
 	}
-	oldFailed := mk("failed", 48*time.Hour)
+	oldFailed := mk("failed", 4*24*time.Hour)
+	retryable := mk("failed", 48*time.Hour)
 	oldDone := mk("done", 48*time.Hour)
 	oldPaused := mk("awaiting_approval", 48*time.Hour)
 	newFailed := mk("failed", time.Hour)
@@ -105,7 +106,7 @@ func TestTheBootSweepRemovesOnlyOldDirsOfOverRuns(t *testing.T) {
 	if n := e.SweepRunDirs(ctx); n != 2 {
 		t.Fatalf("swept %d, want 2", n)
 	}
-	for p, want := range map[string]bool{oldFailed: false, oldDone: false, oldPaused: true, newFailed: true, unknown: true} {
+	for p, want := range map[string]bool{oldFailed: false, retryable: true, oldDone: false, oldPaused: true, newFailed: true, unknown: true} {
 		if exists(p) != want {
 			t.Errorf("%s: exists=%v, want %v", filepath.Base(p), exists(p), want)
 		}
@@ -140,5 +141,33 @@ func TestRemovingARunWorktreeDetachesIt(t *testing.T) {
 	}
 	if l := git(repo, "worktree", "list"); strings.Count(l, "\n") != 1 {
 		t.Fatalf("parent still lists the worktree:\n%s", l)
+	}
+}
+
+// The failed-run retention follows the config, and the sweep runs on a timer
+// too, not only at boot, so a long-lived server stays bounded.
+func TestFailedRetentionIsConfigurableAndTheSweepRepeats(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e, st, work := runDirEngine(t)
+	e.cfg.FailedRunRetentionDays = 1
+	r, _ := st.CreateRun(ctx, "local", "gen", []byte(`{}`))
+	_ = st.UpdateRun(ctx, r.ID, "failed", "", "")
+	dir := runDir(t, work, r.ID, 30*time.Hour)
+	if n := e.SweepRunDirs(ctx); n != 1 || exists(dir) {
+		t.Fatalf("swept %d, dir exists=%v; a 30h-old failed run is past a 1-day retention", n, exists(dir))
+	}
+
+	// the periodic sweeper, on a short interval
+	r2, _ := st.CreateRun(ctx, "local", "gen", []byte(`{}`))
+	_ = st.UpdateRun(ctx, r2.ID, "done", "", "")
+	dir2 := runDir(t, work, r2.ID, 48*time.Hour)
+	e.startRunDirSweeper(ctx, 10*time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for exists(dir2) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if exists(dir2) {
+		t.Fatal("the periodic sweeper never removed an old done run's directory")
 	}
 }
