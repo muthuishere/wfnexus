@@ -69,6 +69,11 @@ type Provider struct {
 	// model are appended. Needed because a CLI's own default model may not
 	// work: `opencode run` with no -m returns a server error.
 	ModelFlag string `json:"modelFlag,omitempty"`
+	// PermissionMode is the agent's own permission/session mode. For the devin
+	// cli preset it is `--permission-mode` (auto | accept-edits | smart |
+	// dangerous); for an acp preset it is the ACP session mode (devin: bypass |
+	// accept-edits | ask | plan). "" means the preset's non-interactive default.
+	PermissionMode string `json:"permissionMode,omitempty"`
 	// Repairs is how many extra attempts a turn gets when the reply fails
 	// validation; the bad output and the parse error go back so it can correct
 	// itself. Never a silent fallback.

@@ -96,6 +96,45 @@ observed live, and each corrupts a run silently if you guess:
 - The structured payload placed in `content` as an object instead of in `arguments`.
 - `arguments` arriving as a JSON-encoded string rather than an object.
 
+## Configuring Devin from the registry
+
+Everything Devin needs comes from the registry entry and the step:
+
+```json
+"providers": {
+  "devin":     { "kind": "acp", "preset": "devin", "model": "sonnet",
+                 "permissionMode": "bypass", "repairs": 2, "timeoutSec": 900 },
+  "devin-cli": { "kind": "cli", "preset": "devin", "model": "sonnet",
+                 "permissionMode": "dangerous", "args": ["--sandbox"] }
+}
+```
+
+```yaml
+steps:
+  - id: triage
+    provider: devin      # or devin-cli
+    model: opus          # overrides the entry's model; reaches devin as --model opus
+    skills: [repo-map]   # copied to <workdir>/.devin/skills/repo-map/ for devin to load
+```
+
+- **model** — entry default, step `model:` wins. Both kinds pass it as
+  `devin --model <m>` (acp: before the `acp` subcommand). Models your Devin plan
+  does not include fail fast with devin's own `/upgrade to access this model`.
+- **permissionMode** — cli: `--permission-mode` (`auto | accept-edits | smart |
+  dangerous`, default `dangerous`); acp: the session mode (`bypass |
+  accept-edits | ask | plan`, default `bypass`). Non-interactive runs have nobody
+  to answer a prompt, so narrowing it can stall a turn.
+- **skills** — the step's (and its team's) skills are copied into
+  `<workdir>/.devin/skills/<name>/`, where devin discovers project skills
+  (`devin skills paths`), and `/.devin/skills/` is added to the checkout's
+  `.git/info/exclude`. Applies to the devin preset and any `command` whose binary
+  is `devin`.
+- **args** — anything else devin takes (`--sandbox`, `--config <path>`) is
+  appended verbatim.
+
+Live check: `WFNEXUS_LIVE_DEVIN=1 go test -run TestLiveDevin ./internal/devinadapter/`
+(optional `WFNEXUS_LIVE_DEVIN_MODEL`).
+
 ## Speed: use ACP
 
 Measured on macOS, `devin` (SWE-1.6 Slow), trivial prompts:
