@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -169,6 +170,13 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 		if err != nil {
 			return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
 		}
+		// Devin discovers skills natively from <workdir>/.devin/skills, so the
+		// step's skills are put where it looks, not only described in the soul.
+		if devinadapter.IsDevin(p.Preset, p.Command) {
+			if err := devinadapter.MaterializeSkills(workdir, e.skillDirs(step)); err != nil {
+				return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
+			}
+		}
 		return localProvider(p, step.Model, workdir, env)
 	}
 	return resolved{}, fmt.Errorf("provider %q has unknown kind %q", p.Name, p.Kind)
@@ -251,6 +259,9 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinad
 			p.Name, name, strings.Join(devinadapter.ACPPresetNames(), ", "))
 	}
 	cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
+	if p.PermissionMode != "" {
+		cfg.Mode = p.PermissionMode
+	}
 	// The adapter's env first, the step's after, so a step can still override.
 	cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
 	cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
@@ -294,7 +305,7 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 		}, noClose, nil
 	}
 
-	cli := devinadapter.CLI{Model: model}
+	cli := devinadapter.CLI{Model: model, PermissionMode: p.PermissionMode}
 	// A preset builds its own CommandAgent, so the step's env is layered on
 	// after: the preset decides the argv, the step decides the environment.
 	withEnv := func(a *devinadapter.CommandAgent) (devinadapter.Agent, func(), error) {
@@ -313,4 +324,24 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 	// twenty turns in, which is the worst place to learn the name was unknown.
 	return nil, nil, fmt.Errorf("provider %q: no preset named %q — presets are devin, claude and copilot; "+
 		"for any other CLI give an explicit `command` in the registry", p.Name, p.Preset)
+}
+
+// skillDirs maps each skill the step (or a team member) names to its
+// directory, for agents that load skills from disk themselves. A name the
+// registry does not know is left out; the toolkit already refuses it.
+func (e *Engine) skillDirs(step *workflow.Step) map[string]string {
+	out := map[string]string{}
+	if e.skills == nil {
+		return out
+	}
+	names := append([]string{}, step.Skills...)
+	for _, m := range step.Team {
+		names = append(names, m.Skills...)
+	}
+	for _, n := range names {
+		if s, ok := e.skills.Get(n); ok {
+			out[n] = filepath.Dir(s.Location)
+		}
+	}
+	return out
 }
