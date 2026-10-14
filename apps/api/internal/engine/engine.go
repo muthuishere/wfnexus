@@ -1030,6 +1030,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		}
 		i = next - 1
 	}
+	e.skipUntaken(ctx, runID)
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
 }

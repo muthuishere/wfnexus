@@ -200,6 +200,12 @@ type Step struct {
 	// means the best one this machine has, which keeps a workflow portable
 	// across Linux, WSL, macOS and Windows without naming any of them.
 	Shell string `yaml:"shell,omitempty" json:"shell,omitempty"`
+	// ContinueOnError lets a `run:` step that exits non-zero finish as done —
+	// GitHub Actions' `continue-on-error`. Without it a non-zero exit fails
+	// the step and the run, unless one of the step's gates matched the output
+	// (a gate is the workflow saying what that exit means). Set it on a step
+	// whose exit code is an ANSWER a later step routes on, e.g. "3 = findings".
+	ContinueOnError bool `yaml:"continue-on-error,omitempty" json:"continueOnError,omitempty"`
 	// Soul is the agent's identity for this step (its system prompt).
 	Soul string `yaml:"soul,omitempty" json:"soul,omitempty"`
 	// Budget caps this step's agent subtree.
@@ -423,6 +429,16 @@ func (d *Definition) validate(cat Catalog) error {
 	}
 	if err := validateTriggers(d.Name, &d.On); err != nil {
 		return err
+	}
+	// runs-on is a literal label: it is never rendered, so a template there
+	// would queue the work for a label no worker holds.
+	if strings.Contains(d.RunsOn, "{{") {
+		return fmt.Errorf("%s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, d.RunsOn)
+	}
+	for _, s := range d.Steps {
+		if strings.Contains(s.RunsOn, "{{") {
+			return fmt.Errorf("%s: step %s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, s.ID, s.RunsOn)
+		}
 	}
 	// Mounts and sidecar files are checked BEFORE the steps, because they
 	// decide what the steps can reach. A workflow that could not attach its
@@ -729,14 +745,19 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog, opts ...LoadOption) (ma
 	if err != nil {
 		return nil, err
 	}
-	defs, err := parseDir(dir)
+	defs, broken, err := parseDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	g := &loadGroup{defs: defs, tasks: tasks}
+	g := &loadGroup{defs: defs, tasks: tasks, broken: broken}
 	newExpander([]*loadGroup{g}, opt).run(cat)
 	if g.err != nil {
 		return nil, g.err
+	}
+	// A lone directory is what `save` validates a single file against, so it
+	// stays strict: any workflow that did not load is the answer.
+	if len(g.broken) > 0 {
+		return nil, fmt.Errorf("%s", g.broken[0].Reason)
 	}
 	out := map[string]*Definition{}
 	for _, d := range defs {
@@ -760,6 +781,11 @@ func normalize(d *Definition) {
 		// too. Jobs merge it on their way through jobs.go; without this, `env:`
 		// would mean one thing in a job and nothing at all outside one.
 		s.Env = MergeEnv(d.Env, s.Env)
+		// The same for the workflow's `runs-on`: jobs.go applies it to a job,
+		// and without this a flat step ignored it and ran on the server.
+		if s.RunsOn == "" {
+			s.RunsOn = d.RunsOn
+		}
 		if s.Name == "" {
 			s.Name = s.ID
 		}

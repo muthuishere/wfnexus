@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,7 +78,7 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 		if g.tasks, g.err = LoadTasks(tasksDir); g.err != nil {
 			continue
 		}
-		g.defs, g.err = parseDirIfPresent(src.Dir)
+		g.defs, g.broken, g.err = parseDirIfPresent(src.Dir)
 	}
 	newExpander(groups, newLoadOptions(opts)).run(cat)
 
@@ -90,11 +91,28 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 			skips = append(skips, Skip{Source: src.Name, Location: src.Dir, Reason: g.err.Error()})
 			continue
 		}
-		defs := map[string]*Definition{}
-		for _, d := range g.defs {
-			defs[d.Name] = d
+		// One workflow that did not load costs only itself (load_calls.go).
+		for _, b := range g.broken {
+			log.Printf("workflow: source %s: skipped %s: %s", src.Name, b.Path, b.Reason)
+			skips = append(skips, Skip{Source: src.Name, Workflow: b.Name, Location: b.Path, Reason: b.Reason})
 		}
-		for name, d := range defs {
+		defs := map[string]*Definition{}
+		var order []string
+		for _, d := range g.defs {
+			if first, dup := defs[d.Name]; dup {
+				// Two files in one project claiming one name: the first (in
+				// directory order) keeps it, and the other is reported, never
+				// silently overwritten.
+				reason := fmt.Sprintf("duplicate workflow name %q in source %q: %s is used and this file is ignored", d.Name, src.Name, first.Path)
+				log.Printf("workflow: %s", reason)
+				skips = append(skips, Skip{Source: src.Name, Workflow: d.Name, Location: d.Path, Reason: reason})
+				continue
+			}
+			defs[d.Name] = d
+			order = append(order, d.Name)
+		}
+		for _, name := range order {
+			d := defs[name]
 			d.Source = src.Name
 			d.RepoDir = src.Repo
 			qualified := src.Name + "/" + name
@@ -119,19 +137,22 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 
 // Skip is a source, or a workflow within one, that did not load.
 type Skip struct {
-	Source   string `json:"source"`
+	Source string `json:"source"`
+	// Workflow is the name of the workflow that did not load, when the file
+	// got far enough to have one. Empty for a whole source that failed.
+	Workflow string `json:"workflow,omitempty"`
 	Location string `json:"location"`
 	Reason   string `json:"reason"`
 }
 
 // parseDirIfPresent treats an absent directory as empty. A repository without
 // workflows is the normal case, not an error.
-func parseDirIfPresent(dir string) ([]*Definition, error) {
+func parseDirIfPresent(dir string) ([]*Definition, []Broken, error) {
 	if dir == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return parseDir(dir)
 }

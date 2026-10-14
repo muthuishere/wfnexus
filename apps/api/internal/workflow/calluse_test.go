@@ -165,20 +165,44 @@ func TestAnUnknownSourceInAQualifiedUseIsASkip(t *testing.T) {
 	}
 }
 
-func TestUsingAWorkflowFromASourceThatFailedSkipsTheCaller(t *testing.T) {
+func TestOneBrokenWorkflowSkipsOnlyItselfNotItsSource(t *testing.T) {
 	shared, app := twoSources(t)
 	write(t, filepath.Join(shared, "build.yaml"), callableBuild)
-	// A second, broken workflow makes the whole shared source fail validation.
+	// A broken sibling used to take the whole shared source (and every caller
+	// of it) down. It now costs only itself.
 	write(t, filepath.Join(shared, "broken.yaml"), "name: broken\nsteps:\n  - id: x\n    skills: [no-such-skill]\n    prompt: p\n")
 	write(t, filepath.Join(app, "release.yaml"), "name: release\nuses:\n  - use: build\n")
 	defs, skips, err := LoadSources([]Source{{Name: "shared", Dir: shared}, {Name: "app", Dir: app}}, catalog())
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, n := range []string{"build", "release"} {
+		if _, ok := defs[n]; !ok {
+			t.Fatalf("%s must still load beside a broken sibling; skips=%+v", n, skips)
+		}
+	}
+	if len(skips) != 1 || skips[0].Workflow != "broken" || skips[0].Source != "shared" {
+		t.Fatalf("want exactly the broken workflow skipped, got %+v", skips)
+	}
+}
+
+func TestCallingABrokenWorkflowSkipsTheCaller(t *testing.T) {
+	shared, app := twoSources(t)
+	// build is callable but fails validation (no output_schema on its step).
+	write(t, filepath.Join(shared, "build.yaml"), "name: build\non: workflow_call\nsteps:\n  - id: x\n    prompt: p\n")
+	write(t, filepath.Join(app, "release.yaml"), "name: release\nuses:\n  - use: build\n")
+	write(t, filepath.Join(app, "other.yaml"), "name: other\nsteps:\n  - id: x\n    run: echo hi\n")
+	defs, skips, err := LoadSources([]Source{{Name: "shared", Dir: shared}, {Name: "app", Dir: app}}, catalog())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := defs["release"]; ok {
-		t.Fatal("a caller must not run steps from a source the platform reports as broken")
+		t.Fatal("a caller must not run steps from a workflow the platform reports as broken")
+	}
+	if _, ok := defs["other"]; !ok {
+		t.Fatalf("an unrelated workflow in the caller's source must still load; skips=%+v", skips)
 	}
 	if len(skips) != 2 {
-		t.Fatalf("want both sources skipped, got %+v", skips)
+		t.Fatalf("want build and release skipped, got %+v", skips)
 	}
 }

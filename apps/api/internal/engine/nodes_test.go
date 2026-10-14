@@ -33,28 +33,6 @@ func TestRunNodeCallsNoModel(t *testing.T) {
 	}
 }
 
-// A non-zero exit is the command's ANSWER, not a platform failure: the step
-// succeeds and the workflow decides what it means.
-func TestRunNodeFailingCommandIsAFactNotACrash(t *testing.T) {
-	def := &workflow.Definition{Name: "redsuite", Steps: []workflow.Step{
-		{ID: "tests", Run: "exit 3", OutputSchema: workflow.RunOutputSchema()},
-	}}
-	normalizeForTest(def)
-	h := newHarness(t, def, newFakeLLM(t), "")
-	run := h.run(nil)
-
-	if run.Status != "done" {
-		t.Fatalf("a non-zero exit should not fail the run: %s (%s)", run.Status, run.Error)
-	}
-	out := output(t, h.steps(run.ID)["tests"])
-	if out["ok"] != false {
-		t.Fatalf("ok = %v, want false", out["ok"])
-	}
-	if got, _ := out["exitCode"].(float64); got != 3 {
-		t.Fatalf("exitCode = %v, want 3", out["exitCode"])
-	}
-}
-
 // …and a gate turns that fact into a decision, exactly as for an agent's output.
 func TestRunNodeGateStopsTheRun(t *testing.T) {
 	def := &workflow.Definition{Name: "gated", Steps: []workflow.Step{

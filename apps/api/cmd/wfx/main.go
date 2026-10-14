@@ -32,8 +32,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -383,7 +381,32 @@ func listWorkflows() error {
 		}
 		fmt.Printf("%-16s %d steps  %-20s %s\n", w.Name, len(w.Steps), mode, firstLine(w.Description))
 	}
+	printBroken()
 	return nil
+}
+
+// printBroken lists the workflows that did not load. One broken file no longer
+// unloads its whole project, so it must be shown somewhere it will be seen —
+// a schedule that quietly stopped is the failure this exists to prevent.
+func printBroken() {
+	var d struct {
+		Skipped []struct {
+			Source   string `json:"source"`
+			Workflow string `json:"workflow"`
+			Location string `json:"location"`
+			Reason   string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := call("GET", "/api/sources", nil, &d); err != nil {
+		return
+	}
+	for _, s := range d.Skipped {
+		name := s.Workflow
+		if name == "" {
+			name = s.Location
+		}
+		fmt.Printf("BROKEN %s/%s  %s\n", s.Source, name, firstLine(s.Reason))
+	}
 }
 
 func showWorkflow(name string) error {
@@ -459,10 +482,13 @@ func apply(args []string, install bool) error {
 	// round trip silently drops every multi-word field (output_schema,
 	// requires_approval, max_turns…). Going through the struct means the two
 	// spellings are the same field by construction.
-	var def workflow.Definition
-	if err := yaml.Unmarshal(raw, &def); err != nil {
+	// Strict: a key the definition does not have (`runs_on:` for `runs-on:`)
+	// is an error naming its line, not a field silently dropped.
+	dp, err := workflow.DecodeYAMLStrict(raw)
+	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+	def := *dp
 	name := def.Name
 	if name == "" {
 		return fmt.Errorf("%s: the workflow needs a name", path)
