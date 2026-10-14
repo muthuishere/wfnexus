@@ -207,14 +207,14 @@ ok "doctor: default provider answered a real call ($(printf '%s\n' "$doc" | grep
 # Health, login and doctor all pass on a stack that cannot answer a prompt
 # (no network to the model, a model withdrawn, a CLI that hangs). READY means
 # the default provider answered one, inside the container, on its own model.
-MODEL="${WFX_TEST_MODEL:-opencode/space-bunny-free}"
+MODEL="${WFX_TEST_MODEL:-opencode/ling-3.1-flash-free}"
 answer=$(docker compose -p "$PROJECT" exec -T wfx-server timeout 180 \
   opencode run --model "$MODEL" "Reply with exactly the word PONG and nothing else." 2>&1 </dev/null)
 rc=$?
 if ! printf '%s\n' "$answer" | grep -qE '^[[:space:]]*PONG[.!]?[[:space:]]*$'; then
   printf '%s\n' "$answer" | tail -8 | sed 's/^/    /'
-  { [ $rc -eq 124 ] || [ $rc -eq 143 ]; } && blocked prompt "opencode run --model $MODEL did not answer in 180s -> check the container reaches opencode.ai; try another free model with WFX_TEST_MODEL=<id from wfx models opencode-acp --free>"
-  blocked prompt "opencode run --model $MODEL did not answer PONG (exit $rc, output above) -> try WFX_TEST_MODEL=<id from wfx models opencode-acp --free>"
+  { [ $rc -eq 124 ] || [ $rc -eq 143 ]; } && blocked prompt "opencode run --model $MODEL did not answer in 180s -> check the container reaches opencode.ai; try another free model with WFX_TEST_MODEL=<an id from: opencode models | grep -- -free>"
+  blocked prompt "opencode run --model $MODEL did not answer PONG (exit $rc, output above) -> try WFX_TEST_MODEL=<an id from: opencode models | grep -- -free>"
 fi
 ok "prompt: $MODEL answered"
 
