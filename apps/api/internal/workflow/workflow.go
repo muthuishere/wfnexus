@@ -775,6 +775,22 @@ func normalize(d *Definition) {
 	if d.MaxParallel <= 0 {
 		d.MaxParallel = 4
 	}
+	// A step whose exitCode another step's `when` reads is routing on that
+	// exit, not failing on it: `exit 3` = "unhealthy, go triage" must reach
+	// the triage step, not fail the run the moment production is unhealthy.
+	routed := map[string]bool{}
+	for _, s := range d.Steps {
+		for _, g := range s.When {
+			if id, field, ok := strings.Cut(g.Path, "."); ok && field == "exitCode" {
+				routed[id] = true
+			}
+		}
+	}
+	for i := range d.Steps {
+		if routed[d.Steps[i].ID] {
+			d.Steps[i].ContinueOnError = true
+		}
+	}
 	for i := range d.Steps {
 		s := &d.Steps[i]
 		// The workflow's env reaches a step written in the flat `steps:` form

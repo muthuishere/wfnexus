@@ -81,3 +81,20 @@ func TestADuplicateNameInOneSourceKeepsTheFirst(t *testing.T) {
 		t.Fatalf("want b.yaml reported as a duplicate, got %+v", skips)
 	}
 }
+
+// reqsume-prod-watch exits 3 for "unhealthy" and its triage step runs `when:
+// collect.exitCode equals 3`. That exit is a route, so it must not fail the
+// run exactly when production is unhealthy.
+func TestAnExitCodeAWhenReadsIsARouteNotAFailure(t *testing.T) {
+	d, err := DecodeYAMLStrict([]byte("name: x\nsteps:\n  - id: collect\n    run: exit 3\n  - id: triage\n    run: echo\n    when:\n      - path: collect.exitCode\n        equals: 3\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalize(d)
+	if !d.Steps[0].ContinueOnError {
+		t.Fatal("collect's exit is read by triage's when; it must be continue-on-error")
+	}
+	if d.Steps[1].ContinueOnError {
+		t.Fatal("triage's exit is read by nobody; it must still fail on non-zero")
+	}
+}
