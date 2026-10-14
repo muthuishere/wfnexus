@@ -1,7 +1,7 @@
 import { test, expect, afterEach } from 'vitest'
 import { render, cleanup } from '@testing-library/react'
 import { Cost, correctionsOf, dur, tokens } from './components/RunTimeline'
-import { readableCommand } from './components/EventLog'
+import { readableCommand, readableArgs } from './components/EventLog'
 import type { Event, StepRun } from './api'
 import { resolutionOf } from './pages/RunPage'
 
@@ -58,6 +58,14 @@ test('the WFX_ exports are stripped from a displayed command', () => {
     "WFX_WORKSPACE='/Users/x/worktree' git diff main~3..main"
   expect(readableCommand(raw)).toBe('git diff main~3..main')
   expect(readableCommand('git status')).toBe('git status')
+})
+
+test('the secrets-file and export preamble is stripped, secrets paths hidden', () => {
+  const raw = ". '/Users/x/runs/r1/secrets/ask-local.env' && export WFX_API='http://127.0.0.1:8090' " +
+    "A='it'\\''s' GH=\"${GH_TOKEN}\" && ls -la && cat go.mod"
+  expect(readableCommand(raw)).toBe('ls -la && cat go.mod')
+  expect(readableCommand('cat /tmp/r/secrets/s.env')).toBe('cat <secrets>')
+  expect(readableArgs({ args: { path: 'a/b.go' } })).toBe('a/b.go')
 })
 
 test('durations and token counts stay readable at run scale', () => {

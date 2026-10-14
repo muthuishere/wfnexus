@@ -4,10 +4,30 @@ import type { Event } from '../api'
 const short = (s: string, n = 400) => (s && s.length > n ? s.slice(0, n) + ' …' : s)
 
 /** The bash tool is handed the step's environment INLINE, so `args.command` on
- *  the wire starts with a run of `WFX_*='…'` exports. The command a human would
- *  read is what is left after them. Display only — the event is untouched. */
+ *  the wire starts with a preamble: the step's secrets file
+ *  (`. '/…/secrets/step.env' && `), an `export K='v' … && ` block, or a run of
+ *  `WFX_*='…'` assignments. The command a human would read is what is left
+ *  after it. Display only — the event is untouched and the raw args stay one
+ *  click away. Mirrors readableCommand in apps/api/cmd/wfx/quiet.go. */
+const preamble = new RegExp(
+  String.raw`^\s*(?:\.\s+(?:'[^']*'|"[^"]*"|\S+)\s*&&\s*)?` +
+  String.raw`(?:export\s+(?:[A-Za-z_][A-Za-z0-9_]*=(?:'(?:[^']|'\\'')*'|"[^"]*"|\S*)\s+)+&&\s*)?` +
+  String.raw`(?:WFX_[A-Z0-9_]*=(?:'[^']*'|"[^"]*"|\S*)\s+)*`)
+const secretsPath = /'?[^\s']*\/secrets\/[^\s']+\.env'?/g
 export const readableCommand = (c: string): string =>
-  typeof c === 'string' ? c.replace(/^(?:WFX_[A-Z0-9_]*=(?:'[^']*'|"[^"]*"|\S*)\s+)+/, '') : c
+  typeof c === 'string' ? c.replace(preamble, '').replace(secretsPath, '<secrets>') : c
+
+/** One readable line for a tool call: the command for bash, the path for a file
+ *  tool, else compact JSON. */
+export const readableArgs = (p: any): string => {
+  const a = p?.args
+  if (a && typeof a === 'object') {
+    if (typeof a.command === 'string') return readableCommand(a.command)
+    for (const k of ['file_path', 'path', 'pattern', 'url', 'query'])
+      if (typeof a[k] === 'string' && a[k]) return a[k]
+  }
+  return JSON.stringify(argsOf(p)) ?? ''
+}
 
 const argsOf = (p: any) => {
   const a = p?.args
@@ -35,7 +55,8 @@ function line(e: Event) {
       : <><span className="tag">← {agentOf(p)} returned</span>{p.isError ? <span style={{ color: 'var(--err)' }}> error</span> : ''}<pre>{short(p.output, 1500)}</pre></>
   }
   switch (e.kind) {
-    case 'tool_call': return <><b>{p.name}</b> <span className="muted">{short(JSON.stringify(argsOf(p)), 300)}</span></>
+    case 'tool_call': return <><b>{p.name}</b> <span className="muted">{short(readableArgs(p), 300)}</span>
+      {p.args && <details><summary className="muted">args</summary><pre>{JSON.stringify(p.args, null, 2)}</pre></details>}</>
     case 'tool_result':
       if (isRejection(e)) return <><span className="tag">output rejected</span> <b>the step must correct itself</b><pre>{short(p.output, 1500)}</pre></>
       return <><b>{p.name}</b> →{p.isError ? <span style={{ color: 'var(--err)' }}> error</span> : ''}<pre>{short(p.output, 1500)}</pre></>

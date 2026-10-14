@@ -46,7 +46,11 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		usage()
+		if len(args) > 1 && args[1] == "all" {
+			usage()
+		} else {
+			shortUsage()
+		}
 		return nil
 	}
 	cmd, rest := args[0], args[1:]
@@ -142,6 +146,26 @@ func run(args []string) error {
 	}
 }
 
+// shortUsage is the handful of verbs people actually reach for; `wfx help all`
+// is every verb.
+func shortUsage() {
+	fmt.Print(`wfx — run agent workflows over a repository
+
+  wfx projects                     projects, their workflows and run activity
+  wfx workflows                    list workflows
+  wfx run <workflow> -i k=v -f     start a run and follow it (-v: every tool call)
+  wfx runs                         recent runs
+  wfx show <run-id>                a run, step by step
+  wfx logs <run-id> [-f] [-v]      what a run did
+  wfx approve | reject | answer <run-id>   a run waiting on you
+  wfx apply <file.yaml>            install a workflow
+  wfx doctor                       what is wired on this machine
+  wfx login --url <host>           sign in to a host
+
+wfx help all   every command
+`)
+}
+
 func usage() {
 	fmt.Print(`wfx — run agent workflows over a repository
 
@@ -155,7 +179,7 @@ func usage() {
   wfx apply <file.yaml> [--project p]  validate and install a workflow; a git-backed project gets a proposal
   wfx apply --from-run <id>        install the workflow a run authored (validated first)
   wfx validate <file.yaml>         validate only; writes nothing
-  wfx run <workflow> -i k=v [-f]   start a run (-f follows the log)
+  wfx run <workflow> -i k=v [-f] [-v]  start a run (-f follows it; -v every tool call)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
   wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
   wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
@@ -184,7 +208,7 @@ func usage() {
   wfx workers rm <id>              forget a machine
   wfx workers rotate               new join token; machines already joined keep working
   wfx show <run-id>                a run, step by step
-  wfx logs <run-id> [-f]           the activity log
+  wfx logs <run-id> [-f] [-v]      the activity log (-v: full transcript)
   wfx approve <run-id> [--as who] approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
@@ -625,7 +649,7 @@ func startRun(args []string) error {
 	r := created.Run
 	fmt.Printf("run %s started (%s)\n", r.ID, name)
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(r.ID, false)
+		return follow(r.ID, false, verbose(args))
 	}
 	fmt.Printf("follow it with:  wfx logs %s -f\n", r.ID)
 	return nil
@@ -720,14 +744,16 @@ func logs(args []string) error {
 		return fmt.Errorf("usage: wfx logs <run-id> [-f]")
 	}
 	if has(args, "-f") || has(args, "--follow") {
-		return follow(id, false)
+		return follow(id, false, verbose(args))
 	}
-	return follow(id, true) // what happened so far, then exit — even while the run is still going
+	return follow(id, true, verbose(args)) // what happened so far, then exit — even while the run is still going
 }
 
 // follow streams the run's activity. The SSE endpoint replays everything that
 // already happened before live events, so a late follower sees the whole run.
-func follow(id string, once bool) error {
+//
+// By default it prints the quiet view (quiet.go); verbose prints every event.
+func follow(id string, once, verbose bool) error {
 	q := "?after=0"
 	if once {
 		q += "&once=1"
@@ -755,6 +781,7 @@ func follow(id string, once bool) error {
 		raw, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("%s: %s", res.Status, strings.TrimSpace(string(raw)))
 	}
+	view := &quietView{runID: id, base: target.url, lookup: runStepLookup(id)}
 	sc := bufio.NewScanner(res.Body)
 	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024)
 	for sc.Scan() {
@@ -770,8 +797,14 @@ func follow(id string, once bool) error {
 		if json.Unmarshal([]byte(payload), &ev) != nil {
 			continue
 		}
-		if s := render(ev.StepID, ev.Kind, ev.Payload); s != "" {
-			fmt.Println(s)
+		if verbose {
+			if s := render(ev.StepID, ev.Kind, ev.Payload); s != "" {
+				fmt.Println(s)
+			}
+		} else {
+			for _, l := range view.line(ev.StepID, ev.Kind, ev.Payload) {
+				fmt.Println(l)
+			}
 		}
 		// Following, the first terminal status ends it. Reading the whole
 		// history (once), keep going: a retried run has events after its
@@ -1360,6 +1393,9 @@ func first(a []string) string {
 	}
 	return ""
 }
+
+// verbose is -v/--verbose on a run or logs: the full transcript.
+func verbose(args []string) bool { return has(args, "-v") || has(args, "--verbose") }
 
 func has(a []string, flag string) bool {
 	for _, s := range a {
