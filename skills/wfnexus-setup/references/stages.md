@@ -15,6 +15,7 @@ This is every blocker it can name, and what fixes it.
 | skills | install failed | `wfx install --skills` must run from the checkout (it finds `skills/` there), or set `WFX_SKILLS_DIR` |
 | login | no bootstrap admin token in the log | The token is printed once, on the first boot of an EMPTY database. If the volume already has users, a person who is an admin runs `wfx login --url <url>` and approves the code in the browser. Starting over: `docker compose -p <project> down -v` (deletes everything) |
 | login | device approval failed | The code expired (15 min) or was burned by 5 wrong tries; re-run the script |
+| doctor | `default call FAIL` | The default provider refused a real call; the line carries its own error. Pick another free model (`opencode models`) or provider |
 | doctor | the default provider ... is not ready | Usually opencode missing from the image (rebuild) or `WFX_DEFAULT_PROVIDER` naming a provider that needs a key |
 
 Notes, not blockers:
@@ -67,7 +68,7 @@ steps:
       properties: { ok: { type: boolean }, exitCode: { type: integer }, stdout: { type: string }, stderr: { type: string } }
 ```
 
-What a good run shows: the agent line names `opencode-acp/opencode/<free model>`, and the judge
+What a good run shows: the agent line names `opencode/opencode/<free model>`, and the judge
 step prints `{"answers":{"concrete":{"noul":0.9,"band":"yes"}}...}` then `judged 1 item(s) on
 jev-direct on http://127.0.0.1:8090`. The judge step's `stderr` is where a missing key or a
 missing step credential shows up. A failed `run:` step still ends `done` with `ok: false`, so

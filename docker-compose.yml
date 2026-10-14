@@ -6,7 +6,7 @@
 #
 # Settings come from .env beside this file (start from compose.env.example);
 # nothing below is baked into the image. With no .env at all it still boots,
-# on the FREE defaults: agent steps on opencode-acp (opencode Zen free models,
+# on the FREE defaults: agent steps on opencode (`opencode run`, Zen free models,
 # no key, no login, running inside the container) and the jev-direct
 # classifier (which does need TYPESAFE_API_KEY — set it with `wfx env set`).
 #
@@ -47,7 +47,7 @@ services:
       # behind another name or port.
       WFX_PUBLIC_URL: ${WFX_PUBLIC_URL:-http://localhost:${WFX_PORT:-8090}}
       # The free defaults. Change them in .env, not here.
-      WFX_DEFAULT_PROVIDER: ${WFX_DEFAULT_PROVIDER:-opencode-acp}
+      WFX_DEFAULT_PROVIDER: ${WFX_DEFAULT_PROVIDER:-opencode}
       WFX_DEFAULT_CLASSIFIER: ${WFX_DEFAULT_CLASSIFIER:-jev-direct}
       # Empty = generated on first boot and shown by `wfx workers`.
       WFX_RUNNER_TOKEN: ${WFX_RUNNER_TOKEN:-}

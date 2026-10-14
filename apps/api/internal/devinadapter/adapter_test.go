@@ -501,6 +501,8 @@ func TestPresetsBuildTheRightArgv(t *testing.T) {
 			append(append([]string{}, devinadapter.ClaudeArgs...), "--model", "sonnet")},
 		{"copilot", devinadapter.Copilot(devinadapter.CLI{}),
 			[]string{"-p", devinadapter.PlaceholderPrompt, "--log-level", "none", "--no-color"}},
+		{"opencode", devinadapter.OpenCode(devinadapter.CLI{Model: "opencode/ling-3.1-flash-free"}),
+			[]string{"run", "-m", "opencode/ling-3.1-flash-free"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.agent.Bin != c.name {
@@ -532,6 +534,28 @@ func TestClaudePresetPromptOnStdin(t *testing.T) {
 	}
 	if !strings.Contains(out, "--model haiku") || !strings.Contains(out, "--no-session-persistence") {
 		t.Errorf("argv missing flags: %q", out)
+	}
+}
+
+// The opencode preset sends the prompt on stdin and the turn's model by -m
+// when the preset left it open.
+func TestOpenCodePresetPromptOnStdin(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-opencode")
+	body := "#!/bin/sh\necho \"args:$*\"\necho \"stdin:$(cat)\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := devinadapter.OpenCode(devinadapter.CLI{Bin: script})
+	out, err := a.Execute(context.Background(), devinadapter.Turn{Workdir: dir, Prompt: "hello world", Model: "opencode/x-free"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "stdin:hello world") || strings.Contains(out, "args:run hello") {
+		t.Errorf("prompt should arrive on stdin only: %q", out)
+	}
+	if !strings.Contains(out, "args:run -m opencode/x-free") {
+		t.Errorf("argv missing model: %q", out)
 	}
 }
 

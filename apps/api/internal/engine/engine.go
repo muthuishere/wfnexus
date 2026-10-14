@@ -455,10 +455,23 @@ func (e *Engine) emit(ctx context.Context, runID uuid.UUID, stepID, kind string,
 
 func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errMsg string) {
 	errMsg = redactText(errMsg, e.redactions.get(runID))
+	if status == "failed" {
+		// A failed run used to leave nothing in the server log: a default
+		// provider refusing every call failed every workflow silently.
+		log.Print(failureLine(runID, step, errMsg))
+	}
 	if err := e.store.UpdateRun(context.WithoutCancel(ctx), runID, status, step, errMsg); err != nil {
 		log.Printf("engine: update run: %v", err)
 	}
 	e.emit(ctx, runID, step, "run.status", map[string]any{"status": status, "step": step, "error": errMsg})
+}
+
+// failureLine is the ERROR line a failed run writes to the server log.
+func failureLine(runID uuid.UUID, step, reason string) string {
+	if step == "" {
+		step = "-"
+	}
+	return fmt.Sprintf("ERROR engine: run %s failed at step %s: %s", runID, step, reason)
 }
 
 func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) {

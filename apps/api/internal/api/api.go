@@ -677,8 +677,18 @@ func (s *Server) forgetSource(w http.ResponseWriter, r *http.Request) {
 
 // doctor reports what is actually wired on this machine: the default model,
 // every provider and classifier, and whether each could run right now.
-func (s *Server) doctor(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, s.eng.Doctor())
+// With ?probe=1 it also makes ONE real tiny call to the default provider and
+// reports a refusal as a problem — a PATH hit is not an answer.
+func (s *Server) doctor(w http.ResponseWriter, r *http.Request) {
+	d := s.eng.Doctor()
+	if v := r.URL.Query().Get("probe"); v == "1" || v == "true" {
+		p := s.eng.ProbeDefault(r.Context())
+		d.Probe = &p
+		if !p.OK {
+			d.Problems = append(d.Problems, "the default provider "+p.Provider+" failed a real call: "+p.Error)
+		}
+	}
+	writeJSON(w, 200, d)
 }
 
 func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {

@@ -146,13 +146,13 @@ func TestALocalProviderResolvesToATransport(t *testing.T) {
 // was never recognised.
 func TestAnUnknownPresetIsRefusedNotGuessed(t *testing.T) {
 	e := testEngine(t, testCatalog(t,
-		catalog.Provider{Name: "opencode", Kind: catalog.KindCLI, Preset: "opencode"},
+		catalog.Provider{Name: "aider", Kind: catalog.KindCLI, Preset: "aider"},
 	))
-	_, err := e.resolveLLM(&workflow.Step{ID: "s", Provider: "opencode"}, "")
+	_, err := e.resolveLLM(&workflow.Step{ID: "s", Provider: "aider"}, "")
 	if err == nil {
 		t.Fatal("an unknown preset resolved")
 	}
-	if !strings.Contains(err.Error(), "opencode") || !strings.Contains(err.Error(), "command") {
+	if !strings.Contains(err.Error(), "aider") || !strings.Contains(err.Error(), "command") {
 		t.Fatalf("error should name the preset and the way out: %v", err)
 	}
 }

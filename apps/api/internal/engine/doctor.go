@@ -48,6 +48,9 @@ type Doctor struct {
 	// the sqlite/folder path existed — a status line nobody can trust is worse
 	// than none.
 	Storage DoctorStorage `json:"storage"`
+	// Probe is one real call to the default provider, filled only when asked
+	// for (GET /api/doctor?probe=1, which `wfx doctor` does). Nil otherwise.
+	Probe *DoctorProbe `json:"probe,omitempty"`
 	// Problems is never nil. A nil slice marshals to `null`, and the one
 	// consumer that reads it does `problems.length` — so a machine with
 	// NOTHING wrong crashed the System page, while a broken one rendered fine.
@@ -434,7 +437,7 @@ func (h *DoctorHost) LabelHolders(label string) int {
 
 func knownPreset(preset string) bool {
 	switch preset {
-	case "", "devin", "claude", "copilot":
+	case "", "devin", "claude", "copilot", "opencode":
 		return true
 	}
 	return false
