@@ -207,11 +207,12 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		return resolved{}, err
 	}
 	ad := devinadapter.New(devinadapter.Options{
-		Agent:   agent,
-		Model:   model,
-		Workdir: workdir,
-		Timeout: time.Duration(p.TimeoutSec) * time.Second,
-		Repairs: p.Repairs,
+		Agent:          agent,
+		Model:          model,
+		Workdir:        workdir,
+		Timeout:        time.Duration(p.TimeoutSec) * time.Second,
+		AttemptTimeout: time.Duration(p.AttemptTimeoutSec) * time.Second,
+		Repairs:        p.Repairs,
 	})
 
 	// The base URL is a sentinel and is never dialled; the round tripper

@@ -73,6 +73,11 @@ type Options struct {
 	Workdir string
 	// Timeout bounds a single turn, repair attempts included. 0 ⇒ 10 minutes.
 	Timeout time.Duration
+	// AttemptTimeout bounds one call to the backend inside a turn. A call that
+	// outlives it is killed and the same prompt is sent again (once), still
+	// inside Timeout: a free hosted model that stops streaming mid-reply
+	// otherwise holds the whole turn for Timeout. 0 ⇒ no per-call bound.
+	AttemptTimeout time.Duration
 	// Repairs is how many extra attempts a turn gets when the reply fails
 	// validation: the offending output and the parse error go back to the
 	// backend so it can correct itself. 0 ⇒ 2. Negative ⇒ no repair, the first
@@ -180,8 +185,15 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	var lastErr error
 	var lastText string
 	prompt := BuildPrompt(requestBody)
+	stalls := 0
 	for attempt := 1; attempt <= a.opts.Repairs+1; attempt++ {
-		text, err := a.invoke(ctx, turn, attempt, prompt, model, lastErr)
+		text, err := a.invokeBounded(ctx, turn, attempt, prompt, model, lastErr)
+		if errors.Is(err, errStalled) && ctx.Err() == nil && stalls == 0 {
+			// The backend went quiet, not wrong: same prompt again, once.
+			stalls++
+			attempt--
+			continue
+		}
 		if errors.Is(err, ErrEmptyTurn) && ctx.Err() == nil {
 			// It reached for its own tools and stopped when refused. Its intent
 			// is known, so hand the platform the equivalent calls — the step's
@@ -221,6 +233,23 @@ func clipEnds(s string, n int) string {
 		return strconv.Quote(s)
 	}
 	return strconv.Quote(s[:n]) + " … " + strconv.Quote(s[len(s)-n:])
+}
+
+// errStalled is one backend call outliving AttemptTimeout.
+var errStalled = errors.New("devinadapter: the backend call stalled")
+
+// invokeBounded is invoke under AttemptTimeout, when one is set.
+func (a *Adapter) invokeBounded(ctx context.Context, turn, attempt int, prompt, model string, prev error) (string, error) {
+	if a.opts.AttemptTimeout <= 0 {
+		return a.invoke(ctx, turn, attempt, prompt, model, prev)
+	}
+	actx, cancel := context.WithTimeout(ctx, a.opts.AttemptTimeout)
+	defer cancel()
+	text, err := a.invoke(actx, turn, attempt, prompt, model, prev)
+	if err != nil && actx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		return "", fmt.Errorf("%w after %s: %v", errStalled, a.opts.AttemptTimeout, err)
+	}
+	return text, err
 }
 
 // invoke writes the prompt to a file and hands it to the Agent.

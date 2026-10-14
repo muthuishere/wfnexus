@@ -79,6 +79,9 @@ type Provider struct {
 	// itself. Never a silent fallback.
 	Repairs    int `json:"repairs,omitempty"`
 	TimeoutSec int `json:"timeoutSec,omitempty"`
+	// AttemptTimeoutSec bounds one backend call inside a turn; a stalled call
+	// is retried once with the same prompt. 0 ⇒ no per-call bound.
+	AttemptTimeoutSec int `json:"attemptTimeoutSec,omitempty"`
 	// SessionPerTurn (acp) opens a fresh ACP session for every turn, in the
 	// same process. Each turn's prompt is already the COMPLETE request, so a
 	// stateful session only accumulates copies of it: opencode's grew until

@@ -244,7 +244,8 @@
       "preset": "opencode",
       "model": "opencode/ling-3.1-flash-free",
       "repairs": 2,
-      "timeoutSec": 900
+      "timeoutSec": 900,
+      "attemptTimeoutSec": 120
     },
     "opencode-acp": {
       "kind": "acp",

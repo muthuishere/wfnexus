@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
@@ -852,5 +853,30 @@ func TestCommandAgentModelFlag(t *testing.T) {
 	got := run(devinadapter.Devin(devinadapter.CLI{Model: "pinned"}), "opus")
 	if !strings.Contains(got, "--model pinned") || strings.Contains(got, "opus") {
 		t.Errorf("pinned model should win alone: %q", got)
+	}
+}
+
+// A free hosted model sometimes stops streaming mid-reply. With an attempt
+// bound, the stalled call is killed and the same prompt sent again, instead
+// of holding the turn for its whole Timeout.
+func TestAStalledCallIsRetriedOnceWithTheSamePrompt(t *testing.T) {
+	var calls int
+	back := devinadapter.AgentFunc{Label: "stalls", Fn: func(ctx context.Context, turn devinadapter.Turn) (string, error) {
+		calls++
+		if calls == 1 {
+			<-ctx.Done() // goes quiet until killed
+			return "", ctx.Err()
+		}
+		return answer("after the stall"), nil
+	}}
+
+	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), AttemptTimeout: 50 * time.Millisecond, Timeout: 5 * time.Second})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "after the stall" || calls != 2 {
+		t.Fatalf("text=%q calls=%d, want the second call's reply", res.Text, calls)
 	}
 }
