@@ -33,12 +33,20 @@ services:
     restart: unless-stopped
 
   wfx-server:
-    build: { context: ., dockerfile: infra/Dockerfile }
-    image: wfnexus/wfx-server:local
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        # Tools baked in from the installer allowlist; add "claude devin codex".
+        AGENT_TOOLS: ${WFX_AGENT_TOOLS:-gh jq rg python3}
+    # Tagged per project, so a second stack never retags the first one's image.
+    image: wfnexus/wfx-server:${WFX_PROJECT_NAME:-wfnexus}
     depends_on:
       postgres: { condition: service_healthy }
     environment:
       WFX_MODE: server
+      # Keeps claude's .claude.json inside the claude volume, so its login survives a rebuild.
+      CLAUDE_CONFIG_DIR: /home/wfx/.claude
       DATABASE_URL: postgres://wfx:${PG_PASSWORD:-wfx}@postgres:5432/wfx?sslmode=disable
       # No MinIO in this stack: artifacts go to a folder on the data volume.
       WFX_ARTIFACT_DRIVER: folder
@@ -59,6 +67,12 @@ services:
     volumes:
       - data:/data
       - opencode:/home/wfx/.local/share/opencode
+      # Agent logins only. The CLIs themselves come from the image, so a
+      # rebuild with new AGENT_TOOLS takes effect without deleting a volume.
+      - claude:/home/wfx/.claude
+      - devin-config:/home/wfx/.config/devin
+      - devin-data:/home/wfx/.local/share/devin
+      - codex:/home/wfx/.codex
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/api/health >/dev/null"]
       interval: 3s
@@ -67,4 +81,4 @@ services:
       retries: 40
     restart: unless-stopped
 
-volumes: { pg: , data: , opencode: }
+volumes: { pg: , data: , opencode: , claude: , devin-config: , devin-data: , codex: }

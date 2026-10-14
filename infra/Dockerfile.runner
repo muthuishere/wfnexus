@@ -15,8 +15,13 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-runner ./cmd/wfx-runner
 FROM alpine:3.21
 RUN apk add --no-cache git bash curl ca-certificates nodejs npm python3 \
  && adduser -D -u 10001 wfx
-# Add the agent CLIs this label is meant to provide, e.g.
-#   RUN npm i -g @devin/cli @anthropic-ai/claude-code
+# Add the agent CLIs this label is meant to provide, from the same allowlist
+# the server image uses (apps/api/internal/engine/installers.go), e.g.
+#   RUN wfx-runner tools --system claude devin codex
+#   USER wfx
+#   ENV PATH=/home/wfx/.local/bin:$PATH
+#   RUN wfx-runner tools --user claude devin codex && wfx-runner tools --check claude devin codex
+# devin has no npm package: its installer is curl -fsSL https://cli.devin.ai/install.sh | bash
 COPY --from=build /out/wfx-runner /usr/local/bin/wfx-runner
 # The runner's home is created and owned HERE, before the volume is mounted.
 # A named volume mounted over a directory inherits that directory's ownership

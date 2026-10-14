@@ -14,6 +14,8 @@ import "github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 // so an entry exists only for the vendor's own documented installer.
 var installers = map[string]Installer{
 	"claude": {
+		// Its native binary needs these on Alpine, or the installer hangs.
+		Alpine:      []string{"libgcc", "libstdc++", "ripgrep"},
 		Command:     []string{"sh", "-c", "curl -fsSL https://claude.ai/install.sh | bash"},
 		Instruction: "curl -fsSL https://claude.ai/install.sh | bash",
 	},
@@ -36,8 +38,15 @@ var installers = map[string]Installer{
 	// gh has no single cross-platform installer. Naming one would be a guess,
 	// and a guess that runs is the thing this table exists to prevent.
 	"gh": {
+		Alpine:      []string{"github-cli"},
 		Instruction: "install the GitHub CLI from https://cli.github.com, then run `gh auth login`",
 	},
+	// Plain tools a step reaches for. Only the server image installs them (as
+	// Alpine packages, infra/Dockerfile AGENT_TOOLS); elsewhere they are the
+	// operator's.
+	"jq":      {Alpine: []string{"jq"}, Instruction: "install jq with your package manager"},
+	"rg":      {Alpine: []string{"ripgrep"}, Instruction: "install ripgrep with your package manager"},
+	"python3": {Alpine: []string{"python3"}, Instruction: "install python3 with your package manager"},
 }
 
 // Installer is one enumerated entry. Command is argv, never a string from
@@ -46,6 +55,9 @@ var installers = map[string]Installer{
 type Installer struct {
 	Command     []string
 	Instruction string
+	// Alpine is the apk packages the server image adds for this tool: the
+	// tool itself, or what its vendor installer needs on musl. Names only.
+	Alpine []string
 }
 
 // LookupInstaller returns the entry for a preset or binary name. A miss is

@@ -22,7 +22,8 @@ COPY apps/api ./
 # Static, so the runtime image needs no libc and the same binary runs anywhere.
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-server . \
- && go build -trimpath -ldflags="-s -w" -o /out/wfx ./cmd/wfx
+ && go build -trimpath -ldflags="-s -w" -o /out/wfx ./cmd/wfx \
+ && go build -trimpath -ldflags="-s -w" -o /out/wfx-runner ./cmd/wfx-runner
 
 # ---- what actually ships --------------------------------------------------
 FROM alpine:3.21
@@ -40,6 +41,22 @@ RUN apk add --no-cache git bash curl ca-certificates tzdata nodejs npm \
 ARG OPENCODE_VERSION=1.18.30
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" && npm cache clean --force \
  && opencode --version
+
+# Agent CLIs and tools for steps, from ONE table: the installer allowlist in
+# apps/api/internal/engine/installers.go, which `wfx-runner setup` also uses.
+# Default is small; opt in to agents with
+#   docker compose build --build-arg AGENT_TOOLS="gh jq rg python3 claude devin codex"
+# (or WFX_AGENT_TOOLS in .env). Any name not in the table fails the build.
+ARG AGENT_TOOLS="gh jq rg python3"
+COPY --from=api /out/wfx-runner /usr/local/bin/
+RUN wfx-runner tools --system ${AGENT_TOOLS} && npm cache clean --force
+# Vendor installers (claude, devin) put binaries in ~/.local/bin, so it is on
+# PATH and the dirs exist owned by wfx before the volume mounts over them.
+ENV PATH=/home/wfx/.local/bin:$PATH
+RUN mkdir -p /home/wfx/.local/bin && chown -R wfx /home/wfx
+USER wfx
+RUN wfx-runner tools --user ${AGENT_TOOLS} && wfx-runner tools --check ${AGENT_TOOLS}
+USER root
 
 WORKDIR /app
 COPY --from=api /out/wfx-server /out/wfx /usr/local/bin/
@@ -68,7 +85,7 @@ ENV WFX_MODE=server \
     WFX_SECRET_KEY_PATH=/data/secret.key
 # The opencode dirs exist in the image and belong to wfx, so a named volume
 # mounted over them inherits that ownership instead of arriving root-owned.
-RUN mkdir -p /data /home/wfx/.local/share/opencode /home/wfx/.config/opencode \
+RUN mkdir -p /data /home/wfx/.local/share/opencode /home/wfx/.config/opencode /home/wfx/.claude \
  && chown -R wfx /data /app /home/wfx
 USER wfx
 EXPOSE 8090
