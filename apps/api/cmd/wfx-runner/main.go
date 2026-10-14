@@ -73,6 +73,8 @@ func main() {
 		// wfx command (a source repository), not a runner verb, and it is
 		// not in this dispatch — the collision that name has bitten once.
 		err = cmdSetup(os.Args[2:])
+	case "tools":
+		err = cmdTools(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -101,6 +103,11 @@ func usage() {
       vendor's own command in this terminal. The platform never holds a
       provider's credential, so a login is never collected.
       --dry-run prints what would be installed and installs nothing.
+
+  wfx-runner tools --system|--user|--check NAME...
+      Install allowlisted tools into a container image (infra/Dockerfile's
+      AGENT_TOOLS): --system as root (apk, npm -g), --user as the runtime
+      user (vendor installers into ~/.local/bin), --check verifies --version.
 
   wfx-runner status      What this machine joined, and whether it is reachable.
   wfx-runner leave       Forget the registration on this machine.

@@ -2,6 +2,7 @@
 # wfnexus from nothing to ready, on one machine with Docker.
 #
 #   setup.sh [--dir <wfnexus checkout>] [--port 8090] [--project wfnexus] [--no-build]
+#            [--tools "gh jq rg python3 claude devin codex"]   (agent CLIs baked into the image)
 #
 # Every stage prints one line: "ok  <stage>" or "BLOCKED <stage>: <why> -> <what to do>".
 # The last line is either "READY <url>" or "BLOCKED: <stage>". Exit 0 only when ready.
@@ -22,7 +23,8 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --project) PROJECT="$2"; shift 2 ;;
     --no-build) BUILD=""; shift ;;
-    -h|--help) sed -n 2,12p "$0"; exit 0 ;;
+    --tools) export WFX_AGENT_TOOLS="$2"; shift 2 ;;
+    -h|--help) sed -n 2,13p "$0"; exit 0 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -194,6 +196,21 @@ if printf '%s\n' "$doc" | grep -q 'default provider .* not'; then
   blocked doctor "$(printf '%s\n' "$doc" | grep 'default provider' | head -1 | sed 's/^ *//')"
 fi
 ok "doctor: default provider ready ($(printf '%s\n' "$doc" | grep -c '✗') optional entries not configured; run wfx doctor for all)"
+
+# ---- 11. one real prompt ---------------------------------------------------
+# Health, login and doctor all pass on a stack that cannot answer a prompt
+# (no network to the model, a model withdrawn, a CLI that hangs). READY means
+# the default provider answered one, inside the container, on its own model.
+MODEL="${WFX_TEST_MODEL:-opencode/space-bunny-free}"
+answer=$(docker compose -p "$PROJECT" exec -T wfx-server timeout 180 \
+  opencode run --model "$MODEL" "Reply with exactly the word PONG and nothing else." 2>&1 </dev/null)
+rc=$?
+if ! printf '%s\n' "$answer" | grep -qE '^[[:space:]]*PONG[.!]?[[:space:]]*$'; then
+  printf '%s\n' "$answer" | tail -8 | sed 's/^/    /'
+  { [ $rc -eq 124 ] || [ $rc -eq 143 ]; } && blocked prompt "opencode run --model $MODEL did not answer in 180s -> check the container reaches opencode.ai; try another free model with WFX_TEST_MODEL=<id from wfx models opencode-acp --free>"
+  blocked prompt "opencode run --model $MODEL did not answer PONG (exit $rc, output above) -> try WFX_TEST_MODEL=<id from wfx models opencode-acp --free>"
+fi
+ok "prompt: $MODEL answered"
 
 # The server requires login (requests reach it over the docker bridge, not
 # loopback), so a bare URL opens the sign-in card. `wfx ui` opens it signed in

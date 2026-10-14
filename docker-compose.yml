@@ -33,8 +33,14 @@ services:
     restart: unless-stopped
 
   wfx-server:
-    build: { context: ., dockerfile: infra/Dockerfile }
-    image: wfnexus/wfx-server:local
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        # Tools baked in from the installer allowlist; add "claude devin codex".
+        AGENT_TOOLS: ${WFX_AGENT_TOOLS:-gh jq rg python3}
+    # Tagged per project, so a second stack never retags the first one's image.
+    image: wfnexus/wfx-server:${WFX_PROJECT_NAME:-wfnexus}
     depends_on:
       postgres: { condition: service_healthy }
     environment:
@@ -59,6 +65,10 @@ services:
     volumes:
       - data:/data
       - opencode:/home/wfx/.local/share/opencode
+      # Agent CLIs that self-update (claude, devin) live here; logins live in
+      # the home dirs below. A NEW image's tools only land in a fresh volume.
+      - local:/home/wfx/.local
+      - claude:/home/wfx/.claude
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/api/health >/dev/null"]
       interval: 3s
@@ -67,4 +77,4 @@ services:
       retries: 40
     restart: unless-stopped
 
-volumes: { pg: , data: , opencode: }
+volumes: { pg: , data: , opencode: , local: , claude: }
