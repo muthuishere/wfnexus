@@ -24,7 +24,9 @@ func TestEventsOnceReturnsTheBacklogAndEnds(t *testing.T) {
 	}
 
 	done := make(chan string, 1)
-	go func() { done <- do(h, "GET", "/api/runs/"+run.ID.String()+"/events?after=0&once=1", "", nil).Body.String() }()
+	go func() {
+		done <- do(h, "GET", "/api/runs/"+run.ID.String()+"/events?after=0&once=1", "", nil).Body.String()
+	}()
 	select {
 	case body := <-done:
 		if !strings.Contains(body, "first") || !strings.Contains(body, "second") {

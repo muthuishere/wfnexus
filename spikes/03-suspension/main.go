@@ -1,10 +1,12 @@
 // Spike 03 — suspension & durable resume. THE spike our `needs_input` depends on.
 //
 // Four parts, all against the live wire:
-//   A  tn.Client path, native tool returns tn.Pending, NO WaitFor -> RunResult{Status,Pending}
-//   B  tn.Client resume: Client.RunWithAnswer(ctx, tk, history, pending, answer)
-//   C  agents runtime path, NO WaitFor -> TaskResult{Status,Pending} (+ data.path)
-//   D  agents runtime resume: Runtime.Resume(tn.Answer{...})
+//
+//	A  tn.Client path, native tool returns tn.Pending, NO WaitFor -> RunResult{Status,Pending}
+//	B  tn.Client resume: Client.RunWithAnswer(ctx, tk, history, pending, answer)
+//	C  agents runtime path, NO WaitFor -> TaskResult{Status,Pending} (+ data.path)
+//	D  agents runtime resume: Runtime.Resume(tn.Answer{...})
+//
 // plus E, the built-in `question` tool on the client path.
 package main
 

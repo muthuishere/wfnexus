@@ -80,10 +80,10 @@ var resourcePerms = map[string][2]string{
 	"registries": {PermRegistryRead, PermRegistryWrite},
 	"models":     {PermRegistryRead, PermRegistryWrite},
 	// What each model costs: configuration next to the providers it prices.
-	"prices": {PermRegistryRead, PermRegistryWrite},
-	"doctor":     {PermRegistryRead, PermRegistryWrite},
-	"sources":    {PermProjectsRead, PermProjectsWrite},
-	"projects":   {PermProjectsRead, PermProjectsWrite},
+	"prices":   {PermRegistryRead, PermRegistryWrite},
+	"doctor":   {PermRegistryRead, PermRegistryWrite},
+	"sources":  {PermProjectsRead, PermProjectsWrite},
+	"projects": {PermProjectsRead, PermProjectsWrite},
 	// The closed list projects and templates choose from: reading it is
 	// reading projects; it has no write route.
 	"categories": {PermProjectsRead, PermProjectsWrite},
