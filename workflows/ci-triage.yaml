@@ -4,8 +4,6 @@ description: >-
   suite, a judge routes on what it found, and the agent is called solely when
   there is something worth its cost.
 
-on_demand: true
-
 input_schema:
   type: object
   required: [repo_path]
@@ -23,6 +21,8 @@ jobs:
     steps:
       - id: test
         run: "{{ .Input.test_command }}"
+        # A red suite is the ANSWER the judge routes on, not a failed run.
+        continue-on-error: true
 
   # ---- a judge node: a decision, for a fraction of a cent ------------------
   route:

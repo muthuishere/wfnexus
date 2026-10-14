@@ -104,8 +104,8 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 		"name": "run", "isError": exitCode != 0,
 		"output": trim(stdout.String()+stderr.String(), maxEventOutput),
 	})
-	// A non-zero exit is the command's ANSWER, not a platform failure: the step
-	// succeeds and the workflow decides what a red suite means via a gate.
+	// A non-zero exit is reported in the output, not as an error: runOneStep
+	// fails the step on it unless the step opted out (exitFailed).
 	return out, nil
 }
 

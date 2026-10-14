@@ -54,6 +54,8 @@ steps:
   # 2. Each model judge is PROBED before it is asked, so one that cannot run is
   #    skipped and named on the scorecard — never a failed eval, never silence.
   - id: probe_gptoss
+    # exit 3 = probe failed; later steps route on .ok.
+    continue-on-error: true
     name: Probe gpt-oss (OpenRouter)
     description: Is OPENROUTER_API_KEY in this run's environment, and does OpenRouter accept it? Prints no value.
     needs: [dossier]
@@ -68,6 +70,8 @@ steps:
     output_schema: *run_output
 
   - id: probe_codex
+    # exit 3 = probe failed; later steps route on .ok.
+    continue-on-error: true
     name: Probe gpt5 (OpenRouter)
     description: Is OPENROUTER_API_KEY in this run's environment, and does OpenRouter accept it?
     needs: [dossier]
@@ -82,6 +86,8 @@ steps:
     output_schema: *run_output
 
   - id: probe_grok
+    # exit 3 = probe failed; later steps route on .ok.
+    continue-on-error: true
     name: Probe haiku (OpenRouter)
     description: The same OpenRouter key serves the haiku judge — a second check, so a transient refusal does not silence two judges.
     needs: [dossier]

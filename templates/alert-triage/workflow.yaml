@@ -88,6 +88,8 @@ env:
 
 steps:
   - id: gather
+    # exit 3 = alerts to triage; later steps route on it.
+    continue-on-error: true
     name: Pick issues and gather evidence
     description: The issue(s), likely duplicates (open and closed), recent commits, firing alerts, and a live re-check of the signal.
     env:
@@ -241,6 +243,8 @@ steps:
   # Which way the run goes from here. Two tiny steps because a guard compares
   # one value: 3 = there is something for this branch to do.
   - id: pending
+    # exit 3 = something pending; a later step routes on it.
+    continue-on-error: true
     name: Anything to approve?
     needs: [comment]
     when:
@@ -258,6 +262,8 @@ steps:
         stderr:   { type: string }
 
   - id: unsure
+    # exit 3 = unsure verdicts; a later step routes on it.
+    continue-on-error: true
     name: Anything for a person?
     needs: [comment]
     when:

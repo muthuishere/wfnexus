@@ -24,6 +24,8 @@ input_schema:
 steps:
   # 1. Rules before models. Exit 0 = nothing broken, and only the report runs.
   - id: collect
+    # exit 3 = findings, 0 = nothing broken; later steps route on it.
+    continue-on-error: true
     name: Collect what is broken
     description: Failed runs since the last look, load problems, incomplete and untracked workflow folders. Read-only.
     run: python3 ./collect.py
@@ -207,6 +209,8 @@ steps:
 
   # 4. Proof, not a claim.
   - id: verify
+    # 0 = a fix proven, 1 = none, 4 = nothing to verify; review/report route on it.
+    continue-on-error: true
     name: Prove every fix
     description: wfx validate on every changed workflow; the Go suite where Go changed; a committed, clean branch. Exit 0 proven, 1 a fix failed, 4 nothing to verify.
     needs: [fix]

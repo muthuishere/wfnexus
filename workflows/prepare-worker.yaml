@@ -27,15 +27,11 @@ description: >-
   So this reports authentication and never performs it. Presence is not
   authentication, and a step that pretended otherwise would be the same lie the
   readiness states exist to remove.
-input_schema:
-  type: object
-  properties:
-    label:
-      type: string
-      description: The runs-on label naming the machines to prepare.
-      default: self-hosted
-  required: [label]
-runs_on: "{{ .input.label }}"
+# runs-on is a literal label (it is not rendered). This was `runs_on:` with a
+# templated label: an unknown key the loader silently dropped, so every step
+# ran on the SERVER. To prepare machines holding another label, copy this file
+# and change the label.
+runs-on: self-hosted
 steps:
   - id: identify
     name: Which machine is this, and which runner

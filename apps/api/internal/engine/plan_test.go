@@ -102,8 +102,8 @@ func TestPlanReplansOnWhatTheStepActuallyFound(t *testing.T) {
 	if steps["reject"].Status != "done" {
 		t.Fatalf("the guard did not route to reject: %s", steps["reject"].Status)
 	}
-	if steps["fix"].Status == "done" {
-		t.Fatal("fix ran although triage.valid was false")
+	if steps["fix"].Status != "skipped" {
+		t.Fatalf("the branch not taken must end skipped, got %q", steps["fix"].Status)
 	}
 }
 
@@ -123,8 +123,8 @@ func TestPlanStopsAtTheGoal(t *testing.T) {
 	if run.Status != "done" {
 		t.Fatalf("run = %s (%s)", run.Status, run.Error)
 	}
-	if st := h.steps(run.ID)["slow"]; st.Status == "done" {
-		t.Fatal("a step ran after the goal was already reached")
+	if st := h.steps(run.ID)["slow"]; st.Status != "skipped" {
+		t.Fatalf("a step past the goal must end skipped, not %q", st.Status)
 	}
 }
 

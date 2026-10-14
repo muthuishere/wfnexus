@@ -183,6 +183,7 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 		wave.Wait()
 	}
 
+	e.skipUntaken(ctx, runID)
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
 }

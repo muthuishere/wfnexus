@@ -76,6 +76,8 @@ env:
 
 steps:
   - id: collect
+    # exit 3 = something is down; later steps route on it.
+    continue-on-error: true
     name: Check that every signal still exists
     description: Scrape targets, exporter self-errors, expected metrics, dashboards, log streams, watcher heartbeats — read-only.
     env:
@@ -248,6 +250,8 @@ steps:
         stderr:   { type: string }
 
   - id: file
+    # exit 3 routes the next step.
+    continue-on-error: true
     name: File one issue per gap
     description: New gaps filed once; known ones commented at most every COMMENT_EVERY_H; uncertain ones stop for a person.
     needs: [verdict]

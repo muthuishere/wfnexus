@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,8 +144,25 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 	if halted {
 		return nil // the step already set the run's terminal status
 	}
+	e.skipUntaken(ctx, runID)
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
+}
+
+// skipUntaken marks every step still pending as skipped once a run has
+// finished successfully. A branch that was not taken — a goal reached before
+// it, a guard upstream that routed around it — did not run and never will, and
+// "pending" on a finished run reads as work still to come.
+func (e *Engine) skipUntaken(ctx context.Context, runID uuid.UUID) {
+	steps, err := e.store.ListSteps(ctx, runID)
+	if err != nil {
+		return
+	}
+	for _, st := range steps {
+		if st.Status == "pending" {
+			e.setStep(ctx, runID, st.StepID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
+		}
+	}
 }
 
 // skipUnlessGuarded honours a step's `when:` on the DAG and sequential paths,
@@ -227,6 +245,13 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 			e.failStep(ctx, runID, step.ID, err)
 			return nil, stepHalted
 		}
+		if code, failed := exitFailed(step, out); failed {
+			// The output is kept so the failure can be read, but the step and
+			// the run are failed: a run whose command exited 1 is not "done".
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Output: mustJSON(out)})
+			e.failStep(ctx, runID, step.ID, fmt.Errorf("command exited %d%s (set continue-on-error: true, or a gate on exitCode, if this exit is an answer)", code, stderrTail(out)))
+			return nil, stepHalted
+		}
 		e.setStep(ctx, runID, step.ID, model.StepPatch{
 			Status: str("done"), Output: mustJSON(out), FinishedAt: now(),
 		})
@@ -284,6 +309,12 @@ func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflo
 			out, err = e.runCommand(ctx, runID, step, data)
 		}
 		if err == nil {
+			// A failing exit is retried like any other failure; the last
+			// attempt's output goes back so runOneStep can fail the step on it.
+			if _, failed := exitFailed(step, out); failed && attempt < attempts && ctx.Err() == nil {
+				e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("retrying"), Error: str(fmt.Sprintf("attempt %d/%d exited non-zero", attempt, attempts))})
+				continue
+			}
 			return out, nil
 		}
 		lastErr = err
@@ -353,6 +384,50 @@ func (e *Engine) executeWithRetry(ctx context.Context, runID uuid.UUID, def *wor
 		}
 	}
 	return stepResult{}, lastErr
+}
+
+// exitFailed reports whether a `run:` step's output is a failure: a non-zero
+// exit the workflow did not opt out of. Opting out is explicit — the step's
+// `continue-on-error: true`, or one of its gates matching the output (a gate
+// is the workflow saying what that exit means, so it routes instead).
+func exitFailed(step *workflow.Step, out map[string]any) (int, bool) {
+	if step.Run == "" || step.ContinueOnError {
+		return 0, false
+	}
+	var code int
+	switch v := out["exitCode"].(type) {
+	case int:
+		code = v
+	case int64:
+		code = int(v)
+	case float64:
+		code = int(v)
+	}
+	if code == 0 {
+		return 0, false
+	}
+	for _, g := range step.Gates {
+		if gateHit(g, out) {
+			return code, false
+		}
+	}
+	return code, true
+}
+
+// stderrTail is the last line of a command's stderr, for the failure message.
+func stderrTail(out map[string]any) string {
+	s, _ := out["stderr"].(string)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	if len(s) > 300 {
+		s = s[:300]
+	}
+	return ": " + s
 }
 
 func (e *Engine) failStep(ctx context.Context, runID uuid.UUID, stepID string, err error) {

@@ -83,6 +83,8 @@ steps:
   # 1. Every signal, read-only. Exit 0 = healthy (nothing after runs but the
   #    heartbeat), 3 = candidates, anything else = the collector broke.
   - id: collect
+    # exit 3 = something is down; later steps route on it.
+    continue-on-error: true
     name: Collect production signals
     description: Logs, metrics and checks/*.{sql,promql,logql} — read-only; rules raise candidates.
     env:
@@ -269,6 +271,8 @@ steps:
   # 5. File yes-findings once each; merge agreed duplicates; stop for a person
   #    on anything uncertain.
   - id: file
+    # exit 3 routes the next step.
+    continue-on-error: true
     name: File issues
     description: One issue per problem, found again by fingerprint; comments at most daily; uncertain ones stop the run.
     needs: [verdict]

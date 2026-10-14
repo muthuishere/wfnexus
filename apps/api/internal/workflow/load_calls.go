@@ -1,7 +1,10 @@
 package workflow
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,15 +27,40 @@ type loadGroup struct {
 	defs  []*Definition
 	tasks map[string]*Task
 	err   error
+	// broken holds the workflows of this group that did not load. One bad
+	// file costs only itself: the rest of the group still loads and is still
+	// scheduled. A whole project going dark because one workflow named a
+	// missing skill is how prod monitoring stopped without anybody noticing.
+	broken []Broken
+}
+
+// Broken is one workflow that did not load, and why.
+type Broken struct {
+	Name   string // the workflow's name, when the file got far enough to have one
+	Path   string
+	Reason string
+}
+
+// drop removes d from the group, recording why.
+func (g *loadGroup) drop(d *Definition, err error) {
+	for i, x := range g.defs {
+		if x == d {
+			g.defs = append(g.defs[:i:i], g.defs[i+1:]...)
+			break
+		}
+	}
+	g.broken = append(g.broken, Broken{Name: d.Name, Path: d.Path, Reason: err.Error()})
 }
 
 // parseDir reads every workflow in dir without expanding or validating it.
-func parseDir(dir string) ([]*Definition, error) {
+//
+// A file that cannot be read or parsed is returned in broken rather than
+// failing the directory; only an unreadable directory is an error.
+func parseDir(dir string) (out []*Definition, broken []Broken, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []*Definition
 	for _, e := range entries {
 		// A workflow is either a file or a DIRECTORY holding workflow.yaml plus
 		// the files that travel with it (files.go).
@@ -45,7 +73,8 @@ func parseDir(dir string) ([]*Definition, error) {
 		if e.IsDir() {
 			raw, p, files, err = loadWorkflowDir(filepath.Join(dir, e.Name()))
 			if err != nil {
-				return nil, err
+				broken = append(broken, Broken{Path: filepath.Join(dir, e.Name()), Reason: err.Error()})
+				continue
 			}
 			if raw == nil {
 				continue // a directory with no workflow.yaml is not ours
@@ -58,12 +87,14 @@ func parseDir(dir string) ([]*Definition, error) {
 			p = filepath.Join(dir, e.Name())
 			raw, err = os.ReadFile(p)
 			if err != nil {
-				return nil, err
+				broken = append(broken, Broken{Path: p, Reason: err.Error()})
+				continue
 			}
 		}
-		d := &Definition{}
-		if err := yaml.Unmarshal(raw, d); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+		d, err := DecodeYAMLStrict(raw)
+		if err != nil {
+			broken = append(broken, Broken{Path: p, Reason: fmt.Sprintf("%s: %v", p, err)})
+			continue
 		}
 		d.Path = p
 		d.Files = files
@@ -74,7 +105,7 @@ func parseDir(dir string) ([]*Definition, error) {
 		}
 		out = append(out, d)
 	}
-	return out, nil
+	return out, broken, nil
 }
 
 type expander struct {
@@ -87,6 +118,9 @@ type expander struct {
 	// is later skipped takes its dependents with it instead of leaving them
 	// running steps from a source the platform reports as broken.
 	uses map[*Definition]map[*loadGroup]bool
+	// usesDefs records which workflows a workflow pulled steps from, so a
+	// callee that fails validation takes only its callers with it.
+	usesDefs map[*Definition]map[*Definition]bool
 }
 
 func newExpander(groups []*loadGroup, opt loadOptions) *expander {
@@ -96,6 +130,7 @@ func newExpander(groups []*loadGroup, opt loadOptions) *expander {
 		done:     map[*Definition]bool{},
 		visiting: map[*Definition]bool{},
 		uses:     map[*Definition]map[*loadGroup]bool{},
+		usesDefs: map[*Definition]map[*Definition]bool{},
 	}
 	for _, g := range groups {
 		for _, d := range g.defs {
@@ -180,6 +215,15 @@ func (x *expander) expand(d *Definition, chain []string) error {
 		for cg := range x.uses[c] {
 			dep[cg] = true
 		}
+		dd := x.usesDefs[d]
+		if dd == nil {
+			dd = map[*Definition]bool{}
+			x.usesDefs[d] = dd
+		}
+		dd[c] = true
+		for cd := range x.usesDefs[c] {
+			dd[cd] = true
+		}
 		return workflowAsTask(c), true, nil
 	}
 	if err := d.expandUses(g.tasks, o); err != nil {
@@ -192,17 +236,24 @@ func (x *expander) expand(d *Definition, chain []string) error {
 	return nil
 }
 
-// run expands and validates every group, setting g.err on the first failure
-// in a group, then propagates skips to groups that used a skipped one.
+// run expands and validates every workflow. A workflow that fails is dropped
+// from its group and recorded in g.broken — the rest of the group still
+// loads. g.err is reserved for a group that could not be read at all, and a
+// workflow that used steps from such a group (or from a broken workflow) is
+// dropped too, rather than running steps from something reported as broken.
 func (x *expander) run(cat Catalog) {
+	bad := map[*Definition]bool{}
+	fail := func(g *loadGroup, d *Definition, err error) {
+		bad[d] = true
+		g.drop(d, err)
+	}
 	for _, g := range x.groups {
 		if g.err != nil {
 			continue
 		}
-		for _, d := range g.defs {
+		for _, d := range append([]*Definition(nil), g.defs...) {
 			if err := x.expand(d, nil); err != nil {
-				g.err = err
-				break
+				fail(g, d, err)
 			}
 		}
 	}
@@ -210,11 +261,10 @@ func (x *expander) run(cat Catalog) {
 		if g.err != nil {
 			continue
 		}
-		for _, d := range g.defs {
+		for _, d := range append([]*Definition(nil), g.defs...) {
 			normalize(d)
 			if err := d.validate(cat); err != nil {
-				g.err = err
-				break
+				fail(g, d, err)
 			}
 		}
 	}
@@ -224,16 +274,25 @@ func (x *expander) run(cat Catalog) {
 			if g.err != nil {
 				continue
 			}
-			for _, d := range g.defs {
+			for _, d := range append([]*Definition(nil), g.defs...) {
+				var why error
 				for dg := range x.uses[d] {
 					if dg != g && dg.err != nil {
-						g.err = fmt.Errorf("%s: uses a workflow from source %q, which did not load: %v", label(g, d), dg.name, dg.err)
-						changed = true
+						why = fmt.Errorf("%s: uses a workflow from source %q, which did not load: %v", label(g, d), dg.name, dg.err)
 						break
 					}
 				}
-				if g.err != nil {
-					break
+				if why == nil {
+					for cd := range x.usesDefs[d] {
+						if bad[cd] {
+							why = fmt.Errorf("%s: uses workflow %q, which did not load", label(g, d), label(x.owner[cd], cd))
+							break
+						}
+					}
+				}
+				if why != nil {
+					fail(g, d, why)
+					changed = true
 				}
 			}
 		}
@@ -256,4 +315,19 @@ func workflowAsTask(d *Definition) *Task {
 		steps[i] = s
 	}
 	return &Task{Name: d.Name, Description: d.Description, Steps: steps, Path: d.Path}
+}
+
+// DecodeYAMLStrict reads one workflow document and REFUSES a key the
+// definition does not have. yaml.v3 ignores unknown keys by default, and that
+// is how `runs_on:` (the field is `runs-on`) silently ran a fleet workflow on
+// the server instead of the workers it named. A typo is a load error that
+// names the line, not a behaviour change nobody sees.
+func DecodeYAMLStrict(raw []byte) (*Definition, error) {
+	d := &Definition{}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(d); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return d, nil
 }
