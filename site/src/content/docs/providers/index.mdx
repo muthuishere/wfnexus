@@ -53,7 +53,7 @@ sub-task has no safe equivalent and stays refused.
 ## Free models
 
 `--free` does not guess. A model counts as free only if its id ends in `-free` (opencode Zen) or
-`:free` (OpenRouter). The `opencode-acp` entry defaults to a free model,
+`:free` (OpenRouter). The default `opencode` cli entry runs `opencode/ling-3.1-flash-free`; `opencode-acp` is no longer the default because opencode now refuses free models over ACP. `opencode-acp` used
 `opencode/space-bunny-free`, which needs no key. Its registry description records why: it was the
 fastest of the free models that scored 7 out of 7 on a commit-classification check on 2026-09-27.
 

@@ -319,10 +319,12 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 		return withEnv(devinadapter.Claude(cli))
 	case "copilot":
 		return withEnv(devinadapter.Copilot(cli))
+	case "opencode":
+		return withEnv(devinadapter.OpenCode(cli))
 	}
 	// Refused rather than guessed. A wrong argv template fails as a parse error
 	// twenty turns in, which is the worst place to learn the name was unknown.
-	return nil, nil, fmt.Errorf("provider %q: no preset named %q — presets are devin, claude and copilot; "+
+	return nil, nil, fmt.Errorf("provider %q: no preset named %q — presets are devin, claude, copilot and opencode; "+
 		"for any other CLI give an explicit `command` in the registry", p.Name, p.Preset)
 }
 

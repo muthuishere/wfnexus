@@ -138,6 +138,27 @@ func Copilot(c CLI) *CommandAgent {
 	}
 }
 
+// OpenCode is the CLI preset for `opencode run`: one fresh process per turn,
+// prompt on stdin (verified: `echo … | opencode run -m <model>` answers on a
+// clean stdout, the "> build · <model>" banner goes to stderr; a bad model
+// exits 1 with "Model unavailable"). This is the path opencode Zen's FREE
+// models still accept: over ACP they now refuse with "OpenCode's free tier
+// can only be used from within OpenCode" (2026-10-14).
+func OpenCode(c CLI) *CommandAgent {
+	args := []string{"run"}
+	if c.Model != "" {
+		args = append(args, "-m", c.Model)
+	}
+	return &CommandAgent{
+		Label:     "opencode",
+		Bin:       c.bin("opencode"),
+		Args:      append(args, c.ExtraArgs...),
+		Env:       c.Env,
+		ModelFlag: c.modelFlag("-m"),
+		Stdin:     true,
+	}
+}
+
 // CLI is the small shared config the presets take.
 type CLI struct {
 	// Bin overrides the executable name.

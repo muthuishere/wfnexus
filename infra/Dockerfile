@@ -33,7 +33,7 @@ FROM alpine:3.21
 RUN apk add --no-cache git bash curl ca-certificates tzdata nodejs npm \
  && adduser -D -u 10001 wfx
 
-# opencode, so the default provider (opencode-acp) runs IN this container. Its
+# opencode, so the default provider (opencode) runs IN this container. Its
 # free models (opencode Zen, `wfx models opencode-acp --free`) need no key and
 # no login; a paid provider is `docker compose exec wfx-server opencode auth
 # login`, kept on the opencode volume. Pinned: an agent CLI that moves under a

@@ -1268,9 +1268,23 @@ func doctor() error {
 			Available                      []string
 		} `json:"shell"`
 		Problems []string `json:"problems"`
+		Probe    *struct {
+			Provider, Model, Reply, Error string
+			OK                            bool
+			Ms                            int64
+		} `json:"probe"`
 	}
-	if err := call("GET", "/api/doctor", nil, &d); err != nil {
+	if err := call("GET", "/api/doctor?probe=1", nil, &d); err != nil {
 		return err
+	}
+	if p := d.Probe; p != nil {
+		// One real call, not a PATH lookup: the line that says whether a
+		// step on the default would get past turn one.
+		if p.OK {
+			fmt.Printf("default call     ✓ %s/%s answered in %dms: %q\n", p.Provider, p.Model, p.Ms, p.Reply)
+		} else {
+			fmt.Printf("default call     FAIL %s/%s (%dms): %s\n", p.Provider, p.Model, p.Ms, p.Error)
+		}
 	}
 
 	if d.Default.Provider != "" {

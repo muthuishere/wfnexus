@@ -240,20 +240,15 @@
     },
     "opencode": {
       "kind": "cli",
-      "description": "opencode as the model, driven by its own CLI — the worked example of the generic `command` mechanism: no Go knows the word. Its default model returns a server error, so a model is named explicitly. Verified live 2026-09-24 (3.8s). TERMS: opencode itself is MIT and restricts nothing. But it is a CLIENT: whatever provider credential you configure it with carries that provider's terms, so pointing it at a Claude subscription seat inherits claude-cli's problem and pointing it at an API key does not.",
-      "model": "openrouter/anthropic/claude-haiku-4.5",
-      "command": [
-        "opencode",
-        "run",
-        "{{prompt}}"
-      ],
-      "modelFlag": "--model",
+      "description": "THE SHIPPED DEFAULT (WFX_DEFAULT_PROVIDER=opencode). `opencode run -m <model>` as the model, headless: a fresh process per turn, prompt on stdin, the step's tools and skills run in wfnexus's in-built toolnexus loop. Default is a FREE opencode Zen model (no key, no login): on 2026-10-14 opencode's service began refusing the free models over ACP (\"OpenCode's free tier can only be used from within OpenCode\") while `opencode run` still serves them, so this — not opencode-acp — is the default. ling-3.1-flash-free answered a commit-classification check correctly in 4s that day (space-bunny-free 1s but dropped from the ACP free list; mimo-v2.6-flash-free 10s). `opencode models | grep -- -free` lists today's free ids; a step picks one with `model:`. TERMS: opencode itself is MIT. The free Zen models run on opencode's hosted service; any other provider you configure carries that provider's terms.",
+      "preset": "opencode",
+      "model": "opencode/ling-3.1-flash-free",
       "repairs": 2,
       "timeoutSec": 900
     },
     "opencode-acp": {
       "kind": "acp",
-      "description": "opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Default is a FREE model (opencode Zen, no key): space-bunny-free was the fastest of the free models that scored 7/7 on a commit-classification check (10s; ling/muse 21s, mimo 37s, nemotron-ultra 76s; longcat returned invalid JSON, nemotron-lightning hung) on 2026-09-27. `wfx models opencode-acp --free` lists them all. TERMS: opencode itself is MIT. The credential is whatever opencode is configured with: the free Zen models need no key and run on opencode's hosted service; any other provider carries that provider's terms (see opencode).",
+      "description": "NOT THE DEFAULT ANY MORE: since 2026-10-14 opencode refuses its free Zen models over ACP (\"OpenCode's free tier can only be used from within OpenCode\"), so every call on the model below fails; use the `opencode` cli entry for free models, and this one only with a logged-in paid provider (`model: <provider>/<id>`). opencode over the Agent Client Protocol: one warm session per step, the model chosen over the protocol. Its model was a FREE model (opencode Zen, no key): space-bunny-free was the fastest of the free models that scored 7/7 on a commit-classification check (10s; ling/muse 21s, mimo 37s, nemotron-ultra 76s; longcat returned invalid JSON, nemotron-lightning hung) on 2026-09-27. `wfx models opencode-acp --free` lists them all. TERMS: opencode itself is MIT. The credential is whatever opencode is configured with: the free Zen models need no key and run on opencode's hosted service; any other provider carries that provider's terms (see opencode).",
       "preset": "opencode",
       "model": "opencode/space-bunny-free",
       "repairs": 2,

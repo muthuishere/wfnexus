@@ -46,12 +46,8 @@ var liveRegistryEntries = []registryArgv{
 		args:    []string{"run", "qwen3:4b", "{{prompt}}", "--hidethinking"},
 		timeout: 3 * time.Minute,
 	},
-	{
-		provider: "opencode", bin: "opencode",
-		args:      []string{"run", "{{prompt}}"},
-		modelFlag: "--model", model: "openrouter/anthropic/claude-haiku-4.5",
-		timeout: 5 * time.Minute,
-	},
+	// opencode is a preset now (prompt on stdin), proven by
+	// TestLiveOpenCodeFreeModelStructuredAnswer in opencode_live_test.go.
 	{
 		provider: "codex-cli", bin: "codex",
 		// `codex exec [PROMPT]` is the documented non-interactive entry.

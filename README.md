@@ -215,12 +215,12 @@ What it is, and what it is honest about:
 
 - **One image** (`infra/Dockerfile`): the server, the UI, the `wfx` CLI, the shipped `skills/` and
   `templates/`, and **opencode** (pinned). Agent steps run *inside the container* on the default
-  provider `opencode-acp`, whose free models (opencode Zen, `wfx models opencode-acp --free`) need
+  provider `opencode` (`opencode run`), whose free models (opencode Zen, `opencode models | grep free`) need
   **no key and no login**; this was verified from a fresh container with no credentials. For a paid
   model, `docker compose exec wfx-server opencode auth login`; the login lives on the `opencode`
   volume. Any other agent CLI (claude, codex, devin) is not in the image: run those steps on a
   `wfx-runner` worker on a machine that has them (`wfx workers` prints the join line).
-- **Free defaults from `.env`**, not baked in: `WFX_DEFAULT_PROVIDER=opencode-acp`,
+- **Free defaults from `.env`**, not baked in: `WFX_DEFAULT_PROVIDER=opencode`,
   `WFX_DEFAULT_CLASSIFIER=jev-direct`. `jev-direct` needs `TYPESAFE_API_KEY`.
 - **Keys**: `wfx env set TYPESAFE_API_KEY` (read without echo, stored encrypted, handed only to the
   steps that name it). A key written into `.env` works too, but it becomes part of the server

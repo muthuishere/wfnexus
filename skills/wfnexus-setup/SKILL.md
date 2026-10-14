@@ -68,14 +68,15 @@ stopped. Stages, in order (`references/stages.md` has the detail and every block
 
 ## Free models
 
-The default provider is `opencode-acp`: opencode running **inside the container**, on
-opencode Zen's free models. They need no key and no login. `jev-direct`, the default
+The default provider is `opencode` (`opencode run -m <model>`, one process per turn): opencode running
+**inside the container**, on opencode Zen's free models (`opencode/ling-3.1-flash-free`). Not `opencode-acp`:
+since 2026-10-14 opencode refuses free models over ACP ("free tier can only be used from within OpenCode"). They need no key and no login. `jev-direct`, the default
 classifier, is the one piece that needs a key (`TYPESAFE_API_KEY`); without it agent
 steps still run, and `decide:` / `wfx judge` are refused with the key's name.
 
 `wfx models opencode-acp --free` lists what opencode offers **today**; the free list
 rotates. If it says the configured model is "NOT offered", do not panic: in rehearsal
-the configured `opencode/space-bunny-free` answered anyway. If a step does refuse to
+the configured free model answered anyway. `wfx doctor` makes one real call to the default provider and prints `default call FAIL ...` with the provider's own error when it refuses. If a step does refuse to
 start, give that step `model: opencode/<a free id from the list>`.
 
 A paid model instead: `docker compose exec wfx-server opencode auth login`.

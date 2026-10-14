@@ -191,11 +191,17 @@ ok "free models listed"
 doc=$(wfx doctor 2>&1) || blocked doctor "wfx doctor failed: $doc"
 # The full report is long (every provider in the registry, most of them
 # optional and unconfigured); what decides READY is the defaults.
-printf '%s\n' "$doc" | grep -E '^(default|storage|shell|skills)|opencode-acp|jev-direct|default provider' | sed 's/^/    /'
+printf '%s\n' "$doc" | grep -E '^(default|storage|shell|skills)|opencode|jev-direct|default provider' | sed 's/^/    /'
 if printf '%s\n' "$doc" | grep -q 'default provider .* not'; then
   blocked doctor "$(printf '%s\n' "$doc" | grep 'default provider' | head -1 | sed 's/^ *//')"
 fi
-ok "doctor: default provider ready ($(printf '%s\n' "$doc" | grep -c '✗') optional entries not configured; run wfx doctor for all)"
+# doctor makes ONE real call to the default provider. A PATH hit is not an
+# answer: opencode-acp was "ready" while opencode refused every call.
+if printf '%s\n' "$doc" | grep -q '^default call *FAIL'; then
+  blocked doctor "$(printf '%s\n' "$doc" | grep '^default call' | head -1)"
+fi
+printf '%s\n' "$doc" | grep -q '^default call *✓' || blocked doctor "wfx doctor made no real call to the default provider (server too old?)"
+ok "doctor: default provider answered a real call ($(printf '%s\n' "$doc" | grep -c '✗') optional entries not configured; run wfx doctor for all)"
 
 # ---- 11. one real prompt ---------------------------------------------------
 # Health, login and doctor all pass on a stack that cannot answer a prompt
