@@ -11,9 +11,9 @@ func TestReadableCommandDropsTheEnvPreamble(t *testing.T) {
 	cases := map[string]string{
 		`. '/Users/me/.wfx/runs/r1/secrets/ask-local.env' && export WFX_API='http://127.0.0.1:8090' WFX_RUN='r1' GH="${GH_TOKEN}" && ls -la`: "ls -la",
 		`export A='it'\''s' && git status && echo done`: "git status && echo done",
-		`WFX_RUN=r1 WFX_STEP='s' go test ./...`:          "go test ./...",
-		`cat /tmp/x/secrets/step.env`:                    "cat <secrets>",
-		`echo plain`:                                     "echo plain",
+		`WFX_RUN=r1 WFX_STEP='s' go test ./...`:         "go test ./...",
+		`cat /tmp/x/secrets/step.env`:                   "cat <secrets>",
+		`echo plain`:                                    "echo plain",
 	}
 	for in, want := range cases {
 		if got := readableCommand(in); got != want {

@@ -79,7 +79,7 @@ type quietView struct {
 	runID   string
 	base    string
 	lookup  func(stepID string) (stepSummary, bool)
-	last    string                 // last step with output, for the final answer
+	last    string // last step with output, for the final answer
 	outputs map[string]json.RawMessage
 	arts    []string
 }
