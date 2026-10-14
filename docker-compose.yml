@@ -45,6 +45,8 @@ services:
       postgres: { condition: service_healthy }
     environment:
       WFX_MODE: server
+      # Keeps claude's .claude.json inside the claude volume, so its login survives a rebuild.
+      CLAUDE_CONFIG_DIR: /home/wfx/.claude
       DATABASE_URL: postgres://wfx:${PG_PASSWORD:-wfx}@postgres:5432/wfx?sslmode=disable
       # No MinIO in this stack: artifacts go to a folder on the data volume.
       WFX_ARTIFACT_DRIVER: folder
@@ -65,10 +67,12 @@ services:
     volumes:
       - data:/data
       - opencode:/home/wfx/.local/share/opencode
-      # Agent CLIs that self-update (claude, devin) live here; logins live in
-      # the home dirs below. A NEW image's tools only land in a fresh volume.
-      - local:/home/wfx/.local
+      # Agent logins only. The CLIs themselves come from the image, so a
+      # rebuild with new AGENT_TOOLS takes effect without deleting a volume.
       - claude:/home/wfx/.claude
+      - devin-config:/home/wfx/.config/devin
+      - devin-data:/home/wfx/.local/share/devin
+      - codex:/home/wfx/.codex
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/api/health >/dev/null"]
       interval: 3s
@@ -77,4 +81,4 @@ services:
       retries: 40
     restart: unless-stopped
 
-volumes: { pg: , data: , opencode: , local: , claude: }
+volumes: { pg: , data: , opencode: , claude: , devin-config: , devin-data: , codex: }
