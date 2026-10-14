@@ -31,6 +31,11 @@ import (
 // there in the workspace — and a reviewer concluded the fix did not exist.
 var pathArgs = []string{"path", "workdir"}
 
+// defaultsToCwd are the builtins whose `path` is optional and, when missing,
+// resolves to the process cwd. read/write/edit require a path; bash's empty
+// workdir is set in the hook itself.
+var defaultsToCwd = map[string]bool{"glob": true, "grep": true}
+
 // pinPaths rewrites a tool call's relative path arguments to sit inside
 // workdir. It returns nil when nothing needed changing.
 //
@@ -50,6 +55,14 @@ func pinPaths(name string, args map[string]any, workdir string) map[string]any {
 			}
 		}
 		out[k] = v
+	}
+	// glob and grep with NO path search the server process's cwd (toolnexus
+	// dirArg falls back to os.Getwd), which is the platform's own checkout. A
+	// live run listed and read files there. No path means the workspace.
+	if defaultsToCwd[name] {
+		if p, _ := args["path"].(string); p == "" {
+			set("path", workdir)
+		}
 	}
 	for _, k := range pathArgs {
 		p, _ := args[k].(string)

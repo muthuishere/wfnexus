@@ -133,3 +133,43 @@ func TestAStepErrorQuotingAModelsReplyIsRedacted(t *testing.T) {
 		t.Fatalf("no redaction mark: %s", got)
 	}
 }
+
+// glob and grep fall back to the SERVER PROCESS'S cwd when `path` is empty
+// (toolnexus dirArg). A live run listed and read the platform's own repository
+// that way. An empty path must mean the workspace.
+func TestGlobAndGrepWithNoPathStayInTheWorkspace(t *testing.T) {
+	e := &Engine{cfg: config.Config{WorkDir: t.TempDir()}}
+	e.sink = func(string, any) {}
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "inside.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := e.hooks(context.Background(), uuid.New(), "review", ws, 10, nil, "")
+	tools := map[string]tn.Tool{}
+	for _, tl := range tn.CreateBuiltinTools() {
+		tools[tl.Name] = tl
+	}
+	for name, args := range map[string]map[string]any{
+		"glob": {"pattern": "**/*"},
+		"grep": {"pattern": "needle|package"},
+	} {
+		ov, err := h.BeforeTool(context.Background(), tn.BeforeToolEvent{Name: name, Args: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if ov != nil {
+			args = ov.Args
+		}
+		res, err := tools[name].Execute(args, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		// The test process's cwd is this package directory.
+		if strings.Contains(res.Output, "paths.go") {
+			t.Fatalf("%s with no path escaped to the process cwd", name)
+		}
+		if !strings.Contains(res.Output, "inside.txt") {
+			t.Fatalf("%s did not search the workspace: %q", name, res.Output)
+		}
+	}
+}
