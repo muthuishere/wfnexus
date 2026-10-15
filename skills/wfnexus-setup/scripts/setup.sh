@@ -2,7 +2,7 @@
 # wfnexus from nothing to ready, on one machine with Docker.
 #
 #   setup.sh [--dir <wfnexus checkout>] [--port 8090] [--project wfnexus] [--no-build]
-#            [--tools "gh jq rg python3 claude devin codex"]   (agent CLIs baked into the image)
+#            [--agents "claude devin codex"]   (agent CLIs baked into the image; other tools: carry)
 #
 # Every stage prints one line: "ok  <stage>" or "BLOCKED <stage>: <why> -> <what to do>".
 # The last line is either "READY <url>" or "BLOCKED: <stage>". Exit 0 only when ready.
@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --project) PROJECT="$2"; shift 2 ;;
     --no-build) BUILD=""; shift ;;
-    --tools) export WFX_AGENT_TOOLS="$2"; shift 2 ;;
+    --agents) export WFX_AGENT_TOOLS="$2"; shift 2 ;;
     -h|--help) sed -n 2,13p "$0"; exit 0 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac

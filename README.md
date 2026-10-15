@@ -238,6 +238,21 @@ What it is, and what it is honest about:
 - The secrets key is on the `data` volume (`/data/secret.key`), so the env store survives
   `docker compose up --build`. `docker compose down -v` deletes it along with everything else.
 
+### Install software / change config on a worker = carry
+
+Server and worker images start through [carry](https://github.com/muthuishere/carry). With
+`CARRY_REPO` set (plus `CARRY_S3_ENDPOINT`, `CARRY_KEY_FILE` and S3 credentials, by name), tools,
+files and env defaults come from your bucket before the process starts; unset, it just starts. One
+state per worker (`CARRY_STATE`, default the project or worker name). Only agent CLIs stay in the
+image (`WFX_AGENT_TOOLS="claude devin codex"`, then rebuild). `wfx doctor` says whether carry is on.
+
+```sh
+carry tool add wfnexus jq@1.7.1     # gh, jq, rg ... no rebuild
+carry put  wfnexus:/home/wfx/.gitconfig ./gitconfig
+carry env  set wfnexus LOG_LEVEL=debug
+carry log  wfnexus                  # versioned: carry rollback wfnexus N
+```
+
 ### Working on the repo
 
 ```bash

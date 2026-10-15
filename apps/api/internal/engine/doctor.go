@@ -43,6 +43,9 @@ type Doctor struct {
 	Workflows   DoctorCount      `json:"workflows"`
 	Models      []string         `json:"models"`
 	Shell       DoctorShell      `json:"shell"`
+	// Carry is whether this process was started with CARRY_REPO, i.e. its
+	// tools and config come from a carry bucket. The value is not reported.
+	Carry bool `json:"carry"`
 	// Storage is what this server is ACTUALLY running on. The UI used to print
 	// a hardcoded "postgres · s3" in its header, which became a lie the moment
 	// the sqlite/folder path existed — a status line nobody can trust is worse
@@ -152,6 +155,7 @@ func (e *Engine) Doctor() Doctor {
 	d.Storage = DoctorStorage{Driver: e.cfg.StorageDriver, Artifacts: e.cfg.ArtifactDriver}
 
 	d.Shell = DoctorShell{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	d.Carry = os.Getenv("CARRY_REPO") != ""
 	if sh, err := shell.Default(); err != nil {
 		d.Shell.Problem = err.Error()
 		d.Problems = append(d.Problems, "no shell: "+err.Error()+" — every `run:` step fails without one")

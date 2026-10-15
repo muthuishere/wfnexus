@@ -23,6 +23,9 @@ RUN apk add --no-cache git bash curl ca-certificates nodejs npm python3 \
 #   RUN wfx-runner tools --user claude devin codex && wfx-runner tools --check claude devin codex
 # devin has no npm package: its installer is curl -fsSL https://cli.devin.ai/install.sh | bash
 COPY --from=build /out/wfx-runner /usr/local/bin/wfx-runner
+# Every other tool (gh, jq, rg, ...) and any config come from carry's bucket
+# (CARRY_REPO etc.); unset, carry just runs the runner.
+COPY --from=ghcr.io/muthuishere/carry:0.1.1 /carry /usr/local/bin/carry
 # The runner's home is created and owned HERE, before the volume is mounted.
 # A named volume mounted over a directory inherits that directory's ownership
 # from the image — but only if it exists in the image. Without this the volume
@@ -32,6 +35,7 @@ RUN mkdir -p /home/wfx/.wfx-runner && chown -R wfx:wfx /home/wfx
 
 USER wfx
 ENV WFX_RUNNER_HOME=/home/wfx/.wfx-runner
-# join writes the registration, then run takes work until stopped.
+# join writes the registration, then run takes work until stopped, under
+# carry. Its state is per worker: CARRY_STATE, else the worker's name.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "wfx-runner status >/dev/null 2>&1 || wfx-runner join --url \"$WFX_URL\" --token \"$WFX_TOKEN\" --labels \"${WFX_LABELS:-self-hosted}\" ${WFX_NAME:+--name \"$WFX_NAME\"}; exec wfx-runner run"]
+  "wfx-runner status >/dev/null 2>&1 || wfx-runner join --url \"$WFX_URL\" --token \"$WFX_TOKEN\" --labels \"${WFX_LABELS:-self-hosted}\" ${WFX_NAME:+--name \"$WFX_NAME\"}; export CARRY_STATE=\"${CARRY_STATE:-${WFX_NAME:-$(hostname)}}\"; exec carry run -- wfx-runner run"]

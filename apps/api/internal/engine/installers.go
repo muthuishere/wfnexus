@@ -35,18 +35,8 @@ var installers = map[string]Installer{
 		Command:     []string{"npm", "install", "-g", "@github/copilot"},
 		Instruction: "npm install -g @github/copilot",
 	},
-	// gh has no single cross-platform installer. Naming one would be a guess,
-	// and a guess that runs is the thing this table exists to prevent.
-	"gh": {
-		Alpine:      []string{"github-cli"},
-		Instruction: "install the GitHub CLI from https://cli.github.com, then run `gh auth login`",
-	},
-	// Plain tools a step reaches for. Only the server image installs them (as
-	// Alpine packages, infra/Dockerfile AGENT_TOOLS); elsewhere they are the
-	// operator's.
-	"jq":      {Alpine: []string{"jq"}, Instruction: "install jq with your package manager"},
-	"rg":      {Alpine: []string{"ripgrep"}, Instruction: "install ripgrep with your package manager"},
-	"python3": {Alpine: []string{"python3"}, Instruction: "install python3 with your package manager"},
+	// Everything else a step reaches for (gh, jq, rg, ...) is a single static
+	// binary and comes from carry on the worker (`carry tool add`), not here.
 }
 
 // Installer is one enumerated entry. Command is argv, never a string from

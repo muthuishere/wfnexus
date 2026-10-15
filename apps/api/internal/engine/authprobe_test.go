@@ -97,11 +97,10 @@ func TestLookupInstallerRefusesACommandThatIsNotAName(t *testing.T) {
 	if _, ok := LookupInstaller("ext::sh"); ok {
 		t.Fatal("a published transport resolved to an installer")
 	}
-	ins, ok := LookupInstaller("gh")
-	if !ok || len(ins.Command) != 0 {
-		t.Fatalf("gh has no installer and was given one: %+v", ins)
+	if _, ok := LookupInstaller("gh"); ok {
+		t.Fatal("gh comes from carry, not the installer table")
 	}
-	ins, ok = LookupInstaller("claude")
+	ins, ok := LookupInstaller("claude")
 	if !ok || len(ins.Command) == 0 {
 		t.Fatal("claude lost its enumerated installer")
 	}

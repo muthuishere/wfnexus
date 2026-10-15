@@ -120,7 +120,7 @@ func TestInstallersAreEnumeratedAndDryRunInstallsNothing(t *testing.T) {
 	if rep.Outcomes[0].Result != "installed" {
 		t.Fatalf("claude: %s %s", rep.Outcomes[0].Result, rep.Outcomes[0].Detail)
 	}
-	if rep.Outcomes[1].Result != "could not" || !strings.Contains(rep.Outcomes[1].Detail, "cli.github.com") {
+	if rep.Outcomes[1].Result != "could not" || !strings.Contains(rep.Outcomes[1].Detail, "no installer for gh") {
 		t.Fatalf("gh should be reported, not installed: %+v", rep.Outcomes[1])
 	}
 	if rep.Unmet == 0 {
