@@ -37,8 +37,9 @@ services:
       context: .
       dockerfile: infra/Dockerfile
       args:
-        # Tools baked in from the installer allowlist; add "claude devin codex".
-        AGENT_TOOLS: ${WFX_AGENT_TOOLS:-gh jq rg python3}
+        # Agent CLIs baked in from the installer allowlist, e.g. "claude devin codex".
+        # Other tools (gh, jq, rg, ...) come from carry, below.
+        AGENT_TOOLS: ${WFX_AGENT_TOOLS:-}
     # Tagged per project, so a second stack never retags the first one's image.
     image: wfnexus/wfx-server:${WFX_PROJECT_NAME:-wfnexus}
     depends_on:
@@ -63,6 +64,15 @@ services:
       # handed to the steps that name them); these are for a .env that has them.
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # carry: tools and config from an S3 bucket (optional; unset = off).
+      # One state per worker, named after the project unless CARRY_STATE says.
+      CARRY_REPO: ${CARRY_REPO:-}
+      CARRY_STATE: ${CARRY_STATE:-${WFX_PROJECT_NAME:-wfnexus}}
+      CARRY_S3_ENDPOINT: ${CARRY_S3_ENDPOINT:-}
+      CARRY_KEY_FILE: ${CARRY_KEY_FILE:-}
+      CARRY_TOOL_PUBKEY: ${CARRY_TOOL_PUBKEY:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     ports: ["${WFX_BIND:-127.0.0.1}:${WFX_PORT:-8090}:8090"]
     volumes:
       - data:/data

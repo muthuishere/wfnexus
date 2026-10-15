@@ -29,8 +29,9 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-server . \
 FROM alpine:3.21
 # git is not optional: a project is a repository, and the platform clones it.
 # The shells are what a `run:` step executes with. node/npm are there for the
-# one agent CLI the image carries (below).
-RUN apk add --no-cache git bash curl ca-certificates tzdata nodejs npm \
+# one agent CLI the image carries (below). python3 is a runtime, not a single
+# binary, so it is baked here rather than carried.
+RUN apk add --no-cache git bash curl ca-certificates tzdata nodejs npm python3 \
  && adduser -D -u 10001 wfx
 
 # opencode, so the default provider (opencode) runs IN this container. Its
@@ -42,12 +43,18 @@ ARG OPENCODE_VERSION=1.18.30
 RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" && npm cache clean --force \
  && opencode --version
 
-# Agent CLIs and tools for steps, from ONE table: the installer allowlist in
+# carry restores this container's tools (gh, jq, rg, ...) and config from an
+# S3 bucket before the server starts. Without CARRY_REPO it just runs the
+# command, so the image behaves the same with no bucket.
+COPY --from=ghcr.io/muthuishere/carry:0.1.1 /carry /usr/local/bin/carry
+
+# Agent CLIs need a runtime (node, a vendor installer), so they stay baked in,
+# from ONE table: the installer allowlist in
 # apps/api/internal/engine/installers.go, which `wfx-runner setup` also uses.
-# Default is small; opt in to agents with
-#   docker compose build --build-arg AGENT_TOOLS="gh jq rg python3 claude devin codex"
+# Opt in with
+#   docker compose build --build-arg AGENT_TOOLS="claude devin codex"
 # (or WFX_AGENT_TOOLS in .env). Any name not in the table fails the build.
-ARG AGENT_TOOLS="gh jq rg python3"
+ARG AGENT_TOOLS=""
 COPY --from=api /out/wfx-runner /usr/local/bin/
 RUN wfx-runner tools --system ${AGENT_TOOLS} && npm cache clean --force
 # Vendor installers (claude, devin) put binaries in ~/.local/bin, so it is on
@@ -91,4 +98,4 @@ USER wfx
 EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s \
   CMD wget -qO- http://127.0.0.1:8090/api/health || exit 1
-ENTRYPOINT ["wfx-server"]
+ENTRYPOINT ["carry", "run", "--", "wfx-server"]

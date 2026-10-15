@@ -1267,6 +1267,7 @@ func doctor() error {
 			OS, Arch, Using, Path, Problem string
 			Available                      []string
 		} `json:"shell"`
+		Carry    bool     `json:"carry"`
 		Problems []string `json:"problems"`
 		Probe    *struct {
 			Provider, Model, Reply, Error string
@@ -1309,6 +1310,8 @@ func doctor() error {
 				strings.Join(d.Shell.Available[1:], ", "))
 		}
 	}
+
+	fmt.Printf("carry            %s\n", tick(d.Carry, "configured (CARRY_REPO set)", "not configured (CARRY_REPO unset)"))
 
 	fmt.Printf("\nproviders (%d)\n", len(d.Providers))
 	for _, p := range d.Providers {
