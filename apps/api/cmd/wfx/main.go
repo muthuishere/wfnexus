@@ -665,7 +665,7 @@ func typedInputs(workflow string, in map[string]any) (map[string]any, error) {
 
 func startRun(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f]")
+		return fmt.Errorf("usage: wfx run <workflow> -i key=value [-f] [--force]")
 	}
 	name := args[0]
 	input, err := inputsFrom(args[1:])
@@ -680,7 +680,11 @@ func startRun(args []string) error {
 	var created struct {
 		Run runRow `json:"run"`
 	}
-	if err := call("POST", "/api/workflows/"+url.PathEscape(name)+"/runs", input, &created); err != nil {
+	path := "/api/workflows/" + url.PathEscape(name) + "/runs"
+	if has(args, "--force") {
+		path += "?force=1" // past the workflow's `concurrency:`
+	}
+	if err := call("POST", path, input, &created); err != nil {
 		return err
 	}
 	r := created.Run

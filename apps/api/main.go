@@ -66,6 +66,10 @@ func resolveAssets(cfg *config.Config) {
 		{assets.SkillsName, &cfg.SkillsDir, cfg.Explicit.Skills},
 		{assets.RegistriesName, &cfg.RegistriesPath, cfg.Explicit.Registries},
 	} {
+		if it.name == assets.TemplatesName && cfg.TemplatesOff {
+			log.Printf("  %-10s off      (templates: off)", it.name)
+			continue
+		}
 		path, origin, warn, err := assets.Resolve(it.name, *it.target, it.explicit)
 		if warn != "" {
 			log.Printf("  WARNING %s", warn)

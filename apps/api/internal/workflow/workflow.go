@@ -377,8 +377,11 @@ type Definition struct {
 	Goal string `yaml:"goal,omitempty" json:"goal,omitempty"`
 	// MaxParallel caps how many of this workflow's steps run at once when it is
 	// a DAG or a plan. 0 ⇒ 4.
-	MaxParallel int    `yaml:"max_parallel,omitempty" json:"maxParallel,omitempty"`
-	Path        string `yaml:"-" json:"path"`
+	MaxParallel int `yaml:"max_parallel,omitempty" json:"maxParallel,omitempty"`
+	// Concurrency keeps two runs of one group from overlapping (GitHub Actions'
+	// `concurrency:`). Nil means no limit.
+	Concurrency *Concurrency `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Path        string       `yaml:"-" json:"path"`
 	// Source names where this workflow was loaded from — "local" for the
 	// platform's own directory, or the name a repository was imported as.
 	Source string `yaml:"-" json:"source,omitempty"`

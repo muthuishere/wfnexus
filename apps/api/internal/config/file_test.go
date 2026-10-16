@@ -57,6 +57,27 @@ func TestLocalModeSelectsLaptopDefaults(t *testing.T) {
 }
 
 // An absent file is the normal state of a fresh install, not an error.
+// `templates: off` loads no templates source at all.
+func TestTemplatesOff(t *testing.T) {
+	t.Setenv("WFX_TEMPLATES", "")
+	t.Setenv("WFX_TEMPLATES_DIR", "")
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("templates: off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.TemplatesOff || cfg.TemplatesDir != "" {
+		t.Fatalf("off=%v dir=%q", cfg.TemplatesOff, cfg.TemplatesDir)
+	}
+	on, _ := LoadWithFile(filepath.Join(t.TempDir(), "nope.yaml"))
+	if on.TemplatesOff || on.TemplatesDir == "" {
+		t.Fatal("templates must default on")
+	}
+}
+
 func TestAbsentFileIsFine(t *testing.T) {
 	cfg, err := LoadWithFile(filepath.Join(t.TempDir(), "nope.yaml"))
 	if err != nil {

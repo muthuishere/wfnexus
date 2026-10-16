@@ -73,6 +73,10 @@ secrets:
 
 maxConcurrentRuns: 4
 
+# Load the shipped templates source? `off` loads none (no gallery, no BROKEN
+# template lines at boot); anything else, or absent, is on. Env: WFX_TEMPLATES.
+# templates: off
+
 # paths:
 #   workflows: ~/.config/wfx/workflows
 #   templates: ~/.config/wfx/templates

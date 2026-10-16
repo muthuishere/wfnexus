@@ -107,6 +107,9 @@ type File struct {
 
 	// MaxConcurrentRuns bounds how many runs execute at once.
 	MaxConcurrentRuns int `yaml:"maxConcurrentRuns,omitempty"`
+	// Templates: off stops the server loading the shipped templates source
+	// at all (no gallery, no BROKEN template lines). Anything else is on.
+	Templates string `yaml:"templates,omitempty"`
 	// RunArtifactsKeep is how many ended-run artifacts are kept.
 	RunArtifactsKeep int `yaml:"runArtifactsKeep,omitempty"`
 
