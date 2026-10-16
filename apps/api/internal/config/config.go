@@ -44,6 +44,9 @@ type Config struct {
 	// WorkflowsDir so a template is never mistaken for something to run, and so
 	// `wfx apply` cannot quietly overwrite one.
 	TemplatesDir string
+	// TemplatesOff is `templates: off` (or WFX_TEMPLATES=off): the shipped
+	// templates are not loaded, and TemplatesDir is empty.
+	TemplatesOff bool
 	SkillsDir    string
 	McpConfig    string
 	// RegistriesPath holds providers, classifiers and MCP servers — everything a
@@ -274,6 +277,9 @@ func LoadWithFile(path string) (Config, error) {
 			Registries: stated("WFX_REGISTRIES", f.Paths.Registries),
 			UI:         stated("WFX_UI_DIR", f.Paths.UI),
 		},
+	}
+	if strings.EqualFold(strings.TrimSpace(env("WFX_TEMPLATES", f.Templates)), "off") {
+		cfg.TemplatesOff, cfg.TemplatesDir = true, ""
 	}
 	if ferr == nil {
 		ferr = merr

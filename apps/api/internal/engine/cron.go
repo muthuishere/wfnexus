@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"log"
@@ -77,6 +78,12 @@ func (e *Engine) fireSchedules(ctx context.Context, minute time.Time) {
 				continue
 			}
 			if err := e.startScheduled(ctx, name, sched.Input); err != nil {
+				var busy *BusyError
+				if errors.As(err, &busy) {
+					// Not silent: a skipped tick says which run held the group.
+					log.Printf("scheduler: %s (%s): skipped: concurrency (run %s still active)", name, sched.Cron, busy.RunID)
+					continue
+				}
 				log.Printf("scheduler: %s (%s): %v", name, sched.Cron, err)
 				continue
 			}
@@ -155,7 +162,7 @@ func (e *Engine) StartTriggered(ctx context.Context, name string, trigger workfl
 	if err != nil {
 		return err
 	}
-	run, err := e.store.CreateRun(ctx, e.ProjectFor(name), name, raw)
+	run, err := e.CreateRunAdmitted(ctx, name, raw, false)
 	if err != nil {
 		return err
 	}

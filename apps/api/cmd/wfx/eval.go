@@ -113,6 +113,9 @@ func resolveEvalAssets(cfg *config.Config) error {
 		{assets.SkillsName, &cfg.SkillsDir, cfg.Explicit.Skills},
 		{assets.RegistriesName, &cfg.RegistriesPath, cfg.Explicit.Registries},
 	} {
+		if it.name == assets.TemplatesName && cfg.TemplatesOff {
+			continue
+		}
 		path, origin, _, err := assets.Resolve(it.name, *it.target, it.explicit)
 		if err != nil {
 			return fmt.Errorf("%s: %w", it.name, err)

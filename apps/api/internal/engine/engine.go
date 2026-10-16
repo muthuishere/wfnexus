@@ -81,6 +81,9 @@ type Engine struct {
 
 	mu      sync.Mutex
 	running map[uuid.UUID]context.CancelFunc
+	// admitMu serialises "is the concurrency group free?" with creating the
+	// run, so two ticks at once start exactly one (concurrency.go).
+	admitMu sync.Mutex
 	// attached is what each live run's `mount:` turned into on this machine:
 	// the extra roots its agents may reach, and the WFX_MOUNT_* variables its
 	// steps get. Held per run rather than threaded through every execution

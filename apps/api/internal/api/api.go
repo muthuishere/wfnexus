@@ -775,7 +775,13 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	run, err := s.store.CreateRun(r.Context(), s.eng.ProjectFor(name), name, input)
+	// `concurrency:` is honoured here too; ?force=1 is a person overriding it.
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	run, err := s.eng.CreateRunAdmitted(r.Context(), name, input, force)
+	if errors.Is(err, engine.ErrConcurrencyBusy) {
+		writeErr(w, 409, fmt.Errorf("%v — wait for it, or start anyway with --force", err))
+		return
+	}
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -843,6 +849,11 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.StartTriggered(r.Context(), name, workflow.TriggerRepositoryDispatch, body.ClientPayload); err != nil {
+		if errors.Is(err, engine.ErrConcurrencyBusy) {
+			log.Printf("dispatch: %s: %v", name, err)
+			writeErr(w, 409, err)
+			return
+		}
 		writeErr(w, 400, err)
 		return
 	}

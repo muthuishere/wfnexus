@@ -586,6 +586,26 @@ workflow carrying `template:`, loaded and validated by the same code as everythi
 template that would not run is caught at boot rather than by the first person who copies it. A
 project ships its own the same way.
 
+A server that wants none of them sets `templates: off` in its config (or `WFX_TEMPLATES=off`):
+the templates source is not loaded at all, so no gallery and no `BROKEN` template lines at boot.
+
+## One run at a time: `concurrency:`
+
+```yaml
+concurrency: 1                 # one active run of this workflow
+# or
+concurrency:
+  group: nightly-db            # default: the workflow's name; share it across workflows
+  cancel-in-progress: false    # true: cancel the older active run, then start
+```
+
+While a run of the group is **running or queued**, a new scheduled or `repository_dispatch` run
+is skipped and logged as `skipped: concurrency (run <id> still active)`; `wfx run` fails with that
+message unless you pass `--force`. A run **parked on a human** (awaiting approval, needs input) does
+not hold the group — an unanswered pause must not stop the workflow forever — and
+`cancel-in-progress` does not cancel it either. Unknown keys are refused. The check is per server
+process, like the scheduler.
+
 ## Environment
 
 Five layers, each overriding only the names it mentions:
