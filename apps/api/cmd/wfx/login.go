@@ -72,6 +72,18 @@ func login(args []string) error {
 		// server has no authentication to log in to either.
 		return fmt.Errorf("usage: wfx login --url https://wfx.example.com")
 	}
+	// A via context is named, not addressed: `wfx login --url deemwar` signs in
+	// through its tunnel and stores the token on that context.
+	saveAs := ""
+	if c, err := loadContexts(); err == nil {
+		if ctx, ok := c.Contexts[hostKey(host)]; ok && ctx.Via != "" {
+			r, err := viaResolved(resolved{url: ctx.URL, name: hostKey(host)}, ctx)
+			if err != nil {
+				return err
+			}
+			saveAs, host = hostKey(host), r.url
+		}
+	}
 	if !strings.Contains(host, "://") {
 		host = "http://" + host
 	}
@@ -113,10 +125,10 @@ func login(args []string) error {
 			user := whoAmI(host, answer.AccessToken)
 			// The value goes straight into the 0600 contexts file. It is not
 			// printed, not logged, and not passed to any process.
-			if err := putContext(host, answer.AccessToken, user); err != nil {
+			if err := putContext(or(saveAs, host), answer.AccessToken, user); err != nil {
 				return err
 			}
-			fmt.Printf("Logged in to %s as %s.\n", hostKey(host), or(user, "?"))
+			fmt.Printf("Logged in to %s as %s.\n", or(saveAs, hostKey(host)), or(user, "?"))
 			fmt.Println("Open the web UI signed in: wfx ui")
 			return nil
 		case answer.Error == "authorization_pending":
