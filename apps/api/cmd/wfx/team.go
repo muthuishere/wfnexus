@@ -19,7 +19,7 @@ import (
 const teamTag = "wfx-team:"
 
 func authorizedKeysPath() string {
-	if p := os.Getenv("WFX_AUTHORIZED_KEYS"); p != "" {
+	if p := os.Getenv("WFX_TEAM_KEYS_FILE"); p != "" {
 		return p
 	}
 	return filepath.Join(homeDir(), ".ssh", "authorized_keys")
