@@ -62,6 +62,22 @@ func TestADirectoryWorkflowCarriesTheFilesBesideIt(t *testing.T) {
 	}
 }
 
+// A workflow directory linked in from a checkout loads like a real one, files
+// and all — that is how a server picks up one workflow out of a repo.
+func TestASymlinkedWorkflowDirectoryLoads(t *testing.T) {
+	linked := t.TempDir()
+	if err := os.Symlink(filepath.Join(writeWorkflowDir(t), "report"), filepath.Join(linked, "report")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	defs, err := LoadDir(linked, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := defs["report"]; d == nil || len(d.Files) != 2 {
+		t.Fatalf("the linked directory did not load with its files: %+v", d)
+	}
+}
+
 // The flat form is untouched: adding the directory form must break nothing
 // that already exists.
 func TestAFlatWorkflowStillLoadsAndCarriesNoFiles(t *testing.T) {

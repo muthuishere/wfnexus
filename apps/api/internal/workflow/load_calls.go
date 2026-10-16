@@ -70,8 +70,18 @@ func parseDir(dir string) (out []*Definition, broken []Broken, err error) {
 			files []File
 			err   error
 		)
-		if e.IsDir() {
-			raw, p, files, err = loadWorkflowDir(filepath.Join(dir, e.Name()))
+		// A symlinked workflow directory (a checkout linked into the
+		// workflows dir) is followed to where it really lives.
+		wfDir, isDir := filepath.Join(dir, e.Name()), e.IsDir()
+		if e.Type()&os.ModeSymlink != 0 {
+			if real, rerr := filepath.EvalSymlinks(wfDir); rerr == nil {
+				if st, serr := os.Stat(real); serr == nil && st.IsDir() {
+					wfDir, isDir = real, true
+				}
+			}
+		}
+		if isDir {
+			raw, p, files, err = loadWorkflowDir(wfDir)
 			if err != nil {
 				broken = append(broken, Broken{Path: filepath.Join(dir, e.Name()), Reason: err.Error()})
 				continue
