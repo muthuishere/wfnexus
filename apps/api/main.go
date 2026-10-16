@@ -202,10 +202,14 @@ func main() {
 	// reaches any of this: no git process, no network, no cache.
 	remote := remoteuse.New(bl, engine.BundleRootDirFor(cfg))
 	loadOpt := workflow.WithRemoteResolver(remote)
-	defs, err := workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
+	//
+	// The platform's own directory loads leniently, like every project source:
+	// one workflow with a YAML error is skipped and reported as NOT LOADED /
+	// BROKEN, never a reason to exit and take every other workflow down with it.
+	defs, _, err := workflow.LoadLocal(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
 	if roots := remote.Roots(); len(roots) > 0 {
 		reg = skills.Load(append(roots, skills.DefaultRoots(cfg.SkillsDir)...)...)
-		defs, err = workflow.LoadDir(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
+		defs, _, err = workflow.LoadLocal(cfg.WorkflowsDir, catalog.NewValidator(reg, cat), loadOpt)
 	}
 	if err != nil {
 		log.Fatalf("workflows: %v", err)
