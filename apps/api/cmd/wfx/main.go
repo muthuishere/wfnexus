@@ -117,6 +117,12 @@ func run(args []string) error {
 		return uiCmd(rest)
 	case "context", "contexts":
 		return contextCmd(rest)
+	case "status":
+		return statusCmd(rest)
+	case "tunnel":
+		return tunnelCmd(rest)
+	case "team":
+		return teamCmd(rest)
 	case "version", "--version", "-v":
 		return printVersion(rest)
 	case "publish":
@@ -184,6 +190,11 @@ func usage() {
   wfx logout [--url <host>]        revoke this host's token and forget it locally
   wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
   wfx context [list|use|rm <host>] several hosts, side by side; * marks the current one
+  wfx context add <name> --url http://127.0.0.1:8090 --via ssh://user@host [--key k] [--accept-host-key]
+                                   reach a server through a lazy SSH tunnel
+  wfx status                       current context; for a via context, its tunnel
+  wfx tunnel stop [context]        close a context's tunnel now (else 15 min idle)
+  wfx team add <name> <pubkey> | remove <name> | list   on the server: who may tunnel in
   wfx publish <file.yaml> --version v  push a workflow and its skills to the host
   wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)
   wfx pull <digest>                materialise a published bundle on the host

@@ -28,6 +28,9 @@ type wfxContext struct {
 	Token   string `json:"token,omitempty"`
 	User    string `json:"user,omitempty"`
 	Project string `json:"project,omitempty"`
+	// Via reaches URL through an SSH tunnel: ssh://user@host[:port][?key=path].
+	// Empty is a direct connection, exactly as before.
+	Via     string `json:"via,omitempty"`
 	Created string `json:"createdAt,omitempty"`
 }
 
@@ -173,7 +176,7 @@ func resolveContext(urlFlag string) (resolved, error) {
 		if !ok {
 			return resolved{}, fmt.Errorf("no context for %s — run `wfx login --url %s` first", key, normalizeURL(urlFlag))
 		}
-		return resolved{url: ctx.URL, token: ctx.Token, name: key}, nil
+		return viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: key}, ctx)
 	}
 	if v := os.Getenv("WFX_API"); v != "" {
 		r := resolved{url: normalizeURL(v), name: hostKey(v)}
@@ -192,10 +195,24 @@ func resolveContext(urlFlag string) (resolved, error) {
 	}
 	if c.Current != "" {
 		if ctx, ok := c.Contexts[c.Current]; ok {
-			return resolved{url: ctx.URL, token: ctx.Token, name: c.Current}, nil
+			return viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: c.Current}, ctx)
 		}
 	}
 	return resolved{url: "http://127.0.0.1:8090", name: "127.0.0.1:8090"}, nil
+}
+
+// viaResolved swaps the URL of a via context for its local tunnel, starting the
+// tunnel helper when it is not running.
+func viaResolved(r resolved, ctx *wfxContext) (resolved, error) {
+	if ctx.Via == "" {
+		return r, nil
+	}
+	local, err := ensureTunnel(r.name, ctx)
+	if err != nil {
+		return resolved{}, err
+	}
+	r.url = local
+	return r, nil
 }
 
 // putContext adds or replaces ONE context. Every other context's credential is
@@ -206,6 +223,12 @@ func putContext(hostURL, token, user string) error {
 		return err
 	}
 	key := hostKey(hostURL)
+	if prev, ok := c.Contexts[key]; ok && prev.Via != "" {
+		// A login through a via context keeps its URL and tunnel.
+		prev.Token, prev.User = token, user
+		c.Current = key
+		return saveContexts(c)
+	}
 	c.Contexts[key] = &wfxContext{
 		URL: normalizeURL(hostURL), Token: token, User: user,
 		Created: time.Now().UTC().Format(time.RFC3339),
@@ -257,6 +280,9 @@ func contextCmd(args []string) error {
 				// Metadata only. The value is never printed, here or anywhere.
 				state = "authenticated as " + or(c.Contexts[k].User, "?")
 			}
+			if c.Contexts[k].Via != "" {
+				state += " · via " + c.Contexts[k].Via
+			}
 			fmt.Printf("%s%-30s %-34s %s\n", mark, k, c.Contexts[k].URL, state)
 		}
 		return nil
@@ -267,8 +293,14 @@ func contextCmd(args []string) error {
 		}
 		c.Current = key
 		return saveContexts(c)
+	case "add":
+		return contextAdd(args[1:])
 	case "rm", "remove":
+		if s, err := readState(hostKey(args[len(args)-1])); err == nil {
+			killProcess(s.PID)
+			_ = os.Remove(statePath(hostKey(args[len(args)-1])))
+		}
 		return removeContext(hostKey(args[len(args)-1]))
 	}
-	return fmt.Errorf("usage: wfx context [list|use <host>|rm <host>]")
+	return fmt.Errorf("usage: wfx context [list|add <name> --url U [--via ssh://user@host]|use <name>|rm <name>]")
 }

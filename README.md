@@ -116,6 +116,20 @@ you want" is a context, not a rebuild.
 needs no browser and no callback on the machine running it, so it works over SSH, in a container,
 and **inside another agent's session** — which is exactly where the authoring happens.
 
+### Reach a remote server over SSH
+
+The server stays on loopback; only sshd faces the internet. A context with `--via` opens a tunnel
+on the first command that needs it and closes it after 15 minutes with nothing open:
+
+```bash
+wfx team add alice alice.pub        # on the server, as the wfx user: tunnel-only key, no shell
+wfx context add deemwar --url http://127.0.0.1:8090 --via ssh://wfx@46.4.13.167 --accept-host-key
+wfx status                          # deemwar · tunnel up 4m · idle close in 11m
+```
+
+`--key` picks a key (default: ssh-agent, then `~/.ssh/id_ed25519`, `id_rsa`); host keys are checked
+against `~/.ssh/known_hosts`. `wfx tunnel stop` closes it now.
+
 ### Or publish to a git remote, with no host and no account
 
 A workflow can also be shared without a server at all. `--to` writes the bundle into a git
