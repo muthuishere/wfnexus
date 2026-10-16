@@ -44,9 +44,13 @@ type Run struct {
 	StartedAt *time.Time `json:"startedAt"`
 	// TriggeredBy is WHO started the run — a subject, a claimed actor, or
 	// `trigger:<kind>` (migration 000016). Segregation of duties reads it.
-	TriggeredBy string    `json:"triggeredBy"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	TriggeredBy string `json:"triggeredBy"`
+	// Outcome is the run's headline verdict, one line:
+	// `ok|incident|waiting|failed: <text>` (migration 000017). A step writes it
+	// to $WFX_OUTCOME; otherwise the engine derives it when the run ends.
+	Outcome   string    `json:"outcome"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type StepRun struct {

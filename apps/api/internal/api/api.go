@@ -198,6 +198,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/state", s.setState)
 		r.Delete("/state/{key}", s.deleteState)
 		r.Get("/workflows/{name}/state", s.workflowState)
+		r.Get("/workflows/{name}/schedule", s.workflowSchedule)
 		// The price table: what each model family costs (ADR 0020).
 		r.Get("/prices", s.listPrices)
 		r.Put("/prices", s.setPrice)

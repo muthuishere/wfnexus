@@ -21,7 +21,12 @@ steps:
         stdout:   { type: string }
         stderr:   { type: string }
   - id: count
-    run: printf 'a\nb\nc\n' | wc -l
+    # The run's story (engine/story.go): a summary and a verdict, written to
+    # the files the engine names. stdout is unchanged.
+    run: |
+      printf 'a\nb\nc\n' | wc -l
+      echo '## Counted 3 lines' >> "$WFX_STEP_SUMMARY"
+      echo 'ok: counted 3 lines' > "$WFX_OUTCOME"
     output_schema:
       type: object
       properties:

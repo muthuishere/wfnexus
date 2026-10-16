@@ -30,10 +30,10 @@ test('free, priced, unpriced and untracked each render differently', () => {
   expect(unknown.textContent).toMatch(/unknown/)
   expect(unknown.textContent).not.toContain('$')   // the whole point
 
-  // run 7437e287 — older than cost accounting: tokens, and nothing else
+  // run 7437e287 — older than cost accounting (or a script step): no cost
+  // recorded, so NOTHING is said — never a "cost not tracked" label.
   const { container: old } = render(<Cost usage={{ totalTokens: 1287416 }} />)
-  expect(old.textContent).toMatch(/not tracked/)
-  expect(old.textContent).not.toContain('$')
+  expect(old.textContent).toBe('')
 })
 
 // The hero moment: the contract refused an answer and the model fixed it.

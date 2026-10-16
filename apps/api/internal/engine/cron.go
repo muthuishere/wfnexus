@@ -55,6 +55,30 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 	}()
 }
 
+// NextRunAt is when a workflow's schedule fires next — the earliest of its
+// cron entries after `after` — or nil when it has no schedule (or no
+// definition by that name). Cron is UTC, as the scheduler reads it.
+func (e *Engine) NextRunAt(name string, after time.Time) *time.Time {
+	def := e.Definitions()[name]
+	if def == nil {
+		return nil
+	}
+	var best time.Time
+	for _, s := range def.On.Schedule {
+		c, err := workflow.ParseCron(s.Cron)
+		if err != nil {
+			continue
+		}
+		if n := c.Next(after); !n.IsZero() && (best.IsZero() || n.Before(best)) {
+			best = n
+		}
+	}
+	if best.IsZero() {
+		return nil
+	}
+	return &best
+}
+
 // fireSchedules starts a run for every cron entry matching this minute.
 func (e *Engine) fireSchedules(ctx context.Context, minute time.Time) {
 	// A project workflow is reachable by its short name AND as project/name —

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -319,6 +320,17 @@ func TestRetryResetsTheStepAndItsSuccessors(t *testing.T) {
 		t.Fatalf("run = %s", run.Status)
 	}
 
+	// The row says `done` a moment before the run's goroutine exits, and Start
+	// ignores a run that is still registered as executing. Wait for it to
+	// leave, or the retry below is silently dropped and the run sits queued.
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		h.eng.mu.Lock()
+		_, busy := h.eng.running[run.ID]
+		h.eng.mu.Unlock()
+		if !busy {
+			break
+		}
+	}
 	if err := h.eng.Retry(context.Background(), run.ID, "one"); err != nil {
 		t.Fatal(err)
 	}

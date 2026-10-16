@@ -463,6 +463,10 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 		// provider refusing every call failed every workflow silently.
 		log.Print(failureLine(runID, step, errMsg))
 	}
+	// The verdict is settled BEFORE the status lands: a reader that sees
+	// `done` must also see its outcome, and the status write stays the last
+	// thing a finishing run does to its row.
+	e.settleOutcome(ctx, runID, status, errMsg)
 	if err := e.store.UpdateRun(context.WithoutCancel(ctx), runID, status, step, errMsg); err != nil {
 		log.Printf("engine: update run: %v", err)
 	}

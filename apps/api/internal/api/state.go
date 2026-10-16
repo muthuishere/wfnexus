@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -77,6 +78,20 @@ func (s *Server) workflowState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"vars": vars})
+}
+
+// workflowSchedule answers "when does this run next?" for the workflow page:
+// the next cron fire (UTC), or null for a workflow nobody schedules.
+func (s *Server) workflowSchedule(w http.ResponseWriter, r *http.Request) {
+	name := urlName(r, "name")
+	def := s.eng.Definitions()[name]
+	crons := []string{}
+	if def != nil {
+		for _, sc := range def.On.Schedule {
+			crons = append(crons, sc.Cron)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"nextRunAt": s.eng.NextRunAt(name, time.Now()), "crons": crons})
 }
 
 // ---- the running step's door ----

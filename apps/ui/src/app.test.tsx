@@ -148,9 +148,13 @@ describe('the UI a person actually downloads', () => {
     const steps = await screen.findByText('1. greet')
     expect(steps).toBeTruthy()
     await screen.findByText('2. count')
-    const kv = document.querySelector('.kv')!
-    expect(within(kv as HTMLElement).getByText('skills')).toBeTruthy()
-    expect(within(kv as HTMLElement).getByText('tools')).toBeTruthy()
+    // Script steps carry no model facts: no skills/tools table, no turns, no
+    // "cost not tracked" anywhere.
+    expect(document.querySelector('.kv')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/not tracked|0 tok/)
+    // The run tells its story: the verdict a step wrote, and its summary.
+    expect(document.querySelector('.vtext')?.textContent).toBe('counted 3 lines')
+    expect((await screen.findAllByText('Counted 3 lines')).length).toBeGreaterThan(0)
   })
 
   test('a failing step is shown as failed, and says why', async () => {
@@ -217,7 +221,7 @@ describe('the UI a person actually downloads', () => {
     await api.setState({ scope: 'global', key: 'tier', value: 'pro' })
 
     go('#/projects/local/deterministic')
-    fireEvent.click(await screen.findByRole('tab', { name: /Memory/ }))
+    fireEvent.click(await screen.findByRole('tab', { name: /State/ }))
     await screen.findByText('last_id')
     await screen.findByText('4120')
     // The global namespace is shared, so it shows here too — labelled, because
