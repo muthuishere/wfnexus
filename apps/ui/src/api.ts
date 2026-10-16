@@ -95,7 +95,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; /** headline verdict `ok|incident|waiting|failed: text` (engine/story.go) */ outcome?: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
@@ -401,6 +401,9 @@ export const api = {
    *  workflow's memory, each of its steps', and the global namespace. */
   workflowState: (name: string) =>
     j<{ vars: StateVar[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/state`)),
+  /** When the workflow's cron fires next (UTC instant), or null when unscheduled. */
+  workflowSchedule: (name: string) =>
+    j<{ nextRunAt: string | null; crons: string[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/schedule`)),
   state: (scope: string, name = '') =>
     j<StateList>(fetch(`/api/state?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(name)}`)),
   setState: (v: { scope: string; name?: string; key: string; value: string }) =>

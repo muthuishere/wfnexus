@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Event, Step, StepRun } from '../api'
 
 // ── the run, drawn as time ───────────────────────────────────────────────────
@@ -51,7 +52,7 @@ export function tokens(n?: number): string {
  *    costUsd: 0        → "$0.00 free"      — known, and worth noticing
  *    costUsd: 4.37     → "$4.37"
  *    costUnknown: true → "cost unknown"    — a price nobody configured
- *    neither key       → "cost not tracked" — a run older than cost accounting
+ *    neither key       → nothing at all     — a script step, or a run older than cost accounting
  */
 export function money(n: number): string {
   if (n === 0) return '$0.00'
@@ -61,8 +62,9 @@ export function money(n: number): string {
 
 export function Cost({ usage, big }: { usage?: Usage; big?: boolean }) {
   const c = big ? 'cost big' : 'cost'
-  if (!usage || (usage.costUsd === undefined && !usage.costUnknown))
-    return <span className={`${c} untracked`} title="this step ran before cost was recorded">cost not tracked</span>
+  // No cost recorded (a script step, or a run older than cost accounting):
+  // say nothing. A label for an absent number is noise on every row.
+  if (!usage || (usage.costUsd === undefined && !usage.costUnknown)) return null
   if (usage.costUnknown)
     return <span className={`${c} unknown`} title="this provider has no price in the registry — the tokens are real, the price is not known">cost unknown</span>
   const n = usage.costUsd ?? 0
@@ -108,23 +110,36 @@ export function Corrections({ items }: { items: Correction[] }) {
 
 type Row = { def: Step; run?: StepRun; ms: number; ceiling: number }
 
-export default function RunTimeline({ steps, byId, events, now, selected, onPick }: {
+/** A step that needed no model: no turns, tokens or cost to report. */
+const isScriptStep = (d: Step) => !!d.run || !!(d as any).judge
+
+export default function RunTimeline({ steps, byId, events, now, selected, onPick, skipReason }: {
   steps: Step[]; byId: Record<string, StepRun>; events: Event[]
   now: number; selected: string; onPick: (id: string) => void
+  /** why the skipped steps were not needed — shown on their collapsed line */
+  skipReason?: string
 }) {
-  const rows: Row[] = steps.map(def => ({
+  const [showSkipped, setShowSkipped] = useState(false)
+  const all: Row[] = steps.map(def => ({
     def, run: byId[def.id], ms: elapsedMs(byId[def.id], now),
     ceiling: def.budget?.maxTurns || def.maxTurns || 0,
   }))
-  const max = Math.max(1, ...rows.map(r => r.ms))
+  const skipped = all.filter(r => r.run?.status === 'skipped')
+  // Skipped steps are folded into ONE line: thirteen "skipped" rows bury the
+  // three that did something.
+  const rows = showSkipped ? all : all.filter(r => r.run?.status !== 'skipped')
+  const max = Math.max(1, ...all.map(r => r.ms))
   const corrections = correctionsOf(events)
 
   return (
     <div className="tl">
-      {rows.map((r, i) => {
+      {rows.map(r => {
+        const i = all.indexOf(r)
         const st = r.run?.status || 'pending'
         const u = r.run?.usage as Usage | undefined
         const running = st === 'running'
+        const script = isScriptStep(r.def)
+        const turns = r.run?.turns ?? 0
         const mine = corrections.filter(c => c.step === r.def.id)
         return (
           <div key={r.def.id} className={`tlrow ${st}${selected === r.def.id ? ' on' : ''}`}
@@ -139,11 +154,13 @@ export default function RunTimeline({ steps, byId, events, now, selected, onPick
             </div>
             <div className="tlfacts">
               <span className="t">{r.ms > 0 ? dur(r.ms) : '—'}</span>
-              <span>{r.run?.turns ?? 0}{r.ceiling ? `/${r.ceiling}` : ''} turns</span>
-              <span>{tokens(u?.totalTokens)} tok</span>
-              <Cost usage={u} />
+              {/* Script steps: status and duration only. Agent steps: the
+                  model facts, each one only when there is one to show. */}
+              {!script && turns > 0 && <span>{turns}{r.ceiling ? `/${r.ceiling}` : ''} turns</span>}
+              {!script && !!u?.totalTokens && <span>{tokens(u.totalTokens)} tok</span>}
+              {!script && <Cost usage={u} />}
             </div>
-            {running && (
+            {running && !script && (
               <div className="tlprog">
                 {r.ceiling > 0 && (
                   <span className="meter" aria-label={`turn ${r.run?.turns ?? 0} of ${r.ceiling}`}>
@@ -156,6 +173,12 @@ export default function RunTimeline({ steps, byId, events, now, selected, onPick
             {mine.length > 0 && <Corrections items={mine} />}
           </div>)
       })}
+      {skipped.length > 0 && (
+        <button type="button" className="tlskipped" onClick={() => setShowSkipped(v => !v)}
+          aria-expanded={showSkipped}>
+          {showSkipped ? '▾' : '▸'} {skipped.length} step{skipped.length === 1 ? '' : 's'} not needed
+          {skipReason && <span className="muted"> — {skipReason}</span>}
+        </button>)}
     </div>
   )
 }

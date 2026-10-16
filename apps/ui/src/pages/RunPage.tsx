@@ -6,7 +6,9 @@ import ApprovalBanner from '../components/ApprovalBanner'
 import NeedsInputForm from '../components/NeedsInputForm'
 import OutputContract from '../components/OutputContract'
 import WorkflowCanvas from '../components/WorkflowCanvas'
-import RunTimeline, { Cost, dur, money, tokens, type Usage } from '../components/RunTimeline'
+import RunTimeline, { Cost, dur, tokens, type Usage } from '../components/RunTimeline'
+import Markdown from '../components/Markdown'
+import { headlineOf, hhmm, isScript, summaryOf } from '../lib/story'
 
 // ── the run page ─────────────────────────────────────────────────────────────
 // A run is WORK HAPPENING IN TIME. The page answers two questions in three
@@ -75,6 +77,13 @@ export default function RunPage({ id }: { id: string }) {
   }, [live, refresh])
 
   const run = d?.run
+  // "next run at" — only worth asking once, for the workflow this run is of.
+  const [nextRunAt, setNextRunAt] = useState<string | null>(null)
+  const wfName = run?.workflow
+  useEffect(() => {
+    if (!wfName) return
+    api.workflowSchedule(wfName).then(s => setNextRunAt(s.nextRunAt)).catch(() => setNextRunAt(null))
+  }, [wfName])
   // The definition is the source of the SHAPE — but it comes off disk, so a
   // run whose workflow has since been deleted or renamed arrives with
   // `definition: null`. The run itself is still in the database, so the
@@ -120,6 +129,17 @@ export default function RunPage({ id }: { id: string }) {
     e.kind === 'step.status' && e.stepId === run.currentStep && PAUSED.includes(e.payload?.status))?.createdAt
     || run.updatedAt
 
+  const head = headlineOf(run)
+  // What happens next: who it is waiting on, or when the schedule runs it again.
+  const next = PAUSED.includes(run.status)
+    ? `waiting on ${haltedDef?.approvers?.length ? haltedDef.approvers.join(', ') : 'you'} · ${dur(now - Date.parse(pausedSince))} so far`
+    : live ? 'still working'
+      : nextRunAt ? `next run at ${hhmm(nextRunAt)}` : run.status === 'failed' ? 'retry the failed step, or fix and run again' : ''
+  const found = stepDefs.map(s => ({ def: s, md: summaryOf(byId[s.id]) })).filter(x => x.md)
+  const script = isScript(curDef)
+  const curSummary = summaryOf(curRun)
+  const curUsage = curRun?.usage as Usage | undefined
+
   return (
     <>
       <div className="head" style={{ alignItems: 'center' }}>
@@ -132,124 +152,132 @@ export default function RunPage({ id }: { id: string }) {
           <h1>{run.input?.title || run.workflow}</h1>
           <div className="muted mono" style={{ fontSize: 12, marginTop: 3 }}>{run.id}</div>
         </div>
-        <span className={`badge ${run.status}`}>{run.status.replace(/_/g, ' ')}</span>
         {['running', 'queued'].includes(run.status) && <button className="ghost" onClick={() => act(api.cancel(run.id))}>Cancel</button>}
       </div>
       {err && <div className="banner err">{err}</div>}
 
-      {/* A PAUSE IS AN ACTION — it goes above everything, with the control in it. */}
+      {/* THE VERDICT: what this run found, in one sentence, and what is next. */}
+      <div className={`card verdict ${head.verdict}`}>
+        <div className="vline">
+          <span className={`vword ${head.verdict}`}>{head.verdict === 'running' ? 'working' : head.verdict}</span>
+          <span className="vtext">{head.text}</span>
+        </div>
+        <div className="vfacts">
+          <span className={`badge ${run.status}`}>{run.status.replace(/_/g, ' ')}</span>
+          <span>{dur(totals.ms)}</span>
+          <span>{new Date(run.startedAt || run.createdAt).toLocaleString()}</span>
+          {next && <span className="vnext">next: {next}</span>}
+          {run.status === 'failed' && run.currentStep &&
+            <button style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, run.currentStep))}>Retry step</button>}
+        </div>
+        {run.status === 'failed' && run.error && head.text !== run.error.split('\n')[0] &&
+          <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>at <span className="mono">{run.currentStep}</span>: {run.error}</div>}
+        {run.status === 'done' && finalUrl &&
+          <div style={{ marginTop: 8 }}><b>PR published</b> — <a href={finalUrl} target="_blank" rel="noreferrer">{finalUrl}</a></div>}
+      </div>
+
+      {/* A PAUSE IS AN ACTION — the control right under the verdict. */}
       {run.status === 'awaiting_approval' && (
-        <>
-          <div className="waiting">waiting for you · {dur(now - Date.parse(pausedSince))}</div>
-          <ApprovalBanner
-            step={haltedDef} stepId={run.currentStep}
-            onApprove={() => act(api.approve(run.id, run.currentStep))}
-            onReject={reason => act(api.reject(run.id, run.currentStep, reason))} />
-        </>)}
+        <ApprovalBanner
+          step={haltedDef} stepId={run.currentStep}
+          onApprove={() => act(api.approve(run.id, run.currentStep))}
+          onReject={reason => act(api.reject(run.id, run.currentStep, reason))} />)}
 
       {run.status === 'needs_input' && (
-        <>
-          <div className="waiting">waiting for you · {dur(now - Date.parse(pausedSince))}</div>
-          <NeedsInputForm
-            stepId={run.currentStep} reason={run.error} stepRun={halted}
-            onSubmit={text => act(api.input(run.id, {
-              extra_context: [run.input?.extra_context, text].filter(Boolean).join('\n\n'),
-            }))} />
-        </>)}
+        <NeedsInputForm
+          stepId={run.currentStep} reason={run.error} stepRun={halted}
+          onSubmit={text => act(api.input(run.id, {
+            extra_context: [run.input?.extra_context, text].filter(Boolean).join('\n\n'),
+          }))} />)}
 
       {resolved && (
         <div className="banner ok"><span className="mono">{resolved.stepId}</span>: <Resolved s={resolved} /></div>)}
 
-      {run.status === 'failed' && (
-        <div className="banner err"><b>Run failed</b> at <span className="mono">{run.currentStep}</span>: {run.error}
-          <div className="actions"><button onClick={() => act(api.retry(run.id, run.currentStep))}>Retry step</button></div>
+      {found.length > 0 && (
+        <div className="card">
+          <h2>What it found</h2>
+          {found.map(f => (
+            <div key={f.def.id} className="found" onClick={() => setSel(f.def.id)}>
+              {found.length > 1 && <div className="muted mono found-step">{f.def.name || f.def.id}</div>}
+              <Markdown text={f.md} />
+            </div>))}
         </div>)}
 
-      {run.status === 'done' && finalUrl && (
-        <div className="banner ok"><b>PR published</b> — <a href={finalUrl} target="_blank" rel="noreferrer">{finalUrl}</a></div>)}
-
-      {/* THE HERO: the run drawn as time, with the money beside the work. */}
       <div className="card runcard">
         <div className="runtop">
-          <div className="big">
-            {/* The known money is always shown as money — a run that is partly
-                unpriced still has a real, spent number in it, and a run of
-                local steps is genuinely free. What is missing is said beside
-                it, never folded into it. */}
-            <Cost usage={totals.priced ? { costUsd: totals.usd } : totals.unpriced ? { costUnknown: true } : undefined} big />
-            {totals.unpriced > 0 && totals.priced > 0 &&
-              <span className="muted"> + {totals.unpriced} unpriced step{totals.unpriced > 1 ? 's' : ''}</span>}
-          </div>
+          <h2 style={{ margin: 0 }}>Steps</h2>
           <div className="runfacts">
-            <span>{dur(totals.ms)}</span>
-            <span>{tokens(totals.tok)} tokens</span>
+            {/* Money only when some step HAS a known price — never a label
+                for a number nobody recorded. */}
+            {totals.priced > 0 && <span><Cost usage={{ costUsd: totals.usd }} />
+              {totals.unpriced > 0 && <span className="muted"> + {totals.unpriced} unpriced</span>}</span>}
+            {totals.tok > 0 && <span>{tokens(totals.tok)} tokens</span>}
             <span>{stepDefs.length} step{stepDefs.length === 1 ? '' : 's'}</span>
           </div>
         </div>
-        <RunTimeline steps={stepDefs} byId={byId} events={events} now={now} selected={current} onPick={setSel} />
+        <RunTimeline steps={stepDefs} byId={byId} events={events} now={now} selected={current} onPick={setSel}
+          skipReason={head.verdict === 'ok' ? 'nothing actionable found' : 'their conditions did not match'} />
       </div>
 
-      <div className="grid cols-2">
-        <div>
-          <div className="card">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <h2 style={{ margin: 0 }}>{curDef?.name || current}</h2>
-              <span className={`badge ${curRun?.status || 'pending'}`}>{curRun?.status || 'pending'}</span>
-              {curRun && curRun.status !== 'running' && <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, current))}>Re-run from here</button>}
-            </div>
-            <div className="kv" style={{ marginTop: 10 }}>
-              <b>skills</b><span className="mono">{curDef?.skills?.join(', ') || '—'}</span>
-              <b>tools</b><span className="mono">{curDef?.tools?.join(', ') || '—'}</span>
-              <b>model</b><span className="mono">{curDef?.model || curDef?.provider || 'default'}</span>
-              <b>cost</b><span><Cost usage={curRun?.usage as Usage | undefined} /></span>
-              <b>tokens</b><span className="mono">
-                {(curRun?.usage as Usage)?.promptTokens !== undefined
-                  ? `${tokens((curRun!.usage as Usage).promptTokens)} in · ${tokens((curRun!.usage as Usage).completionTokens)} out`
-                  : tokens((curRun?.usage as Usage)?.totalTokens)}
-              </span>
-            </div>
-            {curRun?.resolvedBy && <div className="banner ok" style={{ marginTop: 10 }}><Resolved s={curRun} /></div>}
-            {curRun?.error && <div className="banner err" style={{ marginTop: 10 }}>{curRun.error}</div>}
-            {curRun?.output && <><h3 style={{ marginTop: 14 }}>Validated output</h3><pre>{JSON.stringify(curRun.output, null, 2)}</pre></>}
-            <h3 style={{ marginTop: 14 }}>Output contract</h3>
-            <OutputContract schema={curDef?.outputSchema} />
-          </div>
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0 }}>{curDef?.name || current}</h2>
+          <span className={`badge ${curRun?.status || 'pending'}`}>{curRun?.status || 'pending'}</span>
+          {curRun && curRun.status !== 'running' && <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, current))}>Re-run from here</button>}
+        </div>
+        {curRun?.resolvedBy && <div className="banner ok" style={{ marginTop: 10 }}><Resolved s={curRun} /></div>}
+        {curRun?.error && <div className="banner err" style={{ marginTop: 10 }}>{curRun.error}</div>}
+        {curSummary
+          ? <div style={{ marginTop: 10 }}><Markdown text={curSummary} /></div>
+          : <p className="muted" style={{ marginTop: 10 }}>No summary from this step{script ? <> — a script writes one by appending markdown to <span className="mono">$WFX_STEP_SUMMARY</span></> : ''}.</p>}
+        {!script && (
+          <div className="kv" style={{ marginTop: 10 }}>
+            <b>skills</b><span className="mono">{curDef?.skills?.join(', ') || '—'}</span>
+            <b>tools</b><span className="mono">{curDef?.tools?.join(', ') || '—'}</span>
+            <b>model</b><span className="mono">{curDef?.model || curDef?.provider || 'default'}</span>
+            {curUsage?.totalTokens ? <><b>tokens</b><span className="mono">
+              {curUsage.promptTokens !== undefined
+                ? `${tokens(curUsage.promptTokens)} in · ${tokens(curUsage.completionTokens)} out`
+                : tokens(curUsage.totalTokens)}
+            </span></> : null}
+            {(curUsage?.costUsd !== undefined || curUsage?.costUnknown) && <><b>cost</b><span><Cost usage={curUsage} /></span></>}
+          </div>)}
+        <details style={{ marginTop: 12 }}>
+          <summary><b>Log</b></summary>
+          <div style={{ marginTop: 8 }}><EventLog events={events} filter={current || undefined} /></div>
+        </details>
+        {curRun?.output && (
+          <details style={{ marginTop: 8 }}>
+            <summary><b>Output</b></summary>
+            <pre style={{ marginTop: 8 }}>{JSON.stringify(curRun.output, null, 2)}</pre>
+            {!script && <><h3 style={{ marginTop: 10 }}>Output contract</h3><OutputContract schema={curDef?.outputSchema} /></>}
+          </details>)}
+      </div>
 
-          <DecisionPanel decision={curRun?.decision} step={curDef} />
+      <DecisionPanel decision={curRun?.decision} step={curDef} />
 
-          {d!.artifacts.length > 0 && (
-            <div className="card">
-              <h3>Artifacts</h3>
-              {d!.artifacts.map(a => (
-                <div key={a.id} style={{ marginBottom: 6 }}>
-                  <a href={`/api/runs/${run.id}/artifacts/${a.id}?inline=1`} target="_blank" rel="noreferrer" className="mono">{a.stepId}/{a.name}</a>
-                  <span className="muted"> {(a.sizeBytes / 1024).toFixed(1)} KB</span>
-                </div>))}
+      {d!.artifacts.length > 0 && (
+        <div className="card">
+          <h3>Artifacts</h3>
+          {d!.artifacts.map(a => (
+            <div key={a.id} style={{ marginBottom: 6 }}>
+              <a href={`/api/runs/${run.id}/artifacts/${a.id}?inline=1`} target="_blank" rel="noreferrer" className="mono">{a.stepId}/{a.name}</a>
+              <span className="muted"> {(a.sizeBytes / 1024).toFixed(1)} KB</span>
+            </div>))}
+        </div>)}
+
+      <div className="card">
+        <details>
+          <summary><b>Input &amp; shape</b></summary>
+          <pre style={{ marginTop: 10 }}>{JSON.stringify(run.input, null, 2)}</pre>
+          {stepDefs.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel} />
             </div>)}
-
-          <div className="card">
-            <details>
-              <summary><b>Input &amp; shape</b></summary>
-              <pre style={{ marginTop: 10 }}>{JSON.stringify(run.input, null, 2)}</pre>
-              {stepDefs.length > 1 && (
-                <div style={{ marginTop: 10 }}>
-                  <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel} />
-                </div>)}
-            </details>
-          </div>
-        </div>
-
-        <div>
-          <div className="card">
-            <div style={{ display: 'flex', alignItems: 'center' }}><h3>Activity · {current || 'all'}</h3>
-              <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => setSel('')}>All steps</button></div>
-            <EventLog events={events} filter={sel || undefined} />
-          </div>
-        </div>
+        </details>
       </div>
       <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-        {live ? 'live · totals refresh every second' : `finished ${new Date(run.updatedAt).toLocaleString()}`}
-        {totals.unpriced > 0 && ` · ${totals.unpriced} step(s) ran on a provider with no price in the registry — shown as unknown, never as ${money(0)}`}
+        {live ? 'live · refreshes every second' : `finished ${new Date(run.updatedAt).toLocaleString()}`}
       </div>
     </>
   )

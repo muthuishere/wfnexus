@@ -82,6 +82,15 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
 	}
+	// The step's story files (story.go): summary, outcome, state.
+	story, err := newStoryFiles()
+	if err != nil {
+		return nil, fmt.Errorf("step %s: story files: %w", step.ID, err)
+	}
+	defer story.close()
+	for k, v := range story.env() {
+		stepEnv = append(stepEnv, k+"="+v)
+	}
 	c.Env = append(os.Environ(), stepEnv...)
 	var stdout, stderr strings.Builder
 	c.Stdout, c.Stderr = &stdout, &stderr
@@ -99,6 +108,12 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	out := map[string]any{
 		"ok": exitCode == 0, "exitCode": exitCode,
 		"stdout": trim(stdout.String(), maxEventOutput), "stderr": trim(stderr.String(), maxEventOutput),
+	}
+	if oc := e.collectStory(ctx, runID, step.ID, story, out); oc != "" && e.store != nil {
+		// Live: the headline moves the moment a step says what it found.
+		if err := e.store.SetRunOutcome(context.WithoutCancel(ctx), runID, oc); err != nil {
+			e.emit(ctx, runID, step.ID, "log", map[string]any{"message": "outcome: " + err.Error()})
+		}
 	}
 	e.emit(ctx, runID, step.ID, "tool_result", map[string]any{
 		"name": "run", "isError": exitCode != 0,

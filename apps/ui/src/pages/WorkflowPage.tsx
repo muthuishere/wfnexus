@@ -10,6 +10,7 @@ import FileList from '../components/FileList'
 import StepHarness from '../components/StepHarness'
 import WorkflowCanvas from '../components/WorkflowCanvas'
 import { ago } from '../lib/time'
+import { headlineOf, hhmm } from '../lib/story'
 import { href } from '../lib/routes'
 import { canDispatch, clip, sameWorkflow, shapeOf, summariseRun, triggerNames } from '../lib/workflow'
 
@@ -27,6 +28,10 @@ export default function WorkflowPage({ project, name }: { project: string; name:
   // that never has opens on its steps — there is nothing else to look at yet.
   const [tab, setTab] = useState<Tab>()
   const [proposed, setProposed] = useState<Proposal>()
+  const [nextRunAt, setNextRunAt] = useState<string | null>(null)
+  useEffect(() => {
+    api.workflowSchedule(name).then(s => setNextRunAt(s.nextRunAt)).catch(() => setNextRunAt(null))
+  }, [name])
 
   const load = useCallback(() => {
     Promise.all([api.workflows(), api.runs({ project, workflow: name })])
@@ -57,6 +62,11 @@ export default function WorkflowPage({ project, name }: { project: string; name:
       key: 'status', header: 'Status', width: 130,
       value: r => r.status,
       cell: r => <span className={`badge ${r.status}`}>{r.status.replace(/_/g, ' ')}</span>,
+    },
+    {
+      key: 'verdict', header: 'Verdict',
+      value: r => r.outcome || '',
+      cell: r => { const h = headlineOf(r); return <span title={h.text}>{clip(h.text, 70)}</span> },
     },
     {
       key: 'what', header: 'What it is about',
@@ -110,12 +120,29 @@ export default function WorkflowPage({ project, name }: { project: string; name:
         { key: 'steps', label: 'Steps', count: def.steps.length },
         { key: 'checks', label: 'Checks' },
         { key: 'changes', label: 'Changes' },
-        { key: 'memory', label: 'Memory' },
+        { key: 'memory', label: 'State' },
       ]} />
       {proposed && <ProposedNotice proposal={proposed} />}
 
       {tab === 'runs' && (
         <div className="card">
+          {nextRunAt && <p className="nextrun">Next run at <b>{hhmm(nextRunAt)}</b>
+            <span className="muted"> · {new Date(nextRunAt).toLocaleDateString()}</span></p>}
+          {/* The runs as a TIMELINE of verdicts — an every-15-minutes watch
+              reads "16:15 all clear · 16:30 all clear · 16:45 incident: …". */}
+          {runs.length > 0 && (
+            <div className="history">
+              {[...runs].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 12).map(r => {
+                const h = headlineOf(r)
+                return (
+                  <a key={r.id} className="hrow" href={href.run(project, def.name, r.id)}>
+                    <span className="t">{hhmm(r.startedAt || r.createdAt)}</span>
+                    <span><span className={`vword ${h.verdict}`}>{h.verdict === 'running' ? 'working' : h.verdict}</span></span>
+                    <span className="h" title={h.text}>{h.text}</span>
+                    <span className="muted ago">{ago(r.createdAt)}</span>
+                  </a>)
+              })}
+            </div>)}
           <DataTable
             rows={runs} columns={columns} filters={filters}
             getKey={r => r.id}

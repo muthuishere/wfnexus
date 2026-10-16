@@ -252,6 +252,31 @@ provider, here and on a worker. A credential written out in full is refused on
 save — name it (`${GITHUB_PAT}`) and the value is read on the machine that runs
 the step, never committed and never put on the wire.
 
+### The run tells its story: summary, outcome, state
+
+A local `run:` step also gets three FILE paths (GitHub's `GITHUB_STEP_SUMMARY`
+pattern). Write to them; the engine reads them when the command exits:
+
+| env | write | becomes |
+|---|---|---|
+| `WFX_STEP_SUMMARY` | markdown, appended (`>>`) | the step output's `summary`; shown under "What it found" on the run page |
+| `WFX_OUTCOME` | one line `ok\|incident\|waiting\|failed: <text>` | the step output's `outcome` and the run's headline verdict (`run.outcome`); the last step that writes one wins |
+| `WFX_STATE` | a JSON object | each key written to this workflow's state (`{{ .Workflow.<key> }}` next run; the workflow page's State tab) |
+
+```yaml
+run: |
+  n=$(./count-5xx.sh)
+  echo "## $n server errors in the last 15 min" >> "$WFX_STEP_SUMMARY"
+  if [ "$n" -gt 0 ]; then echo "incident: $n 5xx" > "$WFX_OUTCOME"; else echo "ok: all clear" > "$WFX_OUTCOME"; fi
+  echo "{\"last_checked\":\"$(date -u +%H:%M)\"}" > "$WFX_STATE"
+```
+
+An agent step needs none of this: an output field named `summary` or `outcome`
+(a string) is read the same way. There is no run-level summary file — when no
+step writes an outcome, the engine derives one as the run ends: a failed run
+says why, a finished one leads with the first line of the last summary
+(`ok: <line>`), else `ok`. Not yet on worker (`runs-on`) steps.
+
 ## Triggers
 
 ```yaml

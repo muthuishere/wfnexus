@@ -38,7 +38,8 @@ export default function StateStore({ workflow, project }: { workflow?: string; p
         <span className="mono">.Step</span>, <span className="mono">.Project</span> and{' '}
         <span className="mono">.Global</span>. Four separate namespaces: a key missing from one is
         not inherited from another. Write it with <span className="mono">wfx state set</span> or a
-        step's <span className="mono">state:</span> block. Stored in plaintext — this is not a
+        step's <span className="mono">state:</span> block, or from a script by writing a JSON object
+        to <span className="mono">$WFX_STATE</span> (workflow scope). Stored in plaintext — this is not a
         secret store.
       </p>
 
