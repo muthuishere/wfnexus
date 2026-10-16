@@ -135,6 +135,14 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 	return out, skips, nil
 }
 
+// LoadLocal loads the platform's own workflows directory the way every source
+// is loaded: a workflow that does not parse or validate is skipped (and
+// returned in the skips) instead of failing the whole directory. Boot uses it,
+// so one bad file never stops the server. LoadDir stays strict for `save`.
+func LoadLocal(dir string, cat Catalog, opts ...LoadOption) (map[string]*Definition, []Skip, error) {
+	return LoadSources([]Source{{Name: "local", Dir: dir}}, cat, opts...)
+}
+
 // Skip is a source, or a workflow within one, that did not load.
 type Skip struct {
 	Source string `json:"source"`
