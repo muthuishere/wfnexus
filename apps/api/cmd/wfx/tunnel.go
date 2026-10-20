@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -181,9 +185,17 @@ func dialSSH(v viaSpec, accept bool) (*ssh.Client, error) {
 // forwarder accepts on a local listener and forwards each connection over SSH.
 // dial and idle are injectable so tests can use an in-process server and a
 // short idle close.
+//
+// With http set (a context URL that is plain http) it does not pipe each local
+// connection to its own SSH channel: it is a reverse proxy that keeps a pool
+// of SSH channels open to the server and reuses them, request after request.
+// Opening a channel is a round trip, and the server-side TCP connection it
+// brings starts cold, so per-connection forwarding cost ~3 RTT per curl or
+// fresh browser connection where a reused channel costs 1.
 type forwarder struct {
 	dial   func() (*ssh.Client, error)
 	target string
+	http   bool
 	idle   time.Duration
 	onIdle func(idleSince time.Time) // state-file hook; nil in tests
 
@@ -257,6 +269,14 @@ func (f *forwarder) serve(ln net.Listener) error {
 		}
 		f.mu.Unlock()
 	}()
+	var proxied *connQueue
+	if f.http {
+		proxied = newConnQueue(ln.Addr())
+		tr := f.transport()
+		defer tr.CloseIdleConnections()
+		defer proxied.Close()
+		go func() { _ = (&http.Server{Handler: f.proxy(tr), ReadHeaderTimeout: time.Minute}).Serve(proxied) }()
+	}
 	for {
 		lc, err := ln.Accept()
 		if err != nil {
@@ -285,6 +305,14 @@ func (f *forwarder) serve(ln net.Listener) error {
 				}
 				f.mu.Unlock()
 			}()
+			if proxied != nil {
+				tc := &trackedConn{Conn: lc, closed: make(chan struct{})}
+				if proxied.push(tc) {
+					<-tc.closed
+				}
+				lc.Close()
+				return
+			}
 			defer lc.Close()
 			rc, err := f.remote()
 			if err != nil {
@@ -295,6 +323,80 @@ func (f *forwarder) serve(ln net.Listener) error {
 			pipe(lc, rc)
 		}()
 	}
+}
+
+// transport pools HTTP connections to the server, each one an SSH channel.
+func (f *forwarder) transport() *http.Transport {
+	return &http.Transport{
+		DialContext:         func(context.Context, string, string) (net.Conn, error) { return f.remote() },
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     5 * time.Minute,
+		DisableCompression:  true, // pass the client's Accept-Encoding through, don't decode here
+	}
+}
+
+// proxy forwards a request unchanged: the Host the client used is kept (the
+// server builds links and checks origins from it) and no X-Forwarded-For is
+// added (the server must keep seeing a loopback peer, as it did with the
+// byte pipe). Event streams flush as they arrive.
+func (f *forwarder) proxy(tr http.RoundTripper) http.Handler {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = f.target
+			pr.Out.Host = pr.In.Host
+		},
+		Transport: tr,
+		ErrorLog:  log.New(os.Stderr, "tunnel: ", 0),
+	}
+}
+
+// connQueue is a net.Listener fed by the accept loop, so the http.Server sees
+// exactly the connections serve counts for the idle close.
+type connQueue struct {
+	addr net.Addr
+	ch   chan net.Conn
+	done chan struct{}
+	once sync.Once
+}
+
+func newConnQueue(addr net.Addr) *connQueue {
+	return &connQueue{addr: addr, ch: make(chan net.Conn), done: make(chan struct{})}
+}
+
+func (q *connQueue) push(c net.Conn) bool {
+	select {
+	case q.ch <- c:
+		return true
+	case <-q.done:
+		return false
+	}
+}
+
+func (q *connQueue) Accept() (net.Conn, error) {
+	select {
+	case c := <-q.ch:
+		return c, nil
+	case <-q.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (q *connQueue) Close() error   { q.once.Do(func() { close(q.done) }); return nil }
+func (q *connQueue) Addr() net.Addr { return q.addr }
+
+// trackedConn reports its close, which is when the connection stops counting
+// as active.
+type trackedConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *trackedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
 }
 
 func pipe(a, b net.Conn) {
@@ -467,7 +569,8 @@ func tunnelServe(name string) error {
 	if err != nil {
 		return fail(err)
 	}
-	f := &forwarder{dial: func() (*ssh.Client, error) { return dialSSH(v, false) }, target: target, idle: idleClose}
+	f := &forwarder{dial: func() (*ssh.Client, error) { return dialSSH(v, false) }, target: target, idle: idleClose,
+		http: strings.HasPrefix(ctx.URL, "http://")}
 	if _, err := f.sshClient(false); err != nil {
 		return fail(err)
 	}

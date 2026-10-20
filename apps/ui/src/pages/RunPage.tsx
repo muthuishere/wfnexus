@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Event, type RunDetail, type Step, type StepRun } from '../api'
 import EventLog from '../components/EventLog'
 import DecisionPanel from '../components/DecisionPanel'
@@ -59,7 +59,19 @@ export default function RunPage({ id }: { id: string }) {
   const [err, setErr] = useState('')
   const [now, setNow] = useState(() => Date.now())
 
-  const refresh = useCallback(() => api.run(id).then(setD).catch(e => setErr(e.message)), [id])
+  // One fetch in flight at a time; a refresh asked for meanwhile runs once it
+  // lands. The detail is ~200KB, and over the wfx tunnel it takes longer than
+  // a second, so unguarded callers stacked requests up behind each other.
+  const inflight = useRef(false)
+  const again = useRef(false)
+  const refresh = useCallback(function fetchRun() {
+    if (inflight.current) { again.current = true; return }
+    inflight.current = true
+    api.run(id).then(setD).catch(e => setErr(e.message)).finally(() => {
+      inflight.current = false
+      if (again.current) { again.current = false; fetchRun() }
+    })
+  }, [id])
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     // SSE replays the backlog from 0, so the log is complete after a reload too.
@@ -72,8 +84,11 @@ export default function RunPage({ id }: { id: string }) {
   const live = !!d && ['running', 'queued', ...PAUSED].includes(d.run.status)
   useEffect(() => {
     if (!live) return
-    const t = setInterval(() => { setNow(Date.now()); refresh() }, 1000)
-    return () => clearInterval(t)
+    // The clock ticks every second; the data comes from SSE (which refreshes on
+    // every status change above), so the poll is only a slow safety net.
+    const tick = setInterval(() => setNow(Date.now()), 1000)
+    const poll = setInterval(refresh, 10000)
+    return () => { clearInterval(tick); clearInterval(poll) }
   }, [live, refresh])
 
   const run = d?.run

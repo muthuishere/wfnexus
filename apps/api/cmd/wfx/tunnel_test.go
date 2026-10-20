@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -148,6 +149,7 @@ type sshServer struct {
 	hostPK ssh.PublicKey
 	mu     sync.Mutex
 	conns  []net.Conn
+	chans  int // direct-tcpip channels accepted
 }
 
 func newSSHServer(t *testing.T, addr string, hostKey ssh.Signer) *sshServer {
@@ -202,6 +204,9 @@ func (s *sshServer) accept() {
 					rc.Close()
 					continue
 				}
+				s.mu.Lock()
+				s.chans++
+				s.mu.Unlock()
 				go ssh.DiscardRequests(creqs)
 				go func() {
 					defer ch.Close()
@@ -272,6 +277,12 @@ func TestHostKeyIsCheckedStrictly(t *testing.T) {
 }
 
 func TestForwarderThroughSSH(t *testing.T) {
+	for _, mode := range []string{"pipe", "http"} {
+		t.Run(mode, func(t *testing.T) { testForwarderThroughSSH(t, mode == "http") })
+	}
+}
+
+func testForwarderThroughSSH(t *testing.T, httpMode bool) {
 	t.Setenv("WFX_KNOWN_HOSTS", filepath.Join(t.TempDir(), "known_hosts"))
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "pong "+r.URL.Path)
@@ -294,6 +305,7 @@ func TestForwarderThroughSSH(t *testing.T) {
 	f := &forwarder{
 		dial:   func() (*ssh.Client, error) { return dialSSH(v, false) },
 		target: strings.TrimPrefix(app.URL, "http://"),
+		http:   httpMode,
 		idle:   400 * time.Millisecond,
 		onIdle: func(at time.Time) { mu.Lock(); idleEvents = append(idleEvents, at); mu.Unlock() },
 	}
@@ -360,4 +372,78 @@ func TestTunnelLineDown(t *testing.T) {
 	if got := tunnelLine("deemwar"); got != "deemwar · tunnel down (opens on next command)" {
 		t.Fatal(got)
 	}
+}
+
+// The proxy mode reuses SSH channels: ten requests, each on a NEW local
+// connection (as curl or a fresh browser tab makes them), cost one channel —
+// one round trip each over a real link instead of three. The Host the client
+// used reaches the server, no X-Forwarded-For is invented, and an event
+// stream is delivered as it is written, not when it ends.
+func TestHTTPForwarderReusesChannels(t *testing.T) {
+	t.Setenv("WFX_KNOWN_HOSTS", filepath.Join(t.TempDir(), "known_hosts"))
+	flushed := make(chan struct{})
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/events" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: one\n\n")
+			w.(http.Flusher).Flush()
+			<-flushed
+			return
+		}
+		_, _ = io.WriteString(w, r.Host+" xff="+r.Header.Get("X-Forwarded-For"))
+	}))
+	defer app.Close()
+
+	hostKey, _ := newSigner(t)
+	_, clientKey := newSigner(t)
+	srv := newSSHServer(t, "127.0.0.1:0", hostKey)
+	v := viaSpec{User: "wfx", Addr: srv.ln.Addr().String(), Key: clientKey}
+	if c, err := dialSSH(v, true); err != nil {
+		t.Fatal(err)
+	} else {
+		c.Close()
+	}
+	f := &forwarder{
+		dial:   func() (*ssh.Client, error) { return dialSSH(v, false) },
+		target: strings.TrimPrefix(app.URL, "http://"),
+		http:   true,
+		idle:   time.Minute,
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() { _ = f.serve(ln) }()
+	local := "http://" + ln.Addr().String()
+	cl := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 5 * time.Second}
+
+	for i := 0; i < 10; i++ {
+		res, err := cl.Get(local + "/x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if want := ln.Addr().String() + " xff="; string(b) != want {
+			t.Fatalf("got %q, want %q", b, want)
+		}
+	}
+	srv.mu.Lock()
+	chans := srv.chans
+	srv.mu.Unlock()
+	if chans != 1 {
+		t.Fatalf("10 requests opened %d SSH channels, want 1", chans)
+	}
+
+	res, err := cl.Get(local + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: one\n" {
+		t.Fatalf("event not streamed: %q %v", line, err)
+	}
+	close(flushed)
 }

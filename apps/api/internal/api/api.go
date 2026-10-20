@@ -110,6 +110,11 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		})
 	})
 	r.Use(cors.Handler(cors.Options{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"}, AllowedHeaders: []string{"*"}}))
+	// Compress text answers. Over a remote link (the wfx SSH tunnel, ~150ms+
+	// RTT) the bytes are the cost: the UI bundle is 413KB raw and 120KB
+	// gzipped, a run list 63KB vs 5KB. Only text types are compressed, so the
+	// SSE stream (text/event-stream) and bundle downloads stream untouched.
+	r.Use(middleware.Compress(5))
 
 	r.Route("/api", func(r chi.Router) {
 		// Installed UNCONDITIONALLY — there is no branch that omits it and no
@@ -1274,6 +1279,7 @@ func (s *Server) artifact(w http.ResponseWriter, r *http.Request) {
 // instead). Disk first, embedded second — see the field comments on Server.
 func (s *Server) ui(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean("/" + r.URL.Path)
+	setUICache(w, clean)
 	if s.uiDir != "" {
 		if _, err := os.Stat(filepath.Join(s.uiDir, "index.html")); err == nil {
 			p := filepath.Join(s.uiDir, clean)
@@ -1281,6 +1287,7 @@ func (s *Server) ui(w http.ResponseWriter, r *http.Request) {
 				http.ServeFile(w, r, p)
 				return
 			}
+			w.Header().Set("Cache-Control", "no-cache") // the fallback is never immutable
 			http.ServeFile(w, r, filepath.Join(s.uiDir, "index.html"))
 			return
 		}
@@ -1290,6 +1297,18 @@ func (s *Server) ui(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveEmbeddedUI(w, r, clean)
+}
+
+// setUICache: Vite names everything under /assets/ by content hash, so it can
+// be cached forever; anything else (index.html, the SPA fallback) must be
+// revalidated so a new build is picked up. The embedded FS has no mod times,
+// so without this the browser re-downloaded the whole bundle on every load.
+func setUICache(w http.ResponseWriter, clean string) {
+	if strings.HasPrefix(filepath.ToSlash(clean), "/assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
 }
 
 // serveEmbeddedUI answers from the compiled-in bundle, with the same SPA
@@ -1313,6 +1332,7 @@ func (s *Server) serveEmbeddedUI(w http.ResponseWriter, r *http.Request, clean s
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(index)
 }
