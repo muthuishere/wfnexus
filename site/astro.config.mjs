@@ -45,6 +45,14 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Recipes',
+					items: [
+						{ label: 'On your laptop in five minutes', slug: 'recipes/local' },
+						{ label: 'A VPS you reach over SSH', slug: 'recipes/vps' },
+						{ label: 'Put decisions in a workflow', slug: 'recipes/decisions' },
+					],
+				},
+				{
 					label: 'Concepts',
 					items: [
 						{ label: 'Workflows and steps', slug: 'concepts/workflows-and-steps' },

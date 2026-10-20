@@ -1,0 +1,100 @@
+---
+title: "Recipe: a VPS you reach over SSH"
+description: Start wfnexus on a VPS with docker compose, keep it off the internet, connect from your laptop over an SSH tunnel, ship tools and config with carry, and run a workflow there.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**You end with:** wfnexus running on a VPS with Postgres, no public port, your laptop's `wfx`
+talking to it over SSH, the tools a workflow needs installed by carry, and a run you started from
+your laptop.
+
+<Steps>
+
+1. **On the VPS: start it with docker compose.** You need Docker and a checkout.
+
+   ```bash
+   git clone https://github.com/muthuishere/wfnexus && cd wfnexus
+   cp compose.env.example .env         # every setting is optional
+   docker compose up -d --build
+   ```
+
+   The stack is `wfx-server` and its Postgres. The port is published on **`127.0.0.1:8090` of the
+   VPS only** (the compose file's default bind), so nothing is reachable from outside.
+
+   Inside the container the server is not on loopback, so it requires a login. On the first boot
+   of an empty database it creates an admin, prints its token **once** to its log, exits, and
+   comes back with authentication on. Read it without pasting it anywhere:
+
+   ```bash
+   docker compose logs wfx-server | grep -c 'admin token'   # 1 = it is there
+   ```
+
+   The easiest way through this is the setup script. It brings the stack up, reads that token from
+   the log without printing it, signs the VPS's own `wfx` in as the admin, installs the skills,
+   and ends on `READY` or a named blocker:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh   # the CLI, on the VPS
+   bash skills/wfnexus-setup/scripts/setup.sh
+   ```
+
+2. **On the VPS: let your key in, for the tunnel only.** Run this as the user you SSH in as:
+
+   ```bash
+   wfx team add me ./me.pub            # restrict + port-forwarding + permitopen 127.0.0.1:8090
+   ```
+
+3. **On your laptop: connect over SSH.**
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh
+   wfx context add vps --url http://127.0.0.1:8090 --via ssh://you@vps.example.com --accept-host-key
+   wfx login --url vps                 # prints a code; approve it as the admin
+   wfx status                          # the current context and its tunnel
+   ```
+
+   The tunnel opens on the first command and closes after 15 idle minutes. Approve the code on the
+   VPS, where the setup script signed `wfx` in: `wfx login --approve <code>`. See [Remote access over SSH](/wfnexus/concepts/remote-access/).
+
+4. **Put the keys in the server's env store**, from your laptop, through the tunnel:
+
+   ```bash
+   wfx env set OPENROUTER_API_KEY
+   wfx env set TYPESAFE_API_KEY        # for decide:, judge: and wfx judge
+   wfx doctor
+   ```
+
+5. **Ship tools and config with carry.** Set `CARRY_REPO`, `CARRY_S3_ENDPOINT`, `CARRY_KEY_FILE`
+   and the S3 credentials in the VPS's `.env`, then `docker compose up -d` once. From then on,
+   change the server from your laptop, no rebuild:
+
+   ```bash
+   carry tool add wfnexus jq@1.7.1                     # a tool a workflow calls
+   carry put  wfnexus:/home/wfx/.gitconfig ./gitconfig # config a step needs
+   carry env  set wfnexus LOG_LEVEL=info
+   ```
+
+   See [Tools and config with carry](/wfnexus/concepts/carry/), including publishing your own
+   signed tools.
+
+6. **Ship your workflow and run it.**
+
+   ```bash
+   wfx publish my-todos.yaml --version 1.0.0   # the workflow plus its skills, as one bundle
+   wfx run my-todos -i repo_path=<a path on the server> -f
+   wfx ui                                      # the run page, through the tunnel
+   ```
+
+   `wfx publish` sends a bundle: the workflow's skills and MCP declarations travel with it, so
+   the VPS does not need them installed. For a git-backed project, `wfx apply` opens a
+   [proposal](/wfnexus/git-native/proposals/) instead.
+
+</Steps>
+
+<Aside type="caution" title="Do not open 8090">
+	Keep the compose port bound to `127.0.0.1`. The SSH tunnel is the way in; the firewall only needs SSH.
+</Aside>
+
+**More machines:** a GPU box or a Windows machine joins as a [worker](/wfnexus/concepts/workers/)
+with `wfx-runner`, outbound only.

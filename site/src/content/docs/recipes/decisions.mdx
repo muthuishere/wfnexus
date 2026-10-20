@@ -1,0 +1,100 @@
+---
+title: "Recipe: put decisions in a workflow"
+description: The three places a calibrated yes/no/uncertain decision goes — decide before an agent, judge as a step, wfx judge over many items — plus the HTTP endpoint behind them, and what you can ask.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A decision is a typed question answered by a small calibrated classifier, for a fraction of a cent
+and in about a second. Use one wherever you would otherwise spend an agent, or a person, on
+"is this worth it?". Every answer comes back in one of three bands, **no**, **uncertain** or
+**yes**, and the uncertain ones are the ones to send to a person.
+
+**You need:** a classifier key in the env store (`wfx env set TYPESAFE_API_KEY` for the default
+`jev-direct`, or `OPENROUTER_API_KEY` for `jev`). `wfx doctor` shows which classifiers are ready.
+
+## What you can ask
+
+| Type | Answer | Use it for |
+|---|---|---|
+| `noul` | yes / no / uncertain, with a probability | "is this a security bug?", "is this code dead?", "worth an agent?" |
+| `choice` | one of your `options` | "which team owns this?", "which template fits?" |
+| `score` | one of 2 to 10 ordered `levels` | severity, fixability, confidence |
+
+Each question has `instructions`, and a `noul` can say what `true` and `false` mean in words.
+
+## 1. Before an agent: `decide:`
+
+Guard an expensive step. The gates run before the agent starts:
+
+```yaml
+- id: fix
+  decide:
+    state: |
+      {{ .Input.title }}
+      {{ .Input.description }}
+    questions:
+      is_security:
+        type: noul
+        instructions: Is this report describing a security problem?
+    gates:
+      - { question: is_security, at_least: 0.6, action: needs_input }   # a person looks first
+  prompt: Fix the bug described above.
+```
+
+A gate takes exactly one of `below`, `at_least` or `is`, and an action: `fail` (stop the run),
+`needs_input` (pause for a person) or `skip_to` (jump to another step, named in `skip_to`).
+
+## 2. As its own step: `judge:`
+
+A pure decision node, no agent and no tools. Later steps read its verdict, for example in an
+`if:` on `route.verdict.worth_an_agent` (from `workflows/ci-triage.yaml`):
+
+```yaml
+- id: verdict
+  judge:
+    state: |
+      The test command exited with code {{ .Steps.suite.test.exitCode }}.
+      {{ .Steps.suite.test.stdout }}
+    questions:
+      worth_an_agent:
+        type: noul
+        instructions: Is this worth spending an agent on right now?
+```
+
+## 3. Over many items: `wfx judge`
+
+For a list (dead-code candidates, tickets, alerts), judge every item in one call and apply the
+verdicts with code. This works in a `run:` step and from your own terminal:
+
+```bash
+wfx judge -q questions.yaml --items candidates.jsonl > verdicts.jsonl
+wfx judge -q questions.yaml --state "func actorOf ... no callers found"
+```
+
+`--items` is JSON Lines, one `{"id": "...", "state": ...}` per line. Each output line carries the
+answers and each `noul`'s band. `--bands 0.30,0.70` moves the cut points. Inside a step,
+`wfx judge` asks the server, so the classifier key never enters the step's environment.
+
+## The HTTP endpoint
+
+All three go through `POST /api/judge` on the server, which you can call directly with a signed-in
+token:
+
+```json
+{
+  "classifier": "",
+  "questions": { "dead": { "type": "noul", "instructions": "Is this code unreachable?" } },
+  "items": [ { "id": "actorOf", "state": "func actorOf ... no callers found" } ]
+}
+```
+
+An empty `classifier` means the server's default (`WFX_DEFAULT_CLASSIFIER`). Up to 500 items per
+request; the CLI batches larger inputs.
+
+<Aside type="tip" title="Cheapest node first">
+	Order a workflow's checks by cost: a `run:` step that can answer with code, then a decision,
+	then an agent. Most runs should end before the agent.
+</Aside>
+
+See [Classifiers](/wfnexus/concepts/classifiers/) for the registry entries and calibration.

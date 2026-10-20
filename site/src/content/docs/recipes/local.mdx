@@ -1,0 +1,77 @@
+---
+title: "Recipe: on your laptop in five minutes"
+description: Install wfx in one line, start the server, put the skills in Claude Code, ask Claude to build a workflow, run it and watch it in the UI. Everything local.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**You end with:** a server on `127.0.0.1:8090`, the `wfx` CLI, the agent skills in Claude Code,
+and a workflow Claude built for you, run once, visible in the UI. No account, no public port.
+
+<Steps>
+
+1. **Install the CLI** (verified against the release's checksums; no sudo):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh
+   wfx version
+   ```
+
+   On Windows: `install.ps1` from the same place.
+
+2. **Start the server.** The simplest local server is the release binary for your machine, for
+   example `wfx-server-darwin-arm64` or `wfx-server-linux-amd64`, from the
+   [releases page](https://github.com/muthuishere/wfnexus/releases). The UI, templates and skills
+   are embedded, so it needs nothing beside it:
+
+   ```bash
+   chmod +x wfx-server-darwin-arm64
+   xattr -d com.apple.quarantine wfx-server-darwin-arm64   # macOS only: it is unsigned
+   ./wfx-server-darwin-arm64                               # http://127.0.0.1:8090
+   ```
+
+   No config: SQLite in `~/.local/share/wfnexus/`, loopback only, no login.
+
+3. **Check the wiring and give it a model.** The default provider is the free `opencode` CLI
+   (needs `opencode` installed). For a paid model, put its key in the encrypted env store:
+
+   ```bash
+   wfx doctor                          # default provider, keys, one real test call
+   wfx env set OPENROUTER_API_KEY      # optional: read without echoing, stored encrypted
+   ```
+
+4. **Put the skills where Claude Code looks:**
+
+   ```bash
+   wfx install --skills                # into ~/.claude/skills and ~/.agents/skills
+   ```
+
+5. **Ask Claude for a workflow.** In Claude Code, in the repository you care about, say what you
+   want off your plate, in plain words:
+
+   > *Build me a wfnexus workflow that lists every TODO added in the last week, groups them by
+   > owner, and posts a summary. Dry run it first.*
+
+   The `workflow-author` skill interviews you, drafts the YAML, runs `wfx validate` and
+   `wfx dryrun` on its own draft, and installs it with `wfx apply` when you say yes. Prefer a
+   proven shape? `wfx templates` lists them and `wfx new <template> --as <name>` copies one.
+
+6. **Run it and watch it.**
+
+   ```bash
+   wfx run my-todos -i repo_path=. -f   # follow the log in the terminal
+   wfx ui                               # or open the run page in the browser
+   ```
+
+   The run page leads with the verdict and **What it found**. If the workflow has a human gate,
+   `wfx approve <run-id>` (or the button in the UI) lets it continue.
+
+</Steps>
+
+<Aside type="tip" title="No release on your platform yet?">
+	Build from a checkout instead: `task build` writes `bin/wfx-server`, `bin/wfx` and
+	`bin/wfx-runner`. See the [Quickstart](/wfnexus/quickstart/).
+</Aside>
+
+**Next:** run the same thing on a server your team shares, in
+[Recipe: a VPS you reach over SSH](/wfnexus/recipes/vps/).
