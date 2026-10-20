@@ -41,6 +41,15 @@ The engine runs each step as a [toolnexus](https://github.com/muthuishere/toolne
 does not move on until the step's output validates against its schema. It saves every step's
 state, and it stops for a human wherever the workflow says to.
 
+Each run tells you what it found: steps write a summary and an outcome, and the run page leads
+with the verdict. Workflows can hold one active run per group (`concurrency:`), and a workflow that
+fails to load is skipped by name instead of taking the server down.
+
+It runs anywhere one binary runs. `wfx-server` boots on SQLite with no config, listens on loopback,
+and you reach it from your laptop through an SSH tunnel (`wfx context add … --via ssh://…`). Model
+keys live in its encrypted env store, and a provider that is down falls back to the next one. See
+[Self-host on one Linux box](/wfnexus/self-host/).
+
 It is **not a bug-fix product.** The repository started as a bug-fixer, and `templates/bug-fixer.yaml`
 is still one template among eleven. ADR 0010 in the [roadmap](https://github.com/muthuishere/wfnexus/blob/main/docs/ROADMAP.md)
 records the decision: *a workflow platform, not a bug fixer*.
@@ -61,7 +70,8 @@ wfx approve <run-id>                       # the human gate
 	</Card>
 	<Card title="Any backend" icon="setting">
 		The same workflow can run on an HTTP model (OpenRouter, ollama and others), a CLI agent (`claude`, `codex`,
-		`opencode`) or an ACP agent (devin, opencode, codex). The shipped registry has 30 providers.
+		`opencode`) or an ACP agent (devin, opencode, claude, codex). The shipped registry has 32 providers,
+		and a step whose provider cannot be reached falls back to the next one in its chain.
 	</Card>
 	<Card title="Calibrated classifiers" icon="approve-check">
 		`decide:` asks typed questions of a small calibrated classifier (TypeSafe jev) before an
@@ -88,4 +98,5 @@ it on a free model, stops at a human approval gate, and publishes it. See the
 - **Letting an agent do it all:** see [Get started with an agent](/wfnexus/agent-start/).
 - **Want a working workflow today:** browse the [Templates](/wfnexus/templates/). Each page is generated from its YAML.
 - **Driving it from Claude or Codex:** see [Agent skills](/wfnexus/skills/).
+- **Running it for a team:** see [Self-host on one Linux box](/wfnexus/self-host/) and [Remote access over SSH](/wfnexus/concepts/remote-access/).
 - **How it fits together:** see [Architecture](/wfnexus/architecture/).

@@ -123,7 +123,7 @@ on the first command that needs it and closes it after 15 minutes with nothing o
 
 ```bash
 wfx team add alice alice.pub        # on the server, as the wfx user: tunnel-only key, no shell
-wfx context add deemwar --url http://127.0.0.1:8090 --via ssh://wfx@46.4.13.167 --accept-host-key
+wfx context add myserver --url http://127.0.0.1:8090 --via ssh://wfx@your-server --accept-host-key
 wfx status                          # deemwar · tunnel up 4m · idle close in 11m
 ```
 

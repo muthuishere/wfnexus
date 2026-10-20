@@ -36,7 +36,7 @@ const esc = (s) =>
 		.replace(/\|/g, '\\|')
 		.replace(/\s*\n\s*/g, ' ')
 		.trim();
-const code = (s) => '`' + String(s).replace(/`/g, "'") + '`';
+const code = (s) => '`' + String(s).replace(/`/g, "'").replace(/\|/g, '\\|') + '`';
 const yamlStr = (s) => JSON.stringify(String(s ?? '').replace(/\s+/g, ' ').trim());
 
 // ---------------------------------------------------------------------------

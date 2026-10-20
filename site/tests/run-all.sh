@@ -7,7 +7,7 @@
 #   1. verify-symbols   every command, env var, package, template, skill, commit and asset the
 #                       pages name exists on this commit
 #   2. coverage-gate    every template, skill, CLI line and provider has its page; no orphans
-#   3. wfx help         when Go is available: the binary's real `wfx help` equals the usage text
+#   3. wfx help all     when Go is available: the binary's real `wfx help all` equals the usage text
 #                       the CLI reference was generated from
 #   4. build            astro build, then the pages that must exist are in dist/
 set -uo pipefail
@@ -26,7 +26,7 @@ node "$SITE/scripts/coverage-gate.mjs" --strict || FAILED+=("coverage-gate")
 
 step "wfx help == generated CLI reference"
 if command -v go >/dev/null 2>&1; then
-	got="$(cd "$REPO/apps/api" && GOWORK=off go run ./cmd/wfx help 2>&1)"
+	got="$(cd "$REPO/apps/api" && GOWORK=off go run ./cmd/wfx help all 2>&1)"
 	want="$(node --input-type=module -e "import('$SITE/scripts/generate-pages.mjs').then(m => process.stdout.write(m.wfxUsage()))")"
 	if [ "$got" == "$want" ]; then echo "identical ($(printf '%s\n' "$got" | wc -l | tr -d ' ') lines)"; else
 		echo "DIFFERENT — the reference would not match the binary"; diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | head -20

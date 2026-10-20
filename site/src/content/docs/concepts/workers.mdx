@@ -32,3 +32,15 @@ steps:
 ```
 
 The server side is the `/api/workers` endpoints: join, claim, heartbeat and job events.
+
+## Tools and config on a worker
+
+Each worker restores its own tools, config files and env defaults from a bucket through carry, so
+adding `jq` to one machine is `carry tool add`, not an image rebuild. See
+[Tools and config with carry](/wfnexus/concepts/carry/).
+
+## Steps that must not overlap
+
+A worker pool runs steps in parallel. When two runs of the same workflow must not overlap (a
+migration, a nightly job), give the workflow a [`concurrency:`](/wfnexus/concepts/runs-and-concurrency/)
+group.

@@ -1,0 +1,68 @@
+---
+title: Remote access over SSH
+description: Reach a wfx-server that listens on loopback only, through a lazy SSH tunnel — wfx context --via, wfx status, wfx tunnel stop, and wfx team for tunnel-only keys.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A server does not need a public port. `wfx-server` listens on `127.0.0.1:8090` by default, and
+the CLI reaches it through SSH, the way a Docker context with an `ssh://` host does. Only `sshd`
+faces the network.
+
+## On the server: who may tunnel in
+
+`wfx team` runs **on the server host**, as the user the server runs as. It edits that user's
+`~/.ssh/authorized_keys` (or the file `WFX_TEAM_KEYS_FILE` names) so a teammate's key may open a
+tunnel to the API port and nothing else: the line is written with `restrict`,
+`port-forwarding` and `permitopen` for the server's loopback port. No shell, no other forward,
+no agent or X11 forwarding.
+
+```bash
+wfx team add alice ./alice.pub    # a public key file; prints "alice may tunnel to 127.0.0.1:8090"
+wfx team list
+wfx team remove alice
+```
+
+## On your machine: a context with `--via`
+
+```bash
+wfx context add team --url http://127.0.0.1:8090 --via ssh://wfx@server.example.com --accept-host-key
+wfx runs                           # any command works the same as against a local server
+wfx status                         # current context; for a via context, its tunnel
+wfx tunnel stop                    # close it now
+```
+
+The tunnel is **lazy**. The first command that needs the context starts a detached helper
+(the `wfx` binary itself, run in the background) that listens on `127.0.0.1:<random>` and forwards each connection over one
+SSH session (`direct-tcpip`). Every later command reuses it. When no connection has been open for
+**15 minutes**, the helper exits; the next command starts it again.
+
+- `--key` picks a private key. Without it the CLI tries the SSH agent, then `~/.ssh/id_ed25519`,
+  then `~/.ssh/id_rsa`.
+- Host keys are checked strictly against `~/.ssh/known_hosts`. An unknown host is refused unless
+  you pass `--accept-host-key` once, which appends it to `known_hosts`. A changed key is always
+  refused.
+- `--url` is the address **on the server side** of the tunnel, so it is normally the loopback
+  address the server listens on.
+
+A server bound to loopback runs with authentication **absent**: the machine is the trust boundary,
+and the SSH key that `wfx team add` wrote is the access control. If the server has users (it binds
+wider, or you created them), `wfx login --url team` signs in to a via context by its name, through
+the tunnel.
+
+`wfx ui` works the same way: it resolves the context and opens the UI at the local end of the
+tunnel. On a server with users, the link is a one-time sign-in that expires after 60 seconds.
+
+## How the CLI picks a host
+
+`--url`, then `$WFX_API`, then the current context, then `http://127.0.0.1:8090`. Contexts live in
+`~/.config/wfx/contexts.json` (mode `0600`). `wfx context [list|use|rm <host>]` lists them,
+switches the current one, or removes one; `*` marks the current context.
+
+<Aside type="tip" title="Why a tunnel and not a public URL">
+	The API carries run logs, approvals and the env store. Keeping it on loopback means the only
+	thing to harden is `sshd`, which you already harden, and access is a line in
+	`authorized_keys` that `wfx team remove` takes back.
+</Aside>
+
+See [Self-host on one Linux box](/wfnexus/self-host/) for the server side end to end.

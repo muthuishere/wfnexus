@@ -41,6 +41,7 @@ export default defineConfig({
 						{ label: 'Quickstart', slug: 'quickstart' },
 						{ label: 'Get started with an agent', slug: 'agent-start' },
 						{ label: 'Demo video', slug: 'demo' },
+						{ label: 'Self-host on one Linux box', slug: 'self-host' },
 					],
 				},
 				{
@@ -52,7 +53,10 @@ export default defineConfig({
 						{ label: 'Human gates', slug: 'concepts/human-gates' },
 						{ label: 'State and memory', slug: 'concepts/state-and-memory' },
 						{ label: 'Env store and secrets', slug: 'concepts/env-and-secrets' },
+						{ label: 'Run story and concurrency', slug: 'concepts/runs-and-concurrency' },
 						{ label: 'Workers', slug: 'concepts/workers' },
+						{ label: 'Tools and config with carry', slug: 'concepts/carry' },
+						{ label: 'Remote access over SSH', slug: 'concepts/remote-access' },
 					],
 				},
 				{

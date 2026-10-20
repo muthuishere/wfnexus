@@ -1,0 +1,71 @@
+---
+title: Tools and config with carry
+description: Install tools, set config and env defaults on the server and every worker from a bucket, without rebuilding an image — publish a signed tool once, add it anywhere, roll back by version.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A container loses everything added after its image was built. wfnexus does not try to bake every
+tool a workflow might want into its images. The server and runner images start through
+[carry](https://github.com/muthuishere/carry) (`carry run --`), which restores config files, env
+defaults and tools from an S3 bucket **before** the process starts, and commits every change you
+make with the `carry` CLI back as a new encrypted version.
+
+Only the agent CLIs (`claude`, `devin`, `codex`) stay baked into the image. Everything else (`gh`,
+`jq`, `rg`, a `.gitconfig`, a log level) is carry's job.
+
+## Turn it on
+
+carry is off until `CARRY_REPO` is set; without it `carry run --` simply runs the server or the
+runner. To turn it on, pass these to the container (the shipped `docker-compose.yml` already passes
+them through):
+
+| Variable | What it is |
+|---|---|
+| `CARRY_REPO` | the bucket and prefix, e.g. `s3://my-bucket/carry` |
+| `CARRY_S3_ENDPOINT` | the S3 endpoint |
+| `CARRY_KEY_FILE` | the encryption key file for the stored state |
+| `CARRY_STATE` | which state this machine restores; defaults to the project name on the server and the worker's name on a runner |
+| `CARRY_TOOL_PUBKEY` | the public key every tool is verified against before it runs |
+
+S3 credentials come from the environment by name (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`),
+never from a file in the repo. `wfx doctor` prints whether carry is configured on the server.
+
+## Publish a tool once
+
+A tool is published to the bucket once, signed, and promoted to a channel:
+
+```bash
+carry tool keygen                                   # signing key; prints the public key only
+carry tool publish jq@1.7.1 --file ./jq-linux-amd64 --platform linux/amd64
+carry tool promote jq@1.7.1 --channel stable
+```
+
+## Install it, and set config, on any machine
+
+Every change names a state: the server's (the project name) or one worker's.
+
+```bash
+carry tool add wfnexus jq@1.7.1                     # install a tool, no rebuild
+carry put  wfnexus:/home/wfx/.gitconfig ./gitconfig # place a config file
+carry env  set wfnexus LOG_LEVEL=debug              # set an env default
+carry log  wfnexus                                  # every version
+carry rollback wfnexus 3                            # go back to one
+```
+
+Running machines pick up a new version on their next poll. A file deleted inside a container never
+touches the bucket; deletes and renames happen only through `carry rm` / `carry mv`.
+
+<Aside type="tip" title="Keys are not carry's job">
+	Model and API keys belong in the wfnexus [env store](/wfnexus/concepts/env-and-secrets/)
+	(`wfx env set NAME`), where they are sealed and redacted from every run log. Use carry for the
+	tools and the non-secret config a machine needs.
+</Aside>
+
+## With a server you reach over SSH
+
+carry and the SSH tunnel fit together: carry shapes what is installed on the box, and the box never
+exposes its API. Configure the server with carry, keep it on loopback, and reach it with
+`wfx context add … --via ssh://…` as in [Remote access over SSH](/wfnexus/concepts/remote-access/).
+Workers do the same from their side: each restores its own `CARRY_STATE` and connects outbound with
+`wfx-runner`, so no machine in the pool needs an inbound port.

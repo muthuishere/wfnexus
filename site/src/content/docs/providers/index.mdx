@@ -1,6 +1,6 @@
 ---
 title: Providers and models
-description: One workflow, many backends — http models, cli agents, and acp agents (devin, opencode, codex); free opencode models and what they are good for; WFX_DEFAULT_PROVIDER and WFX_DEFAULT_CLASSIFIER.
+description: One workflow, many backends — http models, cli agents, and acp agents (devin, opencode, claude, codex); fallback chains; free opencode models and what they are good for; WFX_DEFAULT_PROVIDER and WFX_DEFAULT_CLASSIFIER.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -29,14 +29,20 @@ See [Env store and secrets](/wfnexus/concepts/env-and-secrets/).
 
 ## ACP adapters: devin, opencode, codex
 
-`internal/devinadapter` makes a local agent CLI usable as a model. There are three presets
+`internal/devinadapter` makes a local agent CLI usable as a model. There are four presets
 (`ACPPresets`):
 
 | Adapter | Command | Mode | Provider |
 |---|---|---|---|
 | devin | `devin acp` (model via `--model`) | bypass | `devin` |
-| opencode | `opencode acp` (model over the protocol, a fresh session per turn) | build | `opencode-acp` |
+| opencode | `opencode acp` (model over the protocol) | build | `opencode-acp` |
+| claude | `npx -y @agentclientprotocol/claude-agent-acp` (uses claude's own login) | default | add an entry with `"kind": "acp", "preset": "claude"` |
 | codex | `npx -y @zed-industries/codex-acp` | full-access | `codex-acp` |
+
+**A fresh session every turn.** Every ACP provider opens a new session for each turn, in the same
+process. Each turn's prompt is already the complete request, so a kept session only accumulates
+copies of it and every turn pays for all the earlier ones again. A registry entry can opt out with
+`"keepSession": true`; do that only for an agent you have measured to need it.
 
 ```bash
 wfx adapters                     # each adapter, whether it is installed, and how to install it
@@ -49,6 +55,46 @@ allowlist and guardrails apply. The adapter therefore **refuses the agent's own 
 default. When a turn ends empty after refusals, the adapter hands the platform the equivalent
 call instead (read, grep, glob, bash), but only for tools the step offers. An edit, a fetch or a
 sub-task has no safe equivalent and stays refused.
+
+## The opencode CLI
+
+The default `opencode` entry is a `cli` provider: one fresh `opencode run --standalone -m <model>`
+process per turn, with the prompt on stdin. `--standalone` gives each turn a private opencode
+server instead of opencode's shared background service, which sits on one fixed port for the whole
+machine; with it, two users or two steps on one box no longer collide.
+
+## Fallback providers
+
+A provider that cannot be reached does not have to fail the step. A registry entry can name
+providers to try next, in order:
+
+```json
+"openrouter": {
+  "kind": "http",
+  "apiKeyEnv": "OPENROUTER_API_KEY",
+  "fallback": ["opencode"]
+}
+```
+
+The server can also name a list that applies to every step, after the step's provider and that
+provider's own `fallback`: `model.fallback` in `config.yaml`, or `WFX_FALLBACK_PROVIDERS`
+(comma separated). That is the one place an operator fixes a broken provider for every workflow at
+once.
+
+A step falls back **only when nothing was answered**: its provider does not resolve (key unset,
+binary missing) or its first call fails before the model has said anything. A step that got any
+answer is never re-run elsewhere, because its working directory may already have changed.
+
+## Where keys live
+
+An `http` entry names its key by `apiKeyEnv`, never by value. The engine looks that name up in the
+step's environment, which includes the [env store](/wfnexus/concepts/env-and-secrets/), and then in
+the server process's own environment. The env store is the recommended place:
+
+```bash
+wfx env set OPENROUTER_API_KEY     # read without echoing, stored encrypted
+wfx doctor                         # says which providers are ready and which key is missing
+```
 
 ## Free models
 
