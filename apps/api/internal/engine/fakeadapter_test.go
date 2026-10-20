@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/notify"
@@ -37,6 +38,9 @@ func fakeAdapterMain() {
 	}
 	switch verb {
 	case "send":
+		if _, err := os.Stat(filepath.Join(dir, "hang")); err == nil {
+			time.Sleep(5 * time.Second) // outlives the channel's timeout
+		}
 		if msg, err := os.ReadFile(filepath.Join(dir, "fail")); err == nil {
 			fmt.Fprint(os.Stderr, string(msg))
 			os.Exit(3)
@@ -87,15 +91,21 @@ func readLines(path string) []string {
 // directory it records into.
 func fakeChannel(t *testing.T, e *Engine, name string, inbound bool, allow ...string) string {
 	t.Helper()
+	return fakeChannelWith(t, e, catalog.Channel{Name: name, Inbound: inbound, Allow: allow})
+}
+
+// fakeChannelWith registers c (its Kind, Run and Env are filled in) backed by
+// the fake adapter.
+func fakeChannelWith(t *testing.T, e *Engine, c catalog.Channel) string {
+	t.Helper()
 	dir := t.TempDir()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.catalog.Channels.Add(catalog.Channel{
-		Name: name, Kind: "command", Run: strconv.Quote(exe), Inbound: inbound, Allow: allow,
-		Env: map[string]string{"WFX_FAKE_ADAPTER": "1", "FAKE_DIR": dir},
-	}, "test")
+	c.Kind, c.Run = "command", strconv.Quote(exe)
+	c.Env = map[string]string{"WFX_FAKE_ADAPTER": "1", "FAKE_DIR": dir}
+	e.catalog.Channels.Add(c, "test")
 	return dir
 }
 

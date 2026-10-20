@@ -22,7 +22,7 @@
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "a local file the adapter can read" },
-        "url": { "type": "string", "description": "a URL the adapter can fetch" },
+        "url": { "type": "string", "pattern": "^https://", "description": "https to a public address only; the server refuses internal targets" },
         "filename": { "type": "string" }
       },
       "oneOf": [{ "required": ["path"] }, { "required": ["url"] }]

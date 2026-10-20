@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/notify"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -213,7 +214,7 @@ func TestMessageTriggerStartsARun(t *testing.T) {
 		Steps: []workflow.Step{{ID: "trg-echo", Run: "echo {{ .Input.message.text }}"}}}
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t), "")
-	dir := fakeChannel(t, h.eng, "opstrg", true)
+	dir := fakeChannel(t, h.eng, "opstrg", true, "a")
 	writeInbox(t, dir,
 		notify.Message{ID: "trg-1", From: "a", Text: "good morning"},
 		notify.Message{ID: "trg-2", From: "a", Text: "Deploy api"})
@@ -233,7 +234,7 @@ func TestMessageTriggerStartsARun(t *testing.T) {
 	}
 	h.runs = append(h.runs, runs[0].ID)
 	r := h.wait(runs[0].ID)
-	if r.Status != "done" || r.TriggeredBy != "trigger:message" {
+	if r.Status != "done" || r.TriggeredBy != "a" {
 		t.Fatalf("run %s triggered by %q", r.Status, r.TriggeredBy)
 	}
 	if !strings.Contains(string(r.Input), `"Deploy api"`) {
@@ -293,4 +294,221 @@ func TestSendStepDedupDryRunAndFailure(t *testing.T) {
 		t.Fatal("a failed send must not count for dedup")
 	}
 	_ = ctx
+}
+
+// Anyone in a group must NOT be able to start a run: a message trigger fires
+// only for a sender on its allow list, else the channel's; both empty ⇒ never.
+func TestMessageTriggerRequiresAnAllowListedSender(t *testing.T) {
+	ctx := context.Background()
+	def := &workflow.Definition{Name: "ondeploy2",
+		On:    workflow.Triggers{Message: []workflow.MessageTrigger{{Channel: "trgallow", Contains: "deploy"}}},
+		Steps: []workflow.Step{{ID: "echo", Run: "echo hi"}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	dir := fakeChannel(t, h.eng, "trgallow", true) // channel allow list EMPTY
+	writeInbox(t, dir, notify.Message{ID: "ta-1", From: "lead", Text: "deploy api"})
+	if _, err := h.eng.ReceiveNow(ctx, "trgallow"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if runs, _ := h.store.FindRuns(ctx, store.RunFilter{Workflow: "ondeploy2"}); len(runs) != 0 {
+		t.Fatalf("an empty allow list must start nothing, got %d runs", len(runs))
+	}
+	msgs, _ := h.eng.ChannelMessages(ctx, "trgallow", "", 5)
+	if len(msgs) != 1 || msgs[0].Outcome != "refused" {
+		t.Fatalf("the refusal must be recorded: %+v", msgs)
+	}
+
+	// The trigger's own list overrides the (empty) channel list.
+	def.On.Message[0].Allow = []string{"lead"}
+	writeInbox(t, dir, notify.Message{ID: "ta-1", From: "lead", Text: "deploy api"},
+		notify.Message{ID: "ta-2", From: "stranger", Text: "deploy api"},
+		notify.Message{ID: "ta-3", From: "lead", Text: "deploy web"})
+	if _, err := h.eng.ReceiveNow(ctx, "trgallow"); err != nil {
+		t.Fatal(err)
+	}
+	var runs []*store.Run
+	for i := 0; i < 100; i++ {
+		if runs, _ = h.store.FindRuns(ctx, store.RunFilter{Workflow: "ondeploy2"}); len(runs) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	runs, _ = h.store.FindRuns(ctx, store.RunFilter{Workflow: "ondeploy2"})
+	if len(runs) != 1 || runs[0].TriggeredBy != "lead" {
+		t.Fatalf("only lead's message may start a run, attributed to lead: %d runs", len(runs))
+	}
+	h.runs = append(h.runs, runs[0].ID)
+	h.wait(runs[0].ID)
+}
+
+// A code is retired when its pause resolves by ANY path, so replaying it after
+// the step pauses again cannot answer the new pause; and a code only matches on
+// the channel it was sent on.
+func TestPauseCodeReplayAndOtherChannel(t *testing.T) {
+	ctx := context.Background()
+	def := &workflow.Definition{Name: "chreplay", Steps: []workflow.Step{{
+		ID: "ship", Run: "exit 1", RequiresApproval: true,
+	}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	dir := fakeChannel(t, h.eng, "opsreplay", true, "lead")
+	other := fakeChannel(t, h.eng, "otherch", true, "lead")
+	h.eng.cfg.DefaultChannel = "opsreplay"
+	run := h.run(nil)
+	announced(t, h.store, run.ID)
+	code1 := sentEnvelopes(t, dir)[0].Code
+	if len(code1) != 6 {
+		t.Fatalf("codes are 6 characters: %q", code1)
+	}
+
+	// The right code on the WRONG channel matches nothing.
+	writeInbox(t, other, notify.Message{ID: "oc-1", From: "lead", Text: "#" + code1 + " yes"})
+	if _, err := h.eng.ReceiveNow(ctx, "otherch"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := h.store.GetRun(ctx, run.ID); r.Status != "awaiting_approval" {
+		t.Fatalf("a code from another channel resolved the pause: %s", r.Status)
+	}
+
+	// Approved in the UI; the step fails; retry pauses it again with a new code.
+	if err := h.eng.Approve(ctx, run.ID, "ship", Actor{ID: "ada", Via: "ui"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.wait(run.ID); r.Status != "failed" {
+		t.Fatalf("status %s", r.Status)
+	}
+	// Start ignores a run still registered as executing (see gates_test.go).
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		h.eng.mu.Lock()
+		_, busy := h.eng.running[run.ID]
+		h.eng.mu.Unlock()
+		if !busy {
+			break
+		}
+	}
+	if err := h.eng.Retry(ctx, run.ID, "ship"); err != nil {
+		t.Fatal(err)
+	}
+	h.wait(run.ID)
+	for i := 0; i < 200 && len(sentEnvelopes(t, dir)) < 2; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	envs := sentEnvelopes(t, dir)
+	if len(envs) != 2 || envs[1].Code == code1 {
+		t.Fatalf("the second pause needs its own code: %+v", envs)
+	}
+	writeInbox(t, dir, notify.Message{ID: "rp-1", From: "lead", Text: "#" + code1 + " yes"})
+	if _, err := h.eng.ReceiveNow(ctx, "opsreplay"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := h.store.GetRun(ctx, run.ID); r.Status != "awaiting_approval" {
+		t.Fatalf("a replayed old code answered the new pause: %s", r.Status)
+	}
+	if !strings.Contains(eventTexts(t, h.store, run.ID), "no longer live") {
+		t.Fatal("the replay must be recorded on the run")
+	}
+}
+
+// A message stored but not handled (a crash between the two) is handled on
+// the next poll — a "#code yes" is never lost.
+func TestPendingMessageIsHandledOnTheNextPoll(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, approvalDef("chpending"), newFakeLLM(t), "")
+	dir := fakeChannel(t, h.eng, "opspend", true, "lead")
+	h.eng.cfg.DefaultChannel = "opspend"
+	run := h.run(nil)
+	announced(t, h.store, run.ID)
+	code := sentEnvelopes(t, dir)[0].Code
+	// As if the previous poll stored it and then died.
+	if _, err := h.store.InsertChannelMessage(ctx, &store.ChannelMessage{Channel: "opspend", MsgID: "crash-1", Sender: "lead", Text: "#" + code + " yes"}); err != nil {
+		t.Fatal(err)
+	}
+	writeInbox(t, dir)
+	if _, err := h.eng.ReceiveNow(ctx, "opspend"); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.wait(run.ID); r.Status != "done" {
+		t.Fatalf("the pending reply was lost: %s", r.Status)
+	}
+}
+
+// A send cut off by the timeout keeps its dedup key — it may have been
+// delivered — and a send step cannot attach a file outside its workspace or an
+// internal URL.
+func TestSendTimeoutKeepsDedupAndAttachmentsAreConfined(t *testing.T) {
+	def := &workflow.Definition{Name: "sendhard", Steps: []workflow.Step{{ID: "tell", Send: &workflow.SendStep{
+		Text: "x", Dedup: &workflow.Dedup{Key: "k", Window: "1h"},
+	}}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	dir := fakeChannelWith(t, h.eng, catalog.Channel{Name: "opshang", TimeoutSec: 1})
+	h.eng.cfg.DefaultChannel = "opshang"
+	_ = os.WriteFile(filepath.Join(dir, "hang"), nil, 0o600)
+	if r := h.run(nil); r.Status != "failed" {
+		t.Fatalf("a timed-out send fails the step: %s", r.Status)
+	}
+	_ = os.Remove(filepath.Join(dir, "hang"))
+	r := h.run(nil)
+	if out := string(h.steps(r.ID)["tell"].Output); !strings.Contains(out, "dedup") {
+		t.Fatalf("a timed-out send must keep its key (it may have landed); got %s / %s", r.Status, out)
+	}
+	if len(sentEnvelopes(t, dir)) != 0 {
+		t.Fatal("nothing should have been sent the second time")
+	}
+
+	def.Steps[0].Send.Dedup = nil
+	for _, a := range []string{"/etc/passwd", "../../outside.txt", "https://127.0.0.1/x", "http://example.com/x"} {
+		def.Steps[0].Send.Attachment = a
+		r := h.run(nil)
+		if r.Status != "failed" {
+			t.Fatalf("attachment %q must be refused, run %s", a, r.Status)
+		}
+	}
+}
+
+// The sender who STARTED a run by message is its triggeredBy, so
+// prevent_self_approval refuses that same sender approving it from chat.
+func TestMessageStarterCannotSelfApprove(t *testing.T) {
+	ctx := context.Background()
+	def := &workflow.Definition{Name: "selfappr",
+		On:    workflow.Triggers{Message: []workflow.MessageTrigger{{Channel: "opsself", Contains: "deploy"}}},
+		Steps: []workflow.Step{{ID: "ship", Run: "echo ok", RequiresApproval: true, PreventSelfApproval: true}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	dir := fakeChannel(t, h.eng, "opsself", true, "lead", "boss")
+	h.eng.cfg.DefaultChannel = "opsself"
+	writeInbox(t, dir, notify.Message{ID: "sa-1", From: "lead", Text: "deploy api"})
+	if _, err := h.eng.ReceiveNow(ctx, "opsself"); err != nil {
+		t.Fatal(err)
+	}
+	var runs []*store.Run
+	for i := 0; i < 100 && len(runs) == 0; i++ {
+		runs, _ = h.store.FindRuns(ctx, store.RunFilter{Workflow: "selfappr"})
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(runs) != 1 {
+		t.Fatal("no run started")
+	}
+	h.runs = append(h.runs, runs[0].ID)
+	h.wait(runs[0].ID)
+	announced(t, h.store, runs[0].ID)
+	code := sentEnvelopes(t, dir)[0].Code
+	writeInbox(t, dir, notify.Message{ID: "sa-1", From: "lead", Text: "deploy api"},
+		notify.Message{ID: "sa-2", From: "lead", Text: "#" + code + " yes"})
+	if _, err := h.eng.ReceiveNow(ctx, "opsself"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := h.store.GetRun(ctx, runs[0].ID); r.Status != "awaiting_approval" {
+		t.Fatalf("the starter approved their own run: %s", r.Status)
+	}
+	writeInbox(t, dir, notify.Message{ID: "sa-2", From: "lead", Text: "#" + code + " yes"},
+		notify.Message{ID: "sa-3", From: "boss", Text: "#" + code + " yes"})
+	if _, err := h.eng.ReceiveNow(ctx, "opsself"); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.wait(runs[0].ID); r.Status != "done" {
+		t.Fatalf("a different allowed sender should approve: %s", r.Status)
+	}
 }

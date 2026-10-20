@@ -648,6 +648,16 @@ const (
 // caller: an approval gate reads Ok as approve/reject; a question or a
 // needs_input gate reads the payload.
 func (e *Engine) Resolve(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
+	if err := e.resolve(ctx, runID, stepID, ans, by); err != nil {
+		return err
+	}
+	// Whatever path answered it, the pause's chat codes are now dead: a late
+	// or replayed "#code yes" must not answer the NEXT pause (ADR 0023).
+	e.retirePause(ctx, runID, stepID)
+	return nil
+}
+
+func (e *Engine) resolve(ctx context.Context, runID uuid.UUID, stepID string, ans tn.Answer, by Actor) error {
 	if err := by.validate(); err != nil {
 		return err
 	}

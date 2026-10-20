@@ -26,12 +26,18 @@
 //   APL_WA_GROUP      the group JID (…@g.us). The envelope's `target` overrides it.
 //   APL_WA_LABEL      the apl handle label (whatsapp:<label>); default "biz"
 //   APL_BIN           the apl binary; default "apl"
-//   APL_WA_TIMEOUT_MS how long one apl call may take; default 120000
+//   APL_WA_TIMEOUT_MS the most one invocation may take; default 120000, and
+//                     never longer than wfnexus allows (WFX_CHANNEL_TIMEOUT_MS,
+//                     which wfnexus sets) less 5s — so the adapter gives up and
+//                     SAYS so before it is killed
 //   APL_WA_LIMIT      most messages one receive returns; default 200
+//   APL_WA_RESET_WINDOW  messages re-read when the cursor is lost; default 20
 
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+const dns = require("node:dns").promises;
+const net = require("node:net");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -40,8 +46,14 @@ const VERSION = "wfnexus.channel/v1";
 const env = process.env;
 const label = env.APL_WA_LABEL || "biz";
 const apl = env.APL_BIN || "apl";
-const timeout = Number(env.APL_WA_TIMEOUT_MS || 120000);
 const limit = Number(env.APL_WA_LIMIT || 200);
+const resetWindow = Number(env.APL_WA_RESET_WINDOW || 20);
+
+// One budget for the whole invocation, inside wfnexus's own kill deadline.
+let budget = Number(env.APL_WA_TIMEOUT_MS || 120000);
+if (env.WFX_CHANNEL_TIMEOUT_MS) budget = Math.min(budget, Math.max(1000, Number(env.WFX_CHANNEL_TIMEOUT_MS) - 5000));
+const deadline = Date.now() + budget;
+const remaining = () => Math.max(1000, deadline - Date.now());
 
 function fail(msg) {
   process.stderr.write("apl-whatsapp: " + msg + "\n");
@@ -53,6 +65,7 @@ function wacli(args, { readOnly } = {}) {
   const argv = ["with", "whatsapp:" + label];
   if (readOnly) argv.push("--read-only");
   argv.push("--", "wacli", "--json", ...args);
+  const timeout = remaining();
   const r = spawnSync(apl, argv, { encoding: "utf8", timeout, maxBuffer: 64 << 20 });
   if (r.error) {
     if (r.error.code === "ETIMEDOUT") throw new Error(`apl timed out after ${timeout}ms`);
@@ -85,15 +98,43 @@ function groupOf(req) {
   return g;
 }
 
+// internal reports an address that is not on the public internet — the same
+// rule wfnexus applies before the envelope ever reaches this script.
+function internal(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224;
+  }
+  const v = ip.toLowerCase();
+  if (v.startsWith("::ffff:")) return internal(v.slice(7));
+  return v === "::" || v === "::1" || v.startsWith("fe8") || v.startsWith("fe9") || v.startsWith("fea") ||
+    v.startsWith("feb") || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("ff");
+}
+
+// checkURL refuses anything but https to a public address. The server checked
+// too; this re-check at fetch time narrows a DNS-rebinding window.
+async function checkURL(raw) {
+  const u = new URL(raw);
+  if (u.protocol !== "https:") throw new Error(`attachment url must be https: ${raw}`);
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+  for (const a of addrs) {
+    if (internal(a.address)) throw new Error(`attachment url ${u.hostname} resolves to an internal address (${a.address}); refused`);
+  }
+}
+
 // fetchToFile downloads a URL attachment, because wacli sends files, not URLs.
+// Redirects are refused: a public URL must not bounce the fetch inward.
 async function fetchToFile(url, filename) {
-  const res = await fetch(url);
+  await checkURL(url);
+  const res = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(remaining()) });
   if (!res.ok) throw new Error(`attachment ${url}: HTTP ${res.status}`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wfx-wa-"));
-  const name = filename || path.basename(new URL(url).pathname) || "attachment";
+  const name = path.basename(filename || new URL(url).pathname) || "attachment";
   const file = path.join(dir, name);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
-  return file;
+  return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
 async function send() {
@@ -101,10 +142,12 @@ async function send() {
   const group = groupOf(e);
   const text = e.text || "";
   let data;
+  let cleanup = () => {};
   try {
     const a = e.attachment;
     if (a && (a.path || a.url)) {
-      const file = a.path || (await fetchToFile(a.url, a.filename));
+      let file = a.path;
+      if (!file) ({ file, cleanup } = await fetchToFile(a.url, a.filename));
       const args = ["send", "file", "--to", group, "--file", file];
       if (a.filename) args.push("--filename", a.filename);
       if (text) args.push("--caption", text);
@@ -114,10 +157,12 @@ async function send() {
       data = wacli(["send", "text", "--to", group, "--message", text]);
     }
   } catch (err) {
+    cleanup();
     // NEVER retried, here or by wfnexus: a send that errored or timed out may
     // still have gone out, and a duplicate in a group is worse than an error.
     fail(`send failed: ${err.message}. The message MAY have landed — read the group before sending it again; do not retry blind.`);
   }
+  cleanup();
   if (!data || data.sent === false) fail("send not confirmed by wacli. The message MAY have landed — read the group first; do not retry blind.");
   process.stdout.write(JSON.stringify({ id: String(data.id || "") }) + "\n");
 }
@@ -154,8 +199,28 @@ function receive() {
     // Read after a message id: the anchor's time, then everything from one
     // second before it (wacli's --after is per second), oldest first, minus
     // the anchor and anything older — the same rule apl serve's after_id uses.
-    const anchor = wacli(["messages", "show", "--chat", group, "--id", req.after], { readOnly: true });
-    if (!anchor || !anchor.Timestamp) throw new Error(`cursor message ${req.after} not found in that group`);
+    let anchor = null;
+    try {
+      anchor = wacli(["messages", "show", "--chat", group, "--id", req.after], { readOnly: true });
+    } catch (_) {
+      anchor = null;
+    }
+    if (!anchor || !anchor.Timestamp) {
+      // The cursor's message is gone (pruned, or the store was rebuilt). Do
+      // not wedge on it forever: re-read the last few messages — wfnexus
+      // stores each id once, so the overlap is harmless — move the cursor to
+      // the newest, and SAY so; it is shown on the System page. If this read
+      // fails too, the group itself is unreadable and that is the error.
+      const d = wacli(["messages", "list", "--chat", group, "--limit", String(resetWindow)], { readOnly: true });
+      const recent = (d.messages || []).slice().reverse(); // oldest first
+      const newest = recent.length ? recent[recent.length - 1].MsgID : "";
+      process.stdout.write(JSON.stringify({
+        messages: recent.filter((m) => !m.FromMe).map(toMessage),
+        cursor: newest,
+        notice: `cursor ${req.after} was not found in the group; re-read the last ${recent.length} message(s) and reset the cursor — anything older than that since the last poll may have been missed`,
+      }) + "\n");
+      return;
+    }
     const since = new Date(anchor.Timestamp);
     const after = new Date(since.getTime() - 1000).toISOString().replace(/\.\d+Z$/, "Z");
     const d = wacli(["messages", "list", "--chat", group, "--after", after, "--asc", "--limit", String(limit)], { readOnly: true });

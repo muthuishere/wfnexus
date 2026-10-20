@@ -86,9 +86,29 @@ test("receive: after a cursor, oldest first, own messages skipped but passed by 
   assert.ok(!calls().some((c) => c.includes("sync")), "the adapter must never sync");
 });
 
-test("receive: an unknown cursor is an error, not an empty inbox", () => {
+test("receive: a lost cursor does not wedge the channel — it re-reads recent messages, resets, and says so", () => {
   const { run } = setup(msgs);
   const r = run("receive", { after: "ZZZ" });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.strictEqual(out.cursor, "D");
+  assert.deepStrictEqual(out.messages.map((m) => m.id), ["A", "B", "D"]);
+  assert.match(out.notice, /ZZZ was not found/);
+});
+
+test("receive: an unreadable group is an error, not an empty inbox", () => {
+  const { run } = setup(msgs, { FAKE_APL_GROUP: "/nonexistent/group.json" });
+  const r = run("receive", { after: "A" });
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /receive failed/);
+});
+
+test("send: an attachment URL that is not https, or points inside the network, is refused before any fetch", () => {
+  for (const url of ["http://example.com/x.pdf", "https://127.0.0.1/x", "https://169.254.169.254/latest", "https://10.1.2.3/x", "https://[::1]/x", "https://localhost/x"]) {
+    const { run, calls } = setup(msgs);
+    const r = run("send", { text: "x", attachment: { url } });
+    assert.notStrictEqual(r.status, 0, url);
+    assert.match(r.stderr, /https|internal/, url);
+    assert.throws(() => calls(), undefined, "nothing may be sent for " + url);
+  }
 });

@@ -58,7 +58,7 @@ says what is waiting, how to answer, and links to the run:
 nightly-watch is waiting (approval) at step ship:
 step ship needs approval before it runs
 
-Reply "#a7k2 yes" or "#a7k2 no <reason>".
+Reply "#a7k2qp yes" or "#a7k2qp no <reason>".
 Open: http://wfx.example.com/runs/6f1c…
 ```
 
@@ -79,7 +79,8 @@ steps:
 The step's output is `{sent, skipped, channel, id, text}`, so a later step can branch on it.
 `dedup` is what lets a 15-minute schedule say a thing once per window. `dry_run: true` renders the
 message and records "would send on channel …" on the run without running the adapter, and
-`wfx dryrun` shows each send step's channel and rendered text. A failed send fails the step with the
+`wfx dryrun` shows each send step's channel and rendered text. A file attachment must be inside
+the run's workspace, and a URL must be `https` to a public address. A failed send fails the step with the
 adapter's error and is **never retried** — a duplicate in a chat is worse than an error.
 
 **An operator** sends through the same path:
@@ -91,8 +92,10 @@ wfx send --channel team-chat --file ./report.pdf "nightly report"
 
 ## Receive
 
-An `inbound` channel is polled every `receiveEvery`. Each received message is stored once, and
-the adapter's cursor is kept in the database, so a restart neither loses nor repeats messages.
+An `inbound` channel is polled every `receiveEvery`, each channel on its own. Each received
+message is stored once and handled after it is stored, and the adapter's cursor is kept in the
+database, so a restart neither loses nor repeats messages. If receiving fails, or the adapter had
+to reset a lost cursor, `wfx channels` and the System page say so.
 
 ```bash
 wfx messages                       # newest first, with what each one did
@@ -109,10 +112,21 @@ on:
   message:
     - channel: team-chat
       match: "(?i)^deploy\\s+\\S+"     # or  contains: "deploy"
+      allow: ["15550100001@s.whatsapp.net"]   # optional; default: the channel's allow list
 ```
 
-The run's input is `message: {channel, id, from, name, text, at, attachments}`. A reply that
-answers a pause does not also trigger.
+A message starts the run only if its sender is on the trigger's `allow` list, or — when the
+trigger has none — the channel's. **With both empty, no message starts anything**; the refusal is
+logged and the message shows as `refused`. The run's input is
+`message: {channel, id, from, name, text, at, attachments}`, and the run is attributed to the
+sender, so `prevent_self_approval` stops them approving their own run from the chat. A reply
+that answers a pause does not also trigger.
+
+<Aside type="danger" title="Message text is untrusted">
+An allow list limits who can send; it does not make the text safe. Never template
+`.Input.message.text` into a `run:` command — that hands the sender a shell — and treat it as
+data, not instructions, in a prompt. Quote it, or let a `judge` step classify it first.
+</Aside>
 
 ## Answer a pause from chat: yes / no
 
@@ -121,16 +135,18 @@ A reply that quotes the pause's code answers it — **only if the sender is on t
 
 | pause | reply | effect |
 |---|---|---|
-| approval | `#a7k2 yes` (or `approve`, `ok`, `lgtm`) | approved |
-| approval | `#a7k2 no not on a friday` | rejected, with the reason |
-| question / input | `#a7k2 use the staging database` | answered with that text |
+| approval | `#a7k2qp yes` (or `approve`, `ok`, `lgtm`) | approved |
+| approval | `#a7k2qp no not on a friday` | rejected, with the reason |
+| question / input | `#a7k2qp use the staging database` | answered with that text |
 
+A code is six characters, matches only on the channel it was sent on, expires, and is retired
+the moment its pause is answered by any path — so an old reply can never answer a newer pause.
 Anyone else's reply is recorded on the run and resolves nothing. **The default `allow` list is
 empty, so out of the box nothing resolves from chat.** The answer is recorded as
 `<sender> (via channel:team-chat)`, and a step's `approvers:` still applies to it.
 
 <Aside type="caution" title="The code is not a password">
-Everyone in the group can read `#a7k2`. It only says *which* pause a reply means. What authorizes
+Everyone in the group can read `#a7k2qp`. It only says *which* pause a reply means. What authorizes
 the answer is the sender id the adapter reports being on the allow list — so it is only as
 trustworthy as the transport's sender identity. A WhatsApp sender id is authenticated by WhatsApp.
 An email `From:` is not: an email adapter must verify the sender before reporting it, or keep the
@@ -147,7 +163,7 @@ group through the apl CLI (`apl with whatsapp:<label> -- wacli …`):
 | `APL_WA_GROUP` | the group id (`1203…@g.us`); a send's `target` overrides it |
 | `APL_WA_LABEL` | the apl handle label; default `biz` |
 | `APL_BIN` | the apl binary; default `apl` |
-| `APL_WA_TIMEOUT_MS` | per call; default 120000 |
+| `APL_WA_TIMEOUT_MS` | the whole invocation; default 120000, capped below the channel's `timeoutSec` |
 
 Run it on the machine that owns the WhatsApp account. There, `wacli send` hands the message to
 the running syncer instead of opening the store a second time, so there is still one writer. The

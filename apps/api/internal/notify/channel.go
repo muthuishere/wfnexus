@@ -111,6 +111,10 @@ type Message struct {
 type ReceiveResult struct {
 	Messages []Message `json:"messages"`
 	Cursor   string    `json:"cursor"`
+	// Notice is something the operator should see even though the receive
+	// succeeded — e.g. the cursor was lost and reset. Shown by `wfx channels`
+	// and on the System page.
+	Notice string `json:"notice,omitempty"`
 }
 
 // Command is the one channel adapter: it runs a program.
@@ -208,6 +212,38 @@ func (c Command) Receive(ctx context.Context, req ReceiveRequest) (ReceiveResult
 	return res, nil
 }
 
+// ErrMaybeDelivered marks a send that was cut off rather than refused: the
+// adapter may already have delivered it, so it is neither retried nor
+// released from dedup.
+var ErrMaybeDelivered = errors.New("the message may have been delivered")
+
+// passEnv is the part of the server's environment an adapter inherits: enough
+// to find programs, a home and a temp dir — and nothing else. The server's
+// environment holds its database URL and provider keys; an adapter is someone
+// else's script and gets none of it. What it needs, the channel's `env:` says.
+var passEnv = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TZ",
+	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+	// windows
+	"SystemRoot", "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ComSpec", "PATHEXT",
+}
+
+// AdapterEnv is the minimal environment plus the channel's own `env:`, whose
+// values may reference the server's variables (${NAME}) — the only way one
+// reaches an adapter, and only because an operator named it.
+func AdapterEnv(extra map[string]string) []string {
+	var out []string
+	for _, k := range passEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, k+"="+v)
+		}
+	}
+	for k, v := range extra {
+		out = append(out, k+"="+os.ExpandEnv(v))
+	}
+	return out
+}
+
 // MaxStderr bounds how much of an adapter's stderr reaches an error (and so a
 // run event).
 const MaxStderr = 2000
@@ -230,11 +266,11 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 	argv := sh.Command(c.Run + " " + verb)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = c.Dir
-	cmd.Env = os.Environ()
-	for k, v := range c.Env {
-		cmd.Env = append(cmd.Env, k+"="+os.ExpandEnv(v))
-	}
-	cmd.Env = append(cmd.Env, "WFX_CHANNEL="+c.EntryName, "WFX_CHANNEL_VERB="+verb)
+	cmd.Env = AdapterEnv(c.Env)
+	// The adapter's own deadline, so it can give up — and say so — before
+	// it is killed rather than after.
+	cmd.Env = append(cmd.Env, "WFX_CHANNEL="+c.EntryName, "WFX_CHANNEL_VERB="+verb,
+		fmt.Sprintf("WFX_CHANNEL_TIMEOUT_MS=%d", timeout.Milliseconds()))
 	cmd.Stdin = bytes.NewReader(body)
 	// A grandchild that outlives the killed shell holds stdout open; without
 	// this a timed-out adapter hangs the caller until that child exits.
@@ -247,8 +283,8 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 		if len(msg) > MaxStderr {
 			msg = msg[len(msg)-MaxStderr:]
 		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("channel %s: %s timed out after %s (it may still have happened; not retried): %s", c.EntryName, verb, timeout, msg)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("%w: channel %s: %s timed out after %s (not retried): %s", ErrMaybeDelivered, c.EntryName, verb, timeout, msg)
 		}
 		if msg == "" {
 			msg = err.Error()

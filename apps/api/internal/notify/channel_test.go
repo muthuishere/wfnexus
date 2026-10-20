@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -97,7 +98,40 @@ func TestCommandSendsTheEnvelopeOnStdinAndReportsStderr(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 	slow := Command{EntryName: "c", Run: "sleep 5;", Timeout: 200 * time.Millisecond}
-	if _, err := slow.Send(context.Background(), Envelope{Text: "x"}); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if _, err := slow.Send(context.Background(), Envelope{Text: "x"}); !errors.Is(err, ErrMaybeDelivered) {
 		t.Fatalf("timeout err %v", err)
+	}
+}
+
+// An attachment URL that would make the adapter fetch from inside the network
+// is refused before it reaches the adapter.
+func TestAttachmentURLRefusesInternalTargets(t *testing.T) {
+	ctx := context.Background()
+	for _, u := range []string{
+		"http://example.com/x", "file:///etc/passwd", "https://127.0.0.1/x", "https://10.0.0.5/x",
+		"https://169.254.169.254/latest/meta-data", "https://[::1]/x", "https://192.168.1.2/x",
+		"https://100.64.1.1/x", "https://localhost/x",
+	} {
+		if err := CheckAttachmentURL(ctx, u); err == nil {
+			t.Errorf("%s must be refused", u)
+		}
+	}
+	if err := CheckAttachmentURL(ctx, "https://93.184.215.14/report.pdf"); err != nil {
+		t.Fatalf("a public https address must pass: %v", err)
+	}
+}
+
+// The adapter gets a minimal environment: never the server's secrets, only
+// what the channel names.
+func TestAdapterEnvIsMinimal(t *testing.T) {
+	t.Setenv("WFX_DATABASE_URL", "postgres://secret")
+	t.Setenv("OPENROUTER_API_KEY", "sk-secret")
+	t.Setenv("TEAM_GROUP", "1203@g.us")
+	env := strings.Join(AdapterEnv(map[string]string{"APL_WA_GROUP": "${TEAM_GROUP}"}), "\n")
+	if strings.Contains(env, "secret") {
+		t.Fatalf("server secrets leaked into the adapter env:\n%s", env)
+	}
+	if !strings.Contains(env, "APL_WA_GROUP=1203@g.us") || !strings.Contains(env, "PATH=") {
+		t.Fatalf("env %s", env)
 	}
 }

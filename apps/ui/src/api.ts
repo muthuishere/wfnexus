@@ -295,12 +295,14 @@ export type Template = {
 export type Channel = {
   name: string; description?: string; kind: string; default: boolean; inbound: boolean
   receiveEvery?: string; allow: string[]; cursor?: string; lastReceive?: string; lastError?: string
+  /** the adapter succeeded but flagged something — e.g. a lost cursor it reset */
+  lastNotice?: string
 }
 /** A message received on a channel, and what it did. */
 export type ChannelMessage = {
   id: number; channel: string; msgId: string; from: string; name?: string; text: string
   attachments?: Array<{ url?: string; filename?: string; mime?: string }>
-  at?: string; runId?: string; outcome?: string; receivedAt: string
+  at?: string; runId?: string; outcome?: string; receivedAt: string; handled?: boolean
 }
 export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
 

@@ -16,3 +16,7 @@ go.work.sum
 # Agent worktrees, created per-task and discarded
 .claude/worktrees/
 
+
+# A `go build` inside cmd/wfx drops the binary beside its source; never commit it
+apps/api/cmd/wfx/wfx
+apps/api/cmd/wfx/wfx.exe

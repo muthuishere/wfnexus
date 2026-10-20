@@ -70,10 +70,16 @@ type Triggers struct {
 //	      match: "(?i)^deploy\\s+\\S+"
 //
 // The run's input is {"message": {channel, id, from, name, text, at, attachments}}.
+// The text is UNTRUSTED input from a chat: a template that puts it in a `run:`
+// command or a prompt is handing that sender a shell or an agent.
 type MessageTrigger struct {
-	Channel  string `yaml:"channel,omitempty" json:"channel,omitempty"`
-	Contains string `yaml:"contains,omitempty" json:"contains,omitempty"`
-	Match    string `yaml:"match,omitempty" json:"match,omitempty"`
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	// Allow is who may start this workflow by message: sender ids. Empty means
+	// the CHANNEL's allow list — and when that is empty too, nobody: a message
+	// trigger never fires for an unknown sender (ADR 0023).
+	Allow    []string `yaml:"allow,omitempty" json:"allow,omitempty"`
+	Contains string   `yaml:"contains,omitempty" json:"contains,omitempty"`
+	Match    string   `yaml:"match,omitempty" json:"match,omitempty"`
 }
 
 // Matches reports whether a message on that channel starts this trigger.
@@ -93,14 +99,37 @@ func (m MessageTrigger) Matches(channel, text string) bool {
 	return true
 }
 
-// MatchesMessage reports whether any of this workflow's message triggers fire.
-func (t Triggers) MatchesMessage(channel, text string) bool {
-	for _, m := range t.Message {
-		if m.Matches(channel, text) {
+// SenderAllowed reports whether `from` may fire this trigger: its own allow
+// list, else the channel's. Both empty ⇒ nobody.
+func (m MessageTrigger) SenderAllowed(channelAllow []string, from string) bool {
+	list := m.Allow
+	if len(list) == 0 {
+		list = channelAllow
+	}
+	for _, a := range list {
+		if a != "" && a == from {
 			return true
 		}
 	}
 	return false
+}
+
+// MatchingMessageTriggers returns this workflow's triggers whose channel and
+// text match; the caller still checks the sender.
+func (t Triggers) MatchingMessageTriggers(channel, text string) []MessageTrigger {
+	var out []MessageTrigger
+	for _, m := range t.Message {
+		if m.Matches(channel, text) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// MatchesMessage reports whether any of this workflow's message triggers match
+// the channel and text (not the sender).
+func (t Triggers) MatchesMessage(channel, text string) bool {
+	return len(t.MatchingMessageTriggers(channel, text)) > 0
 }
 
 // Schedule is one cron entry. Five fields, UTC, because a schedule that means

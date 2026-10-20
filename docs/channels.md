@@ -41,12 +41,12 @@ Reference adapter: [`adapters/apl-whatsapp.js`](../adapters/apl-whatsapp.js)
 |---|---|
 | `kind` | `command` (the only kind) |
 | `run` | the command line; the verb is appended. Runs through the platform shell, from the directory holding `registries.json` |
-| `env` | extra environment for the adapter; `${VAR}` expands from the server's environment, so addresses and tokens stay out of the file |
+| `env` | the adapter's environment beyond the minimal one (`PATH`, `HOME`, temp dirs, locale). `${VAR}` expands from the server's environment — the only way a server variable reaches an adapter; its database URL and keys never do |
 | `target` | optional default address, passed through as `target` |
 | `inbound` | poll `receive` every `receiveEvery` (default `1m`) |
-| `allow` | sender ids whose replies may resolve a pause. **Empty (default) = none.** |
+| `allow` | sender ids whose replies may resolve a pause, and who may fire this channel's `message` triggers (unless a trigger lists its own). **Empty (default) = nobody.** |
 | `sendGap` | minimum time between sends on this channel; sends are always one at a time |
-| `timeoutSec` | per invocation (default 60) |
+| `timeoutSec` | per invocation (default 60). The adapter is told it as `WFX_CHANNEL_TIMEOUT_MS` and should finish (or fail, saying so) before it |
 | `enabled` | `false` switches it off |
 
 `config.yaml` picks the server-wide default (pauses, and any `send:` that names
@@ -66,9 +66,9 @@ channels:
   "version": "wfnexus.channel/v1",
   "type": "pause",
   "channel": "team-chat",
-  "text": "nightly-watch is waiting (approval) at step ship:\n...\n\nReply \"#a7k2 yes\" or \"#a7k2 no <reason>\".\nOpen: https://wfx.example.com/runs/6f1c…",
+  "text": "nightly-watch is waiting (approval) at step ship:\n...\n\nReply \"#a7k2qp yes\" or \"#a7k2qp no <reason>\".\nOpen: https://wfx.example.com/runs/6f1c…",
   "runUrl": "https://wfx.example.com/runs/6f1c…",
-  "code": "a7k2",
+  "code": "a7k2qp",
   "pauseKind": "approval",
   "workflow": "nightly-watch", "project": "ops", "runId": "6f1c…", "stepId": "ship",
   "dedupKey": "pause:6f1c…:ship",
@@ -82,13 +82,18 @@ channels:
 - `text` is complete and ready to post. Adapters should not rewrite it.
 - `runUrl` is a **pointer**. Nothing in an envelope resolves anything.
 - `code` (pause only) is what a reply quotes. It is not a credential.
-- `attachment` has a local `path` **or** a `url`, never both. Optional.
+- `attachment` has a local `path` **or** a `url`, never both. Optional. A `url`
+  is always `https` to a public address — the server refuses loopback, private,
+  link-local and CGNAT targets before running the adapter; an adapter that
+  fetches it should re-check and refuse redirects.
 - `target` is opaque to wfnexus: a group, a mailbox. Empty ⇒ the adapter's own default.
 
 **stdout** — optional: `{"id": "<transport message id>"}`.
 
 **exit** — `0` means sent. Anything else is a failure: wfnexus shows the
-**stderr** on the run and does **not** retry. If the adapter cannot tell whether
+(scrubbed) **stderr** on the run and does **not** retry. A send killed at the
+timeout is treated as *maybe delivered*: its dedup key is kept. A non-zero exit
+is treated as *not delivered* and releases the key. If the adapter cannot tell whether
 the message went out (a timeout, a lost response), it must fail and say so on
 stderr — a duplicate in a chat is worse than an error.
 
@@ -114,12 +119,13 @@ triggers.
       "id": "3EB0C5…",
       "from": "15550100001@s.whatsapp.net",
       "name": "Ops lead",
-      "text": "#a7k2 yes",
+      "text": "#a7k2qp yes",
       "at": "2026-10-20T09:03:11Z",
       "attachments": [ { "url": "", "filename": "log.txt", "mime": "text/plain" } ]
     }
   ],
-  "cursor": "3EB0C5…"
+  "cursor": "3EB0C5…",
+  "notice": ""
 }
 ```
 
@@ -129,14 +135,21 @@ triggers.
 - `from` is what the allow list is matched against, exactly.
 - `cursor` is persisted (only after every message is stored) and handed back as
   `after`. Empty ⇒ keep the previous one.
+- `notice` (optional) is something the operator should see although the receive
+  worked — e.g. the cursor's message was gone and the adapter reset it. It is
+  shown by `wfx channels` and on the System page. An adapter must not wedge on
+  a lost cursor: re-read a recent window (duplicates are harmless) and reset.
 
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
 
 ## What wfnexus does with a received message
 
-1. Stored in `channel_messages` (once).
-2. If the text contains `#<code>` of a pause:
+1. Stored in `channel_messages` (once), pending; marked handled once acted on.
+   A message still pending at the next poll (a crash) is handled then.
+2. If the text contains `#<code>` of a **live** pause code issued **on this
+   channel** (codes are 6 characters, expire, and are retired when the pause
+   resolves or pauses again):
    - sender **on** `allow`: approval → `yes|y|approve|ok|lgtm` approves,
      `no|reject|deny [reason]` rejects; input → the rest of the text is the
      answer. Recorded as `<from> (via channel:<name>)`; a step's `approvers:`
@@ -144,7 +157,11 @@ error is kept and shown by `wfx channels`; the cursor does not move.
    - sender **not** on `allow` (or the pause is no longer waiting): recorded on
      the run, resolves nothing.
 3. Otherwise, every workflow whose `on: message:` matches (channel, `contains`,
-   `match` regex) starts with `input.message = {channel, id, from, name, text, at, attachments}`.
+   `match` regex) **and whose allow list holds the sender** (the trigger's
+   `allow`, else the channel's; both empty ⇒ never) starts with
+   `input.message = {channel, id, from, name, text, at, attachments}` and
+   `triggeredBy = <from>`. The text is **untrusted**: never template it into a
+   `run:` command or treat it as instructions.
 
 ## Adapter author rules
 
