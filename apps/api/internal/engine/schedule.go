@@ -144,7 +144,7 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 	if halted {
 		return nil // the step already set the run's terminal status
 	}
-	e.skipUntaken(ctx, runID)
+	e.skipUntaken(ctx, runID, "not reached: a step it needs did not run")
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
 }
@@ -153,14 +153,14 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 // finished successfully. A branch that was not taken — a goal reached before
 // it, a guard upstream that routed around it — did not run and never will, and
 // "pending" on a finished run reads as work still to come.
-func (e *Engine) skipUntaken(ctx context.Context, runID uuid.UUID) {
+func (e *Engine) skipUntaken(ctx context.Context, runID uuid.UUID, why string) {
 	steps, err := e.store.ListSteps(ctx, runID)
 	if err != nil {
 		return
 	}
 	for _, st := range steps {
 		if st.Status == "pending" {
-			e.setStep(ctx, runID, st.StepID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
+			e.setStep(ctx, runID, st.StepID, model.StepPatch{Status: str("skipped"), FinishedAt: now(), SkipReason: str(why)})
 		}
 	}
 }
@@ -186,7 +186,7 @@ func (e *Engine) skipUnlessGuarded(ctx context.Context, runID uuid.UUID, step *w
 	if guardFor(step.When)(w) {
 		return false
 	}
-	e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
+	e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now(), SkipReason: str(guardWhy(step.When, w))})
 	return true
 }
 

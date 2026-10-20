@@ -1054,13 +1054,13 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 			if pos < 0 {
 				return fmt.Errorf("gate skip_to unknown step %q", g.SkipTo)
 			}
-			e.skipRange(ctx, runID, def, i+1, pos)
+			e.skipRange(ctx, runID, def, i+1, pos, fmt.Sprintf("jumped over: %s's gate on %s skipped to %s", step.ID, g.Field, g.SkipTo))
 			next = pos
 			break
 		}
 		i = next - 1
 	}
-	e.skipUntaken(ctx, runID)
+	e.skipUntaken(ctx, runID, "not reached: the run finished before it")
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
 }
@@ -1088,7 +1088,7 @@ func (e *Engine) applyDecideGates(ctx context.Context, runID uuid.UUID, def *wor
 		case "skip_to":
 			pos, _ := def.Step(g.SkipTo)
 			if pos >= 0 {
-				e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
+				e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now(), SkipReason: str("decide gate: skip to " + g.SkipTo)})
 				return pos, false
 			}
 		}
@@ -1097,9 +1097,9 @@ func (e *Engine) applyDecideGates(ctx context.Context, runID uuid.UUID, def *wor
 }
 
 // skipRange marks the steps between two positions skipped.
-func (e *Engine) skipRange(ctx context.Context, runID uuid.UUID, def *workflow.Definition, from, to int) {
+func (e *Engine) skipRange(ctx context.Context, runID uuid.UUID, def *workflow.Definition, from, to int, why string) {
 	for j := from; j < to && j < len(def.Steps); j++ {
-		e.setStep(ctx, runID, def.Steps[j].ID, model.StepPatch{Status: str("skipped")})
+		e.setStep(ctx, runID, def.Steps[j].ID, model.StepPatch{Status: str("skipped"), SkipReason: str(why)})
 	}
 }
 

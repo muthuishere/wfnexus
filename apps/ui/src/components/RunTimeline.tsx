@@ -120,12 +120,20 @@ type Row = { def: Step; run?: StepRun; ms: number; ceiling: number }
 /** A step that needed no model: no turns, tokens or cost to report. */
 const isScriptStep = (d: Step) => !!d.run || !!(d as any).judge
 
-export default function RunTimeline({ steps, byId, events, now, selected, onPick, skipReason }: {
+export default function RunTimeline({ steps, byId, events, now, selected, onPick, skipReason, input, goal }: {
   steps: Step[]; byId: Record<string, StepRun>; events: Event[]
   now: number; selected: string; onPick: (id: string) => void
   /** why the skipped steps were not needed — shown on their collapsed line */
   skipReason?: string
+  /** the run's input, which `input.*` guards read */
+  input?: unknown
+  /** the workflow's goal — with one, the planner routes */
+  goal?: string
 }) {
+  // The engine's own test (workflow.go IsPlanned): a goal, or any step that
+  // declares facts — `needs:` says nothing either way, since flattened jobs
+  // add synthetic ones. Planned, a skip is "not taken", never a guard replay.
+  const planned = !!goal || steps.some(s => s.produces?.length || s.consumes?.length)
   const [showSkipped, setShowSkipped] = useState(false)
   const all: Row[] = steps.map(def => ({
     def, run: byId[def.id], ms: elapsedMs(byId[def.id], now),
@@ -148,7 +156,7 @@ export default function RunTimeline({ steps, byId, events, now, selected, onPick
         const script = isScriptStep(r.def)
         const turns = r.run?.turns ?? 0
         const mine = corrections.filter(c => c.step === r.def.id)
-        const dec = stepDecision(r.def, r.run, byId)
+        const dec = stepDecision(r.def, r.run, byId, { input, planned })
         return (
           <div key={r.def.id} className={`tlrow ${st}${selected === r.def.id ? ' on' : ''}`}
             onClick={() => onPick(r.def.id)}>

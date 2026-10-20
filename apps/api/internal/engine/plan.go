@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -53,6 +54,44 @@ func guardFor(gs []workflow.Guard) func(*planner.World) bool {
 		}
 		return true
 	}
+}
+
+// guardWhy is guardFor's answer in words: the first condition that does not
+// hold, what it wanted and what the world had — "when classify.change_type =
+// "code" (was "config")". It reads the same World with the same rules
+// (present-but-null EXISTS; values compare as JSON), so the reason shown is
+// the reason the engine acted on. Empty when every condition holds.
+func guardWhy(gs []workflow.Guard, w *planner.World) string {
+	for _, g := range gs {
+		v, ok := w.Value(g.Path)
+		if g.Exists != nil {
+			if ok != *g.Exists {
+				if *g.Exists {
+					return fmt.Sprintf("when %s exists (it does not)", g.Path)
+				}
+				return fmt.Sprintf("when %s is absent (it is %s)", g.Path, mustJSON(v))
+			}
+			continue
+		}
+		if !ok {
+			return fmt.Sprintf("when %s = %s (%s)", g.Path, mustJSON(g.Equals), missing(g.Path, w))
+		}
+		if string(mustJSON(v)) != string(mustJSON(g.Equals)) {
+			return fmt.Sprintf("when %s = %s (was %s)", g.Path, mustJSON(g.Equals), mustJSON(v))
+		}
+	}
+	return ""
+}
+
+// missing says why a guard path did not resolve: the step behind it never
+// produced anything, or it did and the field is not there. The run input
+// always exists, so an unresolved `input.*` is a key nobody passed.
+func missing(path string, w *planner.World) string {
+	head, _, _ := strings.Cut(path, ".")
+	if _, ok := w.Value(head); !ok && head != "input" {
+		return head + " did not run"
+	}
+	return "not set"
 }
 
 // runPlanned executes a workflow whose ORDER IS DERIVED. Every step whose facts
@@ -183,7 +222,7 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 		wave.Wait()
 	}
 
-	e.skipUntaken(ctx, runID)
+	e.skipUntaken(ctx, runID, "not taken by the planner")
 	e.setRun(ctx, runID, "done", "", "")
 	return nil
 }

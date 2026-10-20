@@ -73,6 +73,9 @@ func TestContinueOnErrorKeepsTheExitAsAnAnswer(t *testing.T) {
 	if steps["review"].Status != "skipped" {
 		t.Fatalf("the branch not taken must be skipped, got %q", steps["review"].Status)
 	}
+	if got, want := steps["review"].SkipReason, "when verify.exitCode = 0 (was 4)"; got != want {
+		t.Fatalf("skip reason %q, want %q", got, want)
+	}
 }
 
 // A gate that matches the output is the workflow saying what the exit means,
@@ -93,6 +96,9 @@ func TestAMatchingGateHandlesTheExit(t *testing.T) {
 	steps := h.steps(run.ID)
 	if steps["middle"].Status != "skipped" || steps["end"].Status != "done" {
 		t.Fatalf("middle=%s end=%s", steps["middle"].Status, steps["end"].Status)
+	}
+	if got := steps["middle"].SkipReason; got != "jumped over: check's gate on exitCode skipped to end" {
+		t.Fatalf("skip reason %q", got)
 	}
 }
 

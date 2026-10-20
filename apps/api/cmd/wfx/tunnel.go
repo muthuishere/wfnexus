@@ -221,6 +221,7 @@ func (f *forwarder) sshClient(fresh bool) (*ssh.Client, error) {
 		return nil, err
 	}
 	f.client = c
+	go keepalive(c, keepaliveEvery)
 	go func() { // drop the client the moment the session dies
 		_ = c.Wait()
 		f.mu.Lock()
@@ -230,6 +231,44 @@ func (f *forwarder) sshClient(fresh bool) (*ssh.Client, error) {
 		f.mu.Unlock()
 	}()
 	return c, nil
+}
+
+// keepaliveEvery is how often an idle SSH session is asked if it is alive.
+// After a laptop sleeps, or a NAT drops the mapping, the TCP connection looks
+// open and every write vanishes: without a probe, the next request hangs until
+// the kernel gives up, minutes later. keepaliveMisses probes in a row that go
+// unanswered close the client, so the next request redials — like OpenSSH's
+// ServerAliveCountMax=3. One miss is not enough: a probe queues behind data, and
+// a big publish on a slow uplink can hold the reply back a whole interval.
+var keepaliveEvery = 15 * time.Second
+
+const keepaliveMisses = 3
+
+func keepalive(c *ssh.Client, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	replies := make(chan error, 1)
+	pending, missed := false, 0
+	for range t.C {
+		select {
+		case err := <-replies:
+			if err != nil {
+				c.Close()
+				return
+			}
+			pending, missed = false, 0
+		default:
+		}
+		if pending {
+			if missed++; missed >= keepaliveMisses {
+				c.Close()
+				return
+			}
+			continue // the probe in flight still counts; do not stack another
+		}
+		pending = true
+		go func() { _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); replies <- err }()
+	}
 }
 
 // remote opens the forwarded connection, reconnecting the SSH session once if
@@ -275,7 +314,11 @@ func (f *forwarder) serve(ln net.Listener) error {
 		tr := f.transport()
 		defer tr.CloseIdleConnections()
 		defer proxied.Close()
-		go func() { _ = (&http.Server{Handler: f.proxy(tr), ReadHeaderTimeout: time.Minute}).Serve(proxied) }()
+		srv := &http.Server{Handler: f.proxy(tr), ReadHeaderTimeout: time.Minute}
+		// When the listener closes (idle, or a signal) the proxy goes with it,
+		// open connections included — Serve alone would leave them running.
+		defer srv.Close()
+		go func() { _ = srv.Serve(proxied) }()
 	}
 	for {
 		lc, err := ln.Accept()
@@ -330,8 +373,12 @@ func (f *forwarder) transport() *http.Transport {
 	return &http.Transport{
 		DialContext:         func(context.Context, string, string) (net.Conn, error) { return f.remote() },
 		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     5 * time.Minute,
-		DisableCompression:  true, // pass the client's Accept-Encoding through, don't decode here
+		// The backstop behind keepalive: no answer at all in this long is a
+		// dead session, not a slow server — the slowest real endpoint, publish,
+		// is given 5 minutes by its own client.
+		ResponseHeaderTimeout: 10 * time.Minute,
+		IdleConnTimeout:       5 * time.Minute,
+		DisableCompression:    true, // pass the client's Accept-Encoding through, don't decode here
 	}
 }
 

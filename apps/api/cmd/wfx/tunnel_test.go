@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -446,4 +447,133 @@ func TestHTTPForwarderReusesChannels(t *testing.T) {
 		t.Fatalf("event not streamed: %q %v", line, err)
 	}
 	close(flushed)
+}
+
+// relay forwards TCP both ways until frozen; frozen, it swallows everything —
+// what a session looks like after the laptop slept or a NAT forgot it.
+type relay struct {
+	ln     net.Listener
+	frozen atomic.Bool
+}
+
+func newRelay(t *testing.T, target string) *relay {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &relay{ln: ln}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			u, err := net.Dial("tcp", target)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			cp := func(dst, src net.Conn) {
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := src.Read(buf)
+					if err != nil {
+						return
+					}
+					if !r.frozen.Load() {
+						if _, err := dst.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+				}
+			}
+			go cp(u, c)
+			go cp(c, u)
+		}
+	}()
+	return r
+}
+
+func TestKeepaliveDropsADeadSession(t *testing.T) {
+	t.Setenv("WFX_KNOWN_HOSTS", filepath.Join(t.TempDir(), "known_hosts"))
+	hostKey, _ := newSigner(t)
+	_, clientKey := newSigner(t)
+	srv := newSSHServer(t, "127.0.0.1:0", hostKey)
+	rl := newRelay(t, srv.ln.Addr().String())
+	v := viaSpec{User: "wfx", Addr: rl.ln.Addr().String(), Key: clientKey}
+	c, err := dialSSH(v, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := make(chan struct{})
+	go func() { _ = c.Wait(); close(dead) }()
+	go keepalive(c, 100*time.Millisecond)
+
+	time.Sleep(350 * time.Millisecond) // answered probes keep it open
+	select {
+	case <-dead:
+		t.Fatal("a live session was closed")
+	default:
+	}
+	rl.frozen.Store(true)
+	// one or two missed probes is a busy link, not a dead one (ServerAliveCountMax=3)
+	time.Sleep(220 * time.Millisecond)
+	select {
+	case <-dead:
+		t.Fatal("closed after fewer than three missed probes")
+	default:
+	}
+	select {
+	case <-dead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a session that stopped answering was never closed")
+	}
+}
+
+// Closing the listener takes the proxy's open connections with it.
+func TestHTTPForwarderClosesConnectionsWhenTheListenerCloses(t *testing.T) {
+	t.Setenv("WFX_KNOWN_HOSTS", filepath.Join(t.TempDir(), "known_hosts"))
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	defer app.Close()
+	hostKey, _ := newSigner(t)
+	_, clientKey := newSigner(t)
+	srv := newSSHServer(t, "127.0.0.1:0", hostKey)
+	v := viaSpec{User: "wfx", Addr: srv.ln.Addr().String(), Key: clientKey}
+	if c, err := dialSSH(v, true); err != nil {
+		t.Fatal(err)
+	} else {
+		c.Close()
+	}
+	f := &forwarder{dial: func() (*ssh.Client, error) { return dialSSH(v, false) },
+		target: strings.TrimPrefix(app.URL, "http://"), http: true, idle: time.Minute}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.serve(ln) }()
+
+	held, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	_, _ = io.WriteString(held, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	res, err := http.ReadResponse(bufio.NewReader(held), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close() // the connection stays open, keep-alive
+
+	ln.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve did not return")
+	}
+	_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := held.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("held connection still open after the listener closed: %v", err)
+	}
 }
