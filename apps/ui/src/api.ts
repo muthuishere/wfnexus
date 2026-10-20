@@ -107,6 +107,8 @@ export type StepRun = {
   /** who answered this step's pause, when, and what they decided (ADR 0021) —
    *  the audit fact itself, not the prose log line that echoes it. */
   resolvedBy?: string; resolvedAt?: string | null; resolution?: string; resolutionReason?: string
+  /** why a skipped step did not run, in the engine's words (engine/plan.go guardWhy) */
+  skipReason?: string
 }
 export type Artifact = { id: string; runId: string; stepId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }
 export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow }

@@ -23,9 +23,11 @@ import { headlineOf, hhmm, isScript, summaryOf } from '../lib/story'
 // step ROW, written by the engine's usage accumulator on a bounded 1s cadence
 // (engine/usage.go). Cost in particular cannot be recomputed from the stream —
 // the per-million price is registry-side and never reaches the browser — so the
-// aggregate has to be read back. This polls `GET /api/runs/{id}` every second
-// while the run is live, matching that flush cadence exactly: faster would read
-// the same row twice, slower would be visibly behind the work.
+// aggregate has to be read back. So `GET /api/runs/{id}` is re-read on every
+// status event AND on every model/tool event, one fetch in flight at a time —
+// a burst of events costs one read per round trip, not one per event (over the
+// wfx tunnel a read is ~1s, and a fixed 1s poll stacked them up). A 10s poll is
+// only the safety net for a stream that went quiet.
 
 const PAUSED = ['awaiting_approval', 'needs_input']
 
@@ -63,22 +65,33 @@ export default function RunPage({ id }: { id: string }) {
   // One fetch in flight at a time; a refresh asked for meanwhile runs once it
   // lands. The detail is ~200KB, and over the wfx tunnel it takes longer than
   // a second, so unguarded callers stacked requests up behind each other.
+  //
+  // The page is keyed by run id (App.tsx), so another run is another instance;
+  // `shown` still guards the answer: a fetch for a run this page is no longer
+  // showing is dropped, never painted over the one it is.
   const inflight = useRef(false)
   const again = useRef(false)
+  const shown = useRef(id)
+  shown.current = id
   const refresh = useCallback(function fetchRun() {
     if (inflight.current) { again.current = true; return }
     inflight.current = true
-    api.run(id).then(setD).catch(e => setErr(e.message)).finally(() => {
+    const asked = id
+    api.run(asked).then(r => {
+      if (shown.current !== asked || r.run.id !== asked) return
+      setD(r); setErr('')
+    }).catch(e => { if (shown.current === asked) setErr(e.message) }).finally(() => {
       inflight.current = false
-      if (again.current) { again.current = false; fetchRun() }
+      if (again.current && shown.current === asked) { again.current = false; fetchRun() }
     })
   }, [id])
+  useEffect(() => () => { shown.current = '' }, [])
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     // SSE replays the backlog from 0, so the log is complete after a reload too.
     return api.events(id, 0, ev => {
       setEvents(prev => (prev.some(p => p.id === ev.id) ? prev : [...prev, ev]))
-      if (['run.status', 'step.status', 'artifact', 'decision'].includes(ev.kind)) refresh()
+      if (['run.status', 'step.status', 'artifact', 'decision', 'llm', 'tool_result', 'metric'].includes(ev.kind)) refresh()
     })
   }, [id, refresh])
 
@@ -232,6 +245,7 @@ export default function RunPage({ id }: { id: string }) {
           </div>
         </div>
         <RunTimeline steps={stepDefs} byId={byId} events={events} now={now} selected={current} onPick={setSel}
+          input={run.input}
           skipReason={head.verdict === 'ok' ? 'nothing actionable found' : 'their conditions did not match'} />
       </div>
 
@@ -296,7 +310,7 @@ export default function RunPage({ id }: { id: string }) {
         </details>
       </div>
       <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
-        {live ? 'live · refreshes every second' : `finished ${new Date(run.updatedAt).toLocaleString()}`}
+        {live ? 'live · updates as it runs' : `finished ${new Date(run.updatedAt).toLocaleString()}`}
       </div>
     </>
   )

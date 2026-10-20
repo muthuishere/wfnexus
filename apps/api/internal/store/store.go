@@ -334,14 +334,14 @@ func (s *Store) SetBaseRef(ctx context.Context, id uuid.UUID, ref string) error 
 
 // ---- step runs ----
 
-const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at, resolved_by, resolved_at, resolution, resolution_reason`
+const stepCols = `id, run_id, step_id, position, status, attempts, turns, prompt, output, raw_text, error, usage, pending, decision, started_at, finished_at, resolved_by, resolved_at, resolution, resolution_reason, skip_reason`
 
 func scanStep(row rowScanner) (*StepRun, error) {
 	st := &StepRun{}
 	err := row.Scan(&st.ID, &st.RunID, &st.StepID, &st.Position, &st.Status, &st.Attempts, &st.Turns,
 		&st.Prompt, rawJSON{&st.Output}, &st.RawText, &st.Error, rawJSON{&st.Usage},
 		rawJSON{&st.Pending}, rawJSON{&st.Decision}, &st.StartedAt, &st.FinishedAt,
-		&st.ResolvedBy, &st.ResolvedAt, &st.Resolution, &st.ResolutionReason)
+		&st.ResolvedBy, &st.ResolvedAt, &st.Resolution, &st.ResolutionReason, &st.SkipReason)
 	return st, err
 }
 
@@ -391,11 +391,12 @@ func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p
 		resolved_by       = COALESCE($16, resolved_by),
 		resolved_at       = COALESCE($17, resolved_at),
 		resolution        = COALESCE($18, resolution),
-		resolution_reason = COALESCE($19, resolution_reason)
+		resolution_reason = COALESCE($19, resolution_reason),
+		skip_reason       = COALESCE($20, skip_reason)
 		WHERE run_id=$1 AND step_id=$2`,
 		runID, stepID, p.Status, p.Attempts, p.Turns, p.Prompt, nullableJSON(p.Output), p.RawText, p.Error,
 		nullableJSON(p.Usage), pendingOp(p), nullableJSON(p.Pending), nullableJSON(p.Decision), p.StartedAt, p.FinishedAt,
-		p.ResolvedBy, p.ResolvedAt, p.Resolution, p.ResolutionReason)
+		p.ResolvedBy, p.ResolvedAt, p.Resolution, p.ResolutionReason, p.SkipReason)
 	return err
 }
 
@@ -403,7 +404,7 @@ func (s *Store) PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p
 func (s *Store) ResetStepsFrom(ctx context.Context, runID uuid.UUID, position int) error {
 	_, err := s.exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
 		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL,
-		resolved_by='', resolved_at=NULL, resolution='', resolution_reason=''
+		resolved_by='', resolved_at=NULL, resolution='', resolution_reason='', skip_reason=''
 		WHERE run_id=$1 AND position>=$2`, runID, position)
 	return err
 }

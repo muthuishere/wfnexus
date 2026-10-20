@@ -126,6 +126,9 @@ func TestPlanStopsAtTheGoal(t *testing.T) {
 	if st := h.steps(run.ID)["slow"]; st.Status != "skipped" {
 		t.Fatalf("a step past the goal must end skipped, not %q", st.Status)
 	}
+	if st := h.steps(run.ID)["slow"]; st.SkipReason != "not taken by the planner" {
+		t.Fatalf("skip reason %q", st.SkipReason)
+	}
 }
 
 // A plan that cannot reach its goal must say so precisely, before running.

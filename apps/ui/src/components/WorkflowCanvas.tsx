@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Step } from '../api'
 
 /** WorkflowCanvas draws the execution shape of a workflow.
@@ -28,23 +28,29 @@ export default function WorkflowCanvas({ steps, active, onPick, status }: {
   status?: Record<string, string>
 }) {
   const g = useMemo(() => layout(steps), [steps])
-  const box = useRef<HTMLDivElement>(null)
-  const [avail, setAvail] = useState(0)
-  const [zoom, setZoom] = useState<Zoom>('fit')
+  // A callback ref, not useRef + [] deps: the box does not exist while there
+  // are no steps (the early return below), and a builder draft gains its first
+  // step later — the observer must attach whenever the box appears.
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  const [avail, setAvail] = useState({ w: 0, h: 0 })
+  const [zoom, setZoom] = useState<Zoom>('full')
   useEffect(() => {
-    const el = box.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => setAvail(el.clientWidth))
-    ro.observe(el)
+    if (!box || typeof ResizeObserver === 'undefined') return
+    const measure = () => setAvail({ w: box.clientWidth, h: Math.round(window.innerHeight * 0.7) })
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(box)
     return () => ro.disconnect()
-  }, [])
+  }, [box])
   if (!steps.length) return <div className="muted">No steps yet.</div>
 
-  // Drawn at its real size and scrolled, never squeezed to the width: 'fit'
-  // may shrink it only as far as MIN_SCALE, where the smallest label is
-  // still 12px. A long chain is laid out top-to-bottom (see layout), so it
-  // scrolls down the page instead of shrinking to a line of dots.
-  const scale = zoom === 'fit' && avail > 0 ? Math.max(MIN_SCALE, Math.min(1, avail / g.width)) : 1
+  // 100% is the default and the readable size: never squeezed to the width,
+  // the smallest label is 13px, and a long chain is laid out top-to-bottom
+  // (see layout) so it scrolls down the page instead of shrinking to dots.
+  // 'fit' is an opt-in OVERVIEW — the whole graph in the box, however small —
+  // offered only when the graph does not fit at 100%.
+  const overflows = avail.w > 0 && (g.width > avail.w || g.height > avail.h)
+  const scale = zoom === 'fit' && overflows ? Math.min(1, avail.w / g.width, avail.h / g.height) : 1
 
   return (
     <div className="canvas">
@@ -58,12 +64,14 @@ export default function WorkflowCanvas({ steps, active, onPick, status }: {
         {g.alternatives.length > 0 && <span className="hint">
           alternatives for the same fact: {g.alternatives.join(', ')} — guards pick one at runtime
         </span>}
-        {g.width > avail && avail > 0 && <span className="canvaszoom">
-          <button className={zoom === 'fit' ? 'on' : ''} onClick={() => setZoom('fit')}>fit</button>
-          <button className={zoom === 'full' ? 'on' : ''} onClick={() => setZoom('full')}>100%</button>
+        {overflows && <span className="canvaszoom">
+          <button className={zoom === 'full' ? 'on' : ''} onClick={() => setZoom('full')}
+            title="readable size; scroll to see the rest">100%</button>
+          <button className={zoom === 'fit' ? 'on' : ''} onClick={() => setZoom('fit')}
+            title="the whole graph at once — labels may be small">fit</button>
         </span>}
       </div>
-      <div className="canvasbody" ref={box}>
+      <div className="canvasbody" ref={setBox} data-scale={scale.toFixed(3)}>
         <svg viewBox={`0 0 ${g.width} ${g.height}`} width={g.width * scale} height={g.height * scale}
           role="img" aria-label={`${steps.length} steps, ${g.vertical ? 'top to bottom' : 'left to right'}`}
           data-orientation={g.vertical ? 'vertical' : 'horizontal'}>
@@ -102,8 +110,6 @@ const NODE_W = 220
 const NODE_H = 70
 const GAP_X = 60
 const GAP_Y = 34
-/** the smallest label is 13px, so 13 × MIN_SCALE ≈ 12px is the floor */
-export const MIN_SCALE = 12 / 13
 /** more layers than this and the graph is drawn top-to-bottom */
 export const MAX_LAYERS_ACROSS = 5
 
@@ -123,8 +129,8 @@ function kindOf(s: Step): string {
  *  A step's layer is one past the deepest thing it depends on, so an edge always
  *  points forward (right, or down when the graph is drawn top-to-bottom) and no
  *  edge has to be routed backwards. Cycles cannot occur —
- *  the loader rejects them — but the walk is depth-capped anyway, because a
- *  rendering bug should not become an infinite loop in somebody's browser. */
+ *  the loader rejects them — but a builder draft can hold one mid-edit, so the
+ *  walk breaks cycles (see resolve) rather than looping in somebody's browser. */
 function layout(steps: Step[]) {
   const byId = new Map(steps.map(s => [s.id, s]))
   const usesNeeds = steps.some(s => s.needs?.length)
@@ -149,13 +155,21 @@ function layout(steps: Step[]) {
     return i > 0 ? [steps[i - 1].id] : []
   }
 
+  // Every step is resolved once (memoized), and a step met again while it is
+  // still being resolved is a cycle: it counts as layer 0 there instead of
+  // being walked again. A saved workflow cannot have one — the loader rejects
+  // it — but a builder DRAFT can, mid-edit, and a depth cap alone made each
+  // cycle re-walk every path: exponential, a frozen tab.
   const layerOf = new Map<string, number>()
-  const resolve = (id: string, depth = 0): number => {
+  const visiting = new Set<string>()
+  const resolve = (id: string): number => {
     if (layerOf.has(id)) return layerOf.get(id)!
-    if (depth > steps.length) return 0
+    if (visiting.has(id)) return 0
+    visiting.add(id)
     const s = byId.get(id)
     const d = s ? deps(s) : []
-    const l = d.length ? Math.max(...d.map(p => resolve(p, depth + 1))) + 1 : 0
+    const l = d.length ? Math.max(...d.map(p => resolve(p))) + 1 : 0
+    visiting.delete(id)
     layerOf.set(id, l)
     return l
   }

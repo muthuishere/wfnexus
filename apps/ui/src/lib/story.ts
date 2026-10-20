@@ -69,9 +69,10 @@ export type StepDecision = { tone: Tone; text: string }
 
 type Guard = { path: string; equals?: unknown; exists?: boolean }
 
-export function stepDecision(def: Step, run: StepRun | undefined, byId: Record<string, StepRun>): StepDecision {
+export function stepDecision(def: Step, run: StepRun | undefined, byId: Record<string, StepRun>,
+  ctx: { input?: unknown; planned?: boolean } = {}): StepDecision {
   const st = run?.status || 'pending'
-  if (st === 'skipped') return { tone: 'skipped', text: skipWhy(def, byId) }
+  if (st === 'skipped') return { tone: 'skipped', text: run?.skipReason || skipWhy(def, byId, ctx) }
   if (st === 'pending') return { tone: 'neutral', text: '' }
   if (st === 'running' || st === 'queued') return { tone: 'running', text: st === 'queued' ? 'queued' : 'working…' }
   if (st === 'awaiting_approval' || st === 'needs_input') {
@@ -88,8 +89,12 @@ export function stepDecision(def: Step, run: StepRun | undefined, byId: Record<s
 
   const answers = run?.decision?.answers
   if (answers && Object.keys(answers).length) {
+    // A classifier that could not answer one question leaves it null; one that
+    // answers with a structure gets it as JSON, not "[object Object]".
     return { tone: 'neutral', text: Object.entries(answers).map(([k, a]) => {
-      const v = a.choice ?? a.score ?? (a.noul !== undefined ? String(a.noul) : '?')
+      if (!a || typeof a !== 'object') return `${k}: —`
+      const raw = a.choice ?? a.score ?? a.noul
+      const v = raw === undefined || raw === null ? '?' : typeof raw === 'object' ? JSON.stringify(raw) : String(raw)
       return `${k}: ${v}${typeof a.confidence === 'number' ? ` ${Math.round(a.confidence * 100)}%` : ''}`
     }).join(' · ') }
   }
@@ -127,28 +132,47 @@ export function summaryHeadline(md: string): string {
   return plain(first).endsWith(':') && body[1] ? `${plain(first)} ${plain(body[1])}` : plain(first)
 }
 
-function skipWhy(def: Step, byId: Record<string, StepRun>): string {
+// The fallback for runs recorded before the engine stored `skipReason`. It
+// follows the engine's rules (engine/plan.go guardFor): `input.*` reads the
+// run input, a present-but-null value EXISTS, values compare as canonical
+// JSON. A planned (facts) run is routed by the planner, not by guards it can
+// replay here, so it says so instead of guessing.
+function skipWhy(def: Step, byId: Record<string, StepRun>, ctx: { input?: unknown; planned?: boolean }): string {
+  if (ctx.planned) return 'not taken by the planner'
   const guards: Guard[] = (def as any).when || []
-  const failed = guards.find(g => !holds(g, byId))
-  const g = failed || guards[0]
-  if (!g) return 'not needed'
-  const [step, ...rest] = g.path.split('.')
-  const want = g.exists !== undefined ? (g.exists ? 'exists' : 'absent') : `= ${JSON.stringify(g.equals)}`
-  const up = byId[step]
-  const was = !up || up.status === 'skipped' || up.status === 'pending' ? `${step} did not run`
-    : `was ${JSON.stringify(dig(up.output, rest))}`
-  return `needs ${g.path} ${want} (${was})`
+  const failed = guards.find(g => !holds(g, byId, ctx.input))
+  if (!failed) return 'not reached'
+  const [step, ...rest] = failed.path.split('.')
+  const want = failed.exists !== undefined ? (failed.exists ? 'exists' : 'is absent') : `= ${canon(failed.equals)}`
+  const r = lookup(step, rest, byId, ctx.input)
+  const was = r.ran === false ? `${step} did not run` : r.found ? `was ${canon(r.value)}` : 'not set'
+  return `when ${failed.path} ${want} (${was})`
 }
 
-function holds(g: Guard, byId: Record<string, StepRun>): boolean {
-  const [step, ...rest] = g.path.split('.')
-  const v = dig(byId[step]?.output, rest)
-  if (g.exists !== undefined) return (v !== undefined && v !== null) === g.exists
-  return JSON.stringify(v) === JSON.stringify(g.equals)
+function lookup(step: string, rest: string[], byId: Record<string, StepRun>, input: unknown) {
+  const root = step === 'input' && !byId.input ? input
+    : byId[step] && !['skipped', 'pending'].includes(byId[step].status) ? byId[step].output : undefined
+  if (root === undefined) return { ran: false, found: false, value: undefined }
+  let cur: any = root
+  for (const k of rest) {
+    if (!cur || typeof cur !== 'object' || !(k in cur)) return { ran: true, found: false, value: undefined }
+    cur = cur[k]
+  }
+  return { ran: true, found: true, value: cur }
 }
 
-function dig(o: any, path: string[]): unknown {
-  return path.reduce((v, k) => (v && typeof v === 'object' ? v[k] : undefined), o)
+function holds(g: Guard, byId: Record<string, StepRun>, input: unknown): boolean {
+  const [step, ...rest] = g.path.split('.')
+  const r = lookup(step, rest, byId, input)
+  if (g.exists !== undefined) return r.found === g.exists
+  return r.found && canon(r.value) === canon(g.equals)
+}
+
+/** JSON with object keys sorted — Go's encoding/json order, so {b,a} = {a,b}. */
+export function canon(v: unknown): string {
+  const sort = (x: any): any => Array.isArray(x) ? x.map(sort)
+    : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sort(x[k])])) : x
+  return JSON.stringify(sort(v)) ?? 'undefined'
 }
 
 /** markdown emphasis and code ticks off; the words stay */

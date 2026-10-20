@@ -25,7 +25,9 @@ describe('the UI a person actually downloads', () => {
   test('names the backend it is really running on', async () => {
     go('#/projects')
     // Hardcoded "postgres · s3" here was a lie the moment sqlite existed.
-    await screen.findByText(/toolnexus · sqlite · folder/)
+    // The label comes from /api/doctor, which runs real checks and answers in
+    // ~0.85s — so findByText's 1s default raced it and the test flaked.
+    await screen.findByText(/toolnexus · sqlite · folder/, undefined, { timeout: 5000 })
   })
 
   test("a project lists its workflows; the flat lists and the top-level builder are gone", async () => {

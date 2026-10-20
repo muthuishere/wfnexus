@@ -221,6 +221,7 @@ func (f *forwarder) sshClient(fresh bool) (*ssh.Client, error) {
 		return nil, err
 	}
 	f.client = c
+	go keepalive(c, keepaliveEvery)
 	go func() { // drop the client the moment the session dies
 		_ = c.Wait()
 		f.mu.Lock()
@@ -230,6 +231,32 @@ func (f *forwarder) sshClient(fresh bool) (*ssh.Client, error) {
 		f.mu.Unlock()
 	}()
 	return c, nil
+}
+
+// keepaliveEvery is how often an idle SSH session is asked if it is alive.
+// After a laptop sleeps, or a NAT drops the mapping, the TCP connection looks
+// open and every write vanishes: without a probe, the next request hangs until
+// the kernel gives up, minutes later. A probe that is not answered within
+// keepaliveEvery closes the client, so the next request redials.
+var keepaliveEvery = 15 * time.Second
+
+func keepalive(c *ssh.Client, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for range t.C {
+		done := make(chan error, 1)
+		go func() { _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); done <- err }()
+		select {
+		case err := <-done:
+			if err != nil {
+				c.Close()
+				return
+			}
+		case <-time.After(every):
+			c.Close()
+			return
+		}
+	}
 }
 
 // remote opens the forwarded connection, reconnecting the SSH session once if
@@ -275,7 +302,11 @@ func (f *forwarder) serve(ln net.Listener) error {
 		tr := f.transport()
 		defer tr.CloseIdleConnections()
 		defer proxied.Close()
-		go func() { _ = (&http.Server{Handler: f.proxy(tr), ReadHeaderTimeout: time.Minute}).Serve(proxied) }()
+		srv := &http.Server{Handler: f.proxy(tr), ReadHeaderTimeout: time.Minute}
+		// When the listener closes (idle, or a signal) the proxy goes with it,
+		// open connections included — Serve alone would leave them running.
+		defer srv.Close()
+		go func() { _ = srv.Serve(proxied) }()
 	}
 	for {
 		lc, err := ln.Accept()
@@ -330,8 +361,12 @@ func (f *forwarder) transport() *http.Transport {
 	return &http.Transport{
 		DialContext:         func(context.Context, string, string) (net.Conn, error) { return f.remote() },
 		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     5 * time.Minute,
-		DisableCompression:  true, // pass the client's Accept-Encoding through, don't decode here
+		// The backstop behind keepalive: no answer at all in this long is a
+		// dead session, not a slow server — the slowest real endpoint, publish,
+		// is given 5 minutes by its own client.
+		ResponseHeaderTimeout: 10 * time.Minute,
+		IdleConnTimeout:       5 * time.Minute,
+		DisableCompression:    true, // pass the client's Accept-Encoding through, don't decode here
 	}
 }
 

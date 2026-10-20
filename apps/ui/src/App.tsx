@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import PageBoundary from './components/PageBoundary'
 import { api } from './api'
 import NewRunPage from './pages/NewRunPage'
 import RunPage from './pages/RunPage'
@@ -46,11 +47,11 @@ export default function App() {
     else if (r[2] === '+template') page = <TemplatesPage project={p} />
     else if (r[2] && r[3] === 'edit') page = <WorkflowBuilderPage project={p} name={d(r[2])} />
     else if (r[2] && r[3] === 'run') page = <NewRunPage project={p} name={d(r[2])} />
-    else if (r[2] && r[3] === 'runs' && r[4]) page = <RunPage id={r[4]} />
+    else if (r[2] && r[3] === 'runs' && r[4]) page = <RunPage key={r[4]} id={r[4]} />
     else if (r[2]) page = <WorkflowPage project={p} name={d(r[2])} />
     else page = <ProjectPage name={p} />
   }
-  else if (r[0] === 'runs' && r[1]) page = <RunPage id={r[1]} />
+  else if (r[0] === 'runs' && r[1]) page = <RunPage key={r[1]} id={r[1]} />
   else if (r[0] === 'workflows' && r[1] === 'new' && !r[2]) page = <WorkflowBuilderPage project="local" />
   else if (r[0] === 'workflows' && r[1] && r[2] === 'edit') page = <WorkflowBuilderPage name={d(r[1])} />
   else if (r[0] === 'workflows' && r[1] && r[2] === 'new') page = <NewRunPage name={d(r[1])} />
@@ -87,7 +88,7 @@ export default function App() {
           {/* Nothing at all on a loopback install with no users — see Identity. */}
           <Identity />
         </div>
-        <div className="page">{page}</div>
+        <div className="page"><PageBoundary resetKey={r.join("/")}>{page}</PageBoundary></div>
       </div>
     </div>
   )

@@ -1,6 +1,6 @@
-import { test, expect, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
-import WorkflowCanvas, { MIN_SCALE } from './components/WorkflowCanvas'
+import { test, expect, afterEach, vi } from 'vitest'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
+import WorkflowCanvas from './components/WorkflowCanvas'
 import type { Step } from './api'
 
 afterEach(() => cleanup())
@@ -17,10 +17,10 @@ test('a 30-step chain is drawn top-to-bottom at readable size, with names and st
     status={{ s1: 'done', s2: 'running', s3: 'failed' }} />)
   const svg = container.querySelector('svg')!
   expect(svg.dataset.orientation).toBe('vertical')
-  // drawn at its own pixel size, never width="100%"
+  // drawn at its own pixel size (100% is the default), never width="100%"
   const [, , vw, vh] = svg.getAttribute('viewBox')!.split(' ').map(Number)
-  expect(Number(svg.getAttribute('width'))).toBeGreaterThanOrEqual(vw * MIN_SCALE)
-  expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(vh * MIN_SCALE)
+  expect(Number(svg.getAttribute('width'))).toBe(vw)
+  expect(Number(svg.getAttribute('height'))).toBe(vh)
   expect(vh).toBeGreaterThan(vw * 10) // a column, not a row
 
   const nodes = container.querySelectorAll('g.node')
@@ -33,10 +33,43 @@ test('a 30-step chain is drawn top-to-bottom at readable size, with names and st
   expect(nodes[0].classList).toContain('st-done')
   expect(nodes[1].querySelector('.nstatus')!.textContent).toBe('running')
   expect(nodes[2].classList).toContain('st-failed')
-  expect(MIN_SCALE * 13).toBeGreaterThanOrEqual(12) // the smallest label never drops below 12px
 })
 
 test('a short chain stays left-to-right', () => {
   const { container } = render(<WorkflowCanvas steps={chain(3)} />)
   expect(container.querySelector('svg')!.dataset.orientation).toBe('horizontal')
+})
+
+// A builder draft can hold a cycle mid-edit. The layering used to re-walk every
+// path through it (depth-capped, not memoized): exponential — 20 steps that all
+// need each other froze the tab.
+test('a cyclic draft lays out at once instead of freezing the tab', () => {
+  const ids = Array.from({ length: 20 }, (_, i) => `s${i}`)
+  const steps = ids.map(id => ({ id, name: id, needs: ids.filter(x => x !== id) } as unknown as Step))
+  const t0 = performance.now()
+  const { container } = render(<WorkflowCanvas steps={steps} />)
+  expect(performance.now() - t0).toBeLessThan(1000)
+  expect(container.querySelectorAll('g.node')).toHaveLength(20)
+})
+
+// The box is measured whenever it appears — a draft starts with no steps (no
+// box rendered) and gains them later; a [] effect never measured it.
+test('the zoom toggle measures a box that appears after the first render, and fit is a real overview', () => {
+  const observed: Element[] = []
+  vi.stubGlobal('ResizeObserver', class { constructor(_: unknown) {} observe(el: Element) { observed.push(el) } disconnect() {} })
+  const w = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600)
+  try {
+    const { container, rerender } = render(<WorkflowCanvas steps={[]} />)
+    expect(container.textContent).toContain('No steps yet')
+    rerender(<WorkflowCanvas steps={chain(30)} />)
+    expect(observed).toHaveLength(1)
+    const body = container.querySelector('.canvasbody') as HTMLElement
+    expect(body.dataset.scale).toBe('1.000') // 100% by default
+    const fit = [...container.querySelectorAll('.canvaszoom button')].find(b => b.textContent === 'fit')!
+    act(() => { fireEvent.click(fit) })
+    // the whole 30-row column inside 70% of the window height
+    const svg = container.querySelector('svg')!
+    expect(Number(svg.getAttribute('height'))).toBeLessThanOrEqual(Math.round(window.innerHeight * 0.7) + 1)
+    expect(Number(body.dataset.scale)).toBeLessThan(0.5)
+  } finally { w.mockRestore(); vi.unstubAllGlobals() }
 })

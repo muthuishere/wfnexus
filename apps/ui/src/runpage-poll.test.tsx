@@ -31,3 +31,28 @@ test('a live run page does not poll the detail every second, nor overlap fetches
   // the first load only: 9s with the old 1s poll would have been ~9 calls
   expect(run.mock.calls.length).toBeLessThanOrEqual(2)
 })
+
+// Run A -> run B while A's detail is still in flight: A's answer must never be
+// painted on B's page (it used to stay there for good — App reused the
+// instance, and the shared in-flight flag swallowed B's first fetch).
+test('navigating from one run to another never shows the first run', async () => {
+  const { default: App } = await import('./App')
+  vi.useFakeTimers()
+  const mk = (id: string, name: string) => ({
+    run: { id, workflow: name, project: 'p', status: 'done', input: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    steps: [], artifacts: [], definition: null,
+  } as unknown as RunDetail)
+  vi.spyOn(api, 'run').mockImplementation(id => new Promise(res =>
+    setTimeout(() => res(id === 'A' ? mk('A', 'wf-aaa') : mk('B', 'wf-bbb')), id === 'A' ? 3000 : 100)))
+  vi.spyOn(api, 'events').mockImplementation(() => () => {})
+  vi.spyOn(api, 'workflowSchedule').mockResolvedValue({ nextRunAt: null, crons: [] })
+  location.hash = '#/runs/A'
+  const { container } = render(<App />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(500) }) // A still in flight
+  location.hash = '#/runs/B'
+  await act(async () => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
+  for (let i = 0; i < 5; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+  expect(container.textContent).toContain('wf-bbb')
+  expect(container.textContent).not.toContain('wf-aaa')
+  location.hash = ''
+})

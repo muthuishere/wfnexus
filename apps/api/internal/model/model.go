@@ -81,6 +81,10 @@ type StepRun struct {
 	ResolvedAt       *time.Time `json:"resolvedAt"`
 	Resolution       string     `json:"resolution"`
 	ResolutionReason string     `json:"resolutionReason"`
+	// SkipReason says why a skipped step did not run, in the engine's words:
+	// the `when:` that did not hold and the value it saw, or the branch the
+	// planner did not take. Empty for any other status.
+	SkipReason string `json:"skipReason,omitempty"`
 }
 
 // StepPatch is a partial update to one step row: a nil field is left alone.
@@ -104,6 +108,7 @@ type StepPatch struct {
 	ResolvedAt       *time.Time
 	Resolution       *string
 	ResolutionReason *string
+	SkipReason       *string
 }
 
 type Event struct {
