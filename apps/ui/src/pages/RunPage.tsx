@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Event, type RunDetail, type Step, type StepRun } from '../api'
 import EventLog from '../components/EventLog'
+import { ChannelMessages } from '../components/ChannelMessages'
 import DecisionPanel from '../components/DecisionPanel'
 import ApprovalBanner from '../components/ApprovalBanner'
 import NeedsInputForm from '../components/NeedsInputForm'
@@ -270,6 +271,8 @@ export default function RunPage({ id }: { id: string }) {
       </div>
 
       <DecisionPanel decision={curRun?.decision} step={curDef} />
+
+      <ChannelMessages run={run.id} title="Replies on channels" />
 
       {d!.artifacts.length > 0 && (
         <div className="card">

@@ -197,7 +197,10 @@ tasks:
   # ---- check ----------------------------------------------------------------
   check:
     desc: Everything CI would run
-    cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate]
+    cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate, task: adapters:test]
+  adapters:test:
+    desc: The reference channel adapters against a fake apl (plain node, no deps)
+    cmds: [node --test adapters/apl-whatsapp.test.js]
   test:
     dir: apps/api
     cmds: [go test ./internal/... ./cmd/...]

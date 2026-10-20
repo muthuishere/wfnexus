@@ -6,6 +6,7 @@ import { Field, Section } from '../components/builder/Bits'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import EnvStore from '../components/EnvStore'
 import PriceTable from '../components/PriceTable'
+import Channels from '../components/ChannelMessages'
 
 /** SystemPage answers one question: if a step named this right now, would it run?
  *
@@ -122,6 +123,7 @@ export default function SystemPage() {
       <ProviderForm key={editing?.name || ''} initial={editing} models={doc.models}
         onSave={p => act(`Saved provider ${p.name}.`, () => api.saveProvider(p))} />
       <PriceTable />
+      <Channels />
 
       <EntryTable
         title="Classifiers" entries={doc.classifiers} rows={classifiers}
