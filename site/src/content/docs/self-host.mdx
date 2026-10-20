@@ -1,0 +1,119 @@
+---
+title: Self-host on one Linux box
+description: Run wfx-server on a single Linux machine with systemd and SQLite, bound to loopback, and reach it from your laptop over an SSH tunnel.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The smallest real install is one Linux machine, one systemd unit, SQLite in a file, and no public
+port. Everything below uses the release tarball, so the box itself needs no Go toolchain and no
+container runtime.
+
+## 1. Build or download the tarball
+
+The server ships as one self-contained tarball per architecture, `wfx-server-linux-amd64.tar.gz`
+and `wfx-server-linux-arm64.tar.gz`, with a `checksums.txt`. A tagged release attaches them on GitHub; from a
+checkout of the repository (Go, Node and [Task](https://taskfile.dev) installed) you build them
+yourself:
+
+```bash
+task release                       # writes bin/release/wfx-server-linux-{amd64,arm64}.tar.gz
+```
+
+Copy the one for your machine to the box, then:
+
+```bash
+sudo useradd --system --create-home --shell /bin/bash wfx
+sudo mkdir -p /opt/wfnexus && sudo tar xzf wfx-server-linux-amd64.tar.gz -C /opt/wfnexus
+sudo ln -s /opt/wfnexus/bin/wfx-linux /usr/local/bin/wfx
+```
+
+The tarball holds `bin/wfx-server-linux`, `bin/wfx-linux`, `bin/wfx-runner-linux`, the built UI
+in `ui/`, `workflows/`, `templates/`, `skills/`, `registries.json` and a commented
+`config.example.yaml`.
+
+## 2. A systemd unit
+
+```ini
+# /etc/systemd/system/wfnexus.service
+[Unit]
+Description=wfnexus server
+After=network-online.target
+
+[Service]
+User=wfx
+WorkingDirectory=/opt/wfnexus
+Environment=WFX_ROOT=/opt/wfnexus
+Environment=WFX_UI_DIR=/opt/wfnexus/ui
+ExecStart=/opt/wfnexus/bin/wfx-server-linux
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now wfnexus
+journalctl -u wfnexus -f
+```
+
+With no config file and no `WFX_MODE`, the server runs in **local** mode:
+
+- it listens on `127.0.0.1:8090` (`WFX_ADDR` changes it);
+- runs and state go to SQLite at `~/.local/share/wfnexus/wfnexus.db` of the `wfx` user;
+- artifacts go to a folder under `~/.local/share/wfnexus/`;
+- the env store's encryption key is written on first boot to `~/.config/wfnexus/secret.key`,
+  unless `WFX_SECRET_KEY` holds one. Back it up with the database; without it the stored values
+  cannot be opened.
+
+A file at `~/.config/wfx/config.yaml` (or wherever `WFX_CONFIG` points) sets the same things;
+an environment variable always wins over the file. `mode: server` switches to Postgres and S3.
+
+The boot log says what is wired before it serves: every workflow it loaded, any it skipped as
+`NOT LOADED` with the reason, and the doctor's view of providers and keys.
+
+## 3. A model key
+
+Keys go in the encrypted env store, not in the unit file:
+
+```bash
+sudo -iu wfx
+wfx env set OPENROUTER_API_KEY     # read without echoing, stored encrypted
+wfx doctor                         # default provider, its key, and one real test call
+```
+
+Point the server at a provider with `WFX_DEFAULT_PROVIDER` (or `model.provider` in the config),
+and give it a fallback with `WFX_FALLBACK_PROVIDERS`. See
+[Providers and models](/wfnexus/providers/).
+
+## 4. Let your team in over SSH
+
+Still as the `wfx` user, authorise each teammate's public key for the tunnel only:
+
+```bash
+wfx team add alice ./alice.pub
+```
+
+On each laptop:
+
+```bash
+wfx context add team --url http://127.0.0.1:8090 --via ssh://wfx@server.example.com --accept-host-key
+wfx doctor
+wfx ui
+```
+
+The details, including the 15-minute idle close and `wfx status`, are on
+[Remote access over SSH](/wfnexus/concepts/remote-access/).
+
+<Aside type="caution" title="Keep the bind on loopback">
+	On loopback the server runs with authentication absent, because the machine is the trust
+	boundary. If you set `WFX_ADDR` to a public address with no users, the server refuses to serve
+	and prints the one credential needed to claim the install. Do not put a reverse proxy in front
+	of a loopback bind: that re-exposes an unauthenticated API.
+</Aside>
+
+## Adding machines
+
+Steps that need another OS, a GPU or a logged-in agent CLI run on a
+[worker](/wfnexus/concepts/workers/): `wfx workers` prints the join line, and `wfx-runner` on the
+other machine connects outbound only.
