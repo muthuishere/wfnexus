@@ -236,26 +236,38 @@ func (f *forwarder) sshClient(fresh bool) (*ssh.Client, error) {
 // keepaliveEvery is how often an idle SSH session is asked if it is alive.
 // After a laptop sleeps, or a NAT drops the mapping, the TCP connection looks
 // open and every write vanishes: without a probe, the next request hangs until
-// the kernel gives up, minutes later. A probe that is not answered within
-// keepaliveEvery closes the client, so the next request redials.
+// the kernel gives up, minutes later. keepaliveMisses probes in a row that go
+// unanswered close the client, so the next request redials — like OpenSSH's
+// ServerAliveCountMax=3. One miss is not enough: a probe queues behind data, and
+// a big publish on a slow uplink can hold the reply back a whole interval.
 var keepaliveEvery = 15 * time.Second
+
+const keepaliveMisses = 3
 
 func keepalive(c *ssh.Client, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
+	replies := make(chan error, 1)
+	pending, missed := false, 0
 	for range t.C {
-		done := make(chan error, 1)
-		go func() { _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); done <- err }()
 		select {
-		case err := <-done:
+		case err := <-replies:
 			if err != nil {
 				c.Close()
 				return
 			}
-		case <-time.After(every):
-			c.Close()
-			return
+			pending, missed = false, 0
+		default:
 		}
+		if pending {
+			if missed++; missed >= keepaliveMisses {
+				c.Close()
+				return
+			}
+			continue // the probe in flight still counts; do not stack another
+		}
+		pending = true
+		go func() { _, _, err := c.SendRequest("keepalive@openssh.com", true, nil); replies <- err }()
 	}
 }
 

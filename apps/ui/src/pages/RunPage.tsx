@@ -67,7 +67,7 @@ export default function RunPage({ id }: { id: string }) {
   // a second, so unguarded callers stacked requests up behind each other.
   //
   // The page is keyed by run id (App.tsx), so another run is another instance
-  // and `shown` is fixed for its life (cleared on unmount); it still guards the
+  // and `shown` is set while it is mounted (cleared on unmount); it still guards the
   // answer: a fetch for a run this page is no longer
   // showing is dropped, never painted over the one it is.
   const inflight = useRef(false)
@@ -85,7 +85,9 @@ export default function RunPage({ id }: { id: string }) {
       if (again.current && shown.current === asked) { again.current = false; fetchRun() }
     })
   }, [id])
-  useEffect(() => () => { shown.current = '' }, [])
+  // Set on (re)mount, cleared on unmount — StrictMode mounts twice, and a
+  // cleanup-only effect left it cleared for good, dropping every answer.
+  useEffect(() => { shown.current = id; return () => { shown.current = '' } }, [id])
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     // SSE replays the backlog from 0, so the log is complete after a reload too.
@@ -245,7 +247,7 @@ export default function RunPage({ id }: { id: string }) {
           </div>
         </div>
         <RunTimeline steps={stepDefs} byId={byId} events={events} now={now} selected={current} onPick={setSel}
-          input={run.input}
+          input={run.input} goal={d?.definition?.goal}
           skipReason={head.verdict === 'ok' ? 'nothing actionable found' : 'their conditions did not match'} />
       </div>
 

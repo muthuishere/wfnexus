@@ -1,5 +1,5 @@
 import { test, expect, afterEach, vi } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent } from '@testing-library/react'
 import type { Step, StepRun } from './api'
 import { stepDecision, summaryHeadline } from './lib/story'
 import RunTimeline from './components/RunTimeline'
@@ -111,4 +111,15 @@ test('a page that throws shows what broke instead of blanking the app', async ()
   const { getByRole } = render(<PageBoundary><Boom /></PageBoundary>)
   expect(getByRole('alert').textContent).toContain('answers[0] is null')
   quiet.mockRestore()
+})
+
+// Planned is the engine's IsPlanned: a goal, or facts. A goal-only workflow with
+// guards is routed by the planner, so its skips are "not taken", not a replay.
+test('a workflow with a goal reads its skips as not taken by the planner', () => {
+  const steps = [def('a'), def('b', { when: [{ path: 'a.ok', equals: true }] })]
+  const by = { a: row('a', 'done', { output: { ok: true } }), b: row('b', 'skipped') }
+  const { container } = render(<RunTimeline steps={steps} byId={by} events={[]} now={Date.now()}
+    selected="" onPick={() => {}} goal="answered" />)
+  fireEvent.click(container.querySelector('.tlskipped')!)
+  expect([...container.querySelectorAll('.tldecision')].map(e => e.textContent)).toContain('not taken by the planner')
 })

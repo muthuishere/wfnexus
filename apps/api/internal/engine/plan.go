@@ -84,10 +84,11 @@ func guardWhy(gs []workflow.Guard, w *planner.World) string {
 }
 
 // missing says why a guard path did not resolve: the step behind it never
-// produced anything, or it did and the field is not there.
+// produced anything, or it did and the field is not there. The run input
+// always exists, so an unresolved `input.*` is a key nobody passed.
 func missing(path string, w *planner.World) string {
 	head, _, _ := strings.Cut(path, ".")
-	if _, ok := w.Value(head); !ok {
+	if _, ok := w.Value(head); !ok && head != "input" {
 		return head + " did not run"
 	}
 	return "not set"

@@ -517,6 +517,13 @@ func TestKeepaliveDropsADeadSession(t *testing.T) {
 	default:
 	}
 	rl.frozen.Store(true)
+	// one or two missed probes is a busy link, not a dead one (ServerAliveCountMax=3)
+	time.Sleep(220 * time.Millisecond)
+	select {
+	case <-dead:
+		t.Fatal("closed after fewer than three missed probes")
+	default:
+	}
 	select {
 	case <-dead:
 	case <-time.After(2 * time.Second):

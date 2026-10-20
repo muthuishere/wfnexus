@@ -21,6 +21,8 @@ func TestGuardWhyMatchesGuardFor(t *testing.T) {
 		{workflow.Guard{Path: "check.exitCode", Equals: 0}, `when check.exitCode = 0 (was 3)`},
 		{workflow.Guard{Path: "gone.exitCode", Equals: 0}, `when gone.exitCode = 0 (gone did not run)`},
 		{workflow.Guard{Path: "check.missing", Equals: 1}, `when check.missing = 1 (not set)`},
+		// the input always exists; a key nobody passed is "not set", never "input did not run"
+		{workflow.Guard{Path: "input.nokey", Equals: 1}, `when input.nokey = 1 (not set)`},
 		{workflow.Guard{Path: "check.missing", Exists: &yes}, `when check.missing exists (it does not)`},
 		// present-but-null EXISTS, as guardFor reads it
 		{workflow.Guard{Path: "check.note", Exists: &no}, `when check.note is absent (it is null)`},

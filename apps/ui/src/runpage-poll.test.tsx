@@ -56,3 +56,18 @@ test('navigating from one run to another never shows the first run', async () =>
   expect(container.textContent).not.toContain('wf-aaa')
   location.hash = ''
 })
+
+// main.tsx renders in StrictMode, which mounts, unmounts and mounts again. The
+// "drop answers for a run this page no longer shows" guard was cleared by the
+// first unmount and never set again: every run page hung on "loading…".
+test('a run page under StrictMode loads', async () => {
+  const { StrictMode } = await import('react')
+  vi.spyOn(api, 'run').mockResolvedValue({
+    run: { id: 'S', workflow: 'wf-strict', project: 'p', status: 'done', input: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    steps: [], artifacts: [], definition: null,
+  } as unknown as RunDetail)
+  vi.spyOn(api, 'events').mockImplementation(() => () => {})
+  vi.spyOn(api, 'workflowSchedule').mockResolvedValue({ nextRunAt: null, crons: [] })
+  const { findAllByText } = render(<StrictMode><RunPage id="S" /></StrictMode>)
+  expect((await findAllByText(/wf-strict/, undefined, { timeout: 2000 })).length).toBeGreaterThan(0)
+})
