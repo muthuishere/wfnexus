@@ -195,3 +195,12 @@ func (u *usageAccum) snapshotLocked() (map[string]any, int) {
 func round6(f float64) float64 {
 	return float64(int64(f*1e6+0.5)) / 1e6
 }
+
+// answered reports whether the model produced anything at all: one successful
+// call or one tool call. A step that got an answer is never re-run on a
+// fallback provider.
+func (u *usageAccum) answered() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.llmCalls > u.llmErrors || u.toolCalls > 0
+}

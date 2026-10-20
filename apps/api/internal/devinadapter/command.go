@@ -144,8 +144,14 @@ func Copilot(c CLI) *CommandAgent {
 // exits 1 with "Model unavailable"). This is the path opencode Zen's FREE
 // models still accept: over ACP they now refuse with "OpenCode's free tier
 // can only be used from within OpenCode" (2026-10-14).
+//
+// --standalone runs a private server per turn instead of opencode v2's
+// background service, which sits on one fixed port (127.0.0.1:49374) for the
+// whole MACHINE: on a box where another user already runs it, every call
+// failed with "Managed service port 49374 … already in use" (prod-db,
+// 2026-10-20). A private server also keeps two steps from sharing one.
 func OpenCode(c CLI) *CommandAgent {
-	args := []string{"run"}
+	args := []string{"run", "--standalone"}
 	if c.Model != "" {
 		args = append(args, "-m", c.Model)
 	}

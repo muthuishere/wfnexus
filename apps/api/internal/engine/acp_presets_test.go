@@ -39,22 +39,6 @@ func TestEachACPAdapterLaunchesItsAgentItsOwnWay(t *testing.T) {
 	}
 }
 
-// Every ACP prompt is the whole request, so in one long session opencode's
-// history compounded until its compaction agent killed the process mid-step.
-// The opencode preset opens a fresh session per turn; devin (unmeasured)
-// keeps its old behaviour; any entry can opt in with sessionPerTurn.
-func TestTheOpencodePresetStartsAFreshSessionEachTurn(t *testing.T) {
-	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "opencode"}, "m", "/w", nil); !cfg.SessionPerTurn {
-		t.Error("the opencode preset must open a fresh session per turn")
-	}
-	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Preset: "devin"}, "m", "/w", nil); cfg.SessionPerTurn {
-		t.Error("devin must keep its long-lived session")
-	}
-	if cfg, _ := acpConfig(catalog.Provider{Kind: catalog.KindACP, Command: []string{"x"}, SessionPerTurn: true}, "m", "/w", nil); !cfg.SessionPerTurn {
-		t.Error("a registry entry's sessionPerTurn must reach the adapter")
-	}
-}
-
 func TestTheDoctorLooksForTheProgramAnAdapterReallyRuns(t *testing.T) {
 	if b := providerBinary(catalog.Provider{Kind: catalog.KindACP, Preset: "codex"}); b != "npx" {
 		t.Errorf("codex over ACP runs through npx, doctor looked for %q", b)

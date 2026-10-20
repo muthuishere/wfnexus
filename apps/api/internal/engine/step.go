@@ -122,77 +122,128 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	defer dropSecrets()
 	hooks := e.hooks(ctx, runID, step.ID, workdir, effectiveTurns(step), shellEnv, secretPrefix)
 
-	// The provider is resolved BEFORE the metric sink because the sink needs
-	// its price: cost is computed as the tokens arrive, not reconstructed
-	// afterwards from a log nobody reads back.
-	prov, err := e.resolveLLMWithEnv(step, workdir, env)
-	if err != nil {
-		return stepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
+	// A step runs on its provider; when that provider cannot be reached it
+	// falls back along the provider's own `fallback:` list and then the
+	// server-wide one (model.fallback), so one broken provider is fixed for
+	// every workflow in one place. "Cannot be reached" is narrow on purpose:
+	// it does not resolve (key unset, binary missing) or it failed before the
+	// model answered anything. A step that got ANY answer is never re-run
+	// elsewhere — its workdir may already be changed.
+	type attempt struct {
+		res   agents.TaskResult
+		rt    *agents.Runtime
+		label string
+		err   error
 	}
-	defer prov.Close()
-	// A cancelled or timed-out step must stop its agent NOW, not when the
-	// in-flight turn returns: an ACP turn waiting on a stalled model held the
-	// run's slot for its whole 15-minute timeout after the run was cancelled,
-	// so queued runs behind it never started (2026-09-27). Close is safe to
-	// call twice and from another goroutine.
-	stopOnCancel := context.AfterFunc(ctx, prov.Close)
-	defer stopOnCancel()
+	var usage *usageAccum
+	try := func(step *workflow.Step) attempt {
+		// Each attempt chains its own compaction hook onto its own copy.
+		h := *hooks
+		hooks := &h
+		// The provider is resolved BEFORE the metric sink because the sink needs
+		// its price: cost is computed as the tokens arrive, not reconstructed
+		// afterwards from a log nobody reads back.
+		prov, err := e.resolveLLMWithEnv(step, workdir, env)
+		if err != nil {
+			return attempt{err: fmt.Errorf("step %s: %w", step.ID, err)}
+		}
+		defer prov.Close()
+		// A cancelled or timed-out step must stop its agent NOW, not when the
+		// in-flight turn returns: an ACP turn waiting on a stalled model held the
+		// run's slot for its whole 15-minute timeout after the run was cancelled,
+		// so queued runs behind it never started (2026-09-27). Close is safe to
+		// call twice and from another goroutine.
+		stopOnCancel := context.AfterFunc(ctx, prov.Close)
+		defer stopOnCancel()
 
-	// Every MetricEvent still lands in the append-only event log; it is now
-	// ALSO folded into the step's aggregate and written on a bounded cadence,
-	// so a running step reports progress (ADR 0020). Before this, `turns` and
-	// `usage` were written once, at the end: a 29-call step showed turns=0
-	// until the instant it finished.
-	usage := newUsageAccum(prov.Price, func(u map[string]any, turns int) {
-		e.setStep(ctx, runID, step.ID, model.StepPatch{Turns: intp(turns), Usage: mustJSON(u)})
-	})
-	onMetric := func(m tn.MetricEvent) {
-		e.emit(ctx, runID, step.ID, "metric", m)
-		usage.record(m)
+		// Every MetricEvent still lands in the append-only event log; it is now
+		// ALSO folded into the step's aggregate and written on a bounded cadence,
+		// so a running step reports progress (ADR 0020). Before this, `turns` and
+		// `usage` were written once, at the end: a 29-call step showed turns=0
+		// until the instant it finished.
+		usage = newUsageAccum(prov.Price, func(u map[string]any, turns int) {
+			e.setStep(ctx, runID, step.ID, model.StepPatch{Turns: intp(turns), Usage: mustJSON(u)})
+		})
+		onMetric := func(m tn.MetricEvent) {
+			e.emit(ctx, runID, step.ID, "metric", m)
+			usage.record(m)
+		}
+
+		// A scripted transport (tests) wins over everything: it is how the wire is
+		// held to zero network. Otherwise a local-process provider supplies its own.
+		transport := e.transport
+		if transport == nil {
+			transport = prov.Transport
+		}
+
+		// Compaction is composed onto the SAME BeforeLLM seam the turn-budget
+		// warning already uses, and goes first so the warning lands on the
+		// compacted transcript. Off unless the step's budget names
+		// `compact_at_tokens`; nil hook ⇒ chainBeforeLLM returns the warning alone.
+		if compact := e.compactorHook(ctx, runID, step.ID, step, prov, transport, onMetric); compact != nil {
+			hooks.BeforeLLM = chainBeforeLLM(compact, hooks.BeforeLLM)
+		}
+
+		ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
+		if err != nil {
+			return attempt{err: err}
+		}
+		defer closeAgent()
+
+		// The completion gate travels WITH the agent, so a delegated child inherits
+		// it — which a host-side retry loop cannot do.
+		ag.Spec.Completion = &agents.Completion{
+			MaxAttempts: step.MaxAttempts,
+			Verify: func(tn.RunResult) (bool, string) {
+				if submitted != nil {
+					return true, ""
+				}
+				return false, "you have not called submit_output with an accepted result yet; finish the work and call submit_output with JSON matching its schema"
+			},
+		}
+
+		e.emit(ctx, runID, step.ID, "log", map[string]any{
+			"text": fmt.Sprintf("agent %s → %s (skills=%v tools=%v team=%d guardrails=%d)",
+				step.ID, prov.Label, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
+		})
+
+		res, rt := ag.Run(agents.Options{
+			LLM:       prov.LLM,
+			Transport: transport,
+		}, prompt)
+		return attempt{res: res, rt: rt, label: prov.Label}
 	}
 
-	// A scripted transport (tests) wins over everything: it is how the wire is
-	// held to zero network. Otherwise a local-process provider supplies its own.
-	transport := e.transport
-	if transport == nil {
-		transport = prov.Transport
+	chain := e.providerChain(step)
+	var a attempt
+	for i, name := range chain {
+		st := step
+		if i > 0 {
+			s := *step
+			// `model:` selects within the provider it was written for and
+			// means nothing inside a fallback.
+			s.Provider, s.Model = name, ""
+			st = &s
+		}
+		usage = nil
+		a = try(st)
+		reached := submitted != nil || (a.err == nil && (a.res.Status == "pending" || (usage != nil && usage.answered())))
+		failed := a.err != nil || a.res.IsError || a.res.Status == "error"
+		if reached || !failed || ctx.Err() != nil || i == len(chain)-1 {
+			break
+		}
+		why := scrub(trim(a.res.Text, 300))
+		if a.err != nil {
+			why = scrub(a.err.Error())
+		}
+		e.emit(ctx, runID, step.ID, "log", map[string]any{
+			"text": fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, chain[i+1]),
+		})
 	}
-
-	// Compaction is composed onto the SAME BeforeLLM seam the turn-budget
-	// warning already uses, and goes first so the warning lands on the
-	// compacted transcript. Off unless the step's budget names
-	// `compact_at_tokens`; nil hook ⇒ chainBeforeLLM returns the warning alone.
-	if compact := e.compactorHook(ctx, runID, step.ID, step, prov, transport, onMetric); compact != nil {
-		hooks.BeforeLLM = chainBeforeLLM(compact, hooks.BeforeLLM)
+	if a.err != nil {
+		return stepResult{}, a.err
 	}
-
-	ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
-	if err != nil {
-		return stepResult{}, err
-	}
-	defer closeAgent()
-
-	// The completion gate travels WITH the agent, so a delegated child inherits
-	// it — which a host-side retry loop cannot do.
-	ag.Spec.Completion = &agents.Completion{
-		MaxAttempts: step.MaxAttempts,
-		Verify: func(tn.RunResult) (bool, string) {
-			if submitted != nil {
-				return true, ""
-			}
-			return false, "you have not called submit_output with an accepted result yet; finish the work and call submit_output with JSON matching its schema"
-		},
-	}
-
-	e.emit(ctx, runID, step.ID, "log", map[string]any{
-		"text": fmt.Sprintf("agent %s → %s (skills=%v tools=%v team=%d guardrails=%d)",
-			step.ID, prov.Label, step.Skills, step.Tools, len(step.Team), len(step.Guardrails)),
-	})
-
-	res, rt := ag.Run(agents.Options{
-		LLM:       prov.LLM,
-		Transport: transport,
-	}, prompt)
+	res, rt := a.res, a.rt
 
 	// TotalTokens is PARENT-ONLY; the sub-agent tree's spend lives on the
 	// runtime (spikes/01), so billing must read the tree.

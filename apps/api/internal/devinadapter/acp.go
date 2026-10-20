@@ -109,8 +109,6 @@ type ACPPreset struct {
 	Install string
 	// Env is added to the agent's environment before the step's own env.
 	Env []string
-	// SessionPerTurn: see ACP.SessionPerTurn.
-	SessionPerTurn bool
 }
 
 // opencodeAsAModel denies every tool opencode has of its own. wfnexus drives an
@@ -133,8 +131,11 @@ var ACPPresets = map[string]ACPPreset{
 	// A fresh session per turn stops its history compounding (every prompt is
 	// the whole request) until its compaction agent kills the process.
 	"opencode": {Bin: "opencode", Argv: []string{"acp"}, Mode: "build",
-		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel},
-		SessionPerTurn: true},
+		Install: "brew install sst/tap/opencode", Env: []string{opencodeAsAModel}},
+	// claude speaks ACP through the claude-agent-acp adapter (formerly Zed's
+	// claude-code-acp); it uses claude's own login.
+	"claude": {Bin: "npx", Argv: []string{"-y", "@agentclientprotocol/claude-agent-acp"}, Mode: "default",
+		Install: "curl -fsSL https://claude.ai/install.sh | bash && claude  # log in once"},
 	// codex speaks ACP through Zed's adapter; it uses codex's own login.
 	"codex": {Bin: "npx", Argv: []string{"-y", "@zed-industries/codex-acp"}, Mode: "full-access",
 		Install: "npm i -g @openai/codex && codex login"},
