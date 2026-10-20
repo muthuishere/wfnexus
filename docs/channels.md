@@ -139,6 +139,9 @@ triggers.
   worked — e.g. the cursor's message was gone and the adapter reset it. It is
   shown by `wfx channels` and on the System page. An adapter must not wedge on
   a lost cursor: re-read a recent window (duplicates are harmless) and reset.
+  But reset ONLY when the transport says the cursor's message does not exist;
+  any other error reading it (a locked store, a timeout, a dead session) must
+  fail the receive, or messages are skipped silently.
 
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
@@ -148,8 +151,10 @@ error is kept and shown by `wfx channels`; the cursor does not move.
 1. Stored in `channel_messages` (once), pending; marked handled once acted on.
    A message still pending at the next poll (a crash) is handled then.
 2. If the text contains `#<code>` of a **live** pause code issued **on this
-   channel** (codes are 6 characters, expire, and are retired when the pause
-   resolves or pauses again):
+   channel** — codes are 6 characters and live **at most 7 days** (or the
+   pause's own expiry, if sooner); a code is retired the moment its pause
+   resolves by any path or the step pauses again. After that, answer in the UI
+   or with `wfx approve`:
    - sender **on** `allow`: approval → `yes|y|approve|ok|lgtm` approves,
      `no|reject|deny [reason]` rejects; input → the rest of the text is the
      answer. Recorded as `<from> (via channel:<name>)`; a step's `approvers:`
@@ -160,8 +165,18 @@ error is kept and shown by `wfx channels`; the cursor does not move.
    `match` regex) **and whose allow list holds the sender** (the trigger's
    `allow`, else the channel's; both empty ⇒ never) starts with
    `input.message = {channel, id, from, name, text, at, attachments}` and
-   `triggeredBy = <from>`. The text is **untrusted**: never template it into a
+   `triggeredBy = <from>`. A message starts each workflow **at most once**,
+   even if it is handled again after a crash (`channel_message_runs`). The
+   text is **untrusted**: never template it into a
    `run:` command or treat it as instructions.
+
+## Who sees received messages
+
+`GET /api/channels/messages` (and `wfx messages`) is project-scoped. A message
+belongs to a project when it answered a run there or started one; a
+project-scoped user sees only those. A message that matched nothing belongs to
+no project and is shown only to an unscoped `admin` (or on a loopback install).
+An unscoped non-admin sees every message linked to a run, and none that is not.
 
 ## Adapter author rules
 
