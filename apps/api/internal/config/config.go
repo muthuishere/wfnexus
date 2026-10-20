@@ -65,6 +65,10 @@ type Config struct {
 	// provider's own `fallback:` list, when none of those could be reached
 	// (WFX_FALLBACK_PROVIDERS, comma separated, or model.fallback).
 	FallbackProviders []string
+	// DefaultChannel is the registry channel every pause is announced on and
+	// an unaddressed `send:` step or `wfx send` goes to (WFX_DEFAULT_CHANNEL,
+	// or channels.default). "" ⇒ none: pauses reach only the notifiers.
+	DefaultChannel string
 	// DefaultClassifier, when set, is the registry classifier a decide step
 	// (and a proposal review) uses when it names none — instead of the
 	// Classifier* endpoint below.
@@ -260,6 +264,7 @@ func LoadWithFile(path string) (Config, error) {
 		DefaultProvider:   env("WFX_DEFAULT_PROVIDER", f.Model.Provider),
 		FallbackProviders: splitList(env("WFX_FALLBACK_PROVIDERS", join(f.Model.Fallback))),
 		DefaultClassifier: env("WFX_DEFAULT_CLASSIFIER", f.Classifier.Name),
+		DefaultChannel:    env("WFX_DEFAULT_CHANNEL", f.Channels.Default),
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),
 		RunArtifactsKeep:  envInt("WFX_RUN_ARTIFACTS_KEEP", orInt(f.RunArtifactsKeep, 20)),

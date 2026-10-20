@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wfnexus.dev/schemas/channel-send-stdout.schema.json",
+  "title": "wfnexus.channel/v1 — send: what stdout may carry (optional; empty is fine)",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "description": "the transport's message or job id" }
+  }
+}

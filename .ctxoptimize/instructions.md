@@ -1,4 +1,4 @@
-<!-- ctx-optimize:instructions:begin v0.15.3-2-gb8a8642-dirty -->
+<!-- ctx-optimize:instructions:begin v0.15.4-dirty -->
 # ctx-optimize — the usage card for this repo's knowledge store
 
 **ctx-optimize is a SHELL COMMAND (a CLI on PATH), not a callable tool: run

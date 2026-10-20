@@ -13,6 +13,7 @@ export function triggerNames(w: Workflow): string[] {
   if (on.schedule?.length) out.push('schedule')
   if (on.repositoryDispatch) out.push('repository_dispatch')
   if (on.workflowCall) out.push('workflow_call')
+  if (on.message?.length) out.push('message')
   return out.length ? out : ['workflow_dispatch']
 }
 

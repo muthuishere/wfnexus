@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wfnexus.dev/schemas/channel-receive-stdout.schema.json",
+  "title": "wfnexus.channel/v1 — receive: what stdout must carry",
+  "type": "object",
+  "required": ["messages", "cursor"],
+  "properties": {
+    "messages": {
+      "type": "array",
+      "description": "oldest first; the server's own messages left out",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "text"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "description": "the transport's message id; (channel, id) is stored once" },
+          "from": { "type": "string", "description": "the sender id the allow list matches; must be one the transport authenticated" },
+          "name": { "type": "string" },
+          "text": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": { "type": "string" },
+                "filename": { "type": "string" },
+                "mime": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cursor": { "type": "string", "description": "handed back as `after`; empty keeps the previous one" }
+  }
+}

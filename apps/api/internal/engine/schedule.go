@@ -303,6 +303,11 @@ func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflo
 	for attempt := 1; attempt <= attempts; attempt++ {
 		var out map[string]any
 		var err error
+		if step.Send != nil {
+			// A send is NEVER retried: an adapter that failed may still
+			// have delivered, and a second copy is worse than an error.
+			return e.runSend(ctx, runID, step, data)
+		}
 		if step.Judge != nil {
 			out, err = e.runJudge(ctx, runID, step, data)
 		} else {

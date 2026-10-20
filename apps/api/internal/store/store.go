@@ -42,6 +42,8 @@ type (
 	Worker          = model.Worker
 	StateVar        = model.StateVar
 	Job             = model.Job
+	ChannelMessage  = model.ChannelMessage
+	PauseCode       = model.PauseCode
 )
 
 const (

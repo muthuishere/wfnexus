@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
@@ -193,12 +194,65 @@ func (n Notifier) EntryName() string { return n.Name }
 // Disabled reports an explicitly switched-off notifier.
 func (n Notifier) Disabled() bool { return n.Enabled != nil && !*n.Enabled }
 
+// Channel is a place the server SENDS messages to and, optionally, RECEIVES
+// them from (ADR 0023). Unlike a notifier it is not a URL we post to: it is a
+// COMMAND we run — an adapter script somebody else owns (WhatsApp through apl,
+// email, anything). wfnexus never speaks the transport; it runs `<run> send`
+// with a JSON envelope on stdin and `<run> receive` with a cursor, and that is
+// the whole contract (docs/channels.md). Swapping WhatsApp for email is a
+// different `run:`, never an engine change.
+type Channel struct {
+	// Name is the map KEY on disk; see Provider.Name on omitempty.
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Kind is `command` — the one adapter shape.
+	Kind string `json:"kind"`
+	// Run is the adapter command line; the verb (`send` | `receive`) is
+	// appended. Run through the platform shell, from the server's root.
+	Run string `json:"run"`
+	// Env is passed to the adapter on top of the server's own environment.
+	// A value may reference a variable — "${WA_GROUP}" — so an address or a
+	// token never has to be written into this file.
+	Env map[string]string `json:"env,omitempty"`
+	// Target is an optional default address, opaque to wfnexus and handed to
+	// the adapter in the envelope.
+	Target string `json:"target,omitempty"`
+	// Inbound turns on the receive poll, every ReceiveEvery ("1m" default).
+	Inbound      bool   `json:"inbound,omitempty"`
+	ReceiveEvery string `json:"receiveEvery,omitempty"`
+	// Allow is the EXPLICIT list of sender ids whose replies may resolve a
+	// pause. Empty — the default — means nothing resolves from this channel.
+	Allow []string `json:"allow,omitempty"`
+	// SendGap is the minimum time between two sends on this channel; sends
+	// are always one at a time. A rate-limited transport sets it ("10s").
+	SendGap string `json:"sendGap,omitempty"`
+	// TimeoutSec bounds one adapter invocation (default 60).
+	TimeoutSec int   `json:"timeoutSec,omitempty"`
+	Enabled    *bool `json:"enabled,omitempty"`
+}
+
+func (c Channel) EntryName() string { return c.Name }
+
+// Disabled reports an explicitly switched-off channel.
+func (c Channel) Disabled() bool { return c.Enabled != nil && !*c.Enabled }
+
+// Allows reports whether a sender may resolve a pause from this channel.
+func (c Channel) Allows(sender string) bool {
+	for _, a := range c.Allow {
+		if a != "" && a == sender {
+			return true
+		}
+	}
+	return false
+}
+
 // Catalog is the whole set, one registry per kind.
 type Catalog struct {
 	Providers   *registry.Registry[Provider]
 	Classifiers *registry.Registry[Classifier]
 	Mcp         *registry.Registry[McpServer]
 	Notifiers   *registry.Registry[Notifier]
+	Channels    *registry.Registry[Channel]
 }
 
 // file is the on-disk shape of registries.json.
@@ -208,6 +262,7 @@ type file struct {
 	// McpServers matches mcp.json's own key, so one file can serve both.
 	McpServers map[string]McpServer `json:"mcpServers"`
 	Notifiers  map[string]Notifier  `json:"notifiers"`
+	Channels   map[string]Channel   `json:"channels"`
 }
 
 // Load reads registries.json and merges mcp.json's servers. Neither file is
@@ -219,6 +274,7 @@ func Load(registriesPath, mcpPath string) (*Catalog, error) {
 		Classifiers: registry.New[Classifier]("classifier"),
 		Mcp:         registry.New[McpServer]("mcp server"),
 		Notifiers:   registry.New[Notifier]("notifier"),
+		Channels:    registry.New[Channel]("channel"),
 	}
 	main, err := readFile(registriesPath)
 	if err != nil {
@@ -261,6 +317,18 @@ func Load(registriesPath, mcpPath string) (*Catalog, error) {
 			continue
 		}
 		c.Notifiers.Add(n, registriesPath+"#"+name)
+	}
+	for name, ch := range main.Channels {
+		ch.Name = name
+		if ch.Disabled() {
+			c.Channels.Skipped(registriesPath+"#"+name, "disabled")
+			continue
+		}
+		if err := validateChannel(ch); err != nil {
+			c.Channels.Skipped(registriesPath+"#"+name, err.Error())
+			continue
+		}
+		c.Channels.Add(ch, registriesPath+"#"+name)
 	}
 	addMcp(registriesPath, main.McpServers)
 	if mcpPath != "" && filepath.Clean(mcpPath) != filepath.Clean(registriesPath) {
@@ -431,6 +499,32 @@ func validateNotifier(n Notifier) error {
 		return fmt.Errorf("unknown kind %q", n.Kind)
 	}
 }
+
+func validateChannel(c Channel) error {
+	switch c.Kind {
+	case "command":
+		if strings.TrimSpace(c.Run) == "" {
+			return fmt.Errorf("a command channel needs `run`")
+		}
+	case "":
+		return fmt.Errorf("kind is required (command)")
+	default:
+		return fmt.Errorf("unknown kind %q — channels are `command` adapters", c.Kind)
+	}
+	for _, d := range []string{c.ReceiveEvery, c.SendGap} {
+		if d == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(d); err != nil {
+			return fmt.Errorf("bad duration %q: %w", d, err)
+		}
+	}
+	return nil
+}
+
+// MissingChannels lets a workflow's `send:` steps and `message:` triggers be
+// checked against what is registered.
+func (c *Catalog) MissingChannels(names []string) []string { return c.Channels.Missing(names) }
 
 // MissingProviders / MissingClassifiers / MissingMcp let the Catalog stand in
 // as a workflow validator.

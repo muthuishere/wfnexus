@@ -87,6 +87,12 @@ func run(args []string) error {
 		return act(first(rest), "retry", map[string]any{"stepId": flagOf(rest, "--step", "")})
 	case "cancel":
 		return act(first(rest), "cancel", nil)
+	case "send":
+		return sendCmd(rest)
+	case "messages":
+		return messagesCmd(rest)
+	case "channels", "channel":
+		return channelsCmd(rest)
 	case "registry":
 		return registry(first(rest))
 	case "skills":
@@ -162,6 +168,7 @@ func shortUsage() {
   wfx show <run-id>                a run, step by step
   wfx logs <run-id> [-f] [-v]      what a run did
   wfx approve | reject | answer <run-id>   a run waiting on you
+  wfx send [--channel c] text      send a message on a channel (default if omitted)
   wfx apply <file.yaml>            install a workflow
   wfx doctor                       what is wired on this machine
   wfx login --url <host>           sign in to a host
@@ -221,6 +228,11 @@ func usage() {
   wfx approve <run-id> [--as who] approve the step waiting on a human
   wfx reject <run-id> -m "why"     reject it
   wfx answer <run-id> -m "text"    answer an agent's question
+  wfx send [--channel c] [--file f | --url u] [--target t] text
+                                   send on a channel (the server default if omitted); same path as a send: step
+  wfx messages [--channel c] [--run id]  messages received on channels, newest first, with what each did
+  wfx channels                     channels, which is the default, inbound or not, allow-list size, last receive error
+  wfx channels receive <name>      poll an inbound channel now instead of waiting for its interval
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
   wfx eval <workflow> --corpus f.yaml --providers a,b [--json]  the portability matrix: same workflow, N backends, pass/tokens/$
   wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes

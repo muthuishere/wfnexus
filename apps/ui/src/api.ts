@@ -45,6 +45,8 @@ export type Step = {
   env?: Record<string, string>
   /** deterministic node: a shell command instead of an agent */
   run?: string
+  /** a message node: text handed to a channel adapter (ADR 0023) */
+  send?: { channel?: string; text: string; attachment?: string; target?: string; dedup?: { key: string; window?: string }; dryRun?: boolean }
   /** DAG edges — a step runs once every id here is done */
   needs?: string[]
   /** derived planning (ADR 0014): facts consumed and established */
@@ -64,6 +66,8 @@ export type Triggers = {
   schedule?: Array<{ cron: string; input?: Record<string, unknown> }>
   repositoryDispatch?: { types?: string[] } | null
   workflowCall?: boolean
+  /** a received channel message starts it (ADR 0023) */
+  message?: Array<{ channel?: string; contains?: string; match?: string }>
 }
 export type Workflow = {
   name: string; description: string; inputSchema: JSONSchema; steps: Step[]; path: string
@@ -286,6 +290,18 @@ export type Template = {
 
 /** One row of the price table: a model FAMILY (a prefix of the model id) and
  *  what it costs per million tokens. `*` is the fallback for unmatched models. */
+/** A channel (ADR 0023): an adapter command the server sends through and,
+ *  when inbound, receives from. */
+export type Channel = {
+  name: string; description?: string; kind: string; default: boolean; inbound: boolean
+  receiveEvery?: string; allow: string[]; cursor?: string; lastReceive?: string; lastError?: string
+}
+/** A message received on a channel, and what it did. */
+export type ChannelMessage = {
+  id: number; channel: string; msgId: string; from: string; name?: string; text: string
+  attachments?: Array<{ url?: string; filename?: string; mime?: string }>
+  at?: string; runId?: string; outcome?: string; receivedAt: string
+}
 export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
 
 /** One entry of the platform's env store. A secret arrives with NO value: the
@@ -390,6 +406,14 @@ export const api = {
   /** The price table (ADR 0020): USD per million tokens by model family.
    *  Seeded with approximate list prices; `seeded` means nobody set it yet. */
   prices: () => j<{ prices: ModelPrice[]; fallbackKey: string }>(fetch('/api/prices')),
+  channels: () => j<{ default: string; channels: Channel[] }>(fetch('/api/channels')),
+  channelMessages: (q: { channel?: string; run?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams()
+    if (q.channel) p.set('channel', q.channel)
+    if (q.run) p.set('run', q.run)
+    if (q.limit) p.set('limit', String(q.limit))
+    return j<ChannelMessage[]>(fetch('/api/channels/messages?' + p.toString()))
+  },
   setPrice: (p: { model: string; in: number; out: number }) =>
     j<{ ok: boolean }>(fetch('/api/prices', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),

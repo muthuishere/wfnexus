@@ -175,6 +175,10 @@ type Step struct {
 	// paying for an agent to make one decision is the waste this tier exists to
 	// remove.
 	Judge *Decide `yaml:"judge,omitempty" json:"judge,omitempty"`
+	// Send makes this step a MESSAGE: it renders a text and hands it to a
+	// channel adapter (ADR 0023). No model, no shell — and dedup by key, so
+	// a schedule saying the same thing twice says it once.
+	Send *SendStep `yaml:"send,omitempty" json:"send,omitempty"`
 	// Run makes this step a DETERMINISTIC NODE rather than an agent: the shell
 	// command is executed in the run's workspace, no model is called, and it
 	// costs nothing. Exactly GitHub Actions' `run:`. A step has `run` or
@@ -458,16 +462,24 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: step %d needs an id", d.Name, i)
 		}
 		kinds := 0
-		for _, set := range []bool{s.Prompt != "", s.Run != "", s.Judge != nil} {
+		for _, set := range []bool{s.Prompt != "", s.Run != "", s.Judge != nil, s.Send != nil} {
 			if set {
 				kinds++
 			}
 		}
 		if kinds == 0 {
-			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command) or `judge` (a decision)", d.Name, s.ID)
+			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision) or `send` (a message)", d.Name, s.ID)
 		}
 		if kinds > 1 {
-			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command or a decision — `prompt`, `run` and `judge` are mutually exclusive", d.Name, s.ID)
+			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision or a message — `prompt`, `run`, `judge` and `send` are mutually exclusive", d.Name, s.ID)
+		}
+		if s.Send != nil {
+			if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Team) > 0 || s.Decide != nil {
+				return fmt.Errorf("%s/%s: a `send` step calls no model, so skills, tools, team and decide have no meaning on it", d.Name, s.ID)
+			}
+			if err := s.Send.validate(); err != nil {
+				return fmt.Errorf("%s/%s: send: %w", d.Name, s.ID, err)
+			}
 		}
 		if s.Judge != nil {
 			if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Team) > 0 {
@@ -497,7 +509,7 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: duplicate step id %q", d.Name, s.ID)
 		}
 		seen[s.ID] = true
-		if s.OutputSchema == nil && s.Run == "" && s.Judge == nil {
+		if s.OutputSchema == nil && s.Run == "" && s.Judge == nil && s.Send == nil {
 			return fmt.Errorf("%s: step %q needs output_schema", d.Name, s.ID)
 		}
 		if cat != nil {
@@ -832,6 +844,9 @@ func normalize(d *Definition) {
 		}
 		if s.Judge != nil && s.OutputSchema == nil {
 			s.OutputSchema = JudgeOutputSchema(s.Judge)
+		}
+		if s.Send != nil && s.OutputSchema == nil {
+			s.OutputSchema = SendOutputSchema()
 		}
 	}
 }
