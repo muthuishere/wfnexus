@@ -31,6 +31,7 @@
         }
       }
     },
-    "cursor": { "type": "string", "description": "handed back as `after`; empty keeps the previous one" }
+    "cursor": { "type": "string", "description": "handed back as `after`; empty keeps the previous one" },
+    "notice": { "type": "string", "description": "something the operator should see although the receive worked, e.g. a lost cursor that was reset" }
   }
 }
