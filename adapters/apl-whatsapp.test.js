@@ -96,6 +96,17 @@ test("receive: a lost cursor does not wedge the channel — it re-reads recent m
   assert.match(out.notice, /ZZZ was not found/);
 });
 
+test("receive: a TRANSIENT error reading the cursor fails the receive — it never resets and skips messages", () => {
+  for (const why of ["store is locked (another wacli is running?)", "apl: handle whatsapp:biz is dangling", "context deadline exceeded"]) {
+    const { run, calls } = setup(msgs, { FAKE_APL_SHOW_FAIL: why });
+    const r = run("receive", { after: "A" });
+    assert.notStrictEqual(r.status, 0, why);
+    assert.match(r.stderr, /receive failed/);
+    assert.strictEqual(r.stdout, "", "no cursor may be printed: " + why);
+    assert.ok(!calls().some((c) => c.includes("list")), "no reset read after a transient error: " + why);
+  }
+});
+
 test("receive: an unreadable group is an error, not an empty inbox", () => {
   const { run } = setup(msgs, { FAKE_APL_GROUP: "/nonexistent/group.json" });
   const r = run("receive", { after: "A" });
@@ -104,11 +115,29 @@ test("receive: an unreadable group is an error, not an empty inbox", () => {
 });
 
 test("send: an attachment URL that is not https, or points inside the network, is refused before any fetch", () => {
-  for (const url of ["http://example.com/x.pdf", "https://127.0.0.1/x", "https://169.254.169.254/latest", "https://10.1.2.3/x", "https://[::1]/x", "https://localhost/x"]) {
+  for (const url of ["http://example.com/x.pdf", "https://127.0.0.1/x", "https://169.254.169.254/latest", "https://10.1.2.3/x", "https://[::1]/x", "https://localhost/x", "https://[::ffff:127.0.0.1]/x", "https://[64:ff9b::a9fe:a9fe]/x"]) {
     const { run, calls } = setup(msgs);
     const r = run("send", { text: "x", attachment: { url } });
     assert.notStrictEqual(r.status, 0, url);
     assert.match(r.stderr, /https|internal/, url);
     assert.throws(() => calls(), undefined, "nothing may be sent for " + url);
+  }
+});
+
+test("internal(): every IPv6 form that carries an internal IPv4 is refused; public addresses pass", () => {
+  const { internal } = require("./apl-whatsapp.js");
+  const refused = [
+    "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1",
+    "::", "::1", "fe80::1", "fc00::1", "fd12::1", "ff02::1",
+    "::ffff:127.0.0.1", "::ffff:7f00:1", "[::ffff:7f00:1]", "::ffff:a9fe:a9fe", // IPv4-mapped, both spellings
+    "::127.0.0.1", "::a00:1", // IPv4-compatible
+    "64:ff9b::7f00:1", "64:ff9b::10.0.0.1", "64:ff9b:1::1", // NAT64, and its local-use /48
+    "2002:7f00:1::", "2002:a9fe:a9fe::1", // 6to4
+    "2001:0:4136:e378::1", // Teredo
+    "not-an-ip::zz",
+  ];
+  for (const a of refused) assert.strictEqual(internal(a), true, a);
+  for (const a of ["93.184.215.14", "8.8.8.8", "2606:4700::1111", "::ffff:808:808", "64:ff9b::808:808", "2002:808:808::"]) {
+    assert.strictEqual(internal(a), false, a);
   }
 });

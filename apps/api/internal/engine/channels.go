@@ -32,7 +32,7 @@ import (
 type channelStore interface {
 	InsertChannelMessage(ctx context.Context, m *model.ChannelMessage) (bool, error)
 	SetChannelMessageOutcome(ctx context.Context, channel, msgID, runID, outcome string) error
-	ListChannelMessages(ctx context.Context, channel, runID string, limit int) ([]*model.ChannelMessage, error)
+	ListChannelMessages(ctx context.Context, f model.ChannelMessageFilter) ([]*model.ChannelMessage, error)
 	PendingChannelMessages(ctx context.Context, channel string) ([]*model.ChannelMessage, error)
 	DedupClaim(ctx context.Context, channel, key string, window time.Duration) (bool, time.Time, error)
 	DedupRelease(ctx context.Context, channel, key string) error
@@ -40,6 +40,9 @@ type channelStore interface {
 	RetirePauseCodes(ctx context.Context, runID, stepID string) error
 	PauseByCode(ctx context.Context, channel, code string) (*model.PauseCode, error)
 	PruneChannels(ctx context.Context, msgsBefore, codesBefore time.Time) error
+	ClaimMessageRun(ctx context.Context, channel, msgID, workflow string) (bool, error)
+	SetMessageRun(ctx context.Context, channel, msgID, workflow, runID string) error
+	ReleaseMessageRun(ctx context.Context, channel, msgID, workflow string) error
 	Setting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
 }
@@ -199,13 +202,14 @@ func (e *Engine) SendOnChannel(ctx context.Context, name string, env notify.Enve
 	return c.Name, res, adapterErr(err)
 }
 
-// ChannelMessages lists received messages, newest first.
-func (e *Engine) ChannelMessages(ctx context.Context, channel, runID string, limit int) ([]*model.ChannelMessage, error) {
+// ChannelMessages lists received messages, newest first. Who may see which
+// is the caller's decision, expressed in the filter (api/channels.go).
+func (e *Engine) ChannelMessages(ctx context.Context, f model.ChannelMessageFilter) ([]*model.ChannelMessage, error) {
 	cs, ok := e.chStore()
 	if !ok {
 		return []*model.ChannelMessage{}, nil
 	}
-	return cs.ListChannelMessages(ctx, channel, runID, limit)
+	return cs.ListChannelMessages(ctx, f)
 }
 
 // ---- pause codes ----
@@ -250,10 +254,21 @@ func (e *Engine) issuePauseCode(ctx context.Context, channel string, runID uuid.
 			return "", err
 		}
 		if ok {
+			// Belt and braces: if the pause was answered between parking
+			// and here, retire the code we just issued rather than leave it
+			// live for a pause that no longer exists.
+			if st, err := e.store.GetStep(ctx, runID, stepID); err == nil && st != nil && !waiting(st.Status) {
+				_ = cs.RetirePauseCodes(ctx, runID.String(), stepID)
+			}
 			return code, nil
 		}
 	}
 	return "", fmt.Errorf("could not find a free pause code")
+}
+
+// waiting reports a step status a person can still answer.
+func waiting(status string) bool {
+	return status == "awaiting_approval" || status == "needs_input"
 }
 
 // retirePause retires a step's codes once it is resolved by ANY path — the UI,
@@ -291,9 +306,14 @@ func pauseText(p notify.Pause, code string) string {
 	return b.String()
 }
 
-// announcePause sends a pause to the default channel, with a code. It runs
-// in the BACKGROUND: the run has already parked, and an adapter that takes a
-// minute must not hold the run's goroutine (or its slot) for that minute.
+// announcePause sends a pause to the default channel, with a code.
+//
+// The CODE is issued here, synchronously, on the run's own goroutine — before
+// anything can resolve the pause and retire its codes. (Issued from the
+// background it could land after the retire, leaving a live code for a pause
+// that is gone.) The SEND runs in the background: the run has already parked,
+// and an adapter that takes a minute must not hold the run's slot for that
+// minute. The goroutine is tracked, so a shutdown can drain it.
 func (e *Engine) announcePause(ctx context.Context, runID uuid.UUID, p notify.Pause) {
 	c, err := e.channelEntry("")
 	if err != nil {
@@ -303,6 +323,15 @@ func (e *Engine) announcePause(ctx context.Context, runID uuid.UUID, p notify.Pa
 		return
 	}
 	bg := context.WithoutCancel(ctx)
+	var expires time.Time
+	if p.ExpiresAt != nil {
+		expires = *p.ExpiresAt
+	}
+	code, err := e.issuePauseCode(bg, c.Name, runID, p.StepID, p.Kind, expires)
+	if err != nil {
+		log.Printf("engine: pause code: %v", err)
+		code = ""
+	}
 	timeout := 60 * time.Second
 	if c.TimeoutSec > 0 {
 		timeout = time.Duration(c.TimeoutSec) * time.Second
@@ -310,23 +339,16 @@ func (e *Engine) announcePause(ctx context.Context, runID uuid.UUID, p notify.Pa
 	if d, err := time.ParseDuration(c.SendGap); err == nil {
 		timeout += d // a send may first wait out the channel's gap
 	}
+	env := notify.Envelope{
+		Type: notify.TypePause, Text: pauseText(p, code), RunURL: p.URL, Code: code, PauseKind: p.Kind,
+		Workflow: p.Workflow, Project: p.Project, RunID: p.RunID, StepID: p.StepID,
+		DedupKey: "pause:" + p.RunID + ":" + p.StepID, At: p.At,
+	}
+	e.announcing.Add(1)
 	go func() {
+		defer e.announcing.Done()
 		ctx, cancel := context.WithTimeout(bg, timeout+10*time.Second)
 		defer cancel()
-		var expires time.Time
-		if p.ExpiresAt != nil {
-			expires = *p.ExpiresAt
-		}
-		code, err := e.issuePauseCode(ctx, c.Name, runID, p.StepID, p.Kind, expires)
-		if err != nil {
-			log.Printf("engine: pause code: %v", err)
-			code = ""
-		}
-		env := notify.Envelope{
-			Type: notify.TypePause, Text: pauseText(p, code), RunURL: p.URL, Code: code, PauseKind: p.Kind,
-			Workflow: p.Workflow, Project: p.Project, RunID: p.RunID, StepID: p.StepID,
-			DedupKey: "pause:" + p.RunID + ":" + p.StepID, At: p.At,
-		}
 		if _, _, err := e.SendOnChannel(ctx, c.Name, env); err != nil {
 			e.emit(ctx, runID, p.StepID, "log", map[string]any{
 				"text": "channel " + c.Name + " failed: " + err.Error() + " (the run is still paused)",
@@ -337,6 +359,19 @@ func (e *Engine) announcePause(ctx context.Context, runID uuid.UUID, p notify.Pa
 			"text": "pause (" + p.Kind + ") announced on channel " + c.Name + " with code #" + code + " → " + p.URL,
 		})
 	}()
+}
+
+// DrainAnnouncements waits for background pause announcements to finish, at
+// most `max`. It reports whether they all did.
+func (e *Engine) DrainAnnouncements(max time.Duration) bool {
+	done := make(chan struct{})
+	go func() { e.announcing.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(max):
+		return false
+	}
 }
 
 // ---- the send step ----
@@ -641,21 +676,31 @@ var (
 // `message:` trigger matches and whose allow list holds the sender.
 func (e *Engine) handleInbound(ctx context.Context, c catalog.Channel, m notify.Message) (string, string) {
 	cs, _ := e.chStore()
+	// Every code in the message is tried, in order; the first LIVE one on
+	// this channel is the answer. A dead code (resolved, re-paused, expired)
+	// is noted and skipped, so "#old #new yes" still answers #new.
+	rest := strings.TrimSpace(codeRe.ReplaceAllString(m.Text, ""))
+	var dead *model.PauseCode
 	for _, sm := range codeRe.FindAllStringSubmatch(m.Text, -1) {
 		pc, err := cs.PauseByCode(ctx, c.Name, strings.ToLower(sm[1]))
 		if err != nil || pc == nil {
 			continue
 		}
-		rest := strings.TrimSpace(strings.Replace(m.Text, sm[0], "", 1))
 		if !pc.Live(time.Now()) {
-			if runID, err := uuid.Parse(pc.RunID); err == nil {
-				e.emit(ctx, runID, pc.StepID, "log", map[string]any{
-					"text": "reply on channel " + c.Name + " from " + m.From + " quotes #" + pc.Code + ", which is no longer live — nothing resolved",
-				})
+			if dead == nil {
+				dead = pc
 			}
-			return pc.RunID, "recorded"
+			continue
 		}
 		return pc.RunID, e.answerFromChat(ctx, c, m, pc, rest)
+	}
+	if dead != nil {
+		if runID, err := uuid.Parse(dead.RunID); err == nil {
+			e.emit(ctx, runID, dead.StepID, "log", map[string]any{
+				"text": "reply on channel " + c.Name + " from " + m.From + " quotes #" + dead.Code + ", which is no longer live — nothing resolved",
+			})
+		}
+		return dead.RunID, "recorded"
 	}
 	started, refused := 0, 0
 	for _, def := range workflow.Sorted(e.Definitions()) {
@@ -682,10 +727,24 @@ func (e *Engine) handleInbound(ctx context.Context, c catalog.Channel, m notify.
 			"channel": c.Name, "id": m.ID, "from": m.From, "name": m.Name, "text": m.Text,
 			"at": m.At, "attachments": m.Attachments,
 		}}
-		if err := e.StartTriggeredBy(ctx, def.Name, workflow.TriggerMessage, input, m.From); err != nil {
+		// The claim makes the start idempotent: a message re-handled after a
+		// crash finds its claim and starts nothing (at most once, by design).
+		claimed, err := cs.ClaimMessageRun(ctx, c.Name, m.ID, def.Name)
+		if err != nil {
+			log.Printf("channels: %s: claim %s for %s: %v", c.Name, m.ID, def.Name, err)
+			continue
+		}
+		if !claimed {
+			started++ // it already started this workflow once
+			continue
+		}
+		runID, err := e.StartTriggeredBy(ctx, def.Name, workflow.TriggerMessage, input, m.From)
+		if err != nil {
+			_ = cs.ReleaseMessageRun(context.WithoutCancel(ctx), c.Name, m.ID, def.Name)
 			log.Printf("channels: %s: message trigger for %s: %v", c.Name, def.Name, err)
 			continue
 		}
+		_ = cs.SetMessageRun(ctx, c.Name, m.ID, def.Name, runID.String())
 		started++
 	}
 	switch {

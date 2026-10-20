@@ -289,3 +289,18 @@ type PauseCode struct {
 
 // Live reports whether a reply quoting this code may still answer it.
 func (c PauseCode) Live(now time.Time) bool { return c.RetiredAt == nil && now.Before(c.ExpiresAt) }
+
+// ChannelMessageFilter narrows a listing. A message BELONGS to a project when
+// it answered a run there (channel_messages.run_id) or started one
+// (channel_message_runs); a message that did neither belongs to no project.
+type ChannelMessageFilter struct {
+	Channel string
+	// RunID: messages that answered OR started this run.
+	RunID string
+	// All includes messages linked to no run. Only an unscoped operator
+	// should set it; everyone else sees linked messages only.
+	All bool
+	// Project, when set, keeps only messages linked to a run in it.
+	Project string
+	Limit   int
+}

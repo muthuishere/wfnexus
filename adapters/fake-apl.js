@@ -19,9 +19,14 @@ if (cmd === "send text" || cmd === "send file") {
   }
   ok({ sent: true, to: flag("--to"), id: "SENT1" });
 } else if (cmd === "messages show") {
+  if (process.env.FAKE_APL_SHOW_FAIL) {
+    process.stdout.write(JSON.stringify({ success: false, error: process.env.FAKE_APL_SHOW_FAIL }) + "\n");
+    process.exit(1);
+  }
   const m = group.find((x) => x.MsgID === flag("--id"));
   if (!m) {
-    process.stdout.write(JSON.stringify({ success: false, error: "not found" }) + "\n");
+    // wacli's own not-found: sql.ErrNoRows.
+    process.stdout.write(JSON.stringify({ success: false, error: "sql: no rows in result set" }) + "\n");
     process.exit(1);
   }
   ok(m);

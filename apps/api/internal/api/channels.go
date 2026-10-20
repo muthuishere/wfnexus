@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/notify"
 )
 
@@ -32,10 +33,19 @@ func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"default": s.eng.DefaultChannel(), "channels": s.eng.Channels(r.Context())})
 }
 
+// listChannelMessages is project-scoped. A message belongs to a project when
+// it answered or started a run there; a project-scoped subject sees only
+// those. A message that matched nothing belongs to no project — it may be
+// anyone's chat — so it is shown only to an unscoped subject holding
+// admin:read (the admin role), or on a loopback install, where the machine is
+// the trust boundary.
 func (s *Server) listChannelMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	msgs, err := s.eng.ChannelMessages(r.Context(), q.Get("channel"), q.Get("run"), limit)
+	f := model.ChannelMessageFilter{Channel: q.Get("channel"), RunID: q.Get("run"), Limit: limit,
+		Project: s.scopeOf(r)}
+	f.All = f.Project == "" && s.can(r, PermAdminRead)
+	msgs, err := s.eng.ChannelMessages(r.Context(), f)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
