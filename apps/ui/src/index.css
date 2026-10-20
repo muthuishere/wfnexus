@@ -420,10 +420,23 @@ pre {
 .canvas .node.active rect { stroke: var(--accent-600); stroke-width: 2.5; fill: var(--accent-50) }
 .canvas .node.kind-run rect { stroke-dasharray: 5 3 }
 .canvas .node.kind-judge rect { fill: var(--accent-50) }
-.canvas .node text { font-size: 12px; fill: var(--text) }
-.canvas .node .nid { font-family: var(--mono); font-size: 11.5px; font-weight: 500 }
-.canvas .node .nkind, .canvas .node .nfact { font-size: 10.5px; fill: var(--muted) }
-.canvas .node .nguard { font-size: 13px; fill: var(--warn) }
+.canvas .node text { font-size: 13px; fill: var(--text) }
+.canvas .node .nname { font-size: 14px; font-weight: 600 }
+.canvas .node .nkind { font-family: var(--mono); font-size: 13px; fill: var(--muted) }
+.canvas .node .nfact, .canvas .node .nstatus { font-size: 13px; fill: var(--muted) }
+.canvas .node .nguard { font-size: 14px; fill: var(--warn) }
+.canvasbody { overflow: auto; max-height: 70vh }
+.canvaszoom { margin-left: auto; display: inline-flex; gap: 4px }
+.canvaszoom button { font-size: 12px; padding: 2px 8px }
+.canvaszoom button.on { border-color: var(--accent-500); color: var(--accent-600) }
+.canvas .node.st-done rect, .canvas .node.st-approved rect { stroke: var(--ok) }
+.canvas .node.st-done .nstatus, .canvas .node.st-approved .nstatus { fill: var(--ok-text) }
+.canvas .node.st-failed rect, .canvas .node.st-rejected rect, .canvas .node.st-cancelled rect { stroke: var(--err) }
+.canvas .node.st-failed .nstatus, .canvas .node.st-rejected .nstatus, .canvas .node.st-cancelled .nstatus { fill: var(--err-text) }
+.canvas .node.st-running rect, .canvas .node.st-queued rect { stroke: var(--info) }
+.canvas .node.st-running .nstatus, .canvas .node.st-queued .nstatus { fill: var(--info) }
+.canvas .node.st-awaiting_approval rect, .canvas .node.st-needs_input rect { stroke: var(--warn) }
+.canvas .node.st-awaiting_approval .nstatus, .canvas .node.st-needs_input .nstatus { fill: var(--warn-text) }
 
 /* small inline chips — a step's skills under its name in the run detail */
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px }

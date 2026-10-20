@@ -287,7 +287,8 @@ export default function RunPage({ id }: { id: string }) {
           <pre style={{ marginTop: 10 }}>{JSON.stringify(run.input, null, 2)}</pre>
           {stepDefs.length > 1 && (
             <div style={{ marginTop: 10 }}>
-              <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel} />
+              <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel}
+                status={Object.fromEntries(Object.values(byId).map(s => [s.stepId, s.status]))} />
             </div>)}
         </details>
       </div>

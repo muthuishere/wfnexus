@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Step } from '../api'
 
 /** WorkflowCanvas draws the execution shape of a workflow.
@@ -17,15 +17,34 @@ import type { Step } from '../api'
  *  node count is small, and a dependency that renders boxes would be a poor
  *  trade for one view. */
 type Mode = 'needs' | 'facts' | 'sequence'
+type Zoom = 'fit' | 'full'
 
-export default function WorkflowCanvas({ steps, active, onPick }: {
+export default function WorkflowCanvas({ steps, active, onPick, status }: {
   steps: Step[]
   /** step id to highlight — the running step, or the one being edited */
   active?: string
   onPick?: (id: string) => void
+  /** step id → run status (done, running, failed, …), on the run page */
+  status?: Record<string, string>
 }) {
   const g = useMemo(() => layout(steps), [steps])
+  const box = useRef<HTMLDivElement>(null)
+  const [avail, setAvail] = useState(0)
+  const [zoom, setZoom] = useState<Zoom>('fit')
+  useEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setAvail(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   if (!steps.length) return <div className="muted">No steps yet.</div>
+
+  // Drawn at its real size and scrolled, never squeezed to the width: 'fit'
+  // may shrink it only as far as MIN_SCALE, where the smallest label is
+  // still 12px. A long chain is laid out top-to-bottom (see layout), so it
+  // scrolls down the page instead of shrinking to a line of dots.
+  const scale = zoom === 'fit' && avail > 0 ? Math.max(MIN_SCALE, Math.min(1, avail / g.width)) : 1
 
   return (
     <div className="canvas">
@@ -39,38 +58,57 @@ export default function WorkflowCanvas({ steps, active, onPick }: {
         {g.alternatives.length > 0 && <span className="hint">
           alternatives for the same fact: {g.alternatives.join(', ')} — guards pick one at runtime
         </span>}
+        {g.width > avail && avail > 0 && <span className="canvaszoom">
+          <button className={zoom === 'fit' ? 'on' : ''} onClick={() => setZoom('fit')}>fit</button>
+          <button className={zoom === 'full' ? 'on' : ''} onClick={() => setZoom('full')}>100%</button>
+        </span>}
       </div>
-      <svg viewBox={`0 0 ${g.width} ${g.height}`} width="100%" height={g.height} role="img">
-        <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" className="arrowhead" />
-          </marker>
-        </defs>
-        {g.edges.map((e, i) => (
-          <path key={i} d={e.d} className={`edge${e.soft ? ' soft' : ''}`} markerEnd="url(#arrow)" />
-        ))}
-        {g.nodes.map(n => (
-          <g key={n.id} transform={`translate(${n.x},${n.y})`}
-            className={`node kind-${n.kind}${n.id === active ? ' active' : ''}${onPick ? ' clickable' : ''}`}
-            onClick={onPick ? () => onPick(n.id) : undefined}>
-            <rect width={NODE_W} height={NODE_H} rx="8" />
-            <text x="12" y="20" className="nid">{n.id}</text>
-            <text x="12" y="38" className="nkind">{n.kind}{n.provider ? ` · ${n.provider}` : ''}</text>
-            {n.produces.length > 0 && <text x="12" y="55" className="nfact">⇒ {n.produces.join(', ')}</text>}
-            {n.guarded && <text x={NODE_W - 12} y="20" className="nguard" textAnchor="end">?</text>}
-          </g>))}
-      </svg>
+      <div className="canvasbody" ref={box}>
+        <svg viewBox={`0 0 ${g.width} ${g.height}`} width={g.width * scale} height={g.height * scale}
+          role="img" aria-label={`${steps.length} steps, ${g.vertical ? 'top to bottom' : 'left to right'}`}
+          data-orientation={g.vertical ? 'vertical' : 'horizontal'}>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" className="arrowhead" />
+            </marker>
+          </defs>
+          {g.edges.map((e, i) => (
+            <path key={i} d={e.d} className={`edge${e.soft ? ' soft' : ''}`} markerEnd="url(#arrow)" />
+          ))}
+          {g.nodes.map(n => {
+            const st = status?.[n.id]
+            return (
+              <g key={n.id} transform={`translate(${n.x},${n.y})`} data-step={n.id}
+                className={`node kind-${n.kind}${st ? ` st-${st}` : ''}${n.id === active ? ' active' : ''}${onPick ? ' clickable' : ''}`}
+                onClick={onPick ? () => onPick(n.id) : undefined}>
+                <title>{n.name !== n.id ? `${n.name} (${n.id})` : n.id}</title>
+                <rect width={NODE_W} height={NODE_H} rx="8" />
+                <text x="12" y="22" className="nname">{clip(n.name, 24)}</text>
+                <text x="12" y="42" className="nkind">{clip(`${n.id} · ${n.kind}${n.provider ? ` · ${n.provider}` : ''}`, 28)}</text>
+                {(st || n.produces.length > 0) && <text x="12" y="60" className={st ? 'nstatus' : 'nfact'}>
+                  {st ? st.replace(/_/g, ' ') : clip(`⇒ ${n.produces.join(', ')}`, 28)}</text>}
+                {n.guarded && <text x={NODE_W - 12} y="22" className="nguard" textAnchor="end">?</text>}
+              </g>)
+          })}
+        </svg>
+      </div>
     </div>
   )
 }
 
-const NODE_W = 190
-const NODE_H = 64
-const GAP_X = 70
-const GAP_Y = 22
+function clip(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + '…' : s }
+
+const NODE_W = 220
+const NODE_H = 70
+const GAP_X = 60
+const GAP_Y = 34
+/** the smallest label is 13px, so 13 × MIN_SCALE ≈ 12px is the floor */
+export const MIN_SCALE = 12 / 13
+/** more layers than this and the graph is drawn top-to-bottom */
+export const MAX_LAYERS_ACROSS = 5
 
 type Node = {
-  id: string; kind: string; provider?: string; produces: string[]; guarded: boolean
+  id: string; name: string; kind: string; provider?: string; produces: string[]; guarded: boolean
   x: number; y: number; layer: number
 }
 
@@ -83,7 +121,8 @@ function kindOf(s: Step): string {
 /** layout assigns each step a layer and turns the dependencies into paths.
  *
  *  A step's layer is one past the deepest thing it depends on, so an edge always
- *  points right and no edge has to be routed backwards. Cycles cannot occur —
+ *  points forward (right, or down when the graph is drawn top-to-bottom) and no
+ *  edge has to be routed backwards. Cycles cannot occur —
  *  the loader rejects them — but the walk is depth-capped anyway, because a
  *  rendering bug should not become an infinite loop in somebody's browser. */
 function layout(steps: Step[]) {
@@ -122,15 +161,29 @@ function layout(steps: Step[]) {
   }
   for (const s of steps) resolve(s.id)
 
+  const layers = Math.max(...steps.map(s => layerOf.get(s.id) || 0)) + 1
+  // Left-to-right reads best while it fits a screen; past that every layer
+  // becomes a row, so a 30-step chain is 30 rows of readable boxes.
+  const vertical = layers > MAX_LAYERS_ACROSS
   const rows = new Map<number, number>()
+  const slot = new Map<string, number>()
+  for (const s of steps) {
+    const layer = layerOf.get(s.id) || 0
+    const i = rows.get(layer) || 0
+    rows.set(layer, i + 1)
+    slot.set(s.id, i)
+  }
+  const widest = Math.max(...[...rows.values()])
   const nodes: Node[] = steps.map(s => {
     const layer = layerOf.get(s.id) || 0
-    const row = rows.get(layer) || 0
-    rows.set(layer, row + 1)
+    const i = slot.get(s.id)!
+    // centre each layer on the widest one, so a chain runs straight down
+    const off = (widest - (rows.get(layer) || 1)) / 2
     return {
-      id: s.id, kind: kindOf(s), provider: s.provider,
-      produces: s.produces || [], guarded: !!(s as any).when?.length,
-      layer, x: layer * (NODE_W + GAP_X) + 10, y: row * (NODE_H + GAP_Y) + 10,
+      id: s.id, name: s.name || s.id, kind: kindOf(s), provider: s.provider,
+      produces: s.produces || [], guarded: !!(s as any).when?.length, layer,
+      x: vertical ? (i + off) * (NODE_W + GAP_X) + 10 : layer * (NODE_W + GAP_X) + 10,
+      y: vertical ? layer * (NODE_H + GAP_Y) + 10 : i * (NODE_H + GAP_Y) + 10,
     }
   })
   const pos = new Map(nodes.map(n => [n.id, n]))
@@ -141,18 +194,25 @@ function layout(steps: Step[]) {
     for (const depId of deps(s)) {
       const from = pos.get(depId)
       if (!from) continue
-      const x1 = from.x + NODE_W, y1 = from.y + NODE_H / 2
-      const x2 = to.x, y2 = to.y + NODE_H / 2
-      const mx = (x1 + x2) / 2
-      edges.push({ d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, soft: mode === 'facts' })
+      if (vertical) {
+        const x1 = from.x + NODE_W / 2, y1 = from.y + NODE_H
+        const x2 = to.x + NODE_W / 2, y2 = to.y
+        const my = (y1 + y2) / 2
+        edges.push({ d: `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`, soft: mode === 'facts' })
+      } else {
+        const x1 = from.x + NODE_W, y1 = from.y + NODE_H / 2
+        const x2 = to.x, y2 = to.y + NODE_H / 2
+        const mx = (x1 + x2) / 2
+        edges.push({ d: `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`, soft: mode === 'facts' })
+      }
     }
   }
 
-  const layers = Math.max(...nodes.map(n => n.layer)) + 1
-  const tallest = Math.max(...[...rows.values()])
+  const across = vertical ? widest : layers
+  const down = vertical ? layers : widest
   return {
-    nodes, edges, mode, alternatives,
-    width: layers * (NODE_W + GAP_X) + 20,
-    height: tallest * (NODE_H + GAP_Y) + 20,
+    nodes, edges, mode, alternatives, vertical,
+    width: across * (NODE_W + GAP_X) - GAP_X + 20,
+    height: down * (NODE_H + GAP_Y) - GAP_Y + 20,
   }
 }
