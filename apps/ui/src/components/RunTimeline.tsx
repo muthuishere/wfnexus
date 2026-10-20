@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import type { Event, Step, StepRun } from '../api'
+import { stepDecision } from '../lib/story'
 
 // ── the run, drawn as time ───────────────────────────────────────────────────
 // One row per step, its bar drawn to SCALE against the longest step in the run,
 // so a 27-turn step visibly dwarfs a 4-turn one instead of both being a line in
-// a table. Status is carried by a word as well as a colour — colour alone is
-// not a status.
+// a table. Next to the name is what the step DECIDED (stepDecision in
+// lib/story.ts); its status is an icon with a colour, and a label for a
+// screen reader and on hover — colour alone is not a status.
 
 export type Usage = {
   totalTokens?: number; promptTokens?: number; completionTokens?: number
@@ -108,6 +110,11 @@ export function Corrections({ items }: { items: Correction[] }) {
   )
 }
 
+const ICON: Record<string, string> = {
+  done: '✓', approved: '✓', failed: '✕', rejected: '✕', cancelled: '✕', skipped: '↷',
+  running: '●', queued: '○', awaiting_approval: '⏸', needs_input: '?', pending: '○',
+}
+
 type Row = { def: Step; run?: StepRun; ms: number; ceiling: number }
 
 /** A step that needed no model: no turns, tokens or cost to report. */
@@ -141,14 +148,17 @@ export default function RunTimeline({ steps, byId, events, now, selected, onPick
         const script = isScriptStep(r.def)
         const turns = r.run?.turns ?? 0
         const mine = corrections.filter(c => c.step === r.def.id)
+        const dec = stepDecision(r.def, r.run, byId)
         return (
           <div key={r.def.id} className={`tlrow ${st}${selected === r.def.id ? ' on' : ''}`}
             onClick={() => onPick(r.def.id)}>
             <div className="tlname">
-              <b>{i + 1}. {r.def.name || r.def.id}</b>
-              <span className={`badge ${st}`}>{st.replace(/_/g, ' ')}</span>
+              <span className={`tlicon ${st}`} role="img" aria-label={st.replace(/_/g, ' ')}
+                title={st.replace(/_/g, ' ')}>{ICON[st] || '·'}</span>
+              <b title={r.def.name || r.def.id}>{i + 1}. {r.def.name || r.def.id}</b>
               {r.def.requiresApproval && <span className="badge awaiting_approval">gate</span>}
             </div>
+            <div className={`tldecision tone-${dec.tone}`} title={dec.text}>{dec.text}</div>
             <div className="tlbar" title={`${dur(r.ms)} of ${dur(max)}`}>
               <i className={st} style={{ width: `${Math.max(r.ms > 0 ? 2 : 0, (r.ms / max) * 100)}%` }} />
             </div>

@@ -508,7 +508,7 @@ pre {
 
 .tl { display: flex; flex-direction: column; gap: 4px }
 .tlrow {
-  display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) minmax(190px, max-content);
+  display: grid; grid-template-columns: minmax(170px, 250px) minmax(0, 1fr) 110px minmax(120px, max-content);
   gap: 6px 14px; align-items: center; padding: 9px 10px; border-radius: 9px;
   border: 1px solid transparent; cursor: pointer;
 }
@@ -517,6 +517,20 @@ pre {
 .tlname { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; font-size: 13.5px }
 .tlname .n { color: var(--muted) }
 .tlname b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tlname { flex-wrap: nowrap }
+.tlicon { flex: none; width: 18px; height: 18px; border-radius: 999px; display: inline-grid; place-items: center;
+  font-size: 11px; font-weight: 700; background: var(--subtle); color: var(--muted) }
+.tlicon.done, .tlicon.approved { background: var(--ok-bg); color: var(--ok) }
+.tlicon.failed, .tlicon.rejected, .tlicon.cancelled { background: var(--err-bg); color: var(--err) }
+.tlicon.running, .tlicon.queued { background: var(--info-bg); color: var(--info) }
+.tlicon.awaiting_approval, .tlicon.needs_input { background: var(--warn-bg); color: var(--warn) }
+.tldecision { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text) }
+.tldecision.tone-incident, .tldecision.tone-waiting { color: var(--warn-text) }
+.tldecision.tone-failed { color: var(--err-text) }
+.tldecision.tone-ok { color: var(--ok-text) }
+.tldecision.tone-skipped { color: var(--muted); font-style: italic }
+.tlrow.on .tldecision { white-space: normal }
+@media (max-width: 720px) { .tlrow { grid-template-columns: minmax(0, 1fr) 80px } .tldecision { grid-column: 1 / -1 } }
 
 .tlbar { height: 12px; background: var(--subtle); border-radius: 999px; overflow: hidden }
 .tlbar i { display: block; height: 100%; border-radius: 999px; background: var(--border-strong) }
