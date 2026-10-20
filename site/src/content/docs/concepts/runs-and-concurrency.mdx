@@ -1,0 +1,93 @@
+---
+title: Run story and concurrency
+description: How a run says what it found (WFX_STEP_SUMMARY, WFX_OUTCOME, WFX_STATE, the run verdict), how `concurrency:` keeps one active run per group, and what happens to a broken workflow at boot.
+---
+
+## A run tells its story
+
+A run page full of step rows says when things happened, not what the run found. So a step can say
+it, the way GitHub Actions' `GITHUB_STEP_SUMMARY` does: by writing to a file the engine names in
+its environment.
+
+| Variable | Write | Becomes |
+|---|---|---|
+| `WFX_STEP_SUMMARY` | markdown | the step output's `summary`, shown under **What it found** on the run page |
+| `WFX_OUTCOME` | one line: `ok`, `incident`, `waiting` or `failed`, then `: <text>` | the step output's `outcome`, and the **run's headline verdict** (the last step that wrote one wins) |
+| `WFX_STATE` | a JSON object | each key written to this workflow's state scope, read next run as `{{ .Workflow.<key> }}` |
+
+```yaml
+steps:
+  - id: check
+    run: |
+      n=$(./count-errors.sh)
+      echo "## $n errors in the last hour" >> "$WFX_STEP_SUMMARY"
+      if [ "$n" -gt 0 ]; then echo "incident: $n errors" > "$WFX_OUTCOME"; else echo "ok" > "$WFX_OUTCOME"; fi
+      echo "{\"last_count\": $n}" > "$WFX_STATE"
+```
+
+An agent step needs none of this: an output field named `summary` or `outcome` (a string) is read
+the same way.
+
+There is deliberately no run-level summary file. When no step wrote an outcome, the run's verdict
+is derived when it ends: a failed run says why it failed, a finished one leads with the first line
+of the last summary any step wrote. A retried run re-derives it instead of keeping a stale one.
+
+The files are local to the machine that runs the step. A step placed on a
+[worker](/wfnexus/concepts/workers/) with `runs-on` does not get them yet.
+
+### The run page
+
+The run page opens on a verdict card: the headline, the status, the duration and, for a scheduled
+workflow, when it runs next. Below it is **What it found**, then the steps. Script steps show
+status and duration, cost is shown only when it is known, skipped steps fold into one line, and a
+step's detail is its summary first with the log collapsed underneath. The workflow page shows a
+timeline of recent verdicts and the next run time; its **State** tab is what the workflow remembers
+between runs.
+
+`wfx show <run-id>` prints the same run step by step, and `wfx logs <run-id> -f` follows it. Both
+print one line per step event by default; `-v` gives the full transcript.
+
+## Honest runs
+
+- A `run:` step that exits non-zero **fails** the step and the run, unless the step sets
+  `continue-on-error: true` or one of its gates matches the output. An exit code that a later
+  step's `when` reads is a route, not a failure.
+- Unknown keys in a workflow are an error that names the line, in the loader and in
+  `wfx validate` / `wfx apply`.
+- Steps still pending when a run finishes are marked **skipped**, not left pending.
+
+## One active run per group
+
+A workflow can declare `concurrency:`, the simplest useful form of GitHub Actions' key:
+
+```yaml
+concurrency: 1                      # shorthand: one active run of this workflow
+
+# or
+concurrency:
+  group: nightly-db                 # default: the workflow's name
+  cancel-in-progress: false         # true: cancel the older run, start the new one
+```
+
+"Active" means running or queued. A run parked on a person (waiting for approval or input) does
+**not** hold the group, because a pause nobody answers would otherwise stop the workflow forever.
+
+When the group is busy, a new run is refused with `skipped: concurrency (run <id> still active in
+group "<group>")`. With `cancel-in-progress: true` the older run is cancelled and the new one
+starts. A person can go past the limit on purpose:
+
+```bash
+wfx run nightly-db --force
+```
+
+The check and the insert happen under one lock, so two triggers racing for one group get exactly
+one run.
+
+## A broken workflow skips only itself
+
+When the server boots, or a project reloads, a workflow with a YAML or validation error is
+**skipped by name**, not fatal. The server log prints `NOT LOADED <location>: <reason>`,
+`wfx workflows` prints a `BROKEN` line for it, and the project's problems list shows it. Every
+other workflow in the same directory or project still loads and schedules. A workflow that calls a
+broken one is skipped too. When two workflows in one project share a name, the first wins and the
+other is reported.
