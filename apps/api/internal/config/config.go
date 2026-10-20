@@ -61,6 +61,10 @@ type Config struct {
 	// `provider:` runs on (its `model:` still selects within it). "" ⇒ the
 	// LLMBaseURL endpoint, as before.
 	DefaultProvider string
+	// FallbackProviders are tried, in order, after a step's provider and that
+	// provider's own `fallback:` list, when none of those could be reached
+	// (WFX_FALLBACK_PROVIDERS, comma separated, or model.fallback).
+	FallbackProviders []string
 	// DefaultClassifier, when set, is the registry classifier a decide step
 	// (and a proposal review) uses when it names none — instead of the
 	// Classifier* endpoint below.
@@ -254,6 +258,7 @@ func LoadWithFile(path string) (Config, error) {
 		LLMStyle:          env("LLM_STYLE", or(f.Model.Style, "openai")),
 		Model:             env("WFX_MODEL", or(f.Model.Model, "anthropic/claude-sonnet-4.5")),
 		DefaultProvider:   env("WFX_DEFAULT_PROVIDER", f.Model.Provider),
+		FallbackProviders: splitList(env("WFX_FALLBACK_PROVIDERS", join(f.Model.Fallback))),
 		DefaultClassifier: env("WFX_DEFAULT_CLASSIFIER", f.Classifier.Name),
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),

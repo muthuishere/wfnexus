@@ -235,7 +235,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 // preset keeps devin's own --model flag and implicit acp subcommand.
 func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinadapter.ACP, error) {
 	cfg := devinadapter.ACP{
-		Model: model, Cwd: workdir, Env: env, SessionPerTurn: p.SessionPerTurn,
+		Model: model, Cwd: workdir, Env: env, SessionPerTurn: !p.KeepSession,
 		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
 	}
 	if len(p.Command) > 0 {
@@ -265,7 +265,6 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinad
 	}
 	// The adapter's env first, the step's after, so a step can still override.
 	cfg.Env = append(append([]string{}, pr.Env...), cfg.Env...)
-	cfg.SessionPerTurn = cfg.SessionPerTurn || pr.SessionPerTurn
 	return cfg, nil
 }
 
@@ -347,4 +346,48 @@ func (e *Engine) skillDirs(step *workflow.Step) map[string]string {
 		}
 	}
 	return out
+}
+
+// providerChain is the order a step's providers are tried in: its own (or the
+// server default), that provider's `fallback:` list, then the server-wide
+// model.fallback list — each name once. An eval's provider override pins the
+// provider, so it never falls back: the matrix measures that one backend.
+func (e *Engine) providerChain(step *workflow.Step) []string {
+	first := step.Provider
+	if first == "" {
+		first = e.cfg.DefaultProvider
+	}
+	if e.providerOverride != "" {
+		return []string{e.providerOverride}
+	}
+	chain := []string{first}
+	seen := map[string]bool{first: true}
+	add := func(names []string) {
+		for _, n := range names {
+			n = strings.TrimSpace(n)
+			if n == "" || seen[n] {
+				continue
+			}
+			if _, ok := e.catalog.Providers.Get(n); !ok {
+				continue // named but not configured: nothing to fall back to
+			}
+			seen[n] = true
+			chain = append(chain, n)
+		}
+	}
+	if first != "" {
+		if p, ok := e.catalog.Providers.Get(first); ok {
+			add(p.Fallback)
+		}
+	}
+	add(e.cfg.FallbackProviders)
+	return chain
+}
+
+// orDefault names the built-in endpoint in a log line, where "" says nothing.
+func orDefault(name string) string {
+	if name == "" {
+		return "the default endpoint"
+	}
+	return name
 }

@@ -503,7 +503,7 @@ func TestPresetsBuildTheRightArgv(t *testing.T) {
 		{"copilot", devinadapter.Copilot(devinadapter.CLI{}),
 			[]string{"-p", devinadapter.PlaceholderPrompt, "--log-level", "none", "--no-color"}},
 		{"opencode", devinadapter.OpenCode(devinadapter.CLI{Model: "opencode/ling-3.1-flash-free"}),
-			[]string{"run", "-m", "opencode/ling-3.1-flash-free"}},
+			[]string{"run", "--standalone", "-m", "opencode/ling-3.1-flash-free"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.agent.Bin != c.name {
@@ -555,7 +555,7 @@ func TestOpenCodePresetPromptOnStdin(t *testing.T) {
 	if !strings.Contains(out, "stdin:hello world") || strings.Contains(out, "args:run hello") {
 		t.Errorf("prompt should arrive on stdin only: %q", out)
 	}
-	if !strings.Contains(out, "args:run -m opencode/x-free") {
+	if !strings.Contains(out, "args:run --standalone -m opencode/x-free") {
 		t.Errorf("argv missing model: %q", out)
 	}
 }

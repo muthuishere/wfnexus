@@ -72,7 +72,11 @@ type File struct {
 		// Provider names a registry provider every step without its own
 		// `provider:` runs on, instead of the baseUrl endpoint above.
 		Provider string `yaml:"provider,omitempty"`
-		Model    string `yaml:"model,omitempty"`
+		// Fallback is the server-wide list of providers a step falls back to,
+		// in order, when its own provider cannot be reached — the one place an
+		// operator fixes a broken provider for every workflow at once.
+		Fallback []string `yaml:"fallback,omitempty"`
+		Model    string   `yaml:"model,omitempty"`
 		// APIKeyEnv is the NAME of the variable holding the key. The key
 		// itself is never a field here, and that is deliberate: this file is
 		// the one people paste into an issue when something does not work.

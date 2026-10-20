@@ -82,12 +82,22 @@ type Provider struct {
 	// AttemptTimeoutSec bounds one backend call inside a turn; a stalled call
 	// is retried once with the same prompt. 0 ⇒ no per-call bound.
 	AttemptTimeoutSec int `json:"attemptTimeoutSec,omitempty"`
-	// SessionPerTurn (acp) opens a fresh ACP session for every turn, in the
-	// same process. Each turn's prompt is already the COMPLETE request, so a
-	// stateful session only accumulates copies of it: opencode's grew until
-	// its own compaction agent ran and the process died mid-step. The
-	// opencode preset sets it; any other acp entry can.
+	// KeepSession (acp) keeps ONE ACP session for the whole step. The default
+	// is a fresh session for every turn, in the same process: each turn's
+	// prompt is already the COMPLETE request, so a stateful session only
+	// accumulates copies of it and every turn pays for all the earlier ones
+	// again — opencode's grew until its own compaction agent ran and the
+	// process died mid-step. Opt in only for an agent measured to need it.
+	KeepSession bool `json:"keepSession,omitempty"`
+	// SessionPerTurn is the old opt-in for what is now the default. It is
+	// still accepted so existing registries load; it changes nothing.
 	SessionPerTurn bool `json:"sessionPerTurn,omitempty"`
+
+	// Fallback names the providers to try, in order, when this one cannot be
+	// reached: it does not resolve (key unset, binary missing) or its first
+	// call fails before the model has answered anything. A step that got any
+	// answer is never re-run elsewhere — its workdir may already be changed.
+	Fallback []string `json:"fallback,omitempty"`
 
 	// Price, per MILLION tokens, in USD (ADR 0020). Pointers because the
 	// three states are distinct: unset on an `http` provider means the price
