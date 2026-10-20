@@ -112,6 +112,12 @@ The details, including the 15-minute idle close and `wfx status`, are on
 	of a loopback bind: that re-exposes an unauthenticated API.
 </Aside>
 
+## Tools and config without rebuilding
+
+Run the server through carry (`carry run -- /opt/wfnexus/bin/wfx-server-linux` with `CARRY_REPO`
+set) and install tools or change config from your laptop with `carry tool add` / `carry put` /
+`carry env set`. See [Tools and config with carry](/wfnexus/concepts/carry/).
+
 ## Adding machines
 
 Steps that need another OS, a GPU or a logged-in agent CLI run on a

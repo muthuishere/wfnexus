@@ -33,21 +33,11 @@ steps:
 
 The server side is the `/api/workers` endpoints: join, claim, heartbeat and job events.
 
-## Tools and config on a worker: carry
+## Tools and config on a worker
 
-The server and runner images start through [carry](https://github.com/muthuishere/carry)
-(`carry run --`). With `CARRY_REPO` set, plus the bucket settings carry needs, the tools, files and
-env defaults a machine should have are pulled from your bucket before the process starts. Unset, the
-process simply starts. Each worker keeps its own state (`CARRY_STATE`, by default the project or
-worker name), so adding `jq` to one machine is a `carry tool add`, not an image rebuild:
-
-```bash
-carry tool add wfnexus jq@1.7.1
-carry env set wfnexus LOG_LEVEL=debug
-```
-
-Only the agent CLIs (`claude`, `devin`, `codex`) are baked into the image. `wfx doctor` prints
-whether carry is configured on the server.
+Each worker restores its own tools, config files and env defaults from a bucket through carry, so
+adding `jq` to one machine is `carry tool add`, not an image rebuild. See
+[Tools and config with carry](/wfnexus/concepts/carry/).
 
 ## Steps that must not overlap
 

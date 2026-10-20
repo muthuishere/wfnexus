@@ -55,6 +55,7 @@ export default defineConfig({
 						{ label: 'Env store and secrets', slug: 'concepts/env-and-secrets' },
 						{ label: 'Run story and concurrency', slug: 'concepts/runs-and-concurrency' },
 						{ label: 'Workers', slug: 'concepts/workers' },
+						{ label: 'Tools and config with carry', slug: 'concepts/carry' },
 						{ label: 'Remote access over SSH', slug: 'concepts/remote-access' },
 					],
 				},
