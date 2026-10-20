@@ -66,13 +66,13 @@ export default function RunPage({ id }: { id: string }) {
   // lands. The detail is ~200KB, and over the wfx tunnel it takes longer than
   // a second, so unguarded callers stacked requests up behind each other.
   //
-  // The page is keyed by run id (App.tsx), so another run is another instance;
-  // `shown` still guards the answer: a fetch for a run this page is no longer
+  // The page is keyed by run id (App.tsx), so another run is another instance
+  // and `shown` is fixed for its life (cleared on unmount); it still guards the
+  // answer: a fetch for a run this page is no longer
   // showing is dropped, never painted over the one it is.
   const inflight = useRef(false)
   const again = useRef(false)
   const shown = useRef(id)
-  shown.current = id
   const refresh = useCallback(function fetchRun() {
     if (inflight.current) { again.current = true; return }
     inflight.current = true

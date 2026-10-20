@@ -5,11 +5,14 @@ import { Component, type ReactNode } from 'react'
  *  what broke and the way out, and the side nav keeps working. A new route
  *  (`resetKey`) clears the error — without remounting a healthy page, which
  *  would throw away its state on every in-page hash change. */
-export default class PageBoundary extends Component<{ children: ReactNode; resetKey?: string }, { err?: Error }> {
-  state: { err?: Error } = {}
+type Props = { children: ReactNode; resetKey?: string }
+type State = { err?: Error; key?: string }
+
+export default class PageBoundary extends Component<Props, State> {
+  state: State = { key: this.props.resetKey }
   static getDerivedStateFromError(err: Error) { return { err } }
-  componentDidUpdate(prev: { resetKey?: string }) {
-    if (this.state.err && prev.resetKey !== this.props.resetKey) this.setState({ err: undefined })
+  static getDerivedStateFromProps(p: Props, s: State): Partial<State> | null {
+    return p.resetKey !== s.key ? { key: p.resetKey, err: undefined } : null
   }
   componentDidCatch(err: Error) { console.error('page crashed:', err) }
   render() {
