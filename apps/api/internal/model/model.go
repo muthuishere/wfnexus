@@ -263,12 +263,24 @@ type ChannelMessage struct {
 	// was not allowed to resolve), "triggered", or "" (nothing matched).
 	Outcome    string    `json:"outcome,omitempty"`
 	ReceivedAt time.Time `json:"receivedAt"`
+	// Handled is false between storing a message and acting on it; a message
+	// still pending at the next poll is handled then (a crash loses nothing).
+	Handled bool `json:"handled"`
 }
 
 // PauseCode maps the short code an outbound pause carries back to its step.
+// It is scoped to the channel it was sent on, expires, and is retired when the
+// pause resolves or the step pauses again.
 type PauseCode struct {
-	Code   string
-	RunID  string
-	StepID string
-	Kind   string
+	Channel   string
+	Code      string
+	RunID     string
+	StepID    string
+	Kind      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RetiredAt *time.Time
 }
+
+// Live reports whether a reply quoting this code may still answer it.
+func (c PauseCode) Live(now time.Time) bool { return c.RetiredAt == nil && now.Before(c.ExpiresAt) }

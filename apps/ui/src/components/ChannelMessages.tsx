@@ -3,7 +3,8 @@ import { api, type Channel, type ChannelMessage } from '../api'
 
 /** Messages received on channels (ADR 0023), newest first, with what each did:
  *  `resolved` answered a pause, `recorded` was a reply that was not allowed to
- *  (sender not on the channel's allow list), `triggered` started a run.
+ *  (sender not on the channel's allow list), `triggered` started a run,
+ *  `refused` matched a trigger from a sender on no allow list.
  *
  *  Given a run, it shows that run's replies and renders nothing when there are
  *  none — so a run page that never touched a channel is unchanged. */
@@ -52,7 +53,8 @@ export default function Channels() {
           <span className="mono" style={{ fontWeight: 550 }}>{c.name}</span>
           {c.default && <span className="pill" style={{ marginLeft: 6 }}>default</span>}
           <span className="muted"> · {c.inbound ? `send + receive every ${c.receiveEvery || '1m'}` : 'send only'} · {c.allow.length} allowed to answer</span>
-          {c.lastError && <div className="danger-text" style={{ fontSize: 12 }}>last receive failed: {c.lastError}</div>}
+          {c.lastError && <div className="danger-text" style={{ fontSize: 12 }}>receiving is stalled — last receive failed{c.lastReceive ? ` at ${new Date(c.lastReceive).toLocaleString()}` : ''}: {c.lastError}</div>}
+          {c.lastNotice && <div className="muted" style={{ fontSize: 12 }}>⚠ {c.lastNotice}</div>}
         </div>))}
     </div>
     {doc.channels.some(c => c.inbound) && <ChannelMessages title="Received" />}

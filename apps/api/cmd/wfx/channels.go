@@ -136,6 +136,7 @@ func channelsCmd(args []string) error {
 			Cursor      string   `json:"cursor"`
 			LastReceive string   `json:"lastReceive"`
 			LastError   string   `json:"lastError"`
+			LastNotice  string   `json:"lastNotice"`
 		} `json:"channels"`
 	}
 	if err := call("GET", "/api/channels", nil, &out); err != nil {
@@ -163,6 +164,9 @@ func channelsCmd(args []string) error {
 		fmt.Printf("%s %-14s %-8s %-13s allow=%d", mark, c.Name, c.Kind, dir, len(c.Allow))
 		if c.LastError != "" {
 			fmt.Printf("  last receive FAILED: %s", firstLine(c.LastError))
+		}
+		if c.LastNotice != "" {
+			fmt.Printf("  notice: %s", firstLine(c.LastNotice))
 		}
 		fmt.Println()
 	}
