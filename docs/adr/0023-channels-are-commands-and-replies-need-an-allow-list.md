@@ -77,10 +77,16 @@ means. On its own it authorizes nothing: anyone who can read the chat can read
 the code. Even so it is kept narrow:
 
 - it matches only on the channel it was sent on (`(channel, code)` is the key);
-- it expires (the pause's own expiry, at most 7 days);
+- it expires: **7 days** after it is issued, or the pause's own expiry if
+  that is sooner. A pause still waiting after a week is answered in the UI or
+  with `wfx approve`; the run is not affected, only the chat shortcut;
 - it is **retired** the moment its pause resolves by any path (UI, CLI, chat)
   and when the step pauses again — so a reply replayed later can never answer
-  a newer pause;
+  a newer pause. It is issued synchronously, on the run's own goroutine, before
+  the (background) send — and re-checked against the step after it is written —
+  so it can never be created after the pause it names has already resolved;
+- a reply is checked against every code it quotes, and the first live one on
+  the channel answers;
 - a collision draws a new code (`ON CONFLICT DO NOTHING`); an issued code is
   never re-pointed.
 
@@ -135,7 +141,12 @@ is an answer and does not also trigger.
 Starting a run is authority too, so a message trigger has the same gate as an
 answer: it fires only for a sender on the trigger's `allow` list, or — when that
 is empty — the channel's. **Both empty ⇒ it never fires**, and the refusal is
-logged and recorded (outcome `refused`). The run's `triggeredBy` is the
+logged and recorded (outcome `refused`). A message starts each workflow **at
+most once**: a claim row keyed by `(channel, message id, workflow)` is taken in
+one `INSERT … ON CONFLICT DO NOTHING` before the run is created, so a message
+re-handled after a crash finds its claim and starts nothing. (The other
+direction — a crash after the claim, before the run — loses that start. For a
+message that may say "deploy", at-most-once is the right failure.) The run's `triggeredBy` is the
 **sender id**, not `trigger:message`, so a step's `prevent_self_approval`
 refuses the person who started a run approving it from the same chat.
 
@@ -162,7 +173,9 @@ what it would have sent without running the adapter. Nothing is ever retried.
 - **Its deadline**: `WFX_CHANNEL_TIMEOUT_MS`, so it can stop and say "may have
   been delivered" before it is killed.
 - **Only public attachment URLs**: `https` to an address that is not loopback,
-  private, link-local or CGNAT, checked by the server before any adapter runs
+  private, link-local or CGNAT — including an IPv4 such an address carries
+  inside IPv6 (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4
+  `2002::/16`; Teredo and NAT64 local-use are refused outright) — checked by the server before any adapter runs
   (the reference adapter re-checks at fetch time and refuses redirects). A send
   step's file attachment must be inside the run's workspace.
 - Its **stderr is scrubbed** before it reaches an event, a step error or a log.
@@ -183,4 +196,10 @@ what it would have sent without running the adapter. Nothing is ever retried.
   configured by an operator in `registries.json`, never by a workflow.
 - Pause announcements are sent in the background after the run parks, so a
   slow adapter never holds a run's slot.
-- Handled messages are kept 90 days and expired or retired pause codes 30 days.
+- Handled messages (and their run claims) are kept 90 days; expired or retired
+  pause codes 30 days.
+- Received messages are visible by project: a message is in a project when it
+  answered or started a run there; one that matched nothing is visible only to
+  an unscoped admin.
+- On SIGINT/SIGTERM the server stops taking requests and drains in-flight
+  pause announcements for up to 20 seconds.

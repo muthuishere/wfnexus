@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -133,5 +134,35 @@ func TestAdapterEnvIsMinimal(t *testing.T) {
 	}
 	if !strings.Contains(env, "APL_WA_GROUP=1203@g.us") || !strings.Contains(env, "PATH=") {
 		t.Fatalf("env %s", env)
+	}
+}
+
+// Every IPv6 spelling of an internal IPv4 address is internal; public
+// addresses, in any spelling, are not.
+func TestInternalUnwrapsEmbeddedIPv4(t *testing.T) {
+	for _, tc := range []struct {
+		ip       string
+		internal bool
+	}{
+		{"127.0.0.1", true}, {"10.0.0.1", true}, {"169.254.169.254", true}, {"100.64.0.1", true}, {"0.1.2.3", true},
+		{"255.255.255.255", true}, {"::", true}, {"::1", true}, {"fe80::1", true}, {"fc00::1", true}, {"ff02::1", true},
+		{"::ffff:127.0.0.1", true}, {"::ffff:7f00:1", true}, {"::ffff:a9fe:a9fe", true}, // IPv4-mapped
+		{"::127.0.0.1", true}, {"::a00:1", true}, // IPv4-compatible
+		{"64:ff9b::7f00:1", true}, {"64:ff9b::10.0.0.1", true}, {"64:ff9b:1::1", true}, // NAT64 + local-use
+		{"2002:7f00:1::", true}, {"2002:a9fe:a9fe::1", true}, // 6to4
+		{"2001:0:4136:e378::1", true}, // Teredo
+		{"93.184.215.14", false}, {"8.8.8.8", false}, {"2606:4700::1111", false},
+		{"::ffff:808:808", false}, {"64:ff9b::808:808", false}, {"2002:808:808::", false},
+	} {
+		ip := net.ParseIP(tc.ip)
+		if ip == nil {
+			t.Fatalf("bad fixture %s", tc.ip)
+		}
+		if got := Internal(ip); got != tc.internal {
+			t.Errorf("Internal(%s) = %v, want %v", tc.ip, got, tc.internal)
+		}
+	}
+	if err := CheckAttachmentURL(context.Background(), "https://[::ffff:127.0.0.1]/x"); err == nil {
+		t.Error("an IPv4-mapped loopback URL must be refused")
 	}
 }

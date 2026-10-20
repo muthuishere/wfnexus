@@ -8,6 +8,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -182,27 +184,28 @@ func (e *Engine) startScheduled(ctx context.Context, name string, input map[stri
 // one path for everything that is not a person pressing a button, so the
 // trigger check and the input preparation cannot be skipped by a new caller.
 func (e *Engine) StartTriggered(ctx context.Context, name string, trigger workflow.TriggerKind, input map[string]any) error {
-	return e.StartTriggeredBy(ctx, name, trigger, input, "trigger:"+string(trigger))
+	_, err := e.StartTriggeredBy(ctx, name, trigger, input, "trigger:"+string(trigger))
+	return err
 }
 
 // StartTriggeredBy is StartTriggered with a named principal. A message
 // trigger passes the SENDER, so the run is attributed to the person whose
 // message started it — and prevent_self_approval can refuse that same person
 // approving it from the same chat.
-func (e *Engine) StartTriggeredBy(ctx context.Context, name string, trigger workflow.TriggerKind, input map[string]any, by string) error {
+func (e *Engine) StartTriggeredBy(ctx context.Context, name string, trigger workflow.TriggerKind, input map[string]any, by string) (uuid.UUID, error) {
 	raw, err := e.PrepareRun(name, trigger, mustJSON(input))
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	run, err := e.CreateRunAdmitted(ctx, name, raw, false)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	// Nobody pressed a button: the trigger is the principal, so no person can
 	// be refused approval as its author.
 	if err := e.store.SetTriggeredBy(ctx, run.ID, by); err != nil {
-		return err
+		return run.ID, err
 	}
 	e.Start(run.ID)
-	return nil
+	return run.ID, nil
 }

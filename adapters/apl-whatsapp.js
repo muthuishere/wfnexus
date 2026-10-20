@@ -99,17 +99,46 @@ function groupOf(req) {
 }
 
 // internal reports an address that is not on the public internet — the same
-// rule wfnexus applies before the envelope ever reaches this script.
+// rule wfnexus applies (notify.Internal) before the envelope reaches this
+// script. IPv6 is parsed to its 8 hextets first, because Node's URL
+// normalises https://[::ffff:127.0.0.1] to [::ffff:7f00:1]; any IPv4 an IPv6
+// address CARRIES (mapped, compatible, NAT64, 6to4) is unwrapped and checked.
+function internalV4(a, b) {
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224;
+}
+
+function hextets(ip) {
+  let v = ip.toLowerCase().replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  const dotted = v.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const q = dotted[2].split(".").map(Number);
+    v = dotted[1] + ((q[0] << 8) | q[1]).toString(16) + ":" + ((q[2] << 8) | q[3]).toString(16);
+  }
+  const [head, tail] = v.includes("::") ? v.split("::") : [v, null];
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const fill = tail === null ? [] : new Array(8 - h.length - t.length).fill("0");
+  return [...h, ...fill, ...t].map((x) => parseInt(x || "0", 16));
+}
+
 function internal(ip) {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b < 128) ||
-      (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || a >= 224;
+    return internalV4(a, b);
   }
-  const v = ip.toLowerCase();
-  if (v.startsWith("::ffff:")) return internal(v.slice(7));
-  return v === "::" || v === "::1" || v.startsWith("fe8") || v.startsWith("fe9") || v.startsWith("fea") ||
-    v.startsWith("feb") || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("ff");
+  const x = hextets(ip);
+  if (x.length !== 8 || x.some((n) => Number.isNaN(n))) return true; // unparseable: refuse
+  const zero = (from, to) => x.slice(from, to).every((n) => n === 0);
+  const v4 = (hi) => internalV4(hi >> 8, hi & 0xff); // a.b from the high hextet decides every range here
+  if (zero(0, 8)) return true; // ::
+  if (zero(0, 7) && x[7] === 1) return true; // ::1
+  if (zero(0, 5) && x[5] === 0xffff) return v4(x[6], x[7]); // ::ffff:a.b.c.d (mapped)
+  if (zero(0, 6)) return v4(x[6], x[7]); // ::a.b.c.d (compatible)
+  if (x[0] === 0x64 && x[1] === 0xff9b) return zero(2, 6) ? v4(x[6], x[7]) : true; // NAT64; 64:ff9b:1::/48 is local-use
+  if (x[0] === 0x2002) return v4(x[1], x[2]); // 6to4
+  if (x[0] === 0x2001 && x[1] === 0) return true; // Teredo: the IPv4 is obfuscated; refuse
+  return (x[0] & 0xfe00) === 0xfc00 || (x[0] & 0xffc0) === 0xfe80 || (x[0] & 0xff00) === 0xff00;
 }
 
 // checkURL refuses anything but https to a public address. The server checked
@@ -184,6 +213,11 @@ function toMessage(m) {
   return out;
 }
 
+// notFound is wacli's "that message is not in the store" — sql.ErrNoRows.
+function notFound(err) {
+  return /no rows in result set/i.test(String(err && err.message));
+}
+
 function receive() {
   const req = readStdin();
   const group = groupOf(req);
@@ -202,7 +236,13 @@ function receive() {
     let anchor = null;
     try {
       anchor = wacli(["messages", "show", "--chat", group, "--id", req.after], { readOnly: true });
-    } catch (_) {
+    } catch (err) {
+      // ONLY a real not-found resets the cursor. wacli reports one as
+      // sql.ErrNoRows (cmd/wacli/messages_helpers.go getMessageByChatFilter);
+      // anything else — apl down, a locked store, a timeout — is a failed
+      // receive that wfnexus must show, not a reason to skip ahead and lose
+      // the messages in between.
+      if (!notFound(err)) throw err;
       anchor = null;
     }
     if (!anchor || !anchor.Timestamp) {
@@ -239,6 +279,9 @@ function receive() {
     fail(`receive failed: ${err.message}`);
   }
 }
+
+module.exports = { internal };
+if (require.main !== module) return;
 
 const verb = process.argv[2];
 if (verb === "send") {

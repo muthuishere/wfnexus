@@ -58,7 +58,7 @@ func (s *Store) SetChannelMessageOutcome(ctx context.Context, channel, msgID, ru
 	return err
 }
 
-const channelMessageCols = `id, channel, msg_id, sender, sender_name, text, attachments, sent_at, run_id, outcome, received_at, handled`
+const channelMessageCols = `cm.id, cm.channel, cm.msg_id, cm.sender, cm.sender_name, cm.text, cm.attachments, cm.sent_at, cm.run_id, cm.outcome, cm.received_at, cm.handled`
 
 func scanChannelMessages(rows *sql.Rows) ([]*ChannelMessage, error) {
 	defer rows.Close()
@@ -74,15 +74,29 @@ func scanChannelMessages(rows *sql.Rows) ([]*ChannelMessage, error) {
 	return out, rows.Err()
 }
 
-// ListChannelMessages is newest first, narrowed by channel and/or run.
-func (s *Store) ListChannelMessages(ctx context.Context, channel, runID string, limit int) ([]*ChannelMessage, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
+// ListChannelMessages is newest first.
+func (s *Store) ListChannelMessages(ctx context.Context, f ChannelMessageFilter) ([]*ChannelMessage, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 100
 	}
+	mode := "linked"
+	if f.All && f.Project == "" {
+		mode = "all"
+	}
+	// workflow_runs.id is a uuid in Postgres and text in SQLite; ::text is
+	// dropped by the SQLite dialect, so one spelling serves both.
 	rows, err := s.query(ctx, `
-		SELECT `+channelMessageCols+` FROM channel_messages
-		WHERE ($1 = '' OR channel=$1) AND ($2 = '' OR run_id=$2)
-		ORDER BY id DESC LIMIT $3`, channel, runID, limit)
+		SELECT `+channelMessageCols+` FROM channel_messages cm
+		WHERE ($1 = '' OR cm.channel=$1)
+		  AND ($2 = '' OR cm.run_id=$2 OR EXISTS (
+		        SELECT 1 FROM channel_message_runs mr
+		        WHERE mr.channel=cm.channel AND mr.msg_id=cm.msg_id AND mr.run_id=$2))
+		  AND ($3 = 'all'
+		    OR EXISTS (SELECT 1 FROM workflow_runs wr
+		               WHERE wr.id::text = cm.run_id AND ($4 = '' OR wr.project=$4))
+		    OR EXISTS (SELECT 1 FROM channel_message_runs mr JOIN workflow_runs wr ON wr.id::text = mr.run_id
+		               WHERE mr.channel=cm.channel AND mr.msg_id=cm.msg_id AND ($4 = '' OR wr.project=$4)))
+		ORDER BY cm.id DESC LIMIT $5`, f.Channel, f.RunID, mode, f.Project, f.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +106,8 @@ func (s *Store) ListChannelMessages(ctx context.Context, channel, runID string, 
 // PendingChannelMessages are stored but not yet acted on, oldest first.
 func (s *Store) PendingChannelMessages(ctx context.Context, channel string) ([]*ChannelMessage, error) {
 	rows, err := s.query(ctx, `
-		SELECT `+channelMessageCols+` FROM channel_messages
-		WHERE channel=$1 AND handled=false ORDER BY id LIMIT 500`, channel)
+		SELECT `+channelMessageCols+` FROM channel_messages cm
+		WHERE cm.channel=$1 AND cm.handled=false ORDER BY cm.id LIMIT 500`, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +193,40 @@ func (s *Store) PruneChannels(ctx context.Context, msgsBefore, codesBefore time.
 	if _, err := s.exec(ctx, `DELETE FROM channel_messages WHERE handled=true AND received_at < $1`, s.ts(msgsBefore)); err != nil {
 		return err
 	}
+	// A claim outlives nothing it guards: it goes with the messages' window.
+	if _, err := s.exec(ctx, `DELETE FROM channel_message_runs WHERE created_at < $1`, s.ts(msgsBefore)); err != nil {
+		return err
+	}
 	_, err := s.exec(ctx, `DELETE FROM pause_codes WHERE expires_at < $1 OR retired_at < $1`, s.ts(codesBefore))
+	return err
+}
+
+// ClaimMessageRun takes the right to start `workflow` for one received
+// message. Only one caller ever wins, so a message that is handled twice (a
+// crash before its outcome was recorded) starts the workflow once.
+func (s *Store) ClaimMessageRun(ctx context.Context, channel, msgID, workflow string) (bool, error) {
+	res, err := s.exec(ctx, `
+		INSERT INTO channel_message_runs (channel, msg_id, workflow, created_at) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (channel, msg_id, workflow) DO NOTHING`, channel, msgID, workflow, s.ts(time.Now()))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetMessageRun records the run a claim started.
+func (s *Store) SetMessageRun(ctx context.Context, channel, msgID, workflow, runID string) error {
+	_, err := s.exec(ctx, `UPDATE channel_message_runs SET run_id=$4 WHERE channel=$1 AND msg_id=$2 AND workflow=$3`,
+		channel, msgID, workflow, runID)
+	return err
+}
+
+// ReleaseMessageRun gives a claim back when the run could not be created at
+// all (the workflow refused the input, say), so nothing claims a run that
+// does not exist.
+func (s *Store) ReleaseMessageRun(ctx context.Context, channel, msgID, workflow string) error {
+	_, err := s.exec(ctx, `DELETE FROM channel_message_runs WHERE channel=$1 AND msg_id=$2 AND workflow=$3`,
+		channel, msgID, workflow)
 	return err
 }

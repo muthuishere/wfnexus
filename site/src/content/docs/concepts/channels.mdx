@@ -104,6 +104,8 @@ wfx channels receive team-chat     # poll now
 ```
 
 The run page lists the replies a run got, and the System page lists channels and what came in.
+What you see is scoped to your project: a message is in a project when it answered or started a
+run there, and a message that matched nothing is shown only to an unscoped admin.
 
 ## Start a workflow from a message
 
@@ -139,8 +141,9 @@ A reply that quotes the pause's code answers it — **only if the sender is on t
 | approval | `#a7k2qp no not on a friday` | rejected, with the reason |
 | question / input | `#a7k2qp use the staging database` | answered with that text |
 
-A code is six characters, matches only on the channel it was sent on, expires, and is retired
-the moment its pause is answered by any path — so an old reply can never answer a newer pause.
+A code is six characters, matches only on the channel it was sent on, and lives **at most 7
+days** (sooner if the pause itself expires sooner); after that, answer in the UI or with
+`wfx approve`. It is retired the moment its pause is answered by any path — so an old reply can never answer a newer pause.
 Anyone else's reply is recorded on the run and resolves nothing. **The default `allow` list is
 empty, so out of the box nothing resolves from chat.** The answer is recorded as
 `<sender> (via channel:team-chat)`, and a step's `approvers:` still applies to it.

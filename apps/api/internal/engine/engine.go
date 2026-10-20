@@ -94,6 +94,9 @@ type Engine struct {
 	// goroutine and stays queued, so the cap is on machine load, not on
 	// accepting work.
 	slots chan struct{}
+	// announcing tracks pause announcements still being sent in the
+	// background, so a shutdown can let them finish (DrainAnnouncements).
+	announcing sync.WaitGroup
 }
 
 func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {

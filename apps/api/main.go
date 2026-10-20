@@ -3,13 +3,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/api"
@@ -274,7 +277,29 @@ func main() {
 	uiDir, uiFS := uiSource(cfg)
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.Addr, uiDir, uiFS), ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("wfnexus api on %s  model=%s  llm=%s", cfg.Addr, cfg.Model, cfg.LLMBaseURL)
-	log.Fatal(srv.ListenAndServe())
+
+	// SIGINT/SIGTERM: stop taking requests, then give pause announcements
+	// already handed to a channel adapter a bounded time to finish — an
+	// announcement cut off mid-send is one the operator never sees, and its
+	// run waits for nobody. Bounded, because a hung adapter must not hold a
+	// deploy hostage. Runs themselves are marked interrupted on the next boot.
+	drained := make(chan struct{})
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		<-sig
+		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = srv.Shutdown(sctx)
+		cancel()
+		if !eng.DrainAnnouncements(20 * time.Second) {
+			log.Printf("shutdown: some pause announcements were still sending after 20s; their runs are paused, and the UI shows them")
+		}
+		close(drained)
+	}()
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+	<-drained
 }
 
 // The engine names what it needs of persistence and artifact storage as its
