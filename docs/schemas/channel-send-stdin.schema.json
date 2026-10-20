@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wfnexus.dev/schemas/channel-send-stdin.schema.json",
+  "title": "wfnexus.channel/v1 — send: the envelope on stdin",
+  "type": "object",
+  "required": ["version", "type", "channel", "text", "at"],
+  "properties": {
+    "version": { "const": "wfnexus.channel/v1" },
+    "type": { "enum": ["pause", "notice", "send"] },
+    "channel": { "type": "string", "minLength": 1 },
+    "text": { "type": "string", "description": "complete, ready to post" },
+    "runUrl": { "type": "string", "description": "a pointer at the run; never a capability" },
+    "code": { "type": "string", "pattern": "^[a-z0-9]{4,8}$", "description": "pause only: what a reply quotes as #code" },
+    "pauseKind": { "type": "string", "description": "pause only: approval | input" },
+    "workflow": { "type": "string" },
+    "project": { "type": "string" },
+    "runId": { "type": "string" },
+    "stepId": { "type": "string" },
+    "dedupKey": { "type": "string" },
+    "target": { "type": "string", "description": "adapter-specific address; opaque to wfnexus" },
+    "attachment": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "a local file the adapter can read" },
+        "url": { "type": "string", "description": "a URL the adapter can fetch" },
+        "filename": { "type": "string" }
+      },
+      "oneOf": [{ "required": ["path"] }, { "required": ["url"] }]
+    },
+    "at": { "type": "string", "format": "date-time" }
+  }
+}

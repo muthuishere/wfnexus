@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wfnexus.dev/schemas/channel-receive-stdin.schema.json",
+  "title": "wfnexus.channel/v1 — receive: the request on stdin",
+  "type": "object",
+  "required": ["version", "channel", "after"],
+  "properties": {
+    "version": { "const": "wfnexus.channel/v1" },
+    "channel": { "type": "string", "minLength": 1 },
+    "after": { "type": "string", "description": "the cursor returned last time; empty on the first poll" },
+    "target": { "type": "string" }
+  }
+}

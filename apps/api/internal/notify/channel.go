@@ -236,6 +236,9 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 	}
 	cmd.Env = append(cmd.Env, "WFX_CHANNEL="+c.EntryName, "WFX_CHANNEL_VERB="+verb)
 	cmd.Stdin = bytes.NewReader(body)
+	// A grandchild that outlives the killed shell holds stdout open; without
+	// this a timed-out adapter hangs the caller until that child exits.
+	cmd.WaitDelay = time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()

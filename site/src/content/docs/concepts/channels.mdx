@@ -1,0 +1,160 @@
+---
+title: Channels — send and receive messages
+description: Configure one place for the whole server to send and receive messages — pause announcements, a send step, wfx send, message triggers, and yes/no answers from an allow list.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **channel** is how the server talks to people: it announces every pause, a workflow's `send:`
+step posts through it, and — when it is inbound — replies come back through it to answer a pause
+or start a run. It is configured once for the whole server and every workflow uses it.
+
+wfnexus does not speak WhatsApp, email or anything else. A channel is a **command** the server
+runs — an adapter script — with a JSON message on stdin. The contract is
+`docs/channels.md` in the repository, with JSON Schemas under `docs/schemas/`; ADR 0023 says why.
+
+## Configure
+
+Register the channel in `registries.json`:
+
+```json
+{
+  "channels": {
+    "team-chat": {
+      "kind": "command",
+      "run": "node adapters/apl-whatsapp.js",
+      "env": { "APL_WA_GROUP": "${TEAM_GROUP_JID}" },
+      "inbound": true,
+      "receiveEvery": "1m",
+      "allow": ["15550100001@s.whatsapp.net"],
+      "sendGap": "10s"
+    }
+  }
+}
+```
+
+Then make it the default in `~/.config/wfx/config.yaml` (or set `WFX_DEFAULT_CHANNEL`, which
+wins over the file):
+
+```yaml
+channels:
+  default: team-chat
+```
+
+`env` values may reference variables — `${TEAM_GROUP_JID}` is read from the server's own
+environment when the adapter runs, so a group id or a token never sits in the file. `run` runs
+from the directory that holds `registries.json`.
+
+```bash
+wfx channels            # every channel, which is the default, inbound or not
+```
+
+## Send
+
+**Pauses** go to the default channel automatically, alongside any webhook notifiers. The message
+says what is waiting, how to answer, and links to the run:
+
+```text
+nightly-watch is waiting (approval) at step ship:
+step ship needs approval before it runs
+
+Reply "#a7k2 yes" or "#a7k2 no <reason>".
+Open: http://wfx.example.com/runs/6f1c…
+```
+
+**A workflow** sends with a `send:` step. `channel` defaults to the server's default; `text`,
+`attachment`, `target` and the dedup key are templates:
+
+```yaml
+steps:
+  - id: tell
+    send:
+      text: "disk {{ .Steps.check.percent }}% full on {{ .Input.host }}"
+      attachment: report.txt          # a path in the run's workspace, or an https:// URL
+      dedup:
+        key: "disk-{{ .Input.host }}"
+        window: 6h                    # same key within 6h ⇒ skipped, logged on the run
+```
+
+The step's output is `{sent, skipped, channel, id, text}`, so a later step can branch on it.
+`dedup` is what lets a 15-minute schedule say a thing once per window. `dry_run: true` renders the
+message and records "would send on channel …" on the run without running the adapter, and
+`wfx dryrun` shows each send step's channel and rendered text. A failed send fails the step with the
+adapter's error and is **never retried** — a duplicate in a chat is worse than an error.
+
+**An operator** sends through the same path:
+
+```bash
+wfx send "deploy window opens in 10 minutes"
+wfx send --channel team-chat --file ./report.pdf "nightly report"
+```
+
+## Receive
+
+An `inbound` channel is polled every `receiveEvery`. Each received message is stored once, and
+the adapter's cursor is kept in the database, so a restart neither loses nor repeats messages.
+
+```bash
+wfx messages                       # newest first, with what each one did
+wfx messages --channel team-chat
+wfx channels receive team-chat     # poll now
+```
+
+The run page lists the replies a run got, and the System page lists channels and what came in.
+
+## Start a workflow from a message
+
+```yaml
+on:
+  message:
+    - channel: team-chat
+      match: "(?i)^deploy\\s+\\S+"     # or  contains: "deploy"
+```
+
+The run's input is `message: {channel, id, from, name, text, at, attachments}`. A reply that
+answers a pause does not also trigger.
+
+## Answer a pause from chat: yes / no
+
+A reply that quotes the pause's code answers it — **only if the sender is on that channel's
+`allow` list**:
+
+| pause | reply | effect |
+|---|---|---|
+| approval | `#a7k2 yes` (or `approve`, `ok`, `lgtm`) | approved |
+| approval | `#a7k2 no not on a friday` | rejected, with the reason |
+| question / input | `#a7k2 use the staging database` | answered with that text |
+
+Anyone else's reply is recorded on the run and resolves nothing. **The default `allow` list is
+empty, so out of the box nothing resolves from chat.** The answer is recorded as
+`<sender> (via channel:team-chat)`, and a step's `approvers:` still applies to it.
+
+<Aside type="caution" title="The code is not a password">
+Everyone in the group can read `#a7k2`. It only says *which* pause a reply means. What authorizes
+the answer is the sender id the adapter reports being on the allow list — so it is only as
+trustworthy as the transport's sender identity. A WhatsApp sender id is authenticated by WhatsApp.
+An email `From:` is not: an email adapter must verify the sender before reporting it, or keep the
+channel's allow list empty.
+</Aside>
+
+## The reference WhatsApp adapter
+
+`adapters/apl-whatsapp.js` (plain Node 18+, no dependencies) sends to and reads one WhatsApp
+group through the apl CLI (`apl with whatsapp:<label> -- wacli …`):
+
+| env | meaning |
+|---|---|
+| `APL_WA_GROUP` | the group id (`1203…@g.us`); a send's `target` overrides it |
+| `APL_WA_LABEL` | the apl handle label; default `biz` |
+| `APL_BIN` | the apl binary; default `apl` |
+| `APL_WA_TIMEOUT_MS` | per call; default 120000 |
+
+Run it on the machine that owns the WhatsApp account. There, `wacli send` hands the message to
+the running syncer instead of opening the store a second time, so there is still one writer. The
+adapter never runs a sync and never retries a send.
+
+## Email, and anything else
+
+Another transport is another adapter script and another `channels` entry — the envelope, the
+engine and every workflow stay the same. Switching the default from chat to email is
+`channels.default: team-mail`.
