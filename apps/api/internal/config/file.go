@@ -92,6 +92,13 @@ type File struct {
 		APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
 	} `yaml:"classifier,omitempty"`
 
+	// Channels: where the server sends and receives messages (ADR 0023).
+	// The channels themselves are registry entries; this only picks the one
+	// pauses and an unaddressed `send:` go to.
+	Channels struct {
+		Default string `yaml:"default,omitempty"`
+	} `yaml:"channels,omitempty"`
+
 	Paths struct {
 		Workflows  string `yaml:"workflows,omitempty"`
 		Templates  string `yaml:"templates,omitempty"`

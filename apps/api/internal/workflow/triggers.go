@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -53,6 +54,53 @@ type Triggers struct {
 	// `jobs.<id>.uses`. Actions spells it `workflow_call`, and it is what makes
 	// a workflow reusable rather than merely copyable.
 	Call bool `yaml:"-" json:"workflowCall"`
+	// Message starts a run when a message arrives on a channel (ADR 0023).
+	// Not a GitHub trigger — Actions has no inbox — so it is the one name
+	// here that is ours.
+	Message []MessageTrigger `yaml:"message,omitempty" json:"message,omitempty"`
+}
+
+// MessageTrigger matches a received message. Channel "" means any channel;
+// Contains is a case-insensitive substring, Match a regular expression; both
+// empty means every message on that channel.
+//
+//	on:
+//	  message:
+//	    - channel: ops
+//	      match: "(?i)^deploy\\s+\\S+"
+//
+// The run's input is {"message": {channel, id, from, name, text, at, attachments}}.
+type MessageTrigger struct {
+	Channel  string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	Contains string `yaml:"contains,omitempty" json:"contains,omitempty"`
+	Match    string `yaml:"match,omitempty" json:"match,omitempty"`
+}
+
+// Matches reports whether a message on that channel starts this trigger.
+func (m MessageTrigger) Matches(channel, text string) bool {
+	if m.Channel != "" && m.Channel != channel {
+		return false
+	}
+	if m.Contains != "" && !strings.Contains(strings.ToLower(text), strings.ToLower(m.Contains)) {
+		return false
+	}
+	if m.Match != "" {
+		re, err := regexp.Compile(m.Match)
+		if err != nil || !re.MatchString(text) {
+			return false
+		}
+	}
+	return true
+}
+
+// MatchesMessage reports whether any of this workflow's message triggers fire.
+func (t Triggers) MatchesMessage(channel, text string) bool {
+	for _, m := range t.Message {
+		if m.Matches(channel, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // Schedule is one cron entry. Five fields, UTC, because a schedule that means
@@ -96,6 +144,7 @@ const (
 	TriggerSchedule           TriggerKind = "schedule"
 	TriggerRepositoryDispatch TriggerKind = "repository_dispatch"
 	TriggerWorkflowCall       TriggerKind = "workflow_call"
+	TriggerMessage            TriggerKind = "message"
 )
 
 // Allows reports whether this workflow may be started by that trigger.
@@ -120,13 +169,15 @@ func (t Triggers) Allows(k TriggerKind) bool {
 		return t.RepositoryDispatch != nil
 	case TriggerWorkflowCall:
 		return t.Call
+	case TriggerMessage:
+		return len(t.Message) > 0
 	}
 	return false
 }
 
 // none reports a completely unset block.
 func (t Triggers) none() bool {
-	return !t.Dispatch && len(t.Schedule) == 0 && t.RepositoryDispatch == nil && !t.Call
+	return !t.Dispatch && len(t.Schedule) == 0 && t.RepositoryDispatch == nil && !t.Call && len(t.Message) == 0
 }
 
 // Names lists the triggers this workflow declares, for an error message.
@@ -146,6 +197,9 @@ func (t Triggers) Names() []string {
 	}
 	if t.Call {
 		out = append(out, string(TriggerWorkflowCall))
+	}
+	if len(t.Message) > 0 {
+		out = append(out, string(TriggerMessage))
 	}
 	return out
 }
@@ -179,6 +233,7 @@ func (t *Triggers) UnmarshalYAML(unmarshal func(any) error) error {
 		Dispatch           any                 `yaml:"dispatch"`
 		Schedule           []Schedule          `yaml:"schedule"`
 		RepositoryDispatch *RepositoryDispatch `yaml:"repository_dispatch"`
+		Message            []MessageTrigger    `yaml:"message"`
 	}
 	if err := unmarshal(&m); err != nil {
 		return fmt.Errorf("`on` must be a trigger name, a list of names, or a mapping: %w", err)
@@ -192,7 +247,7 @@ func (t *Triggers) UnmarshalYAML(unmarshal func(any) error) error {
 			switch k {
 			case "workflow_dispatch", "dispatch":
 				t.Dispatch = true
-			case "schedule", "repository_dispatch":
+			case "schedule", "repository_dispatch", "message":
 			case "workflow_call":
 				t.Call = true
 			// Actions declares a dispatch form under workflow_dispatch.inputs;
@@ -202,12 +257,13 @@ func (t *Triggers) UnmarshalYAML(unmarshal func(any) error) error {
 			case "inputs":
 			default:
 				return fmt.Errorf("unknown trigger %q — supported: workflow_dispatch, schedule, "+
-					"repository_dispatch, workflow_call", k)
+					"repository_dispatch, workflow_call, message", k)
 			}
 		}
 	}
 	t.Schedule = m.Schedule
 	t.RepositoryDispatch = m.RepositoryDispatch
+	t.Message = m.Message
 	return nil
 }
 
@@ -226,9 +282,13 @@ func (t *Triggers) enable(name string) error {
 	case "workflow_call":
 		t.Call = true
 		return nil
+	case "message":
+		// A bare `message` is every message on every channel.
+		t.Message = []MessageTrigger{{}}
+		return nil
 	}
 	return fmt.Errorf("unknown trigger %q — supported: workflow_dispatch, schedule, "+
-		"repository_dispatch, workflow_call", name)
+		"repository_dispatch, workflow_call, message", name)
 }
 
 // validateTriggers is called at load time. It checks the shape only — whether
@@ -244,6 +304,13 @@ func validateTriggers(name string, t *Triggers) error {
 			return fmt.Errorf("%s: schedule[%d]: %w", name, i, err)
 		}
 	}
+	for i, m := range t.Message {
+		if m.Match != "" {
+			if _, err := regexp.Compile(m.Match); err != nil {
+				return fmt.Errorf("%s: message[%d].match: %w", name, i, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -255,7 +322,7 @@ func validateTriggers(name string, t *Triggers) error {
 // mapping that means nothing, quoted because `on` is a YAML 1.1 boolean. A file
 // the platform writes should look like one a person would write.
 func (t Triggers) IsZero() bool {
-	return t.none() || (t.Dispatch && len(t.Schedule) == 0 && t.RepositoryDispatch == nil && !t.Call)
+	return t.none() || (t.Dispatch && len(t.Schedule) == 0 && t.RepositoryDispatch == nil && !t.Call && len(t.Message) == 0)
 }
 
 // MarshalYAML writes `on:` the way a person writes it.
@@ -272,6 +339,9 @@ func (t Triggers) MarshalYAML() (any, error) {
 	}
 	if t.Call {
 		out["workflow_call"] = nil
+	}
+	if len(t.Message) > 0 {
+		out["message"] = t.Message
 	}
 	return out, nil
 }

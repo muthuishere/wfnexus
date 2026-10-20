@@ -246,3 +246,29 @@ type ModelPrice struct {
 	Seeded    bool      `json:"seeded"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
+
+// ChannelMessage is one message RECEIVED on a channel (ADR 0023), with what
+// the server did about it.
+type ChannelMessage struct {
+	ID          int64           `json:"id"`
+	Channel     string          `json:"channel"`
+	MsgID       string          `json:"msgId"`
+	Sender      string          `json:"from"`
+	SenderName  string          `json:"name,omitempty"`
+	Text        string          `json:"text"`
+	Attachments json.RawMessage `json:"attachments,omitempty"`
+	SentAt      *time.Time      `json:"at,omitempty"`
+	RunID       string          `json:"runId,omitempty"`
+	// Outcome is what the message did: "resolved", "recorded" (a reply that
+	// was not allowed to resolve), "triggered", or "" (nothing matched).
+	Outcome    string    `json:"outcome,omitempty"`
+	ReceivedAt time.Time `json:"receivedAt"`
+}
+
+// PauseCode maps the short code an outbound pause carries back to its step.
+type PauseCode struct {
+	Code   string
+	RunID  string
+	StepID string
+	Kind   string
+}

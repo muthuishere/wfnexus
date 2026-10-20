@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,7 +21,15 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
-func TestMain(m *testing.M) { pgtest.Main(m) }
+func TestMain(m *testing.M) {
+	// The test binary doubles as the FAKE CHANNEL ADAPTER (fakeadapter_test.go):
+	// a channel whose `run:` is this binary lands here instead of in the suite.
+	if os.Getenv("WFX_FAKE_ADAPTER") != "" {
+		fakeAdapterMain()
+		return
+	}
+	pgtest.Main(m)
+}
 
 // These tests run the real engine against a scripted LLM. They need the local
 // Postgres + MinIO (task infra:up); without them the suite skips rather than

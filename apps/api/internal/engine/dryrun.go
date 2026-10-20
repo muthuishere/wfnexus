@@ -55,9 +55,12 @@ type DryRunStep struct {
 	Workers int    `json:"workers,omitempty"`
 	// Env are the variable NAMES this step reads from the environment. Names
 	// only: a dry run has to be safe to paste into an issue.
-	Env      []string `json:"env,omitempty"`
-	Skills   []string `json:"skills,omitempty"`
-	Tools    []string `json:"tools,omitempty"`
+	Env    []string `json:"env,omitempty"`
+	Skills []string `json:"skills,omitempty"`
+	Tools  []string `json:"tools,omitempty"`
+	// Send is what a `send:` step would send — rendered against sample data,
+	// and never actually sent (ADR 0023).
+	Send     *DrySend `json:"send,omitempty"`
 	MaxTurns int      `json:"maxTurns,omitempty"`
 	// Prompt is the template ACTUALLY RENDERED against the sample input, so an
 	// author sees what the agent would read rather than what they typed.
@@ -173,6 +176,20 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			ID: s.ID, Kind: stepKind(s), Provider: s.Provider, Model: s.Model,
 			Shell: s.Shell, Skills: s.Skills, Tools: s.Tools,
 			MaxTurns: effectiveTurns(s), Wave: waveOf[s.ID],
+		}
+
+		// Would its channel resolve? A send never happens in a dry run; it
+		// says where it would go and what it would say.
+		if s.Send != nil {
+			ds.Send = &DrySend{Channel: s.Send.Channel}
+			if c, err := e.channelEntry(s.Send.Channel); err != nil {
+				fail(DryProblem{Step: s.ID, Field: "send.channel", Message: err.Error(), Fatal: true})
+			} else {
+				ds.Send.Channel = c.Name
+			}
+			if txt, err := workflow.Render(s.Send.Text, dryTemplateData(def, sample, waveOf, s.ID)); err == nil {
+				ds.Send.Text = txt
+			}
 		}
 
 		// Would its model resolve? This is the check that catches a provider
@@ -558,12 +575,20 @@ func anyNeeds(def *workflow.Definition) bool {
 	return false
 }
 
+// DrySend is a send step's would-be message.
+type DrySend struct {
+	Channel string `json:"channel"`
+	Text    string `json:"text"`
+}
+
 func stepKind(s *workflow.Step) string {
 	switch {
 	case s.Run != "":
 		return "run"
 	case s.Judge != nil:
 		return "judge"
+	case s.Send != nil:
+		return "send"
 	}
 	return "prompt"
 }

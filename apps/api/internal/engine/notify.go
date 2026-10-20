@@ -58,7 +58,10 @@ func (e *Engine) pauseURL(runID uuid.UUID) string {
 // by the time this runs, and a failure here never changes that.
 func (e *Engine) notifyPause(ctx context.Context, runID uuid.UUID, stepID, kind, prompt string, req *tn.Request) {
 	ns := e.notifiers()
-	if len(ns) == 0 {
+	// No early return when there are no notifiers: the default CHANNEL is
+	// the other place a pause goes (ADR 0023), and returning here meant a
+	// pause told nobody unless a webhook happened to be registered.
+	if len(ns) == 0 && e.cfg.DefaultChannel == "" {
 		return
 	}
 	p := notify.Pause{
@@ -94,4 +97,5 @@ func (e *Engine) notifyPause(ctx context.Context, runID uuid.UUID, stepID, kind,
 			"text": "pause (" + kind + ") announced on notifier " + n.Name() + " → " + p.URL,
 		})
 	}
+	e.announcePause(ctx, runID, p)
 }

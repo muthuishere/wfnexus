@@ -259,6 +259,7 @@ func main() {
 
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)
+	eng.StartChannelReceivers(ctx)
 	for _, d := range workflow.Sorted(defs) {
 		for _, sched := range d.On.Schedule {
 			log.Printf("  schedule   %-16s %q", d.Name, sched.Cron)
