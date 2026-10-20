@@ -13,12 +13,12 @@ wfnexus is three binaries:
 
 With no configuration at all, the server runs on SQLite and a local folder.
 
-<Aside type="caution" title="No published release yet">
-	The repository ships `install.sh` and `install.ps1`, which download a release and check its
-	checksum. No GitHub release has been published yet, so for now build from source, as shown
-	below. Once a release exists,
-	`curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh` will be
-	the one-liner.
+<Aside type="tip" title="One-line install">
+	`curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh` installs
+	`wfx` from the latest [release](https://github.com/muthuishere/wfnexus/releases) and refuses on
+	a checksum mismatch (`install.ps1` on Windows). The release also has `wfx-server` and
+	`wfx-runner` for Linux and macOS, so you can skip the build below. For the shortest path, see
+	[Recipe: on your laptop in five minutes](/wfnexus/recipes/local/).
 </Aside>
 
 <Steps>
