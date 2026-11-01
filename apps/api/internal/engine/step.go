@@ -164,6 +164,9 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		usage = newUsageAccum(prov.Price, func(u map[string]any, turns int) {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Turns: intp(turns), Usage: mustJSON(u)})
 		})
+		// Which provider answered, so the metrics page can split spend by it
+		// (the model id alone does not say: two providers serve the same one).
+		usage.provider, _, _ = strings.Cut(prov.Label, "/")
 		onMetric := func(m tn.MetricEvent) {
 			e.emit(ctx, runID, step.ID, "metric", m)
 			usage.record(m)
