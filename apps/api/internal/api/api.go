@@ -206,6 +206,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/workflows/{name}/schedule", s.workflowSchedule)
 		// The price table: what each model family costs (ADR 0020).
 		r.Get("/prices", s.listPrices)
+		// The server's own operational picture (metrics.go).
+		r.Get("/metrics", s.metrics)
 		r.Put("/prices", s.setPrice)
 		r.Delete("/prices", s.deletePrice)
 		r.Get("/sources", s.listSources)
@@ -257,6 +259,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	// Where a one-time link from `wfx ui` lands: it becomes a cookie and a
 	// redirect to /, never a page that shows anything.
 	r.Get("/auth/browser", s.browserRedeem)
+	// Prometheus text exposition, behind the same subject and permission as
+	// /api/metrics: a scraper sends a bearer token like any other client.
+	r.With(s.requireSubject, s.authorize).Get("/metrics", s.prometheus)
 	r.Get("/*", s.ui)
 	return r
 }

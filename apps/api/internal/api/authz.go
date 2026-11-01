@@ -83,7 +83,9 @@ var resourcePerms = map[string][2]string{
 	"registries": {PermRegistryRead, PermRegistryWrite},
 	"models":     {PermRegistryRead, PermRegistryWrite},
 	// What each model costs: configuration next to the providers it prices.
-	"prices":   {PermRegistryRead, PermRegistryWrite},
+	"prices": {PermRegistryRead, PermRegistryWrite},
+	// How runs went, what they cost, what is waiting: reading runs, in sum.
+	"metrics":  {PermRunsRead, PermRunsRead},
 	"doctor":   {PermRegistryRead, PermRegistryWrite},
 	"sources":  {PermProjectsRead, PermProjectsWrite},
 	"projects": {PermProjectsRead, PermProjectsWrite},

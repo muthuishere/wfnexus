@@ -68,6 +68,9 @@ type usageAccum struct {
 	mu    sync.Mutex
 	start time.Time
 	price pricing
+	// provider is the registry name the step ran on; set once, before any
+	// event arrives.
+	provider string
 
 	llmCalls   int
 	llmErrors  int
@@ -163,6 +166,9 @@ func (u *usageAccum) snapshotLocked() (map[string]any, int) {
 		"elapsedMs":        time.Since(u.start).Milliseconds(),
 		"llmMs":            u.llmMs,
 		"toolMs":           u.toolMs,
+	}
+	if u.provider != "" {
+		out["provider"] = u.provider
 	}
 	if u.llmErrors > 0 {
 		out["llmErrors"] = u.llmErrors

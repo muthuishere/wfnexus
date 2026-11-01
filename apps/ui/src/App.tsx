@@ -7,6 +7,7 @@ import SkillsPage from './pages/SkillsPage'
 import SkillRegistryPage from './pages/SkillRegistryPage'
 import WorkflowBuilderPage from './pages/WorkflowBuilderPage'
 import SystemPage from './pages/SystemPage'
+import MetricsPage from './pages/MetricsPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectPage from './pages/ProjectPage'
 import WorkflowPage from './pages/WorkflowPage'
@@ -21,7 +22,7 @@ import Icon, { type IconName } from './components/Icon'
 //   #/projects · #/projects/:p · #/projects/:p/+new
 //   #/projects/:p/:w · #/projects/:p/:w/edit · #/projects/:p/:w/run
 //   #/projects/:p/:w/runs/:id
-//   #/templates · #/skills · #/registry[/:source] · #/workers · #/system
+//   #/templates · #/skills · #/registry[/:source] · #/workers · #/metrics · #/system
 // There is no top-level builder and no flat list of every run or every
 // workflow: a workflow is made, edited and run from inside its project. The
 // older addresses (#/runs/:id, #/workflows/:name/edit|new, #/workflows/new)
@@ -60,6 +61,7 @@ export default function App() {
   else if (r[0] === 'templates') page = <TemplatesPage />
   else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
+  else if (r[0] === 'metrics') page = <MetricsPage />
   const inProjects = !r[0] || ['projects', 'runs', 'workflows'].includes(r[0])
   const nav: Array<[string, string, IconName, boolean]> = [
     ['Projects', '#/projects', 'projects', inProjects],
@@ -67,6 +69,7 @@ export default function App() {
     ['Skills & tools', '#/skills', 'skills', r[0] === 'skills'],
     ['Skill registry', '#/registry', 'registry', r[0] === 'registry'],
     ['Workers', '#/workers', 'workers', r[0] === 'workers'],
+    ['Metrics', '#/metrics', 'metrics', r[0] === 'metrics'],
     ['System', '#/system', 'system', r[0] === 'system'],
   ]
   return (

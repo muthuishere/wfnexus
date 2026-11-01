@@ -462,6 +462,8 @@ export const api = {
   /** What is wired on this machine — the default model, every provider and
    *  classifier, the shell, and whether each could run right now. */
   doctor: () => j<Doctor>(fetch('/api/doctor')),
+  /** The server's own metrics over a window, aggregated server-side. */
+  metrics: (window: MetricsWindow) => j<Metrics>(fetch(`/api/metrics?window=${window}`)),
   models: () => j<string[]>(fetch('/api/models')),
   // These endpoints answer {entries, skipped} — a skipped entry is one the
   // loader REFUSED, and it is the more interesting half: it is why a name a
@@ -532,3 +534,18 @@ export const api = {
 export type AcpModel = { id: string; name?: string; free: boolean }
 export type ProviderModels = { provider: string; current: string; models: AcpModel[]; configured?: string; offered: boolean }
 export type AcpAdapter = { name: string; bin: string; argv: string[]; modelFlag?: string; mode: string; install: string; installed: boolean; path?: string; providers: string[] }
+
+export type MetricsWindow = '24h' | '7d' | '30d'
+export type Counts = Record<string, number>
+export type Metrics = {
+  window: MetricsWindow; since: string; generatedAt: string; bucketSeconds: number
+  runs: { total: number; byStatus: Counts; byWorkflow: Array<{ project: string; workflow: string; total: number; byStatus: Counts; p50Ms: number; p95Ms: number; durations: number }> | null }
+  timeline: Array<{ start: string; byStatus: Counts }>
+  steps: { total: number; finished: number; failed: number; retried: number; failureRate: number; retryRate: number; toolCalls: number; toolErrors: number
+    slowest: Array<{ project: string; workflow: string; step: string; count: number; p50Ms: number; p95Ms: number }> | null }
+  approvals: { waiting: number; oldestWaiting: string | null; resolved: number; byResolution: Counts; p50Ms: number; p95Ms: number }
+  llm: { calls: number; errors: number; promptTokens: number; completionTokens: number; costUsd: number; unpricedSteps: number; fallbacks: number
+    models: Array<{ provider: string; model: string; calls: number; errors: number; promptTokens: number; completionTokens: number; costUsd: number; costKnown: boolean }> | null }
+  workers: { total: number; online: number; workers: Array<{ name: string; labels: string[]; status: string; lastSeen: string; version: string }> }
+  queue: { runsQueued: number; runsRunning: number; jobsQueued: number; jobsLeased: number; oldestQueued: string | null }
+}
