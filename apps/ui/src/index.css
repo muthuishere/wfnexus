@@ -46,20 +46,20 @@
   --sans: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   /* One scale. Every size in this file is one of these steps. */
-  --fs-2xs: 11px;    /* badges, tags, counters */
-  --fs-xs:  11.5px;  /* table heads, captions */
-  --fs-sm:  12.5px;  /* secondary text, code */
-  --fs-md:  13.5px;  /* body */
-  --fs-lg:  15px;
-  --fs-xl:  18px;
-  --fs-2xl: 22px;
-  --fs-3xl: 28px;
+  --fs-2xs: 12px;    /* badges, tags, counters */
+  --fs-xs:  12.5px;  /* table heads, captions */
+  --fs-sm:  13.5px;  /* secondary text, code */
+  --fs-md:  15px;  /* body */
+  --fs-lg:  17px;
+  --fs-xl:  20px;
+  --fs-2xl: 26px;
+  --fs-3xl: 32px;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(20, 32, 58, .05), 0 1px 3px rgba(20, 32, 58, .04);
   --shadow-lg: 0 4px 16px rgba(20, 32, 58, .08);
 
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
@@ -159,7 +159,7 @@ table, .badge, .cost, .num { font-variant-numeric: tabular-nums }
 .side nav { display: flex; flex-direction: column; gap: 2px }
 .side nav a {
   display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 999px;
-  color: var(--text-2); font-weight: 500; font-size: 14px; text-decoration: none;
+  color: var(--text-2); font-weight: 500; font-size: var(--fs-md); text-decoration: none;
 }
 .side nav a:hover { background: var(--subtle); color: var(--text) }
 .side nav a.active { background: var(--accent-50); color: var(--accent-600); font-weight: 620 }
