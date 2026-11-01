@@ -51,6 +51,8 @@ and `--dry-run` prints only.
 wfx install server --to local                       # wfx-server into ~/.local/bin
 wfx install server --to ssh://ops@box               # the same, on a box you reach over ssh
 wfx install server --to ssh://ops@box --image       # docker run the GHCR image there (loopback port)
+wfx install server --compose                        # server + Postgres with docker compose, here
+wfx install server --compose --to ssh://ops@box    # the same stack on a box over ssh
 wfx install server --to k8s --version v0.3.0        # helm upgrade --install infra/helm/wfnexus
 wfx install runner --to ssh://ops@worker-1          # a runner; then `wfx workers` for the join line
 ```

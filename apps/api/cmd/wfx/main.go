@@ -214,6 +214,7 @@ func usage() {
   wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
   wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]
+  wfx install server --compose [--to ssh://user@host] [--dir d]  server + Postgres via docker compose
                                    get the server or a runner there (install.sh, GHCR image, or helm)
   wfx tool add <name>[@v] [--on worker]   install a tool through the server's carry; also rm, ls
   wfx config put <abs-path> <file> [--on worker] [--to ctx]  place a config file; also get, ls, rm

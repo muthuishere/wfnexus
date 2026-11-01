@@ -16,6 +16,10 @@ import (
 //           here or over ssh — the ship-a-gettable-binary release assets
 //   --image the GHCR images built from infra/Dockerfile{,.runner}, via docker
 //           run here or over ssh
+//   --compose the repo's docker-compose.yml (server + Postgres), cloned into
+//           --dir and brought up with `docker compose up -d --build`, here or
+//           over ssh; .env starts from compose.env.example and is never
+//           overwritten
 //   k8s     `helm upgrade --install` of infra/helm/wfnexus (or --chart)
 //
 // Every plan prints before it runs; --dry-run prints only.
@@ -40,6 +44,8 @@ type deployOpts struct {
 	component string // server | runner
 	to        string // local | ssh://… | k8s
 	image     bool
+	compose   bool
+	dir       string // --compose checkout
 	version   string
 	repo      string
 	chart     string
@@ -66,6 +72,8 @@ func parseDeploy(args []string) (deployOpts, error) {
 		component: first(args),
 		to:        flagOf(args, "--to", "local"),
 		image:     hasFlag(args, "--image"),
+		compose:   hasFlag(args, "--compose"),
+		dir:       flagOf(args, "--dir", "wfnexus"),
 		version:   flagOf(args, "--version", os.Getenv("WFX_VERSION")),
 		repo:      flagOf(args, "--repo", envOr("WFX_REPO", "muthuishere/wfnexus")),
 		chart:     flagOf(args, "--chart", "infra/helm/wfnexus"),
@@ -75,7 +83,10 @@ func parseDeploy(args []string) (deployOpts, error) {
 		port:      flagOf(args, "--port", "8090"),
 	}
 	if o.component != "server" && o.component != "runner" {
-		return o, fmt.Errorf("usage: wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v]")
+		return o, fmt.Errorf("usage: wfx install server|runner --to local|ssh://user@host|k8s [--image|--compose] [--version v]")
+	}
+	if o.compose && (o.component != "server" || o.to == "k8s" || o.image) {
+		return o, fmt.Errorf("--compose installs the server stack with docker compose, --to local or ssh://; not with a runner, k8s or --image")
 	}
 	o.release = flagOf(args, "--release", "wfnexus")
 	o.name = flagOf(args, "--name", "wfx-"+o.component)
@@ -144,8 +155,30 @@ func (o deployOpts) dockerRun() string {
 	return strings.Join(append(parts, o.imageRef()), " ")
 }
 
+// composeUp is the compose line: fetch the repo at --version (or pull the
+// existing checkout), keep any .env already there, and bring the stack up.
+func (o deployOpts) composeUp() string {
+	clone := "git clone --depth 1"
+	if o.version != "" {
+		clone += " --branch " + o.version
+	}
+	clone += " https://github.com/" + o.repo + ".git " + o.dir
+	return "{ [ -d " + o.dir + "/.git ] && git -C " + o.dir + " pull --ff-only || " + clone + "; }" +
+		" && cd " + o.dir +
+		" && { [ -f .env ] || cp compose.env.example .env; }" +
+		" && docker compose up -d --build"
+}
+
 func planDeploy(o deployOpts) ([]deployStep, error) {
 	switch {
+	case o.compose && o.to == "local":
+		return []deployStep{{"bring up the server stack with docker compose", []string{"sh", "-c", o.composeUp()}}}, nil
+	case o.compose:
+		ssh, err := sshArgv(o.to)
+		if err != nil {
+			return nil, err
+		}
+		return []deployStep{{"bring up the server stack with docker compose on " + o.to, append(ssh, o.composeUp())}}, nil
 	case o.to == "k8s":
 		argv := []string{"helm", "upgrade", "--install", o.release, o.chart, "--namespace", o.namespace, "--create-namespace"}
 		if o.version != "" {
@@ -186,6 +219,8 @@ func (o deployOpts) nextSteps() []string {
 			"wfx login --url http://127.0.0.1:"+o.port)
 	case strings.HasPrefix(o.to, "ssh://"):
 		out = append(out, "wfx context add <name> --url http://127.0.0.1:"+o.port+" --via "+o.to)
+	case o.compose:
+		out = append(out, "wfx login --url http://127.0.0.1:"+o.port+"   # settings: "+o.dir+"/.env, then docker compose up -d")
 	default:
 		if !o.image {
 			out = append(out, o.bin()+" &                     # start it (no config = local mode: SQLite + a folder)")
