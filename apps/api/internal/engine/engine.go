@@ -474,6 +474,10 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 	// `done` must also see its outcome, and the status write stays the last
 	// thing a finishing run does to its row.
 	e.settleOutcome(ctx, runID, status, errMsg)
+	// Workflow memory is written at the same moment, for the same reason: a
+	// reader that sees the run ended can already see what it left behind.
+	// It never fails the run (memory.go).
+	e.recordMemory(ctx, runID, status, errMsg)
 	if err := e.store.UpdateRun(context.WithoutCancel(ctx), runID, status, step, errMsg); err != nil {
 		log.Printf("engine: update run: %v", err)
 	}

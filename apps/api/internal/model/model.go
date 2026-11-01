@@ -189,6 +189,40 @@ type StateVar struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// Workflow memory kinds (engine/memory.go).
+const (
+	MemoryKindRun    = "run"    // the record a finished run leaves
+	MemoryKindNote   = "note"   // a lesson an agent wrote with `remember`
+	MemoryKindDigest = "digest" // older run records, folded
+)
+
+// MemoryEntry is one remembered thing about a workflow.
+type MemoryEntry struct {
+	ID        string    `json:"id"`
+	Project   string    `json:"project"`
+	Workflow  string    `json:"workflow"`
+	RunID     string    `json:"runId,omitempty"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status,omitempty"`
+	StepID    string    `json:"stepId,omitempty"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// MemoryFilter selects memory entries. Empty fields match everything.
+type MemoryFilter struct {
+	Project string
+	// AnyProject ignores Project entirely (a dry run, or `global`).
+	AnyProject bool
+	Workflow   string
+	// NotWorkflow excludes one workflow (`project`/`global` includes skip the
+	// workflow's own memory, which is loaded separately).
+	NotWorkflow string
+	Kind        string
+	RunID       string
+	Limit       int
+}
+
 // Sealer is the encryption the store writes through. It is an interface so the
 // store does not import a key: whoever holds the key passes it in.
 type Sealer interface {

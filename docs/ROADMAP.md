@@ -163,6 +163,12 @@ All present in the pinned v0.19.0 and worth taking, most valuable first.
 — `budget: { compact_at_tokens: N }` on a step, off by default, measured in
 spikes/FINDINGS.md §11.
 
+**Workflow memory** is now **shipped** without `MemoryTool`: every finished run leaves a scrubbed
+record in the run database, agents add lessons with a `remember` tool, and every agent step of the
+next run reads a bounded section of it (`internal/engine/memory.go`, `memory:` in the YAML). The
+toolnexus persona / agent home below is still open: it would be per-agent and file-backed, where
+workflow memory is per-workflow and lives next to the runs.
+
 | capability | why we want it |
 |---|---|
 | **Multimodal content parts** (`tn.File`, `tn.Bytes`) | a bug report is often a screenshot. We can only take text. |

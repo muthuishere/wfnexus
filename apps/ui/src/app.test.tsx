@@ -224,6 +224,8 @@ describe('the UI a person actually downloads', () => {
 
     go('#/projects/local/deterministic')
     fireEvent.click(await screen.findByRole('tab', { name: /State/ }))
+    // Workflow memory sits above state on the same tab.
+    await screen.findByRole('heading', { name: 'Memory' })
     await screen.findByText('last_id')
     await screen.findByText('4120')
     // The global namespace is shared, so it shows here too — labelled, because

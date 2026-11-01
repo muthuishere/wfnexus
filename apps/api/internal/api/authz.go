@@ -94,10 +94,12 @@ var resourcePerms = map[string][2]string{
 	"categories": {PermProjectsRead, PermProjectsWrite},
 	"env":        {PermEnvRead, PermEnvWrite},
 	"state":      {PermStateRead, PermStateWrite},
-	"workers":    {PermWorkersRead, PermWorkersWrite},
-	"bundles":    {PermBundlesRead, PermPublish},
-	"users":      {PermAdminRead, PermAdminWrite},
-	"roles":      {PermAdminRead, PermAdminWrite},
+	// Workflow memory is the implicit half of state: the same permissions.
+	"memory":  {PermStateRead, PermStateWrite},
+	"workers": {PermWorkersRead, PermWorkersWrite},
+	"bundles": {PermBundlesRead, PermPublish},
+	"users":   {PermAdminRead, PermAdminWrite},
+	"roles":   {PermAdminRead, PermAdminWrite},
 	// carry installs binaries and config on the server and workers: what
 	// runs on the machine, so it is an operator's permission.
 	"carry": {PermAdminRead, PermAdminWrite},

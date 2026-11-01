@@ -207,6 +207,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Delete("/state/{key}", s.deleteState)
 		r.Get("/workflows/{name}/state", s.workflowState)
 		r.Get("/workflows/{name}/schedule", s.workflowSchedule)
+		// Workflow memory: what previous runs learned (memory.go).
+		r.Get("/workflows/{name}/memory", s.workflowMemory)
+		r.Delete("/workflows/{name}/memory", s.forgetWorkflowMemory)
+		r.Delete("/memory/{id}", s.deleteMemoryEntry)
 		// The price table: what each model family costs (ADR 0020).
 		r.Get("/prices", s.listPrices)
 		// The server's own operational picture (metrics.go).

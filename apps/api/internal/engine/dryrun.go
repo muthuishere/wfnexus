@@ -40,6 +40,20 @@ type DryRun struct {
 	Problems []DryProblem   `json:"problems"`
 	Cost     DryRunCost     `json:"cost"`
 	Input    map[string]any `json:"input"`
+	// Memory is the workflow memory a run would load (memory.go), across
+	// projects, since a dry run belongs to none.
+	Memory *DryMemory `json:"memory,omitempty"`
+}
+
+// DryMemory is what a run's agent steps would be told about previous runs.
+type DryMemory struct {
+	On      bool     `json:"on"`
+	Budget  int      `json:"budget,omitempty"`
+	Retain  int      `json:"retain,omitempty"`
+	Include []string `json:"include,omitempty"`
+	// Text is the section exactly as it would be appended; empty when nothing
+	// has been remembered yet.
+	Text string `json:"text"`
 }
 
 // DryRunStep is what one step would do.
@@ -133,6 +147,9 @@ func (e *Engine) loadFailure(name string) (string, bool) {
 // is how the authoring agent checks a draft before proposing it.
 func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any) *DryRun {
 	out := &DryRun{Workflow: def.Name, OK: true}
+	plan := workflow.EffectiveMemory(def, nil)
+	out.Memory = &DryMemory{On: plan.On, Budget: plan.Budget, Retain: plan.Retain, Include: plan.Include,
+		Text: e.PreviewMemory(context.Background(), def)}
 
 	// Sample input: what was supplied, then the schema's declared defaults, then
 	// an obvious placeholder per required property. A dry run must not fail for
