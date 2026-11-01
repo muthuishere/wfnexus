@@ -128,6 +128,9 @@ func (e *Engine) Doctor() Doctor {
 	d := Doctor{
 		Problems: []string{},
 		Notes:    []string{},
+		// Empty, not null: a machine with no registry still lists none.
+		Providers:   []DoctorProvider{},
+		Classifiers: []DoctorProvider{},
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "" || sysEnv[e.cfg.LLMAPIKeyEnv] != "",

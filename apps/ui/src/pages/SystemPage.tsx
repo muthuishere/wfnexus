@@ -49,6 +49,9 @@ export default function SystemPage() {
 
   if (err && !doc) return <div className="banner err">{err}</div>
   if (!doc) return <div className="muted">checking this machine…</div>
+  const isUnconfigured = (p: string) => /^(provider|classifier) \S+: \S+ is not set$/.test(p)
+  const problems = (doc.problems ?? []).filter((p) => !isUnconfigured(p))
+  const unconfigured = (doc.problems ?? []).filter(isUnconfigured)
 
   return (
     <>
@@ -69,13 +72,27 @@ export default function SystemPage() {
       {/* What every run on this platform gets, before any workflow file. */}
       <EnvStore />
 
-      {!!doc.problems?.length && (
+      {!!problems.length && (
         <div className="banner err">
-          <strong>{doc.problems!.length} problem{doc.problems!.length > 1 ? 's' : ''}</strong>
+          <strong>{problems.length} problem{problems.length > 1 ? 's' : ''}</strong>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-            {doc.problems!.map((p, i) => <li key={i}>{p}</li>)}
+            {problems.map((p, i) => <li key={i}>{p}</li>)}
           </ul>
         </div>
+      )}
+
+      {/* A provider or classifier without its key is only a problem for a
+          step that names it, so it is listed quietly, not as an error. */}
+      {!!unconfigured.length && (
+        <details className="card">
+          <summary>
+            <strong>{unconfigured.length} provider{unconfigured.length > 1 ? 's' : ''} not configured</strong>
+            <span className="muted"> — set the key to use one</span>
+          </summary>
+          <ul className="muted" style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+            {unconfigured.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </details>
       )}
 
       <div className="card">
@@ -114,7 +131,7 @@ export default function SystemPage() {
       </div>
 
       <EntryTable
-        title="Providers" entries={doc.providers} rows={providers}
+        title="Providers" entries={doc.providers ?? []} rows={providers}
         hint="A provider is where a step's turns come from. `http` is an endpoint; `cli` and `acp` are a program on this machine, which needs no key because the CLI holds its own."
         onDelete={name => act(`Removed provider ${name}.`, () => api.deleteProvider(name))}
         price={name => priceOfEntry(providers.find(p => p.name === name))}
@@ -126,7 +143,7 @@ export default function SystemPage() {
       <Channels />
 
       <EntryTable
-        title="Classifiers" entries={doc.classifiers} rows={classifiers}
+        title="Classifiers" entries={doc.classifiers ?? []} rows={classifiers}
         hint="The judge tier: a cheap typed decision instead of a whole agent turn. A `judge` step names one."
         onDelete={name => act(`Removed classifier ${name}.`, () => api.deleteClassifier(name))}
       />
