@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -101,7 +102,7 @@ func (e *Engine) Join(ctx context.Context, req JoinRequest) (*JoinResult, error)
 	if err != nil {
 		return nil, err
 	}
-	if req.Token == "" || req.Token != want {
+	if req.Token == "" || subtle.ConstantTimeCompare([]byte(req.Token), []byte(want)) != 1 {
 		return nil, ErrBadToken
 	}
 	if req.Name == "" {

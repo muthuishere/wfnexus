@@ -84,6 +84,10 @@ var publicAPIPaths = map[string]bool{
 	// not a subject yet — it is how one is obtained, the same reason join
 	// carries its token in the body.
 	"/api/workers/providers": true,
+	// How a machine becomes a worker: the registration token travels in the
+	// body and Engine.Join checks it. Off loopback the middleware would refuse
+	// the request before that check ever ran, so no remote runner could join.
+	"/api/workers/join": true,
 	// The browser's half of the device grant (session.go): the UI polls here
 	// with the device code it was issued, exactly as /device/token is polled,
 	// and is answered with a session cookie instead of a bearer value.

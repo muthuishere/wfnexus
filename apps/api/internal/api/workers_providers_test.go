@@ -64,3 +64,15 @@ func TestWorkerProvidersAcceptsAJoinTokenAndAWorkerToken(t *testing.T) {
 		t.Fatalf("worker token: %d %s", w.Code, w.Body)
 	}
 }
+
+// Off loopback every route needs a subject, but join is how a machine gets
+// one: a runner on another host must reach the handler, which checks the
+// registration token itself. A wrong token is still refused.
+func TestWorkerJoinReachesTheHandlerOffLoopback(t *testing.T) {
+	h, _ := testServer(t, ":8090")
+	if w := do(h, "POST", "/api/workers/join", "", map[string]any{
+		"token": "wfx_not-a-token", "name": "box",
+	}); w.Code != 401 || !strings.Contains(w.Body.String(), "token") {
+		t.Fatalf("wrong token must be refused by the join check: %d %s", w.Code, w.Body)
+	}
+}

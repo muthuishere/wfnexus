@@ -117,6 +117,11 @@ func PermissionFor(method, path string) string {
 	if method == http.MethodGet && path == "/api/workers/providers" {
 		return PermPublic
 	}
+	// The same for join: the registration token is in the body and
+	// Engine.Join checks it.
+	if method == http.MethodPost && path == "/api/workers/join" {
+		return PermPublic
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]
