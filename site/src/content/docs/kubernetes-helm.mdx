@@ -29,7 +29,7 @@ A `config:` key that looks like a secret (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PAS
 render.
 
 ```bash
-kubectl create namespace wfx
+kubectl create namespace wfnexus
 # The model key — read by NAME at call time, never written anywhere.
 kubectl -n wfnexus create secret generic wfnexus-llm --from-literal=OPENROUTER_API_KEY=...
 # The env store's encryption key. Back this Secret up: lose it and stored values are unreadable.
@@ -39,7 +39,7 @@ kubectl -n wfnexus create secret generic wfnexus-key --from-literal=WFX_SECRET_K
 ## Smallest install: SQLite on a volume
 
 ```bash
-helm install wfx oci://ghcr.io/muthuishere/charts/wfnexus --version <chart-version> -n wfnexus \
+helm install wfnexus oci://ghcr.io/muthuishere/charts/wfnexus --version <chart-version> -n wfnexus \
   --set secretKey.existingSecret=wfnexus-key \
   --set 'extraSecretEnv[0].name=OPENROUTER_API_KEY' \
   --set 'extraSecretEnv[0].secretName=wfnexus-llm' \
@@ -56,7 +56,7 @@ and exits; Kubernetes restarts it and the second boot serves with authentication
 token from the first container's output:
 
 ```bash
-kubectl -n wfnexus logs deploy/wfx-wfnexus --previous | grep 'admin token'
+kubectl -n wfnexus logs deploy/wfnexus --previous | grep 'admin token'
 ```
 
 Then `wfx login --url https://wfx.example.com` and approve with it.
