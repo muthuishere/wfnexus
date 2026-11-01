@@ -42,6 +42,7 @@ export default defineConfig({
 						{ label: 'Get started with an agent', slug: 'agent-start' },
 						{ label: 'Demo video', slug: 'demo' },
 						{ label: 'Self-host on one Linux box', slug: 'self-host' },
+						{ label: 'Kubernetes with Helm', slug: 'kubernetes-helm' },
 					],
 				},
 				{

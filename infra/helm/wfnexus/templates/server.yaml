@@ -1,0 +1,129 @@
+{{- $fullname := include "wfnexus.fullname" . -}}
+{{- $db := .Values.database -}}
+{{- $art := .Values.artifacts -}}
+{{- if not (has $db.driver (list "sqlite" "postgres")) }}{{ fail "database.driver must be sqlite or postgres" }}{{ end -}}
+{{- if not (has $art.driver (list "folder" "s3")) }}{{ fail "artifacts.driver must be folder or s3" }}{{ end -}}
+{{- if and (eq $db.driver "sqlite") (not .Values.persistence.enabled) }}{{ fail "database.driver=sqlite needs persistence.enabled=true" }}{{ end -}}
+{{- if and (eq $db.driver "postgres") (not $db.postgres.existingSecret) }}{{ fail "database.driver=postgres needs database.postgres.existingSecret" }}{{ end -}}
+{{- if and (eq $art.driver "s3") (or (not $art.s3.endpoint) (not $art.s3.existingSecret)) }}{{ fail "artifacts.driver=s3 needs artifacts.s3.endpoint and artifacts.s3.existingSecret" }}{{ end -}}
+# One replica, Recreate: the engine holds running steps in memory and the data
+# volume is ReadWriteOnce, so two pods must never overlap. (A Deployment with
+# Recreate gives the same guarantee a 1-replica StatefulSet would, for SQLite
+# and Postgres alike, and keeps one code path.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "wfnexus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "wfnexus.serverSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wfnexus.serverSelector" . | nindent 8 }}
+        {{- with .Values.server.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.server.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "wfnexus.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{ toYaml .Values.server.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.server.repository }}:{{ .Values.image.server.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.server.pullPolicy }}
+          securityContext: {{ toYaml .Values.server.securityContext | nindent 12 }}
+          ports:
+            - { name: http, containerPort: {{ .Values.server.port }} }
+          envFrom:
+            - configMapRef: { name: {{ $fullname }} }
+            {{- range .Values.extraEnvFromSecrets }}
+            - secretRef: { name: {{ . }} }
+            {{- end }}
+          env:
+            # Stated, never inherited: the binary's no-config default is `local`.
+            - { name: WFX_MODE, value: "server" }
+            - { name: WFX_ADDR, value: ":{{ .Values.server.port }}" }
+            - { name: WFX_WORKDIR, value: "/data/runs" }
+            - { name: WFX_STORAGE_DRIVER, value: {{ $db.driver | quote }} }
+            {{- if eq $db.driver "sqlite" }}
+            - { name: DATABASE_URL, value: {{ $db.sqlite.path | quote }} }
+            {{- else }}
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ $db.postgres.existingSecret }}, key: {{ $db.postgres.key }} } }
+            {{- end }}
+            - { name: WFX_ARTIFACT_DRIVER, value: {{ $art.driver | quote }} }
+            {{- if eq $art.driver "folder" }}
+            - { name: WFX_ARTIFACT_DIR, value: {{ $art.folder.path | quote }} }
+            {{- else }}
+            - { name: S3_ENDPOINT, value: {{ $art.s3.endpoint | quote }} }
+            - { name: S3_BUCKET, value: {{ $art.s3.bucket | quote }} }
+            - { name: S3_USE_SSL, value: {{ $art.s3.useSSL | toString | quote }} }
+            - name: S3_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ $art.s3.existingSecret }}, key: {{ $art.s3.accessKeyKey }} } }
+            - name: S3_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ $art.s3.existingSecret }}, key: {{ $art.s3.secretKeyKey }} } }
+            {{- end }}
+            {{- if .Values.secretKey.existingSecret }}
+            - name: WFX_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretKey.existingSecret }}, key: {{ .Values.secretKey.key }} } }
+            {{- else }}
+            - { name: WFX_SECRET_KEY_PATH, value: "/data/secret.key" }
+            {{- end }}
+            {{- if .Values.runnerToken.existingSecret }}
+            - name: WFX_RUNNER_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.runnerToken.existingSecret }}, key: {{ .Values.runnerToken.key }} } }
+            {{- end }}
+            {{- range .Values.extraSecretEnv }}
+            - name: {{ .name }}
+              valueFrom: { secretKeyRef: { name: {{ .secretName }}, key: {{ .key }} } }
+            {{- end }}
+            {{- include "wfnexus.carryEnv" (dict "root" . "server" true) | nindent 12 }}
+            {{- with .Values.extraEnv }}{{ toYaml . | nindent 12 }}{{ end }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            {{- if and .Values.carry.enabled .Values.carry.keyFileSecret }}
+            - { name: carry-key, mountPath: /etc/carry, readOnly: true }
+            {{- end }}
+            {{- with .Values.server.extraVolumeMounts }}{{ toYaml . | nindent 12 }}{{ end }}
+          {{- with .Values.server.startupProbe }}
+          startupProbe: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.server.readinessProbe }}
+          readinessProbe: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.server.livenessProbe }}
+          livenessProbe: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          resources: {{ toYaml .Values.server.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ include "wfnexus.pvcName" . }} }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if and .Values.carry.enabled .Values.carry.keyFileSecret }}
+        - name: carry-key
+          secret: { secretName: {{ .Values.carry.keyFileSecret }}, defaultMode: 0400 }
+        {{- end }}
+        {{- with .Values.server.extraVolumes }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}

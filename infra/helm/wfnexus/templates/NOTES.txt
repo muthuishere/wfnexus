@@ -1,0 +1,21 @@
+wfnexus is starting ({{ .Values.database.driver }} / {{ .Values.artifacts.driver }}).
+
+Reach it:
+{{- if .Values.ingress.enabled }}
+  {{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+  {{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wfnexus.fullname" . }} 8090:{{ .Values.service.port }}
+  curl http://127.0.0.1:8090/api/health
+{{- end }}
+{{- if not .Values.config.WFX_PUBLIC_URL }}
+
+WARNING: config.WFX_PUBLIC_URL is empty. The join command the UI hands out
+will not point anywhere a worker outside the cluster can reach.
+{{- end }}
+{{- if and (not .Values.extraSecretEnv) (not .Values.extraEnvFromSecrets) }}
+
+NOTE: no model provider key is referenced (extraSecretEnv). Steps that call
+a hosted model will fail until one is.
+{{- end }}

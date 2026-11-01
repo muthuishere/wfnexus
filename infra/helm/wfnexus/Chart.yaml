@@ -1,0 +1,12 @@
+apiVersion: v2
+name: wfnexus
+description: wfnexus — declarative agent workflows. The server (UI + API + engine) and its workers (wfx-runner).
+type: application
+version: 0.1.0
+# The image tag used when image.*.tag is empty. The release workflow sets both
+# fields to the tag being released.
+appVersion: "latest"
+home: https://muthuishere.github.io/wfnexus/
+sources:
+  - https://github.com/muthuishere/wfnexus
+keywords: [workflows, agents, llm]
