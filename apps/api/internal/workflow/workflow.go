@@ -254,6 +254,8 @@ type Step struct {
 	// WHICH workflow or project: that comes from the run, or one workflow could
 	// write another repository's state.
 	State map[string]map[string]string `yaml:"state,omitempty" json:"state,omitempty"`
+	// Memory narrows or disables the workflow's memory for this step (memory.go).
+	Memory *Memory `yaml:"memory,omitempty" json:"memory,omitempty"`
 	// AskHuman is DEPRECATED (ADR 0021): name `ask_human` in `tools:` instead,
 	// so the capability passes the same per-step allowlist as every other tool
 	// (ADR 0004). It is still honoured — shipped workflows use it and failing
@@ -407,7 +409,9 @@ type Definition struct {
 	// Concurrency keeps two runs of one group from overlapping (GitHub Actions'
 	// `concurrency:`). Nil means no limit.
 	Concurrency *Concurrency `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
-	Path        string       `yaml:"-" json:"path"`
+	// Memory is workflow memory (memory.go): on unless `memory: false`.
+	Memory *Memory `yaml:"memory,omitempty" json:"memory,omitempty"`
+	Path   string  `yaml:"-" json:"path"`
 	// Source names where this workflow was loaded from — "local" for the
 	// platform's own directory, or the name a repository was imported as.
 	Source string `yaml:"-" json:"source,omitempty"`
@@ -615,6 +619,14 @@ func (d *Definition) validate(cat Catalog) error {
 			if g.Action == "skip_to" && !seen[g.SkipTo] {
 				return fmt.Errorf("%s/%s: skip_to unknown step %q", d.Name, s.ID, g.SkipTo)
 			}
+		}
+	}
+	if err := d.Memory.validate(d.Name); err != nil {
+		return err
+	}
+	for i := range d.Steps {
+		if err := d.Steps[i].Memory.validate(d.Name + "/" + d.Steps[i].ID); err != nil {
+			return err
 		}
 	}
 	if err := d.validateGraph(seen); err != nil {
@@ -1165,6 +1177,10 @@ type TemplateData struct {
 	Workflow map[string]string // this workflow, across runs
 	Project  map[string]string // every workflow in this repository
 	Global   map[string]string // everything on this platform
+
+	// Memory is what previous runs of this workflow left behind, rendered as a
+	// bounded section (engine/memory.go). Empty when memory is off or empty.
+	Memory string
 }
 
 var funcs = template.FuncMap{

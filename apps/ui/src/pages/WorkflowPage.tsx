@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import StateStore from '../components/StateStore'
+import WorkflowMemory from '../components/WorkflowMemory'
 import Changes, { ProposedNotice } from '../components/Changes'
 import Checks from '../components/Checks'
 import { lifecycle, type Proposal } from '../lifecycle'
@@ -120,7 +121,7 @@ export default function WorkflowPage({ project, name }: { project: string; name:
         { key: 'steps', label: 'Steps', count: def.steps.length },
         { key: 'checks', label: 'Checks' },
         { key: 'changes', label: 'Changes' },
-        { key: 'memory', label: 'State' },
+        { key: 'memory', label: 'Memory & State' },
       ]} />
       {proposed && <ProposedNotice proposal={proposed} />}
 
@@ -182,7 +183,7 @@ export default function WorkflowPage({ project, name }: { project: string; name:
           date?" — on the workflow's page instead of in a database client. */}
       {tab === 'checks' && <Checks workflow={def} runs={runs} />}
       {tab === 'changes' && <Changes project={project} workflow={def.name} />}
-      {tab === 'memory' && <StateStore workflow={def.name} />}
+      {tab === 'memory' && <><WorkflowMemory workflow={def.name} project={project} /><StateStore workflow={def.name} /></>}
     </>
   )
 }

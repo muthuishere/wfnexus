@@ -76,6 +76,12 @@ type Store interface {
 	ListState(ctx context.Context, scope, scopeName string) ([]model.StateVar, error)
 	ListStateByPrefix(ctx context.Context, scope, prefix string) ([]model.StateVar, error)
 
+	// workflow memory — what previous runs learned (memory.go)
+	AddMemory(ctx context.Context, m model.MemoryEntry) (model.MemoryEntry, error)
+	ListMemory(ctx context.Context, f model.MemoryFilter) ([]model.MemoryEntry, error)
+	DeleteMemory(ctx context.Context, id string) error
+	ForgetMemory(ctx context.Context, project, workflow string, anyProject bool) (int64, error)
+
 	// settings
 	SetSetting(ctx context.Context, key, value string) error
 	SettingOnce(ctx context.Context, key string, gen func() string) (string, error)

@@ -349,6 +349,15 @@ export type StateVar = {
 }
 export type StateList = { scope: string; scopeName: string; vars: StateVar[] }
 
+/** One thing a workflow remembers from previous runs (engine/memory.go):
+ *  a run's record, a lesson an agent wrote with `remember`, or the digest
+ *  older records fold into. */
+export type MemoryEntry = {
+  id: string; project: string; workflow: string; runId?: string
+  kind: 'run' | 'note' | 'digest'; status?: string; stepId?: string; body: string; createdAt: string
+}
+export type MemoryList = { workflow: string; entries: MemoryEntry[]; preview?: string; enabled?: boolean }
+
 // actor is WHO is resolving a pause (ADR 0021). There is no sign-in yet, so
 // the browser asks once and remembers the claim; when ADR 0017's identity lands
 // the server takes it from the session and stops reading this.
@@ -444,6 +453,14 @@ export const api = {
    *  workflow's memory, each of its steps', and the global namespace. */
   workflowState: (name: string) =>
     j<{ vars: StateVar[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/state`)),
+  /** Workflow memory: what previous runs left behind, and what the next run will read. */
+  workflowMemory: (name: string, project = '') =>
+    j<MemoryList>(fetch(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`)),
+  forgetWorkflowMemory: (name: string, project = '') =>
+    j<{ ok: boolean; deleted: number }>(fetch(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`,
+      { method: 'DELETE' })),
+  deleteMemory: (id: string) =>
+    j(fetch(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })),
   /** When the workflow's cron fires next (UTC instant), or null when unscheduled. */
   workflowSchedule: (name: string) =>
     j<{ nextRunAt: string | null; crons: string[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/schedule`)),

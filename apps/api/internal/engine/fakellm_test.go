@@ -68,9 +68,10 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.next != nil {
 		f.n++
+		n := f.n
 		f.mu.Unlock()
 		tn := f.next()
-		f.writeTurn(w, tn)
+		f.writeTurn(w, tn, n)
 		return
 	}
 	var tn turn
@@ -80,18 +81,20 @@ func (f *fakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	} else {
 		tn = turn{text: "(script exhausted)"}
 	}
+	n := f.n
 	f.mu.Unlock()
-	f.writeTurn(w, tn)
+	f.writeTurn(w, tn, n)
 }
 
-func (f *fakeLLM) writeTurn(w http.ResponseWriter, tn turn) {
+// n is the request count taken under f.mu; reading f.n here raced.
+func (f *fakeLLM) writeTurn(w http.ResponseWriter, tn turn, n int) {
 	msg := map[string]any{"role": "assistant"}
 	if len(tn.calls) > 0 {
 		var tcs []any
 		for i, c := range tn.calls {
 			raw, _ := json.Marshal(c.args)
 			tcs = append(tcs, map[string]any{
-				"id": fmt.Sprintf("call_%d_%d", f.n, i), "type": "function",
+				"id": fmt.Sprintf("call_%d_%d", n, i), "type": "function",
 				"function": map[string]any{"name": c.name, "arguments": string(raw)},
 			})
 		}

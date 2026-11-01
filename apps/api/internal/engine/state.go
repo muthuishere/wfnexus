@@ -95,7 +95,10 @@ func (e *Engine) withState(ctx context.Context, data workflow.TemplateData, def 
 	if def != nil {
 		name = def.Name
 	}
-	data.Step, data.Workflow, data.Project, data.Global = e.stateData(ctx, name, e.projectOfRun(ctx, runID), stepID)
+	project := e.projectOfRun(ctx, runID)
+	data.Step, data.Workflow, data.Project, data.Global = e.stateData(ctx, name, project, stepID)
+	// Workflow memory rides along: on by default, read fresh per step (memory.go).
+	data.Memory = e.memoryFor(ctx, def, stepID, project)
 	return data
 }
 
