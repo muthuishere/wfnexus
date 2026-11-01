@@ -141,7 +141,7 @@ func (e *Engine) Doctor() Doctor {
 	// With a default provider those steps never touch the endpoint, so its
 	// key is not a problem — the provider's own readiness is what matters.
 	if dp := e.cfg.DefaultProvider; dp != "" {
-		if p, ok := e.catalog.Providers.Get(dp); !ok {
+		if p, ok := e.Catalog().Providers.Get(dp); !ok {
 			d.Problems = append(d.Problems, "the default provider "+dp+" is not in the registry, so any step that names no provider will be refused")
 		} else if c := checkProviderWith(p, sysEnv); !c.Ready && c.State != bundle.StatePresent {
 			d.Problems = append(d.Problems, "the default provider "+dp+" is not ready ("+c.Problem+"), so any step that names no provider will fail")
@@ -171,12 +171,12 @@ func (e *Engine) Doctor() Doctor {
 		}
 	}
 
-	for _, p := range e.catalog.Providers.List() {
+	for _, p := range e.Catalog().Providers.List() {
 		d.Providers = append(d.Providers, checkProviderWith(p, sysEnv))
 	}
 	sort.Slice(d.Providers, func(i, j int) bool { return d.Providers[i].Name < d.Providers[j].Name })
 
-	for _, c := range e.catalog.Classifiers.List() {
+	for _, c := range e.Catalog().Classifiers.List() {
 		kind := c.Backend
 		if kind == "" {
 			kind = "url"
@@ -213,11 +213,11 @@ func (e *Engine) Doctor() Doctor {
 	}
 	sort.Slice(d.Classifiers, func(i, j int) bool { return d.Classifiers[i].Name < d.Classifiers[j].Name })
 
-	d.Skills = DoctorCount{Count: len(e.skills.List())}
-	for _, s := range e.skills.Skipped() {
+	d.Skills = DoctorCount{Count: len(e.Skills().List())}
+	for _, s := range e.Skills().Skipped() {
 		d.Skills.Skipped = append(d.Skills.Skipped, s.Location+" ("+s.Reason+")")
 	}
-	d.Mcp = DoctorCount{Count: e.catalog.Mcp.Len()}
+	d.Mcp = DoctorCount{Count: e.Catalog().Mcp.Len()}
 	d.Workflows = DoctorCount{Count: len(e.Definitions())}
 
 	for _, p := range d.Providers {
@@ -392,10 +392,10 @@ func (e *Engine) CheckBundleRequirements(reqs []bundle.Requirement) bundle.Repor
 func (e *Engine) RequirementHost() *DoctorHost { return &DoctorHost{e: e} }
 
 func (h *DoctorHost) Provider(name string) bundle.ProviderReadiness {
-	if h.e.catalog == nil {
+	if h.e.Catalog() == nil {
 		return bundle.ProviderReadiness{}
 	}
-	p, ok := h.e.catalog.Providers.Get(name)
+	p, ok := h.e.Catalog().Providers.Get(name)
 	if !ok {
 		return bundle.ProviderReadiness{}
 	}
@@ -430,7 +430,7 @@ func (h *DoctorHost) Provider(name string) bundle.ProviderReadiness {
 }
 
 func (h *DoctorHost) HasMcp(name string) bool {
-	return h.e.catalog != nil && h.e.catalog.Mcp.Has(name)
+	return h.e.Catalog() != nil && h.e.Catalog().Mcp.Has(name)
 }
 
 func (h *DoctorHost) LabelHolders(label string) int {

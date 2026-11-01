@@ -221,7 +221,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 				// HTTP error, which reads like a network fault and is not.
 				// Caught here, where it costs nothing, and named as what it is.
 				if s.Provider != "" {
-					if p, err := e.catalog.Providers.Require(s.Provider); err == nil {
+					if p, err := e.Catalog().Providers.Require(s.Provider); err == nil {
 						if c := checkProviderWith(p, stored); !c.Ready {
 							fail(DryProblem{Step: s.ID, Field: "provider", Message: c.Problem, Fatal: true})
 						} else if c.Detail != "" {
@@ -311,7 +311,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		}
 
 		if s.Classifier != "" {
-			if _, err := e.catalog.Classifiers.Require(s.Classifier); err != nil {
+			if _, err := e.Catalog().Classifiers.Require(s.Classifier); err != nil {
 				fail(DryProblem{Step: s.ID, Field: "classifier", Message: err.Error(), Fatal: true})
 			}
 		}
@@ -406,7 +406,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 // server are already checked by dryCatalog and by the cost and placement passes,
 // and reporting them twice would make the same problem look like two.
 func (e *Engine) dryRequirements(def *workflow.Definition) []DryProblem {
-	reqs := bundle.Requirements(def, e.catalog)
+	reqs := bundle.Requirements(def, e.Catalog())
 	if len(reqs) == 0 {
 		return nil
 	}
@@ -463,7 +463,7 @@ func (e *Engine) dryCatalog(def *workflow.Definition) []DryProblem {
 				continue
 			}
 			seen["mcp:"+name] = true
-			if !e.catalog.Mcp.Has(name) {
+			if !e.Catalog().Mcp.Has(name) {
 				out = append(out, DryProblem{Step: s.ID, Field: "mcp", Fatal: true,
 					Message: fmt.Sprintf("mcp server %q is not in the registry", name)})
 			}
@@ -473,7 +473,7 @@ func (e *Engine) dryCatalog(def *workflow.Definition) []DryProblem {
 				continue
 			}
 			seen["skill:"+name] = true
-			if len(e.skills.RootsFor([]string{name})) == 0 {
+			if len(e.Skills().RootsFor([]string{name})) == 0 {
 				out = append(out, DryProblem{Step: s.ID, Field: "skills", Fatal: true,
 					Message: fmt.Sprintf("skill %q is not in the registry on this machine", name)})
 			}

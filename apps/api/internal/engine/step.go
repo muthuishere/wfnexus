@@ -353,7 +353,7 @@ func (e *Engine) askHumanTool(step *workflow.Step) tn.Tool {
 func (e *Engine) buildToolkit(ctx context.Context, label string, skillNames, tools, mcp []string) (*tn.Toolkit, error) {
 	opts := tn.Options{}
 	if len(skillNames) > 0 {
-		opts.SkillsDir = e.skills.RootsFor(skillNames)
+		opts.SkillsDir = e.Skills().RootsFor(skillNames)
 		if len(opts.SkillsDir) == 0 {
 			return nil, fmt.Errorf("%s: none of the skills %v are in the registry", label, skillNames)
 		}

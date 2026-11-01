@@ -121,7 +121,7 @@ func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflo
 		},
 	}
 	if step.Provider != "" {
-		p, err := e.catalog.Providers.Require(step.Provider)
+		p, err := e.Catalog().Providers.Require(step.Provider)
 		if err != nil {
 			return nil, err
 		}
@@ -178,7 +178,7 @@ func (e *Engine) bundleSkills(names []string) ([]BundledFile, error) {
 			continue
 		}
 		seen[n] = true
-		sk, ok := e.skills.Get(n)
+		sk, ok := e.Skills().Get(n)
 		if !ok {
 			return nil, fmt.Errorf("skill %q is not in the registry", n)
 		}
