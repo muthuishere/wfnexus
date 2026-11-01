@@ -284,7 +284,14 @@ func checkSchemas(d *workflow.Definition) error {
 			return fmt.Errorf("input_schema is not a valid JSON Schema: %w", err)
 		}
 	}
+	all := append([]workflow.Step(nil), d.Steps...)
 	for _, s := range d.Steps {
+		for _, b := range s.Steps { // a loop body's steps are steps too
+			b.ID = s.ID + "." + b.ID
+			all = append(all, b)
+		}
+	}
+	for _, s := range all {
 		if len(s.OutputSchema) == 0 {
 			continue
 		}
@@ -734,8 +741,9 @@ func (e *Engine) stepDef(runID uuid.UUID, stepID string) (*model.Run, *workflow.
 	if def == nil {
 		return run, nil
 	}
-	_, s := def.Step(stepID)
-	return run, s
+	// Lookup also resolves an iteration row (`review[2]`) to the step it
+	// repeats, so an approval inside a loop is held to that step's approvers.
+	return run, def.Lookup(stepID)
 }
 
 // Approve unblocks a step that is awaiting approval and continues the run.
@@ -915,11 +923,7 @@ func (e *Engine) Retry(ctx context.Context, runID uuid.UUID, stepID string) erro
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
 	}
-	pos, _ := def.Step(stepID)
-	if pos < 0 {
-		return fmt.Errorf("unknown step %q", stepID)
-	}
-	if err := e.store.ResetStepsFrom(ctx, runID, pos); err != nil {
+	if err := e.resetFrom(ctx, runID, def, stepID); err != nil {
 		return err
 	}
 	e.setRun(ctx, runID, "queued", stepID, "")
@@ -998,6 +1002,9 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	outputs := map[string]any{}
 	start := 0
 	for i, st := range steps {
+		if isIterationRow(st.StepID) {
+			break // iteration rows sort after every definition step
+		}
 		if st.Status == "done" || st.Status == "skipped" {
 			if len(st.Output) > 0 {
 				var o any
@@ -1022,7 +1029,7 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		if e.skipUnlessGuarded(ctx, runID, step, guard) {
 			continue
 		}
-		if step.RequiresApproval && st.Status != "approved" {
+		if step.ApprovesOnce() && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 			// The sequential path halts HERE rather than in runOneStep, so the

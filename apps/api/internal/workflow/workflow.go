@@ -260,6 +260,28 @@ type Step struct {
 	// their load would break a running installation on upgrade — and the engine
 	// logs a deprecation on the run when a step arrives with the boolean only.
 	AskHuman bool `yaml:"ask_human,omitempty" json:"askHuman,omitempty"`
+
+	// ---- loops (see loop.go) ----
+	//
+	// Foreach repeats this step — or its `steps:` group — once per item of a
+	// list: a path (`input.files`, `list.items`) or a literal YAML list. The
+	// item and its position are `{{ .Item }}` and `{{ .Index }}`.
+	Foreach any `yaml:"foreach,omitempty" json:"foreach,omitempty"`
+	// Parallel caps how many foreach iterations run at once. 0 or 1 ⇒ one at
+	// a time, in order.
+	Parallel int `yaml:"parallel,omitempty" json:"parallel,omitempty"`
+	// Until repeats the step until every guard holds, checked after each
+	// iteration. While repeats it as long as every guard holds, also checked
+	// after each iteration (do…while). Both need MaxIterations.
+	Until []Guard `yaml:"until,omitempty" json:"until,omitempty"`
+	While []Guard `yaml:"while,omitempty" json:"while,omitempty"`
+	// MaxIterations bounds a loop. Required for until/while; for foreach it
+	// refuses a list longer than this rather than run a surprise.
+	MaxIterations int `yaml:"max_iterations,omitempty" json:"maxIterations,omitempty"`
+	// Steps is the loop BODY: a group of steps run in order once per
+	// iteration. Only valid on a loop step, which then has no prompt/run of
+	// its own.
+	Steps []Step `yaml:"steps,omitempty" json:"steps,omitempty"`
 }
 
 // TemplateInfo describes a workflow that exists to be copied.
@@ -467,7 +489,12 @@ func (d *Definition) validate(cat Catalog) error {
 				kinds++
 			}
 		}
-		if kinds == 0 {
+		if strings.Contains(s.ID, "[") || strings.Contains(s.ID, "]") {
+			return fmt.Errorf("%s/%s: a step id may not contain '[' or ']' — they name loop iterations", d.Name, s.ID)
+		}
+		if kinds == 0 && s.IsGroup() {
+			// A loop over a `steps:` body: the body is the work, checked below.
+		} else if kinds == 0 {
 			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision) or `send` (a message)", d.Name, s.ID)
 		}
 		if kinds > 1 {
@@ -509,7 +536,7 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: duplicate step id %q", d.Name, s.ID)
 		}
 		seen[s.ID] = true
-		if s.OutputSchema == nil && s.Run == "" && s.Judge == nil && s.Send == nil {
+		if s.OutputSchema == nil && s.Run == "" && s.Judge == nil && s.Send == nil && !s.IsGroup() {
 			return fmt.Errorf("%s: step %q needs output_schema", d.Name, s.ID)
 		}
 		if cat != nil {
@@ -560,6 +587,25 @@ func (d *Definition) validate(cat Catalog) error {
 			}
 			if g.Field == "" {
 				return fmt.Errorf("%s/%s: gate needs a field", d.Name, s.ID)
+			}
+		}
+	}
+	// Loops are checked once every id and position is known, because a
+	// foreach path may read any earlier step. A body is then checked exactly
+	// like a workflow of its own, so a body step meets every rule a step does.
+	pos := map[string]int{}
+	for i, s := range d.Steps {
+		pos[s.ID] = i
+	}
+	for i := range d.Steps {
+		s := &d.Steps[i]
+		if err := d.validateLoop(s, pos); err != nil {
+			return err
+		}
+		if s.IsGroup() {
+			body := &Definition{Name: d.Name + "/" + s.ID, InputSchema: d.InputSchema, Steps: s.Steps}
+			if err := body.validate(cat); err != nil {
+				return err
 			}
 		}
 	}
@@ -805,6 +851,11 @@ func normalize(d *Definition) {
 		if routed[d.Steps[i].ID] {
 			d.Steps[i].ContinueOnError = true
 		}
+		// A single-step loop whose until/while reads its own exit is routing
+		// on it, exactly like a `when` above.
+		if st := &d.Steps[i]; st.IsLoop() && !st.IsGroup() && bodyRoutedExits(st)[st.ID] {
+			st.ContinueOnError = true
+		}
 	}
 	for i := range d.Steps {
 		s := &d.Steps[i]
@@ -847,6 +898,19 @@ func normalize(d *Definition) {
 		}
 		if s.Send != nil && s.OutputSchema == nil {
 			s.OutputSchema = SendOutputSchema()
+		}
+		// A loop body is normalised like a workflow of its own, inheriting
+		// the loop step's (already merged) env and placement.
+		if s.IsGroup() {
+			body := &Definition{Env: s.Env, RunsOn: s.RunsOn, MaxParallel: 1, Steps: s.Steps}
+			normalize(body)
+			routed := bodyRoutedExits(s)
+			for j := range body.Steps {
+				if routed[body.Steps[j].ID] {
+					body.Steps[j].ContinueOnError = true
+				}
+			}
+			s.Steps = body.Steps
 		}
 	}
 }
@@ -1089,6 +1153,10 @@ type TemplateData struct {
 	Steps   map[string]any // previous step outputs, keyed by step id
 	Output  map[string]any // current step output (gate messages only)
 	Decide  map[string]any // this step's judge answers, keyed by question
+	// Item and Index are the current loop iteration's element and position
+	// (0-based). Outside a loop Item is nil and Index 0.
+	Item  any
+	Index int
 
 	// STATE — what survives a run. Four SEPARATE namespaces, narrowest first,
 	// and deliberately not a cascade: `.Step.x` never falls back to

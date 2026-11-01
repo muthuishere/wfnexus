@@ -52,6 +52,7 @@ export default defineConfig({
 						{ label: 'Projects, workflows, runs', slug: 'concepts/projects-and-runs' },
 						{ label: 'Classifiers', slug: 'concepts/classifiers' },
 						{ label: 'Human gates', slug: 'concepts/human-gates' },
+						{ label: 'Loops', slug: 'concepts/loops' },
 						{ label: 'Channels: send and receive', slug: 'concepts/channels' },
 						{ label: 'State and memory', slug: 'concepts/state-and-memory' },
 						{ label: 'Env store and secrets', slug: 'concepts/env-and-secrets' },

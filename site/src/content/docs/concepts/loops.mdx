@@ -1,0 +1,138 @@
+---
+title: Loops
+description: Repeat a step once per item with foreach, or until a check passes with until/while — every iteration persisted, bounded and visible on the run.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A step can repeat. There are three ways, and a step uses exactly one:
+
+| Key | Repeats | Bound |
+|---|---|---|
+| `foreach: <path or list>` | once per item, optionally `parallel: N` at a time | the list's length (`max_iterations` caps it) |
+| `until: [guards]` | until every guard holds, checked after each iteration | `max_iterations` — **required** |
+| `while: [guards]` | as long as every guard holds, checked after each iteration (do…while) | `max_iterations` — **required** |
+
+The repeated thing is either the step itself (it keeps its `prompt` or `run`) or a `steps:` body
+that runs in order once per iteration. There is no unbounded loop: `until`/`while` without
+`max_iterations` is refused when the file loads, and the hard ceiling is 999 iterations.
+
+## foreach
+
+```yaml
+input_schema:
+  type: object
+  properties:
+    files: { type: array, items: { type: string } }
+
+steps:
+  - id: review
+    foreach: input.files          # or list.items (an earlier step's array), or [a, b, c]
+    parallel: 3                   # optional; 0/1 = one at a time, in order
+    prompt: "Review {{ .Item }} (file {{ .Index }})"
+    tools: [read, grep]
+    output_schema:
+      type: object
+      properties: { verdict: { type: string } }
+
+  - id: summary
+    run: echo "{{ .Steps.review.count }} files reviewed"
+```
+
+Inside the loop, `{{ .Item }}` is the current element and `{{ .Index }}` its 0-based position.
+`.Item` can be an object: `{{ .Item.name }}`.
+
+A foreach path is `input.<key>` or `<step>.<field>`. It is checked at load time: the input or the
+step must exist, the field must be declared as an `array` in its schema, and the step must run
+before the loop — in a [DAG](/wfnexus/concepts/workflows-and-steps/) that means the loop `needs` it.
+A template (`"{{ .Input.files }}"`) is refused; foreach takes a plain path.
+
+## until and while
+
+```yaml
+steps:
+  - id: baseline
+    run: go test ./...
+    continue-on-error: true
+
+  - id: repair
+    when: [{ path: baseline.ok, equals: false }]
+    until:
+      - path: check.ok
+        equals: true
+    max_iterations: 4
+    steps:
+      - id: fix
+        prompt: |
+          The suite is red. Last output:
+          {{ with .Steps.check }}{{ .stdout }}{{ else }}{{ .Steps.baseline.stdout }}{{ end }}
+          Fix the first failure.
+        tools: [bash, read, edit]
+        output_schema: { type: object, properties: { cause: { type: string } } }
+      - id: check
+        run: go test ./...
+```
+
+Guards are the same shape as `when`: a `path` and `equals` or `exists`. A loop guard must read
+something the loop produces — a body step (`check.ok`) or, for a step that repeats itself, its own
+id (`poll.exitCode`) — otherwise nothing could change between iterations, and the file is refused.
+
+The next iteration sees the previous one's outputs: on round 2, `{{ .Steps.check.stdout }}` is
+round 1's check. A step whose result a loop guard reads is routing on it, so a red `check` makes
+the loop go round again instead of failing the run.
+
+<Aside type="caution" title="A loop that runs out fails">
+	If `max_iterations` is spent and the `until` condition still does not hold (or the `while`
+	condition still does), the loop step and the run **fail**, quoting the last check — for example
+	`until condition not met after 4 iterations — last check: when check.ok = true (was false)`.
+	A loop never hands back "done" for work that did not settle.
+</Aside>
+
+## What a loop produces
+
+The loop step's output is an aggregate, so a later step reads it like any other output:
+
+| Field | Value |
+|---|---|
+| `iterations` | an array of every iteration's output, in item order (even with `parallel`) |
+| `count` | how many iterations ran |
+| `last` | the final iteration's output |
+
+For a step that repeats itself an iteration's output is that step's output. For a body it is an
+object keyed by body step id: `{{ .Steps.repair.last.check.ok }}`. A body step's id is local to
+the loop: `{{ .Steps.fix }}` from outside the loop is reported by the dry run as a step that
+does not exist.
+
+## Every iteration is a row on the run
+
+Each iteration is persisted as its own step row — `review[0]`, `review[1]`, …, or
+`repair[0].fix`, `repair[0].check`, … for a body — with its prompt, output, status, timing and
+cost. The run page lists them under their loop step. Because each one is an ordinary step:
+
+- **Resume** replays the iterations that finished and continues with the first that did not.
+- **Retry** of an iteration (`wfx retry`, the UI) resets it and every later one; retrying the
+  loop step resets all of its iterations. A finished loop earlier in the run keeps its record.
+- **Human gates work inside loops.** `requires_approval` on a step that repeats itself is asked
+  **per iteration** (`deploy[0]`, then `deploy[1]`); on a loop with a `steps:` body it is asked
+  once, before the loop; on a body step it is asked for that step in every iteration. `approvers`
+  and `prevent_self_approval` are enforced on the iteration exactly as on the step. Gates,
+  `ask_human` and `needs_input` behave as they do anywhere else.
+- A body step's own `when` is read against its iteration, so a step can run for one item and be
+  skipped for the next.
+
+## The dry run shows the plan
+
+`wfx dryrun` reports each loop's mode, the iterations it would create
+(`review[0] … review[2]` for a three-item input; `repair[0].fix … repair[3].check` for
+`max_iterations: 4`), and checks every body step's templates as the first iteration would render
+them, with `.Item` and `.Index` filled in. A step that reads `.Item` without being a loop is
+flagged.
+
+## Limits
+
+- No loop inside a loop: split it into two steps.
+- A body's steps run in order; `needs`, `consumes`, `produces` and `skip_to` are refused inside one.
+- `parallel` applies only to `foreach`: an `until` iteration depends on the one before it.
+- At most 999 iterations and 99 body steps per loop.
+
+A complete example is the [fix-until-green](/wfnexus/templates/) template.

@@ -409,6 +409,20 @@ func (s *Store) ResetStepsFrom(ctx context.Context, runID uuid.UUID, position in
 	return err
 }
 
+// ResetStepsRange marks the steps with from <= position < to pending again;
+// to < 0 means no upper bound. Loops need the bound: their iteration rows sort
+// after every step, and a retry must not wipe a finished loop's record.
+func (s *Store) ResetStepsRange(ctx context.Context, runID uuid.UUID, from, to int) error {
+	if to < 0 {
+		return s.ResetStepsFrom(ctx, runID, from)
+	}
+	_, err := s.exec(ctx, `UPDATE step_runs SET status='pending', output=NULL, raw_text='', error='',
+		pending=NULL, decision=NULL, started_at=NULL, finished_at=NULL,
+		resolved_by='', resolved_at=NULL, resolution='', resolution_reason='', skip_reason=''
+		WHERE run_id=$1 AND position>=$2 AND position<$3`, runID, from, to)
+	return err
+}
+
 // pendingOp distinguishes "leave pending alone" from "clear it": a step that
 // resumes must drop the question it was parked on.
 func pendingOp(p StepPatch) string {

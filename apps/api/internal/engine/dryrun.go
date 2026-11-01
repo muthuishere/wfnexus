@@ -66,6 +66,9 @@ type DryRunStep struct {
 	// author sees what the agent would read rather than what they typed.
 	Prompt string `json:"prompt,omitempty"`
 	Wave   int    `json:"wave"`
+	// Loop is what a repeating step would do: how many iterations are
+	// planned, under which row ids, and — for a body — each body step.
+	Loop *DryLoop `json:"loop,omitempty"`
 }
 
 // DryProblem is one thing that would go wrong, and where.
@@ -170,8 +173,10 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		}
 	}
 
-	for i := range def.Steps {
-		s := &def.Steps[i]
+	// checkStep is every per-step check, parameterised by what the step's
+	// templates may see — so a loop body's steps are checked by exactly the
+	// code that checks a top-level one, against their iteration's view.
+	checkStep := func(s *workflow.Step, td workflow.TemplateData, refDef *workflow.Definition, refWave map[string]int) DryRunStep {
 		ds := DryRunStep{
 			ID: s.ID, Kind: stepKind(s), Provider: s.Provider, Model: s.Model,
 			Shell: s.Shell, Skills: s.Skills, Tools: s.Tools,
@@ -187,7 +192,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			} else {
 				ds.Send.Channel = c.Name
 			}
-			if txt, err := workflow.Render(s.Send.Text, dryTemplateData(def, sample, waveOf, s.ID)); err == nil {
+			if txt, err := workflow.Render(s.Send.Text, td); err == nil {
 				ds.Send.Text = txt
 			}
 		}
@@ -318,7 +323,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			text = s.Run
 		}
 		if text != "" {
-			data := dryTemplateData(def, sample, waveOf, s.ID)
+			data := td
 			data.Step, data.Workflow = state[model.StateScopeStep], state[model.StateScopeWorkflow]
 			data.Project, data.Global = state[model.StateScopeProject], state[model.StateScopeGlobal]
 			// Rendered twice on purpose. The lenient render is what the agent
@@ -334,7 +339,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 			}
 			// What it REFERENCES, checked against what exists — see dryrefs.go
 			// for why rendering alone catches almost nothing here.
-			for _, p := range checkRefs(def, s, text, waveOf) {
+			for _, p := range checkRefs(refDef, s, text, refWave) {
 				fail(p)
 			}
 			for _, p := range checkStateRefs(s, text, state) {
@@ -357,8 +362,20 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		} else {
 			out.Cost.FreeSteps++
 		}
+		if !s.IsLoop() && usesLoopVars(text) {
+			fail(DryProblem{Step: s.ID, Field: fieldName(s), Fatal: false,
+				Message: "reads .Item or .Index, but this step is not a loop — they render as nothing"})
+		}
+		return ds
+	}
 
-		out.Steps = append(out.Steps, ds)
+	for i := range def.Steps {
+		s := &def.Steps[i]
+		if s.IsLoop() {
+			out.Steps = append(out.Steps, e.dryLoop(def, s, sample, waveOf, fail, checkStep))
+			continue
+		}
+		out.Steps = append(out.Steps, checkStep(s, dryTemplateData(def, sample, waveOf, s.ID), def, waveOf))
 	}
 
 	out.Problems = append(out.Problems, e.dryCatalog(def)...)
@@ -583,6 +600,8 @@ type DrySend struct {
 
 func stepKind(s *workflow.Step) string {
 	switch {
+	case s.IsGroup():
+		return "loop"
 	case s.Run != "":
 		return "run"
 	case s.Judge != nil:
@@ -674,7 +693,7 @@ func (e *Engine) dryState(def *workflow.Definition) map[string]map[string]string
 // the schema does not declare renders as "<no value>" — which is the bug.
 func sampleOutput(s *workflow.Step) map[string]any {
 	out := map[string]any{}
-	props, _ := s.OutputSchema["properties"].(map[string]any)
+	props, _ := s.ResultSchema()["properties"].(map[string]any)
 	for name, raw := range props {
 		p, _ := raw.(map[string]any)
 		out[name] = sampleValue(p)

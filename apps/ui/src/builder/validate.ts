@@ -81,6 +81,8 @@ function stepIssues(s: Step, i: number, allIds: string[], seenBefore: Set<string
   if (!s.id?.trim()) push('id', 'a step needs an id — it is how later prompts reference this step’s output.')
   else if (!/^[A-Za-z0-9_-]+$/.test(s.id)) push('id', 'step ids should be letters, digits, - or _ so `{{ .Steps.<id> }}` resolves.', 'warn')
   if (seenBefore.has(s.id)) push('id', `duplicate step id “${s.id}”.`)
+  loopIssues(s, allIds, push)
+  if (s.steps?.length) return // a loop over a body: the body steps are the work
   if (!s.prompt?.trim()) push('prompt', 'a step needs a prompt — this is the task handed to the agent.')
   if (!s.outputSchema || Object.keys(s.outputSchema).length === 0) {
     push('outputSchema', 'a step needs an output_schema — it becomes the submit_output tool the agent must call to finish.')
@@ -142,6 +144,56 @@ function stepIssues(s: Step, i: number, allIds: string[], seenBefore: Set<string
       if (!g.skipTo) push(at, `gate ${gi + 1} is a skip_to gate and needs skip_to.`)
       else if (!allIds.includes(g.skipTo)) push(at, `skip_to names “${g.skipTo}”, which is not a step in this workflow.`)
     }
+  }
+}
+
+/** validateLoop() from workflow/loop.go: the shape and the bounds of a loop.
+ *  Reference checks that need schemas of OTHER steps stay on the server. */
+const MAX_LOOP_ITERATIONS = 999
+export function loopIssues(s: Step, allIds: string[], push: (f: string, m: string, sev?: Issue['severity']) => void) {
+  const modes = [s.foreach !== undefined, !!s.until?.length, !!s.while?.length].filter(Boolean).length
+  if (/[[\]]/.test(s.id || '')) push('id', 'a step id may not contain [ or ] — they name loop iterations.')
+  if (modes === 0) {
+    if (s.steps?.length) push('steps', '`steps:` inside a step is a loop body — add foreach, until or while.')
+    if (s.parallel || s.maxIterations) push('maxIterations', '`parallel` and `max_iterations` only apply to a loop.')
+    return
+  }
+  if (modes > 1) push('foreach', 'a loop is ONE of foreach, until or while.')
+  const max = s.maxIterations ?? 0
+  if (max < 0 || max > MAX_LOOP_ITERATIONS) push('maxIterations', `max_iterations must be 1..${MAX_LOOP_ITERATIONS}.`)
+  if (s.until?.length || s.while?.length) {
+    const kind = s.until?.length ? 'until' : 'while'
+    if (max < 1) push('maxIterations', `an ${kind} loop needs max_iterations — an unbounded loop is a runaway.`)
+    if ((s.parallel ?? 0) > 1) push('parallel', `parallel applies to foreach; ${kind} iterations depend on the one before.`)
+    const body = new Set((s.steps || []).map(b => b.id))
+    let inside = false
+    for (const g of (s.until || s.while || [])) {
+      if (!g.path?.trim()) { push(kind, `a ${kind} guard needs a path.`); continue }
+      if (g.equals === undefined && g.exists === undefined) push(kind, `${kind} guard on “${g.path}” needs equals or exists.`)
+      const head = g.path.split('.')[0]
+      if (body.has(head) || head === s.id) inside = true
+      else if (head !== 'input' && !allIds.some(id => g.path === id || g.path.startsWith(id + '.'))) push(kind, `${kind} guard reads “${g.path}”, which names no step.`)
+    }
+    if (!inside) push(kind, `an ${kind} guard must read something the loop produces — otherwise nothing changes between iterations.`)
+  }
+  if (s.foreach !== undefined) {
+    if (typeof s.foreach === 'string') {
+      const p = s.foreach.trim()
+      if (!p) push('foreach', 'foreach needs a path (input.files, list.items) or a list.')
+      else if (p.includes('{{')) push('foreach', 'foreach takes a plain path like input.files, not a template.')
+      else if (!p.startsWith('input.') && !allIds.some(id => p.startsWith(id + '.'))) push('foreach', `foreach “${p}” names no step (or input.*).`)
+    } else if (Array.isArray(s.foreach) && s.foreach.length === 0) {
+      push('foreach', 'foreach over an empty list never runs.')
+    }
+  }
+  const seen = new Set<string>()
+  for (const b of s.steps || []) {
+    if (!b.id?.trim()) push('steps', 'every body step needs an id.')
+    else if (seen.has(b.id)) push('steps', `duplicate body step id “${b.id}”.`)
+    else if (allIds.includes(b.id)) push('steps', `body step “${b.id}” shadows the top-level step of the same name.`)
+    if (b.id) seen.add(b.id)
+    if (b.foreach !== undefined || b.until?.length || b.while?.length || b.steps?.length) push('steps', `“${b.id}”: a loop inside a loop is not supported.`)
+    if (!b.prompt?.trim() && !b.run?.trim() && !(b as any).judge && !b.send) push('steps', `body step “${b.id || '?'}” needs a prompt, run, judge or send.`)
   }
 }
 
