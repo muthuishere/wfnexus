@@ -34,7 +34,7 @@ func (e *Engine) Adapters() []Adapter {
 		if path, err := exec.LookPath(pr.Bin); err == nil {
 			a.Installed, a.Path = true, path
 		}
-		for _, p := range e.catalog.Providers.List() {
+		for _, p := range e.Catalog().Providers.List() {
 			preset := p.Preset
 			if preset == "" && len(p.Command) == 0 {
 				preset = "devin"
@@ -63,7 +63,7 @@ type ProviderModels struct {
 }
 
 func (e *Engine) ProviderModels(ctx context.Context, name string) (ProviderModels, error) {
-	p, ok := e.catalog.Providers.Get(name)
+	p, ok := e.Catalog().Providers.Get(name)
 	if !ok {
 		return ProviderModels{}, fmt.Errorf("no provider named %q", name)
 	}

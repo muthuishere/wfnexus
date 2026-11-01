@@ -88,7 +88,7 @@ func (e *Engine) catalogText(kind, needle string) string {
 	}
 	if want("skills") {
 		var lines []string
-		for _, s := range e.skills.List() {
+		for _, s := range e.Skills().List() {
 			if match(s.Name, s.Description) {
 				lines = append(lines, fmt.Sprintf("  %-28s %s", s.Name, firstLineOf(s.Description, 110)))
 			}
@@ -124,7 +124,7 @@ func (e *Engine) catalogText(kind, needle string) string {
 	}
 	if want("classifiers") {
 		var lines []string
-		for _, c := range e.catalog.Classifiers.List() {
+		for _, c := range e.Catalog().Classifiers.List() {
 			if match(c.Name, c.Backend, c.Description) {
 				lines = append(lines, fmt.Sprintf("  %-14s %-11s %s", c.Name, c.Backend, firstLineOf(c.Description, 90)))
 			}
@@ -134,7 +134,7 @@ func (e *Engine) catalogText(kind, needle string) string {
 	}
 	if want("mcp") {
 		var lines []string
-		for _, m := range e.catalog.Mcp.List() {
+		for _, m := range e.Catalog().Mcp.List() {
 			if match(m.Name, m.Description) {
 				lines = append(lines, "  "+m.Name)
 			}

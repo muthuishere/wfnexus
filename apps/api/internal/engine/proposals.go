@@ -116,7 +116,7 @@ func (e *Engine) classifierConfigured() bool {
 		return true
 	}
 	if e.cfg.DefaultClassifier != "" {
-		entry, ok := e.catalog.Classifiers.Get(e.cfg.DefaultClassifier)
+		entry, ok := e.Catalog().Classifiers.Get(e.cfg.DefaultClassifier)
 		if !ok {
 			return false
 		}

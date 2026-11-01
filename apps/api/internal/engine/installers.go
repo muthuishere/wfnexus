@@ -75,11 +75,11 @@ type SetupNeed struct {
 // prepare for. The catalog's command argv is not copied: that array is how a
 // published registry entry would otherwise become a command this binary runs.
 func (e *Engine) SetupNeeds() []SetupNeed {
-	if e.catalog == nil {
+	if e.Catalog() == nil {
 		return nil
 	}
-	out := make([]SetupNeed, 0, len(e.catalog.Providers.List()))
-	for _, p := range e.catalog.Providers.List() {
+	out := make([]SetupNeed, 0, len(e.Catalog().Providers.List()))
+	for _, p := range e.Catalog().Providers.List() {
 		need := SetupNeed{
 			Name: p.Name, Kind: string(p.Kind), Preset: p.Preset, APIKeyEnv: p.APIKeyEnv,
 		}

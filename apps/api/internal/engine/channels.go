@@ -92,7 +92,7 @@ func (e *Engine) DefaultChannel() string { return e.cfg.DefaultChannel }
 
 func (e *Engine) channelEntry(name string) (catalog.Channel, error) {
 	e.mu.Lock()
-	cat := e.catalog
+	cat := e.Catalog()
 	e.mu.Unlock()
 	if name == "" {
 		name = e.cfg.DefaultChannel
@@ -143,7 +143,7 @@ func adapterErr(err error) error {
 // Channels lists every registered channel.
 func (e *Engine) Channels(ctx context.Context) []ChannelInfo {
 	e.mu.Lock()
-	cat := e.catalog
+	cat := e.Catalog()
 	e.mu.Unlock()
 	out := []ChannelInfo{}
 	if cat == nil || cat.Channels == nil {
@@ -495,7 +495,7 @@ func (e *Engine) StartChannelReceivers(ctx context.Context) {
 					}
 				}
 				e.mu.Lock()
-				cat := e.catalog
+				cat := e.Catalog()
 				e.mu.Unlock()
 				if cat == nil || cat.Channels == nil {
 					continue

@@ -79,7 +79,11 @@ type Engine struct {
 	// database: every event goes here to be posted back to the platform.
 	sink func(kind string, payload any)
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// catMu guards skills and catalog, which the catalog watcher swaps while
+	// requests and steps read them. Separate from mu so a reader holding mu
+	// cannot deadlock against a reload.
+	catMu   sync.RWMutex
 	running map[uuid.UUID]context.CancelFunc
 	// admitMu serialises "is the concurrency group free?" with creating the
 	// run, so two ticks at once start exactly one (concurrency.go).
@@ -136,10 +140,18 @@ func (e *Engine) UseTransport(rt http.RoundTripper) { e.transport = rt }
 func (e *Engine) UseClassifier(opts tn.ClassifierOptions) { e.classifierOpts = &opts }
 
 // Skills is the registry backing every step's skill allowlist.
-func (e *Engine) Skills() *skills.Registry { return e.skills }
+func (e *Engine) Skills() *skills.Registry {
+	e.catMu.RLock()
+	defer e.catMu.RUnlock()
+	return e.skills
+}
 
 // Catalog is the provider / classifier / MCP registry set.
-func (e *Engine) Catalog() *catalog.Catalog { return e.catalog }
+func (e *Engine) Catalog() *catalog.Catalog {
+	e.catMu.RLock()
+	defer e.catMu.RUnlock()
+	return e.catalog
+}
 
 // SourceSkips lists sources or workflows that failed to load.
 func (e *Engine) SourceSkips() []workflow.Skip {
@@ -152,7 +164,7 @@ func (e *Engine) SourceSkips() []workflow.Skip {
 func (e *Engine) validator() workflow.Catalog {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return catalog.NewValidator(e.skills, e.catalog)
+	return catalog.NewValidator(e.Skills(), e.Catalog())
 }
 
 func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
@@ -187,7 +199,10 @@ func (e *Engine) ReloadDefinitions() error {
 		return err
 	}
 	e.mu.Lock()
-	e.defs, e.skills, e.catalog, e.sourceSkips = defs, reg, cat, skips
+	e.defs, e.sourceSkips = defs, skips
+	e.catMu.Lock()
+	e.skills, e.catalog = reg, cat
+	e.catMu.Unlock()
 	e.mu.Unlock()
 	return nil
 }
