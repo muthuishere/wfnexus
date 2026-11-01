@@ -196,10 +196,11 @@ export function wfxUsage() {
 export function wfxCommands() {
 	const cmds = new Set();
 	for (const line of wfxUsage().split('\n')) {
-		const m = line.match(/^\s+wfx ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?/);
+		// `wfx install server|runner` documents both subcommands.
+		const m = line.match(/^\s+wfx ([a-z][a-z-]*)(?: ([a-z][a-z-]*(?:\|[a-z][a-z-]*)*))?/);
 		if (!m) continue;
 		cmds.add(m[1]);
-		if (m[2]) cmds.add(`${m[1]} ${m[2]}`);
+		if (m[2]) for (const sub of m[2].split('|')) cmds.add(`${m[1]} ${sub}`);
 	}
 	return cmds;
 }

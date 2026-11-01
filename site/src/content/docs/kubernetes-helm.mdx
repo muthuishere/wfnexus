@@ -29,17 +29,17 @@ A `config:` key that looks like a secret (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PAS
 render.
 
 ```bash
-kubectl create namespace wfx
+kubectl create namespace wfnexus
 # The model key — read by NAME at call time, never written anywhere.
-kubectl -n wfx create secret generic wfnexus-llm --from-literal=OPENROUTER_API_KEY=...
+kubectl -n wfnexus create secret generic wfnexus-llm --from-literal=OPENROUTER_API_KEY=...
 # The env store's encryption key. Back this Secret up: lose it and stored values are unreadable.
-kubectl -n wfx create secret generic wfnexus-key --from-literal=WFX_SECRET_KEY="$(openssl rand -hex 32)"
+kubectl -n wfnexus create secret generic wfnexus-key --from-literal=WFX_SECRET_KEY="$(openssl rand -hex 32)"
 ```
 
 ## Smallest install: SQLite on a volume
 
 ```bash
-helm install wfx oci://ghcr.io/muthuishere/charts/wfnexus --version <chart-version> -n wfx \
+helm install wfnexus oci://ghcr.io/muthuishere/charts/wfnexus --version <chart-version> -n wfnexus \
   --set secretKey.existingSecret=wfnexus-key \
   --set 'extraSecretEnv[0].name=OPENROUTER_API_KEY' \
   --set 'extraSecretEnv[0].secretName=wfnexus-llm' \
@@ -56,7 +56,7 @@ and exits; Kubernetes restarts it and the second boot serves with authentication
 token from the first container's output:
 
 ```bash
-kubectl -n wfx logs deploy/wfx-wfnexus --previous | grep 'admin token'
+kubectl -n wfnexus logs deploy/wfnexus --previous | grep 'admin token'
 ```
 
 Then `wfx login --url https://wfx.example.com` and approve with it.
@@ -64,9 +64,9 @@ Then `wfx login --url https://wfx.example.com` and approve with it.
 ## Postgres and S3
 
 ```bash
-kubectl -n wfx create secret generic wfnexus-db \
+kubectl -n wfnexus create secret generic wfnexus-db \
   --from-literal=DATABASE_URL='postgres://user:pass@pg:5432/wfx?sslmode=require'
-kubectl -n wfx create secret generic wfnexus-s3 \
+kubectl -n wfnexus create secret generic wfnexus-s3 \
   --from-literal=S3_ACCESS_KEY=... --from-literal=S3_SECRET_KEY=...
 ```
 
@@ -95,7 +95,7 @@ The volume is still mounted: run workspaces live there.
 ## Workers
 
 ```bash
-kubectl -n wfx create secret generic wfnexus-runner \
+kubectl -n wfnexus create secret generic wfnexus-runner \
   --from-literal=WFX_RUNNER_TOKEN=wfx_$(openssl rand -hex 24)
 ```
 
