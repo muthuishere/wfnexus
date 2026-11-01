@@ -1,0 +1,245 @@
+# wfnexus Helm chart values.
+#
+# SECRETS ARE NEVER VALUES. Every credential below is a reference: the name of
+# a Secret you created yourself and the key inside it. Nothing in this file
+# should ever hold a password, a DSN with a password, a token or an API key.
+#
+# Plain (non-secret) server settings go in `config:` and land in a ConfigMap.
+# An environment variable wins over everything else in wfx-server's config, so
+# what you set here is what the server runs with.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  server:
+    repository: ghcr.io/muthuishere/wfx-server
+    # Empty = the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  runner:
+    repository: ghcr.io/muthuishere/wfx-runner
+    tag: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # Neither wfx-server nor wfx-runner calls the Kubernetes API.
+  automountServiceAccountToken: false
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+database:
+  # sqlite   - a file on the server's PVC (persistence.enabled must be true).
+  # postgres - an external Postgres; the DSN is read from an existing Secret.
+  driver: sqlite
+  sqlite:
+    path: /data/wfnexus.db
+  postgres:
+    # A Secret you created, holding the full DSN, e.g.
+    #   kubectl create secret generic wfnexus-db \
+    #     --from-literal=DATABASE_URL='postgres://user:pass@host:5432/wfx?sslmode=require'
+    existingSecret: ""
+    key: DATABASE_URL
+
+# Artifacts: the files steps produce.
+artifacts:
+  # folder - on the server's PVC.   s3 - any S3-compatible bucket.
+  driver: folder
+  folder:
+    path: /data/artifacts
+  s3:
+    endpoint: ""        # host:port, no scheme, e.g. minio.minio.svc:9000
+    bucket: wfx-artifacts
+    useSSL: true
+    # Secret holding the access and secret keys.
+    existingSecret: ""
+    accessKeyKey: S3_ACCESS_KEY
+    secretKeyKey: S3_SECRET_KEY
+
+# The server's volume, mounted at /data. It holds run workspaces (/data/runs),
+# the env-store key file (unless secretKey.existingSecret is set), and the
+# SQLite file / artifacts folder when those drivers are used.
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""      # "" = cluster default; "-" = no storage class
+  accessModes: [ReadWriteOnce]
+  size: 20Gi
+
+# ---------------------------------------------------------------------------
+# Secrets, by reference only
+# ---------------------------------------------------------------------------
+
+# The token a worker presents to join. Required when runners.enabled (without
+# it the server generates one that pods cannot learn).
+#   kubectl create secret generic wfnexus-runner \
+#     --from-literal=WFX_RUNNER_TOKEN=wfx_$(openssl rand -hex 24)
+runnerToken:
+  existingSecret: ""
+  key: WFX_RUNNER_TOKEN
+
+# The env store's encryption key. Unset = generated on first boot into
+# /data/secret.key on the PVC. Lose it and every stored value is unreadable,
+# so for production keep it in a Secret you back up.
+secretKey:
+  existingSecret: ""
+  key: WFX_SECRET_KEY
+
+# Other secret env the server needs, model provider keys above all. They are
+# read by NAME at call time (see WFX_LLM_API_KEY_ENV), never written anywhere.
+#   extraSecretEnv:
+#     - name: OPENROUTER_API_KEY
+#       secretName: wfnexus-llm
+#       key: OPENROUTER_API_KEY
+extraSecretEnv: []
+# Whole Secrets as env (every key becomes a variable): [secret-name, ...]
+extraEnvFromSecrets: []
+
+# ---------------------------------------------------------------------------
+# Plain server config -> ConfigMap -> env. Non-secret values only.
+# Keys are the env names wfx-server reads (apps/api/internal/config/config.go).
+# The chart itself sets WFX_MODE, WFX_ADDR, WFX_STORAGE_DRIVER, DATABASE_URL
+# (sqlite), WFX_ARTIFACT_DRIVER, WFX_ARTIFACT_DIR / S3_*, WFX_WORKDIR and
+# WFX_SECRET_KEY_PATH from the sections above; don't repeat them here.
+# ---------------------------------------------------------------------------
+config:
+  # The URL workers and the join command use. Set it to your ingress URL.
+  WFX_PUBLIC_URL: ""
+  # Labels the server serves ITSELF. Keep `local`; workers get other labels.
+  WFX_RUNNER_LABELS: "local"
+  WFX_MAX_CONCURRENT_RUNS: "4"
+  WFX_RUN_ARTIFACTS_KEEP: "20"
+  # LLM_BASE_URL: https://openrouter.ai/api/v1
+  # LLM_STYLE: openai
+  # WFX_MODEL: anthropic/claude-sonnet-4.5
+  # WFX_LLM_API_KEY_ENV: OPENROUTER_API_KEY     # the NAME of the key variable
+  # WFX_DEFAULT_PROVIDER: ""
+  # WFX_FALLBACK_PROVIDERS: ""                  # comma-separated
+  # WFX_CLASSIFIER_BASE_URL: https://openrouter.ai/api/v1
+  # WFX_CLASSIFIER_MODEL: typesafe/jev-1.13
+  # WFX_CLASSIFIER_API_KEY_ENV: OPENROUTER_API_KEY
+  # WFX_DEFAULT_CLASSIFIER: ""
+  # WFX_DEFAULT_CHANNEL: ""
+  # WFX_PROPOSAL_AUTO_APPROVE: "0"
+  # WFX_TEMPLATES: "off"                        # no template gallery
+  # WFX_MOUNT_ROOTS: ""                         # allowlist for step mounts
+# Extra plain env in list form (supports valueFrom).
+extraEnv: []
+
+# ---------------------------------------------------------------------------
+# carry: restores tools and config from a bucket before the process starts.
+# Both images start as `carry run -- ...`, a no-op without CARRY_REPO. When
+# enabled this applies to the server and every runner pool.
+# ---------------------------------------------------------------------------
+carry:
+  enabled: false
+  repo: ""              # s3://bucket/prefix
+  s3Endpoint: ""
+  toolPubkey: ""        # a public key, not a secret
+  state: ""             # server only; each runner defaults to its pod name
+  # Secret holding AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY for the bucket.
+  awsCredentialsSecret: ""
+  # Secret holding the state encryption key file. Mounted read-only at
+  # /etc/carry and CARRY_KEY_FILE points at it.
+  keyFileSecret: ""
+  keyFileKey: carry.key
+
+# ---------------------------------------------------------------------------
+# The server
+# ---------------------------------------------------------------------------
+server:
+  # Always 1: the engine holds running steps in memory. Scale with runners.
+  port: 8090
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { memory: 2Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+    # Agent CLIs write under $HOME, so the root filesystem stays writable.
+    readOnlyRootFilesystem: false
+  # GET /api/health is public and answers {"ok":true}.
+  startupProbe:
+    httpGet: { path: /api/health, port: http }
+    periodSeconds: 5
+    failureThreshold: 60   # carry may restore tools first
+  readinessProbe:
+    httpGet: { path: /api/health, port: http }
+    periodSeconds: 10
+    timeoutSeconds: 3
+  livenessProbe:
+    httpGet: { path: /api/health, port: http }
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraVolumes: []
+  extraVolumeMounts: []
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # Run logs stream over SSE; on ingress-nginx turn buffering off:
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: wfx.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: wfx-tls
+  #    hosts: [wfx.example.com]
+
+# ---------------------------------------------------------------------------
+# Runners (workers). One Deployment per pool: a pool is a label set plus the
+# image whose toolchain those labels promise. Requires runnerToken.existingSecret.
+# ---------------------------------------------------------------------------
+runners:
+  enabled: false
+  # The URL runners join. Empty = this release's in-cluster Service.
+  serverUrl: ""
+  pools:
+    - name: linux
+      replicas: 2
+      labels: "self-hosted,linux"
+      # image: { repository: ghcr.io/you/wfx-runner-jdk, tag: "1.0" }
+      resources:
+        requests: { cpu: 500m, memory: 1Gi }
+        limits: { memory: 4Gi }
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+      extraEnv: []
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities: { drop: [ALL] }
+    readOnlyRootFilesystem: false

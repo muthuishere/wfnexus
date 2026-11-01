@@ -1,0 +1,18 @@
+{{- range $k, $v := .Values.config }}
+{{- if regexMatch "(?i)(KEY|TOKEN|SECRET|PASSWORD|_PW)$" $k }}
+{{- if not (regexMatch "_ENV$" $k) }}
+{{- fail (printf "config.%s looks like a secret; put it in a Secret and reference it via extraSecretEnv" $k) }}
+{{- end }}
+{{- end }}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wfnexus.fullname" . }}
+  labels: {{- include "wfnexus.labels" . | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.config }}
+  {{- if ne (toString $v) "" }}
+  {{ $k }}: {{ toString $v | quote }}
+  {{- end }}
+  {{- end }}

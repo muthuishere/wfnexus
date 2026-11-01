@@ -208,3 +208,20 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/wfx-runner:${{ steps.meta.outputs.v }}
             ghcr.io/${{ github.repository_owner }}/wfx-runner:${{ steps.meta.outputs.minor }}
             ghcr.io/${{ github.repository_owner }}/wfx-runner:latest
+
+      - uses: azure/setup-helm@v4
+        with: { version: v3.16.4 }
+
+      - name: Publish the Helm chart
+        # OCI chart at ghcr.io/<owner>/charts/wfnexus, versioned with the tag,
+        # defaulting to the images published above. Same token, read from env.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.meta.outputs.v }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          helm lint infra/helm/wfnexus
+          helm package infra/helm/wfnexus --version "$V" --app-version "$V" -d /tmp/chart
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "/tmp/chart/wfnexus-$V.tgz" "oci://ghcr.io/${OWNER}/charts"
