@@ -76,7 +76,10 @@ func login(args []string) error {
 	// through its tunnel and stores the token on that context.
 	saveAs := ""
 	if c, err := loadContexts(); err == nil {
-		if ctx, ok := c.Contexts[hostKey(host)]; ok && ctx.Via != "" {
+		if ctx, ok := c.Contexts[hostKey(host)]; ok && ctx.Via == "" && !strings.Contains(host, "://") {
+			// A profile named rather than addressed: `wfx login --url prod`.
+			saveAs, host = hostKey(host), ctx.URL
+		} else if ok && ctx.Via != "" {
 			r, err := viaResolved(resolved{url: ctx.URL, name: hostKey(host)}, ctx)
 			if err != nil {
 				return err

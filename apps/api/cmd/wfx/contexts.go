@@ -223,8 +223,9 @@ func putContext(hostURL, token, user string) error {
 		return err
 	}
 	key := hostKey(hostURL)
-	if prev, ok := c.Contexts[key]; ok && prev.Via != "" {
-		// A login through a via context keeps its URL and tunnel.
+	if prev, ok := c.Contexts[key]; ok && (prev.Via != "" || !strings.Contains(hostURL, "://")) {
+		// A login through a via context — or through a profile addressed by
+		// its NAME — keeps that profile's URL and tunnel.
 		prev.Token, prev.User = token, user
 		c.Current = key
 		return saveContexts(c)

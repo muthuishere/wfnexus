@@ -14,12 +14,19 @@ wfnexus is three binaries:
 With no configuration at all, the server runs on SQLite and a local folder.
 
 <Aside type="caution" title="No published release yet">
-	The repository ships `install.sh` and `install.ps1`, which download a release and check its
-	checksum. No GitHub release has been published yet, so for now build from source, as shown
-	below. Once a release exists,
-	`curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh` will be
-	the one-liner.
+	The repository ships `install.sh` (Linux, macOS) and `install.cmd` (Windows 10+, using only
+	`curl.exe`, `certutil` and `reg`), which download a release and check its checksum. No GitHub
+	release has been published yet, so for now build from source, as shown below. Once a release
+	exists, `curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh`
+	will be the one-liner.
 </Aside>
+
+Installing the `wfx` CLI with either script also installs this platform's agent skills into
+`~/.claude/skills` and `~/.agents/skills` (it runs `wfx install --skills`) and prints one line
+saying how many and where. To skip that, set `WFX_SKILLS=0` or pass `--no-skills`
+(`curl … | sh -s -- --no-skills`, or `install.cmd --no-skills`). Installing `wfx-server` or
+`wfx-runner` never touches skills. If the skills step fails, the script warns and the CLI install
+still completes.
 
 <Steps>
 

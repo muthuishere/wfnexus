@@ -34,7 +34,7 @@
     "deny", "args_contain", "reason", "questions", "below", "at_least", "is", "backoff_sec"
   ],
   "paths": [
-    "install.sh", "install.ps1", "registries.json", "docs/ROADMAP.md", "Taskfile.yml",
+    "install.sh", "install.cmd", "registries.json", "docs/ROADMAP.md", "Taskfile.yml",
     "apps/api/cmd/wfx", "apps/api/cmd/wfx-runner", "apps/ui/src/App.tsx",
     "apps/api/internal/engine/redact.go", "apps/api/internal/engine/state.go", "apps/api/internal/workflow/categories.go",
     "workflows/mock-demo.yaml", "workflows/bug-fix.yaml"

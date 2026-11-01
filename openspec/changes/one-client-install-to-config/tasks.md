@@ -29,11 +29,11 @@
 ## 6. Follow-ups (not in this PR)
 
 - [ ] 6.1 `wfx sync` workflows + skills (reuse `/api/bundles` publish/tar/install between contexts).
-- [ ] 6.2 `install.ps1` `WFX_BIN` and Windows `--to local`.
+- [x] 6.2 Windows installer: superseded by `profiles-and-server-packages` (install.cmd replaces install.ps1).
 - [ ] 6.3 `wfx install --build`: build from source (`task release`, or `docker build` of infra/Dockerfile*) instead of fetching.
 - [ ] 6.4 Align `--set` keys with the helm chart once `infra/helm/wfnexus` lands; runner on k8s.
-- [ ] 6.5 `--image` server in local mode (env/volume conventions), or a compose-over-ssh path.
+- [ ] 6.5 `--image` server in local mode (env/volume conventions). The compose-over-ssh path landed with `--compose` (PR #64, folded into `profiles-and-server-packages`).
 - [ ] 6.6 Per-state tool listing (needs a carry `tool ls <state>` or a read of the state manifest).
-- [ ] 6.7 Auto `wfx context add` after an ssh install; a web UI page for carry.
+- [ ] 6.7 A web UI page for carry. (Auto-registering after an install is `wfx profile create --install`, see `profiles-and-server-packages`.)
 - [ ] 6.8 `wfx config mv` (carry `mv`) and `wfx config diff` (carry `diff`).
 - [ ] 6.9 Live end-to-end against a real bucket (MinIO) with the real carry binary.

@@ -43,17 +43,52 @@ carry tool promote jq@1.7.1 --channel stable
 
 ## Get the server there with wfx
 
-`wfx install` puts the server or a runner where you say, with the same checksum-verified
-`install.sh`, the published images, or the Helm chart. It prints every command before running it,
-and `--dry-run` prints only.
+A server is a [profile](/wfnexus/concepts/profiles/): `wfx profile create <name> --install …` puts
+the server where you say, with the same checksum-verified `install.sh`, docker compose, the
+published image, or the Helm chart, then registers the profile, switches to it and logs in. A
+runner is `wfx worker install --to …`. Both print every command before running it, and `--dry-run`
+prints only.
 
 ```bash
-wfx install server --to local                       # wfx-server into ~/.local/bin
-wfx install server --to ssh://ops@box               # the same, on a box you reach over ssh
-wfx install server --to ssh://ops@box --image       # docker run the GHCR image there (loopback port)
-wfx install server --to k8s --version v0.3.0        # helm upgrade --install infra/helm/wfnexus
-wfx install runner --to ssh://ops@worker-1          # a runner; then `wfx workers` for the join line
+wfx profile create dev  --install local                        # wfx-server into ~/.local/bin
+wfx profile create box  --install ssh://ops@box --compose      # server + Postgres with docker compose there
+wfx profile create box  --install ssh://ops@box --image        # docker run the GHCR image (loopback port)
+wfx profile create here --install local --compose              # the compose stack on this machine
+wfx profile create prod --install k8s --version v0.3.0         # helm upgrade --install infra/helm/wfnexus
+wfx worker install --to ssh://ops@worker-1                     # a runner; then `wfx workers` for the join line
 ```
+
+## Skills and MCP servers on the server
+
+`wfx skill` and `wfx mcp` work like `wfx tool`, on the current profile's server:
+
+```bash
+wfx skill add pr-reviewer                          # a skill this server ships, by name
+wfx skill add ./skills/my-skill                    # a local folder, uploaded
+wfx skill add https://github.com/acme/skills.git --ref v2   # a git source, at a ref
+wfx skill ls                                       # installed skills and git sources
+wfx skill rm my-skill
+
+wfx env set GITHUB_TOKEN                           # the credential goes in the env store…
+wfx mcp add github --set command="npx -y @modelcontextprotocol/server-github" --env GITHUB_TOKEN
+wfx mcp add docs --set url=https://mcp.example.com/mcp   # a remote server
+wfx mcp ls
+wfx mcp rm docs
+```
+
+`--env NAME` stores the **name** only. The value is read from the env store when a step that uses
+the server starts, so it never sits in `mcp.json`, in your shell history, or in a log. A literal
+`--set env.X=…` or `--set header.X=…` that looks like a credential is refused.
+
+**Live, no restart.** The server re-reads its catalog (skills, MCP servers, providers) when any of
+its files change: after `wfx skill`/`wfx mcp`, after a rollback, or after an edit by hand. A step
+already running keeps the toolkit it started with; the next step sees the change.
+`WFX_CATALOG_POLL` sets how often the server checks, in seconds (default 2, `0` turns it off).
+
+**Versioned with carry.** After each change the server records all of its skills and MCP servers
+as one file in its carry state, so the change is one line in `wfx config log`, and
+`wfx config rollback <n>` puts those skills and servers back on disk and reloads them. When carry
+is off, the change still applies and the command says it was not versioned.
 
 The image path passes configuration **by name** (`-e CARRY_REPO -e AWS_SECRET_ACCESS_KEY …`), so a
 value in your shell reaches the container and never appears on a command line.
@@ -61,7 +96,7 @@ value in your shell reaches the container and never appears on a command line.
 ## Install it, and set config, with wfx
 
 The server runs carry with its **own** bucket credentials, so `wfx` needs only your wfx login: no S3
-keys and no state key on your laptop. Every verb acts on the current context (or `--context <name>`),
+keys and no state key on your laptop. Every verb acts on the current profile (or `--context <name>`),
 on the server's state by default, or a worker's with `--on <worker>`.
 
 ```bash
@@ -124,6 +159,6 @@ touches the bucket; deletes and renames happen only through `carry rm` / `carry 
 
 carry and the SSH tunnel fit together: carry shapes what is installed on the box, and the box never
 exposes its API. Configure the server with carry, keep it on loopback, and reach it with
-`wfx context add … --via ssh://…` as in [Remote access over SSH](/wfnexus/concepts/remote-access/).
+`wfx profile create … --via ssh://…` as in [Remote access over SSH](/wfnexus/concepts/remote-access/).
 Workers do the same from their side: each restores its own `CARRY_STATE` and connects outbound with
 `wfx-runner`, so no machine in the pool needs an inbound port.

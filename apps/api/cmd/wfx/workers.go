@@ -30,6 +30,10 @@ type poolView struct {
 
 func workers(args []string) error {
 	switch {
+	case len(args) >= 1 && args[0] == "install":
+		// A runner is provisioned FOR the current profile's server; it has no
+		// profile of its own because nothing talks to it.
+		return deployCmd(append([]string{"runner"}, args[1:]...))
 	case len(args) >= 2 && (args[0] == "rm" || args[0] == "remove"):
 		if err := call("DELETE", "/api/workers/"+url.PathEscape(args[1]), nil, nil); err != nil {
 			return err

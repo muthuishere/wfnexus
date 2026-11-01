@@ -231,6 +231,11 @@ func (e *Engine) skillRoots() []skills.Root {
 	for _, d := range skills.DefaultRoots(e.cfg.SkillsDir) {
 		roots = append(roots, skills.Root{Dir: d})
 	}
+	// `wfx skill add` installs, after the machine's own roots so they never
+	// change what an existing name resolves to.
+	if st, err := os.Stat(e.InstalledSkillsDir()); err == nil && st.IsDir() {
+		roots = append(roots, skills.Root{Dir: e.InstalledSkillsDir(), Label: "installed"})
+	}
 	return append(roots, e.skillSourceRoots()...)
 }
 
