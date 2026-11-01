@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -124,7 +125,8 @@ func TestSyncLocalToServerToServerToLocal(t *testing.T) {
 		t.Fatalf("local copy: %q %v", got, err)
 	}
 	info, _ := os.Stat(filepath.Join(out, "env.defaults"))
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits; os.Stat reports 0666 there.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("env.defaults must be 0600, is %o", info.Mode().Perm())
 	}
 	// --dry-run writes nothing.
