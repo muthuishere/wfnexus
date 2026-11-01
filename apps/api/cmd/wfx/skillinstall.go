@@ -39,13 +39,17 @@ func skillRoots() []string {
 // is the skills; the flag is there so adding the next one does not need a new
 // verb.
 func installCmd(args []string) error {
+	if c := first(args); c == "server" || c == "runner" {
+		return deployCmd(args)
+	}
 	if hasFlag(args, "--skills") {
 		return skillInstall(args)
 	}
 	if hasFlag(args, "--list") {
 		return skillList()
 	}
-	return fmt.Errorf("usage: wfx install --skills [name…] [--to DIR] [--force]\n" +
+	return fmt.Errorf("usage: wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]\n" +
+		"       wfx install --skills [name…] [--to DIR] [--force]\n" +
 		"       wfx install --list            what this platform ships")
 }
 
