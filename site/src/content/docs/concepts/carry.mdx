@@ -41,19 +41,77 @@ carry tool publish jq@1.7.1 --file ./jq-linux-amd64 --platform linux/amd64
 carry tool promote jq@1.7.1 --channel stable
 ```
 
-## Install it, and set config, on any machine
+## Get the server there with wfx
 
-Every change names a state: the server's (the project name) or one worker's.
+`wfx install` puts the server or a runner where you say, with the same checksum-verified
+`install.sh`, the published images, or the Helm chart. It prints every command before running it,
+and `--dry-run` prints only.
 
 ```bash
-carry tool add wfnexus jq@1.7.1                     # install a tool, no rebuild
-carry put  wfnexus:/home/wfx/.gitconfig ./gitconfig # place a config file
-carry env  set wfnexus LOG_LEVEL=debug              # set an env default
-carry log  wfnexus                                  # every version
-carry rollback wfnexus 3                            # go back to one
+wfx install server --to local                       # wfx-server into ~/.local/bin
+wfx install server --to ssh://ops@box               # the same, on a box you reach over ssh
+wfx install server --to ssh://ops@box --image       # docker run the GHCR image there (loopback port)
+wfx install server --to k8s --version v0.3.0        # helm upgrade --install infra/helm/wfnexus
+wfx install runner --to ssh://ops@worker-1          # a runner; then `wfx workers` for the join line
 ```
 
-Running machines pick up a new version on their next poll. A file deleted inside a container never
+The image path passes configuration **by name** (`-e CARRY_REPO -e AWS_SECRET_ACCESS_KEY …`), so a
+value in your shell reaches the container and never appears on a command line.
+
+## Install it, and set config, with wfx
+
+The server runs carry with its **own** bucket credentials, so `wfx` needs only your wfx login: no S3
+keys and no state key on your laptop. Every verb acts on the current context (or `--context <name>`),
+on the server's state by default, or a worker's with `--on <worker>`.
+
+```bash
+wfx config status                                   # is carry on for this server
+wfx tool add jq@1.7.1                               # install a tool, no rebuild
+wfx tool add gh@2.60.0 --on worker-1                # on one worker
+wfx tool rm jq                                      # and take it off
+wfx tool ls                                         # what is published in the bucket
+wfx config put /home/wfx/.gitconfig ./gitconfig     # place a config file
+wfx config get /home/wfx/.gitconfig -o ./gitconfig  # read it back
+wfx config ls                                       # every file in the state
+wfx config env set LOG_LEVEL=debug                  # set an env default
+wfx config env ls                                   # names only; a value is never printed
+wfx config log                                      # every version
+wfx config rollback 3                               # go back to one
+```
+
+Running machines pick up a new version on their next poll. Nothing reaches into a worker: the server
+writes the bucket, and the worker's own `carry run` pulls the change. When carry is not configured on
+the server, these verbs answer with what to set (`CARRY_REPO` and friends) instead of failing
+silently.
+
+## Move config between places
+
+`wfx sync` copies config files and env defaults from one place to another. A place is a context or a
+local folder (`local:DIR`, holding `files/<absolute path>` and a 0600 `env.defaults`).
+
+```bash
+wfx sync --from local:./box-config --to prod                 # local → server
+wfx sync --from prod --to local:./backup                     # server → local
+wfx sync --from staging --to prod --dry-run                  # server → another server, preview
+wfx sync --from prod --state worker-1 --to prod --to-state worker-2   # one worker's setup onto another
+wfx config put /etc/app.yaml ./app.yaml --to prod            # one file, to another context
+```
+
+Sync is additive: nothing at the destination is deleted (`wfx config rm` does that). Secrets do not
+move with it. They stay in the env store. Workflows and skills move with `wfx publish` / `wfx pull`.
+
+## The same, with the carry CLI
+
+Every `wfx` verb above is the server running one of these. Use them directly when you hold the
+bucket credentials yourself:
+
+```bash
+carry tool add wfnexus jq@1.7.1
+carry put  wfnexus:/home/wfx/.gitconfig ./gitconfig
+carry env  set wfnexus LOG_LEVEL=debug
+carry log  wfnexus
+carry rollback wfnexus 3
+``` A file deleted inside a container never
 touches the bucket; deletes and renames happen only through `carry rm` / `carry mv`.
 
 <Aside type="tip" title="Keys are not carry's job">

@@ -5,6 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh | sh
 #   WFX_VERSION=v0.1.0 sh install.sh        # pin a version
 #   WFX_INSTALL_DIR=~/bin  sh install.sh    # somewhere else on your PATH
+#   WFX_BIN=wfx-server sh install.sh        # the server (or wfx-runner) instead;
+#                                           # `wfx install server --to …` uses this
 #
 # It needs no Go, no Node, no container runtime and no clone of the repository,
 # and it writes nothing outside your own directories — no sudo, ever.
@@ -17,7 +19,11 @@ set -eu
 REPO="${WFX_REPO:-muthuishere/wfnexus}"
 BASE="${WFX_BASE_URL:-https://github.com/$REPO/releases}"
 INSTALL_DIR="${WFX_INSTALL_DIR:-$HOME/.local/bin}"   # same dir `task install` uses
-BIN=wfx
+BIN="${WFX_BIN:-wfx}"
+case "$BIN" in
+  wfx|wfx-server|wfx-runner) ;;
+  *) echo "wfx install: WFX_BIN must be wfx, wfx-server or wfx-runner (got '$BIN')" >&2; exit 1 ;;
+esac
 
 die() { echo "wfx install: $*" >&2; exit 1; }
 say() { echo "$*"; }

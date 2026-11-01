@@ -139,6 +139,12 @@ func run(args []string) error {
 		return installCmd(rest)
 	case "env":
 		return envCmd(rest)
+	case "tool", "tools":
+		return toolCmd(rest)
+	case "config":
+		return configCmd(rest)
+	case "sync":
+		return syncCmd(rest)
 	case "state":
 		return stateCmd(rest)
 	case "prices":
@@ -172,6 +178,7 @@ func shortUsage() {
   wfx apply <file.yaml>            install a workflow
   wfx doctor                       what is wired on this machine
   wfx login --url <host>           sign in to a host
+  wfx install server --to <where>  get a server running; then wfx tool / wfx config
 
 wfx help all   every command
 `)
@@ -206,6 +213,14 @@ func usage() {
   wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)
   wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
+  wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]
+                                   get the server or a runner there (install.sh, GHCR image, or helm)
+  wfx tool add <name>[@v] [--on worker]   install a tool through the server's carry; also rm, ls
+  wfx config put <abs-path> <file> [--on worker] [--to ctx]  place a config file; also get, ls, rm
+  wfx config env set K=V | unset K | ls   non-secret env defaults (names only are ever shown)
+  wfx config log | rollback <n> | status  carry history, roll back, is carry on
+  wfx sync --from <ctx|local:DIR> --to <ctx|local:DIR> [--only files,env] [--dry-run]
+                                   move config files and env defaults between places
   wfx version [--json]             which binary this is, and where it came from
   wfx install --list               what this platform ships
   wfx env [--project p]            the platform's env store (values are never shown)

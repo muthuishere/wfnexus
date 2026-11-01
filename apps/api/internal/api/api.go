@@ -184,6 +184,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		// Tools, config files and env defaults on the server or a worker,
+		// through the server's own carry (carry.go).
+		s.carryRoutes(r)
 		r.Get("/projects", s.listProjects)
 		r.Post("/projects", s.createProject)
 		r.Get("/projects/{name}", s.getProject)

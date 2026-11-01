@@ -98,6 +98,9 @@ var resourcePerms = map[string][2]string{
 	"bundles":    {PermBundlesRead, PermPublish},
 	"users":      {PermAdminRead, PermAdminWrite},
 	"roles":      {PermAdminRead, PermAdminWrite},
+	// carry installs binaries and config on the server and workers: what
+	// runs on the machine, so it is an operator's permission.
+	"carry": {PermAdminRead, PermAdminWrite},
 	// How a subject is obtained, and what it may always ask about itself.
 	"device": {PermPublic, PermPublic},
 	"health": {PermPublic, PermPublic},
