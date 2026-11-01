@@ -18,7 +18,7 @@ import (
 // ABSENT is not an error: the one-person scale must stay zero-config (ADR 0021).
 func (e *Engine) notifiers() []notify.Notifier {
 	e.mu.Lock()
-	cat := e.catalog
+	cat := e.Catalog()
 	e.mu.Unlock()
 	if cat == nil || cat.Notifiers == nil {
 		return nil

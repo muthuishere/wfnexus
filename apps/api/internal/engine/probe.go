@@ -60,7 +60,7 @@ func (e *Engine) probe(ctx context.Context) DoctorProbe {
 			Style: e.cfg.LLMStyle, Model: e.cfg.Model, APIKeyEnv: e.cfg.LLMAPIKeyEnv}
 		return e.probeProvider(ctx, p)
 	}
-	p, ok := e.catalog.Providers.Get(name)
+	p, ok := e.Catalog().Providers.Get(name)
 	if !ok {
 		return DoctorProbe{Provider: name, Error: "not in the registry"}
 	}

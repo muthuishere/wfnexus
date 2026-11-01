@@ -127,7 +127,7 @@ func (e *Engine) classifierFor(step *workflow.Step) (*tn.Classifier, error) {
 		name = e.cfg.DefaultClassifier
 	}
 	if name != "" {
-		entry, err := e.catalog.Classifiers.Require(name)
+		entry, err := e.Catalog().Classifiers.Require(name)
 		if err != nil {
 			return nil, err
 		}

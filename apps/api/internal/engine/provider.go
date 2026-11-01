@@ -99,7 +99,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 			Price: priceOf(catalog.Provider{Kind: catalog.KindHTTP, BaseURL: e.cfg.LLMBaseURL}, model, e.prices())}, nil
 	}
 
-	p, err := e.catalog.Providers.Require(step.Provider)
+	p, err := e.Catalog().Providers.Require(step.Provider)
 	if err != nil {
 		return resolved{}, err
 	}
@@ -333,7 +333,7 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 // registry does not know is left out; the toolkit already refuses it.
 func (e *Engine) skillDirs(step *workflow.Step) map[string]string {
 	out := map[string]string{}
-	if e.skills == nil {
+	if e.Skills() == nil {
 		return out
 	}
 	names := append([]string{}, step.Skills...)
@@ -341,7 +341,7 @@ func (e *Engine) skillDirs(step *workflow.Step) map[string]string {
 		names = append(names, m.Skills...)
 	}
 	for _, n := range names {
-		if s, ok := e.skills.Get(n); ok {
+		if s, ok := e.Skills().Get(n); ok {
 			out[n] = filepath.Dir(s.Location)
 		}
 	}
@@ -368,7 +368,7 @@ func (e *Engine) providerChain(step *workflow.Step) []string {
 			if n == "" || seen[n] {
 				continue
 			}
-			if _, ok := e.catalog.Providers.Get(n); !ok {
+			if _, ok := e.Catalog().Providers.Get(n); !ok {
 				continue // named but not configured: nothing to fall back to
 			}
 			seen[n] = true
@@ -376,7 +376,7 @@ func (e *Engine) providerChain(step *workflow.Step) []string {
 		}
 	}
 	if first != "" {
-		if p, ok := e.catalog.Providers.Get(first); ok {
+		if p, ok := e.Catalog().Providers.Get(first); ok {
 			add(p.Fallback)
 		}
 	}
