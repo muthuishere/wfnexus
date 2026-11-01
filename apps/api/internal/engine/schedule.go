@@ -37,6 +37,9 @@ func (e *Engine) runDAG(ctx context.Context, runID uuid.UUID, def *workflow.Defi
 		return err
 	}
 	for _, st := range existing {
+		if isIterationRow(st.StepID) {
+			continue // the loop step's own row says whether it finished
+		}
 		if st.Status == "done" || st.Status == "skipped" {
 			done[st.StepID] = true
 			if len(st.Output) > 0 {
@@ -202,6 +205,9 @@ const (
 // policy and gates, and records the terminal run status itself when it halts.
 // Shared by the sequential and the DAG paths so the two cannot drift.
 func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) (map[string]any, stepOutcome) {
+	if step.IsLoop() {
+		return e.runLoop(ctx, runID, def, step, data)
+	}
 	st, err := e.store.GetStep(ctx, runID, step.ID)
 	if err != nil {
 		e.failStep(ctx, runID, step.ID, err)

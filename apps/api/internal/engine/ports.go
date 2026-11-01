@@ -56,6 +56,7 @@ type Store interface {
 	ListSteps(ctx context.Context, runID uuid.UUID) ([]*model.StepRun, error)
 	PatchStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) error
 	ResetStepsFrom(ctx context.Context, runID uuid.UUID, position int) error
+	ResetStepsRange(ctx context.Context, runID uuid.UUID, from, to int) error
 
 	// events and artifacts
 	AppendEvent(ctx context.Context, runID uuid.UUID, stepID, kind string, payload any) (*model.Event, error)

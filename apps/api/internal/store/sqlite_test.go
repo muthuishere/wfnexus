@@ -436,3 +436,37 @@ func TestRunStartedAtIsStampedOnceWhenItLeavesTheQueue(t *testing.T) {
 		t.Fatalf("start time moved: %v -> %v", first, got.StartedAt)
 	}
 }
+
+// ResetStepsRange resets only [from, to): a retry of a step after a finished
+// loop must not wipe that loop's iteration rows, which sort after every step.
+func TestResetStepsRangeLeavesOtherRowsAlone(t *testing.T) {
+	st := openSQLite(t)
+	ctx := context.Background()
+	run, err := st.CreateRun(ctx, "demo", "loops", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]int{"a": 0, "b": 1, "a[0]": 1_000_000, "b[0]": 1_100_000}
+	for id, pos := range rows {
+		if err := st.EnsureStep(ctx, run.ID, id, pos); err != nil {
+			t.Fatal(err)
+		}
+		done := "done"
+		if err := st.PatchStep(ctx, run.ID, id, StepPatch{Status: &done}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.ResetStepsRange(ctx, run.ID, 1, 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ResetStepsRange(ctx, run.ID, 1_100_000, -1); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"a": "done", "b": "pending", "a[0]": "done", "b[0]": "pending"}
+	for id, w := range want {
+		s, _ := st.GetStep(ctx, run.ID, id)
+		if s.Status != w {
+			t.Fatalf("%s = %s, want %s", id, s.Status, w)
+		}
+	}
+}

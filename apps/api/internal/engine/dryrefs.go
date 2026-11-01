@@ -144,7 +144,7 @@ func checkRefs(def *workflow.Definition, s *workflow.Step, text string, waveOf m
 			})
 			continue
 		}
-		props, _ := other.OutputSchema["properties"].(map[string]any)
+		props, _ := other.ResultSchema()["properties"].(map[string]any)
 		if _, ok := props[field]; !ok {
 			out = append(out, DryProblem{
 				Step: s.ID, Field: fieldName(s), Fatal: false,

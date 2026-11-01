@@ -68,6 +68,7 @@ one of bash, sh, pwsh, powershell or cmd.
 | Classifier | `decide` (typed questions before the agent), `judge` (a pure decision node), `classifier` |
 | Placement | `provider`, `model`, `runs-on`, `env` |
 | Graph | `needs`, `consumes`, `produces`, `when` |
+| Loops | `foreach`, `parallel`, `until`, `while`, `max_iterations`, `steps` (see [Loops](/wfnexus/concepts/loops/)) |
 | Memory | `state` (see [State and memory](/wfnexus/concepts/state-and-memory/)) |
 
 ## Gates
@@ -106,6 +107,8 @@ guardrails:
 Steps run in order by default. If any step declares `needs`, the workflow becomes a DAG, and
 steps whose needs are met run in parallel, up to `max_parallel`. `consumes` and `produces` let
 `internal/planner` work out the order from data, and `when` skips a step whose condition is false.
+A step can also repeat: once per item with `foreach`, or until a check passes with `until` (see
+[Loops](/wfnexus/concepts/loops/)).
 
 <Aside type="tip" title="Prove it before it runs">
 	`wfx validate <file>` checks the file without writing anything. `wfx dryrun <workflow>` answers

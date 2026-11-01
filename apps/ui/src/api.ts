@@ -59,7 +59,22 @@ export type Step = {
   // added by the agent-harness work — may be absent on an older API
   soul?: string; budget?: Budget; guardrails?: Guardrail[]; team?: TeamMember[]
   decide?: Decide; askHuman?: boolean
+  /** applicability guard — the step runs only when every guard holds */
+  when?: Guard[]
+  // ── loops (workflow/loop.go) ──
+  /** repeat once per item: a path (`input.files`, `list.items`) or a literal list */
+  foreach?: string | unknown[]
+  /** cap on concurrent foreach iterations; 0/1 ⇒ one at a time */
+  parallel?: number
+  /** repeat until every guard holds / while every guard holds (checked after each iteration) */
+  until?: Guard[]; while?: Guard[]
+  /** required for until/while; for foreach, a ceiling on the list */
+  maxIterations?: number
+  /** the loop body: run in order once per iteration */
+  steps?: Step[]
 }
+/** A condition over the facts so far: `path` is `<step>.<field>` or `input.<key>`. */
+export type Guard = { path: string; equals?: unknown; exists?: boolean }
 /** `on:` — what may start a workflow. Actions' own block (see triggers.go). */
 export type Triggers = {
   dispatch?: boolean

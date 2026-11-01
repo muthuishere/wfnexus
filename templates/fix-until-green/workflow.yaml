@@ -1,0 +1,92 @@
+# fix-until-green — run the suite; while it is red, let an agent fix one thing and re-run it,
+# at most four rounds; then a person approves the branch before anything is pushed.
+#
+# THE LOOP is the point of this template (site: concepts/loops):
+#   repair:  until check.ok = true, max_iterations: 4
+#     fix    — an agent reads the LAST failing output ({{ .Steps.check.stdout }} from the
+#              previous round, the baseline on round 0) and makes the smallest change
+#     check  — re-runs the suite; its `ok` is what the loop condition reads
+# Every round is its own row on the run (repair[0].fix, repair[0].check, …) with its own
+# prompt, output and timing. If round 4 is still red the loop — and the run — FAIL with the
+# last check quoted: it never hands back a "done" that is still red.
+name: fix-until-green
+template:
+  title: Fix until green — bounded agent repair loop with a human gate
+  category: development
+  summary: >-
+    Runs the test suite; if it is red, an agent fixes the first failure and the suite runs
+    again, round after round, until it is green or four rounds are spent. Every round is
+    recorded. A person approves the branch before it is pushed.
+  fill:
+    - "test_command: the command that runs the suite (default: go test ./...)"
+    - "a provider for the fix step if the default model is not one you trust with edits"
+
+description: >-
+  Bounded repair loop. Baseline the suite; when red, repeat {agent fix → re-run suite} until
+  the suite passes (max 4 rounds), each round persisted and visible; then a human approves
+  committing the fix to a branch.
+
+on:
+  workflow_dispatch:
+
+input_schema:
+  type: object
+  properties:
+    repo_path:    { type: string, title: "Local repo path (the run works in its own worktree)" }
+    test_command: { type: string, title: "Command that runs the suite", default: "go test ./..." }
+    branch:       { type: string, title: "Branch to commit the fix on", default: "fix/until-green" }
+    isolate:      { type: boolean, title: "Work in a throwaway git worktree", default: true }
+
+steps:
+  - id: baseline
+    name: Run the suite once
+    run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+    shell: bash
+    continue-on-error: true
+
+  - id: repair
+    name: Fix, re-run, repeat until green
+    when:
+      - path: baseline.ok
+        equals: false
+    until:
+      - path: check.ok
+        equals: true
+    max_iterations: 4
+    steps:
+      - id: fix
+        name: Fix the first failure
+        prompt: |
+          Round {{ .Index }} of at most 4. The test suite is red. Its last output:
+
+          {{ with .Steps.check }}{{ .stdout }}{{ else }}{{ .Steps.baseline.stdout }}{{ end }}
+
+          Find the FIRST failure, explain its cause in one sentence, and make the smallest
+          change that fixes it. Do not touch tests to make them pass unless the test itself is
+          wrong — say so if it is. Do not commit.
+        tools: [bash, read, edit, grep, glob]
+        max_turns: 30
+        output_schema:
+          type: object
+          required: [cause, changed_files]
+          properties:
+            cause:         { type: string }
+            changed_files: { type: array, items: { type: string } }
+            test_was_wrong: { type: boolean }
+      - id: check
+        name: Re-run the suite
+        run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+        shell: bash
+
+  - id: commit
+    name: Commit the fix on a branch
+    when:
+      - path: repair.last.check.ok
+        equals: true
+    requires_approval: true
+    run: |
+      git checkout -b "{{ .Input.branch }}"
+      git add -A
+      git commit -m "fix: green after {{ .Steps.repair.count }} repair round(s)"
+      git log -1 --stat
+    shell: bash

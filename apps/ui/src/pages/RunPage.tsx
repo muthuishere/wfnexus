@@ -10,6 +10,7 @@ import WorkflowCanvas from '../components/WorkflowCanvas'
 import RunTimeline, { Cost, dur, tokens, type Usage } from '../components/RunTimeline'
 import Markdown from '../components/Markdown'
 import { headlineOf, hhmm, isScript, summaryOf } from '../lib/story'
+import { withIterations } from '../lib/loops'
 
 // ── the run page ─────────────────────────────────────────────────────────────
 // A run is WORK HAPPENING IN TIME. The page answers two questions in three
@@ -121,7 +122,9 @@ export default function RunPage({ id }: { id: string }) {
   // timeline is drawn from the step rows instead of showing an empty page.
   const stepDefs = useMemo<Step[]>(() => {
     const defs = d?.definition?.steps
-    if (defs?.length) return defs
+    // A loop step is followed by its iteration rows (`review[0]`, …), each
+    // carrying the definition it repeats — approvers included.
+    if (defs?.length) return withIterations(defs, d?.steps || [])
     return (d?.steps || [])
       .slice().sort((a, b) => a.position - b.position)
       .map(s => ({ id: s.stepId, name: s.stepId, skills: [], tools: [], outputSchema: {} }))

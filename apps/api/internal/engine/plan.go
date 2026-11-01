@@ -122,6 +122,9 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 		byID[def.Steps[i].ID] = &def.Steps[i]
 	}
 	for _, st := range existing {
+		if isIterationRow(st.StepID) {
+			continue
+		}
 		if st.Status != "done" && st.Status != "skipped" {
 			continue
 		}

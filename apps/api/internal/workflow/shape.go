@@ -49,6 +49,11 @@ func DescribeShape() string {
 	b.WriteString("    one another, and an unwritten key renders empty — use `default`. Write with a\n")
 	b.WriteString("    step's `state:` block (scope → key → template) or `wfx state set`. Plaintext:\n")
 	b.WriteString("    it is not a secret store.\n")
+	b.WriteString("  - LOOPS: `foreach: <input.x | step.field | [literal]>` (+ optional `parallel: N`)\n")
+	b.WriteString("    repeats a step once per item; `until:`/`while:` (guards, like `when`) repeat it and\n")
+	b.WriteString("    NEED `max_iterations`. A loop step may hold a `steps:` body instead of a prompt/run.\n")
+	b.WriteString("    Inside, {{ .Item }} and {{ .Index }}; afterwards {{ .Steps.<id>.iterations }} is the\n")
+	b.WriteString("    array of per-iteration outputs, plus `count` and `last`.\n")
 	return b.String()
 }
 
