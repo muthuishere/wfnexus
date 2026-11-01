@@ -97,6 +97,12 @@ func run(args []string) error {
 		return registry(first(rest))
 	case "skills":
 		return skillsCmd(rest)
+	case "skill":
+		return skillCmd(rest)
+	case "mcp":
+		return mcpCmd(rest)
+	case "profile", "profiles":
+		return profileCmd(rest)
 	case "doctor":
 		return doctor()
 	case "adapters":
@@ -178,7 +184,7 @@ func shortUsage() {
   wfx apply <file.yaml>            install a workflow
   wfx doctor                       what is wired on this machine
   wfx login --url <host>           sign in to a host
-  wfx install server --to <where>  get a server running; then wfx tool / wfx config
+  wfx profile create <name> --install <where>  get a server running and switch to it
 
 wfx help all   every command
 `)
@@ -203,9 +209,13 @@ func usage() {
   wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
   wfx logout [--url <host>]        revoke this host's token and forget it locally
   wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
-  wfx context [list|use|rm <host>] several hosts, side by side; * marks the current one
-  wfx context add <name> --url http://127.0.0.1:8090 --via ssh://user@host [--key k] [--accept-host-key]
-                                   reach a server through a lazy SSH tunnel
+  wfx profile create <name> --url U [--via ssh://user@host [--key k] [--accept-host-key]]
+                                   register a server you can already reach (kubectl-style)
+  wfx profile create <name> --install local|ssh://user@host|k8s [--compose|--image] [--version v] [--dry-run]
+                                   provision the server (install.sh, docker compose, GHCR image or helm),
+                                   register it, log in
+  wfx profile ls | use|switch <name> | current | rm <name>   * marks the current one
+  wfx context add|use|ls|rm …      the same profiles under their older name, kept as an alias
   wfx status                       current context; for a via context, its tunnel
   wfx tunnel stop [context]        close a context's tunnel now (else 15 min idle)
   wfx team add <name> <pubkey> | remove <name> | list   on the server: who may tunnel in
@@ -213,8 +223,11 @@ func usage() {
   wfx publish <file.yaml> --version v --to <git remote>  publish to a git repo instead (no login)
   wfx pull <digest>                materialise a published bundle on the host
   wfx install --skills             install every agent skill into ~/.claude and ~/.agents
-  wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]
-                                   get the server or a runner there (install.sh, GHCR image, or helm)
+  wfx worker install --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]
+                                   put a runner on a machine; then "wfx workers" for its join line
+  wfx skill add <name|git-url|path> [--ref r]  agent skills onto the current profile's server; also rm, ls
+  wfx mcp add <name> --set command="npx -y pkg" | --set url=U [--env NAME]…  an MCP server; also rm, ls
+                                   --env names an env-store key; its value is injected at run time, never stored here
   wfx tool add <name>[@v] [--on worker]   install a tool through the server's carry; also rm, ls
   wfx config put <abs-path> <file> [--on worker] [--to ctx]  place a config file; also get, ls, rm
   wfx config env set K=V | unset K | ls   non-secret env defaults (names only are ever shown)

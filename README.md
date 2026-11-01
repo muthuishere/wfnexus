@@ -109,7 +109,7 @@ wfx publish my-workflow.yaml --version 1.0.0
 
 `publish` sends a **bundle**: the workflow's skills and MCP declarations resolve now and travel
 with it, addressed by digest, so it runs on a host holding none of them. `wfx context list` shows
-every host you are signed in to and `wfx context use` switches between them — "deploy it wherever
+every host you are signed in to and `wfx profile switch` (or `wfx context use`) switches between them — "deploy it wherever
 you want" is a context, not a rebuild.
 
 `wfx login` is the OAuth 2.0 device grant (RFC 8628) for one specific reason: it prints a code and
@@ -123,7 +123,7 @@ on the first command that needs it and closes it after 15 minutes with nothing o
 
 ```bash
 wfx team add alice alice.pub        # on the server, as the wfx user: tunnel-only key, no shell
-wfx context add myserver --url http://127.0.0.1:8090 --via ssh://wfx@your-server --accept-host-key
+wfx profile create myserver --url http://127.0.0.1:8090 --via ssh://wfx@your-server --accept-host-key
 wfx status                          # deemwar · tunnel up 4m · idle close in 11m
 ```
 
@@ -305,7 +305,7 @@ curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/install.sh
 
 Detects your OS and architecture, downloads `checksums.txt`, **refuses to install if the checksum
 does not match or is not published**, and lands the binaries in `~/.local/bin`. `WFX_VERSION=v0.2.0`
-pins a version instead of taking the latest. Windows: `install.ps1`, same behaviour.
+pins a version instead of taking the latest. Windows: `install.cmd` (curl.exe, certutil, reg — nothing to install first), same behaviour. Installing the `wfx` CLI also installs the agent skills into `~/.claude/skills` and `~/.agents/skills`; `WFX_SKILLS=0` or `--no-skills` skips that.
 
 macOS will quarantine a downloaded binary; the installer prints the release note's own workaround:
 

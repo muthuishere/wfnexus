@@ -217,5 +217,19 @@ func (s *Server) carryRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := carryops.FromEnv().Rollback(r.Context(), b.State, b.Version)
-	carryOK(w, v, err)
+	if err != nil {
+		carryFail(w, err)
+		return
+	}
+	// The server's own state may hold its skills and MCP servers (packages.go):
+	// put them back on disk too, so the rollback is live, not just recorded.
+	restored, rerr := s.restorePackages(r.Context(), b.State)
+	if v == nil {
+		v = map[string]any{}
+	}
+	v["packagesRestored"] = restored
+	if rerr != nil {
+		v["packagesError"] = rerr.Error()
+	}
+	writeJSON(w, http.StatusOK, v)
 }

@@ -127,6 +127,13 @@ func PermissionFor(method, path string) string {
 	if method == http.MethodPost && path == "/api/workers/join" {
 		return PermPublic
 	}
+	// Installing a skill or an MCP server puts code the server will RUN on the
+	// machine — the same reach as carry — so it is an operator's permission,
+	// not a registry editor's.
+	if method != http.MethodGet && method != http.MethodHead &&
+		(strings.HasPrefix(path, "/api/skills/installed") || strings.HasPrefix(path, "/api/mcp/")) {
+		return PermAdminWrite
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]

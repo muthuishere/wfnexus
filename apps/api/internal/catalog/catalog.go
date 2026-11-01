@@ -159,7 +159,13 @@ type McpServer struct {
 	Command     []string          `json:"command,omitempty"`
 	URL         string            `json:"url,omitempty"`
 	Headers     map[string]string `json:"headers,omitempty"`
-	Enabled     *bool             `json:"enabled,omitempty"`
+	// Environment holds NON-secret literals for a local server's process.
+	Environment map[string]string `json:"environment,omitempty"`
+	// EnvFrom names env-store keys (`wfx env set NAME`) whose
+	// values are injected into the server's environment when a step is built.
+	// Names only: a value never lands in this file, in argv or in a log.
+	EnvFrom []string `json:"envFrom,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty"`
 }
 
 func (m McpServer) EntryName() string { return m.Name }

@@ -379,7 +379,11 @@ func (e *Engine) buildToolkit(ctx context.Context, label string, skillNames, too
 			if !ok {
 				return nil, fmt.Errorf("%s: mcp server %q not in %s", label, name, e.cfg.McpConfig)
 			}
-			keep[name] = s
+			resolved, err := e.resolveMcpEnv(ctx, name, s)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", label, err)
+			}
+			keep[name] = resolved
 		}
 		opts.McpConfig = map[string]any{"mcpServers": keep}
 	}

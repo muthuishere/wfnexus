@@ -43,7 +43,8 @@ func carryState(args []string) string {
 // carryPositional is positional() with carry's valued flags skipped.
 func carryPositional(args []string) []string {
 	valued := map[string]bool{"--context": true, "--to": true, "--from": true, "--on": true, "--state": true,
-		"--channel": true, "--mode": true, "-o": true, "--limit": true, "--to-state": true, "--only": true, "--dir": true}
+		"--channel": true, "--mode": true, "-o": true, "--limit": true, "--to-state": true, "--only": true, "--dir": true,
+		"--ref": true, "--branch": true, "--path": true, "--name": true}
 	var out []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]

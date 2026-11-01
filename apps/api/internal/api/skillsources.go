@@ -55,6 +55,7 @@ func (s *Server) importSkillSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	s.versionPackages(r.Context())
 	writeJSON(w, 201, rep)
 }
 
@@ -97,6 +98,7 @@ func (s *Server) removeSkillSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	s.versionPackages(r.Context())
 	writeJSON(w, 200, rep)
 }
 

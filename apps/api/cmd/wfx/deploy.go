@@ -8,14 +8,18 @@ import (
 	"strings"
 )
 
-// `wfx install server|runner --to local|ssh://user@host|k8s` — get the server
-// or a runner onto a machine with what already exists, then configure it with
+// The provisioning plans behind `wfx profile create <name> --install …` (the
+// server) and `wfx worker install --to …` (a runner) — get either onto a machine with what already exists, then configure it with
 // `wfx tool` / `wfx config`. Nothing here is new machinery:
 //
 //   binary  install.sh (checksum-verified, WFX_BIN picks the binary), run
 //           here or over ssh — the ship-a-gettable-binary release assets
 //   --image the GHCR images built from infra/Dockerfile{,.runner}, via docker
 //           run here or over ssh
+//   --compose the repo's docker-compose.yml (server + Postgres), cloned into
+//           --dir and brought up with `docker compose up -d --build`, here or
+//           over ssh; .env starts from compose.env.example and is never
+//           overwritten
 //   k8s     `helm upgrade --install` of infra/helm/wfnexus (or --chart)
 //
 // Every plan prints before it runs; --dry-run prints only.
@@ -40,6 +44,8 @@ type deployOpts struct {
 	component string // server | runner
 	to        string // local | ssh://… | k8s
 	image     bool
+	compose   bool
+	dir       string // --compose checkout
 	version   string
 	repo      string
 	chart     string
@@ -66,6 +72,8 @@ func parseDeploy(args []string) (deployOpts, error) {
 		component: first(args),
 		to:        flagOf(args, "--to", "local"),
 		image:     hasFlag(args, "--image"),
+		compose:   hasFlag(args, "--compose"),
+		dir:       flagOf(args, "--dir", "wfnexus"),
 		version:   flagOf(args, "--version", os.Getenv("WFX_VERSION")),
 		repo:      flagOf(args, "--repo", envOr("WFX_REPO", "muthuishere/wfnexus")),
 		chart:     flagOf(args, "--chart", "infra/helm/wfnexus"),
@@ -75,7 +83,10 @@ func parseDeploy(args []string) (deployOpts, error) {
 		port:      flagOf(args, "--port", "8090"),
 	}
 	if o.component != "server" && o.component != "runner" {
-		return o, fmt.Errorf("usage: wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v]")
+		return o, fmt.Errorf("usage: wfx profile create <name> --install local|ssh://user@host|k8s [--image|--compose] | wfx worker install --to …")
+	}
+	if o.compose && (o.component != "server" || o.to == "k8s" || o.image) {
+		return o, fmt.Errorf("--compose installs the server stack with docker compose, --to local or ssh://; not with a runner, k8s or --image")
 	}
 	o.release = flagOf(args, "--release", "wfnexus")
 	o.name = flagOf(args, "--name", "wfx-"+o.component)
@@ -133,7 +144,7 @@ func (o deployOpts) installScript() string {
 func (o deployOpts) dockerRun() string {
 	parts := []string{"docker", "run", "-d", "--name", o.name, "--restart", "unless-stopped"}
 	if o.component == "server" {
-		// Loopback only: reach it with `wfx context add … --via ssh://`.
+		// Loopback only: reach it with `wfx profile create … --via ssh://`.
 		parts = append(parts, "-p", "127.0.0.1:"+o.port+":8090", "-v", o.name+"-data:/home/wfx")
 	} else {
 		parts = append(parts, "-e", "WFX_URL", "-e", "WFX_TOKEN", "-e", "WFX_NAME", "-e", "WFX_LABELS")
@@ -144,8 +155,30 @@ func (o deployOpts) dockerRun() string {
 	return strings.Join(append(parts, o.imageRef()), " ")
 }
 
+// composeUp is the compose line: fetch the repo at --version (or pull the
+// existing checkout), keep any .env already there, and bring the stack up.
+func (o deployOpts) composeUp() string {
+	clone := "git clone --depth 1"
+	if o.version != "" {
+		clone += " --branch " + o.version
+	}
+	clone += " https://github.com/" + o.repo + ".git " + o.dir
+	return "{ [ -d " + o.dir + "/.git ] && git -C " + o.dir + " pull --ff-only || " + clone + "; }" +
+		" && cd " + o.dir +
+		" && { [ -f .env ] || cp compose.env.example .env; }" +
+		" && docker compose up -d --build"
+}
+
 func planDeploy(o deployOpts) ([]deployStep, error) {
 	switch {
+	case o.compose && o.to == "local":
+		return []deployStep{{"bring up the server stack with docker compose", []string{"sh", "-c", o.composeUp()}}}, nil
+	case o.compose:
+		ssh, err := sshArgv(o.to)
+		if err != nil {
+			return nil, err
+		}
+		return []deployStep{{"bring up the server stack with docker compose on " + o.to, append(ssh, o.composeUp())}}, nil
 	case o.to == "k8s":
 		argv := []string{"helm", "upgrade", "--install", o.release, o.chart, "--namespace", o.namespace, "--create-namespace"}
 		if o.version != "" {
@@ -185,7 +218,9 @@ func (o deployOpts) nextSteps() []string {
 		out = append(out, "kubectl -n "+o.namespace+" port-forward svc/"+o.release+" "+o.port+":8090 &",
 			"wfx login --url http://127.0.0.1:"+o.port)
 	case strings.HasPrefix(o.to, "ssh://"):
-		out = append(out, "wfx context add <name> --url http://127.0.0.1:"+o.port+" --via "+o.to)
+		out = append(out, "wfx profile create <name> --url http://127.0.0.1:"+o.port+" --via "+o.to)
+	case o.compose:
+		out = append(out, "wfx login --url http://127.0.0.1:"+o.port+"   # settings: "+o.dir+"/.env, then docker compose up -d")
 	default:
 		if !o.image {
 			out = append(out, o.bin()+" &                     # start it (no config = local mode: SQLite + a folder)")
@@ -193,7 +228,7 @@ func (o deployOpts) nextSteps() []string {
 	}
 	return append(out,
 		"wfx config status                 # is carry on for this server",
-		"wfx tool add jq@1.7.1             # tools, config, env defaults through the server")
+		"wfx tool add jq@1.7.1             # tools; wfx skill add / wfx mcp add for the rest")
 }
 
 func deployCmd(args []string) error {
@@ -201,11 +236,22 @@ func deployCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := runDeploy(o, hasFlag(args, "--dry-run")); err != nil {
+		return err
+	}
+	fmt.Println("\nnext:")
+	for _, n := range o.nextSteps() {
+		fmt.Println("  " + n)
+	}
+	return nil
+}
+
+// runDeploy prints every step of the plan and runs it unless dry.
+func runDeploy(o deployOpts, dry bool) error {
 	steps, err := planDeploy(o)
 	if err != nil {
 		return err
 	}
-	dry := hasFlag(args, "--dry-run")
 	for _, s := range steps {
 		fmt.Printf("→ %s\n  %s\n", s.what, s)
 		if dry {
@@ -222,10 +268,6 @@ func deployCmd(args []string) error {
 	}
 	if dry {
 		fmt.Println("(dry run — nothing was run)")
-	}
-	fmt.Println("\nnext:")
-	for _, n := range o.nextSteps() {
-		fmt.Println("  " + n)
 	}
 	return nil
 }

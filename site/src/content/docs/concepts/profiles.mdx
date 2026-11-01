@@ -1,0 +1,63 @@
+---
+title: Profiles
+description: Named wfx servers you switch between, kubectl-style — register one you can reach, or provision one with --install and land logged in.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **profile** is a named wfx server: its URL, an optional SSH tunnel, and your login for it. Every
+`wfx` command talks to the current profile, the way `kubectl` talks to its current context.
+
+```bash
+wfx profile create dev  --url http://127.0.0.1:8090                       # one you can already reach
+wfx profile create prod --url http://127.0.0.1:8090 --via ssh://wfx@box   # one behind an SSH tunnel
+wfx profile ls                  # * marks the current one
+wfx profile switch dev          # or: wfx profile use dev
+wfx profile current             # dev
+wfx profile rm prod
+```
+
+`create` switches to the new profile. Log in to it with `wfx login --url <name>`; the token is
+stored on that profile, in `~/.config/wfx/contexts.json` (mode `0600`).
+
+## Provision and register in one step
+
+`--install` puts a server on a machine first, then registers the profile, switches to it and logs
+in. The server always listens on loopback, and a profile on another box goes through an SSH tunnel.
+
+```bash
+wfx profile create box  --install ssh://ops@box --compose       # server + Postgres via docker compose
+wfx profile create box  --install ssh://ops@box --image         # the GHCR image, docker run
+wfx profile create dev  --install local                         # wfx-server via install.sh
+wfx profile create prod --install k8s --version v0.3.0          # helm upgrade --install
+wfx profile create box  --install ssh://ops@box --compose --dry-run   # print the plan, register nothing
+```
+
+Every command prints before it runs. The login follows only when the install leaves a server
+running (`--compose`, `--image`). A bare binary is installed but not started, and k8s needs a
+port-forward first, so for those the command prints the next step. `--no-login` skips the login.
+
+## Runners are not profiles
+
+You never talk to a runner, so it has no profile. Provision one for the current profile's server
+with `wfx worker install --to local|ssh://user@host|k8s`, then join it with the line
+`wfx workers` prints. See [Workers](/wfnexus/concepts/workers/).
+
+## What goes on a profile's server
+
+Once a profile is current, these act on its server:
+
+| Command | What it adds |
+|---|---|
+| `wfx tool add gh@2.60.0` | a tool on the server's PATH, through [carry](/wfnexus/concepts/carry/) |
+| `wfx skill add <name\|git-url\|path>` | agent skills |
+| `wfx mcp add <name> --set command=… --env NAME` | an MCP server, its credential by env-store name |
+| `wfx config put` / `wfx config env set` | config files and non-secret env defaults |
+
+Skills and MCP servers are live as soon as the command returns, with no restart, and each change
+is versioned in carry: `wfx config log` lists it, `wfx config rollback <n>` undoes it.
+
+<Aside>
+	`wfx context …` is the same thing under its older name, and keeps working: `wfx context add`,
+	`use`, `ls` and `rm` read and write the same profiles.
+</Aside>
