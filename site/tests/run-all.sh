@@ -26,6 +26,9 @@ node "$SITE/scripts/coverage-gate.mjs" --strict || FAILED+=("coverage-gate")
 
 step "wfx help == generated CLI reference"
 if command -v go >/dev/null 2>&1; then
+	# Build first: on a cold module cache `go run` prints "go: downloading"
+	# lines, which must not end up in the diff.
+	(cd "$REPO/apps/api" && GOWORK=off go build -o /dev/null ./cmd/wfx)
 	got="$(cd "$REPO/apps/api" && GOWORK=off go run ./cmd/wfx help all 2>&1)"
 	want="$(node --input-type=module -e "import('$SITE/scripts/generate-pages.mjs').then(m => process.stdout.write(m.wfxUsage()))")"
 	if [ "$got" == "$want" ]; then echo "identical ($(printf '%s\n' "$got" | wc -l | tr -d ' ') lines)"; else
