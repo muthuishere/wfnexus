@@ -1,3 +1,6 @@
+> Partly superseded by `profiles-and-server-packages`: `wfx install server|runner` is now
+> `wfx profile create <name> --install …` and `wfx worker install --to …`.
+
 ## Why
 
 Today a wfnexus install is three tools: `install.sh` (or an image, or nothing yet for k8s) to get the

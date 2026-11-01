@@ -115,6 +115,8 @@ for (const c of commands) {
 
 const envVars = new Set();
 for (const m of execFileSync('grep', ['-rhoE', '--include=*.go', '--exclude=*_test.go', 'WFX_[A-Z_]+', R('apps/api')], { encoding: 'utf8' }).matchAll(/WFX_[A-Z_]+/g)) envVars.add(m[0]);
+// The install scripts read their own WFX_* variables (WFX_SKILLS, WFX_BIN, ...).
+for (const f of ['install.sh', 'install.cmd']) for (const m of fs.readFileSync(R(f), 'utf8').matchAll(/WFX_[A-Z_]+/g)) envVars.add(m[0]);
 
 const internalPkgs = new Set(fs.readdirSync(R('apps/api/internal')));
 const publicFiles = new Set(fs.readdirSync(path.join(siteRoot, 'public')));

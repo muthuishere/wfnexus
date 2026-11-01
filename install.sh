@@ -6,7 +6,8 @@
 #   WFX_VERSION=v0.1.0 sh install.sh        # pin a version
 #   WFX_INSTALL_DIR=~/bin  sh install.sh    # somewhere else on your PATH
 #   WFX_BIN=wfx-server sh install.sh        # the server (or wfx-runner) instead;
-#                                           # `wfx install server --to …` uses this
+#                                           # `wfx profile create … --install` uses this
+#   WFX_SKILLS=0 sh install.sh              # the CLI without its agent skills
 #
 # It needs no Go, no Node, no container runtime and no clone of the repository,
 # and it writes nothing outside your own directories — no sudo, ever.
@@ -20,6 +21,16 @@ REPO="${WFX_REPO:-muthuishere/wfnexus}"
 BASE="${WFX_BASE_URL:-https://github.com/$REPO/releases}"
 INSTALL_DIR="${WFX_INSTALL_DIR:-$HOME/.local/bin}"   # same dir `task install` uses
 BIN="${WFX_BIN:-wfx}"
+# The CLI install also puts this platform's agent skills into ~/.claude/skills
+# and ~/.agents/skills (`wfx install --skills`). Opt out with WFX_SKILLS=0 or
+# `sh install.sh --no-skills` (`curl … | sh -s -- --no-skills`).
+SKILLS="${WFX_SKILLS:-1}"
+for arg in "$@"; do
+  case "$arg" in
+    --no-skills) SKILLS=0 ;;
+    *) echo "wfx install: unknown argument '$arg' (only --no-skills)" >&2; exit 1 ;;
+  esac
+done
 case "$BIN" in
   wfx|wfx-server|wfx-runner) ;;
   *) echo "wfx install: WFX_BIN must be wfx, wfx-server or wfx-runner (got '$BIN')" >&2; exit 1 ;;
@@ -36,7 +47,7 @@ case "$os" in
   Darwin) GOOS=darwin ;;
   *) die "unsupported operating system '$os'.
   Published platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
-  Windows is served by install.ps1." ;;
+  Windows is served by install.cmd." ;;
 esac
 case "$arch" in
   x86_64|amd64)  GOARCH=amd64 ;;
@@ -109,6 +120,20 @@ mv "$TMP/$ASSET" "$INSTALL_DIR/.$BIN.incoming.$$" || die "cannot write to $INSTA
 mv "$INSTALL_DIR/.$BIN.incoming.$$" "$INSTALL_DIR/$BIN" || die "cannot install into $INSTALL_DIR"
 
 say "installed $INSTALL_DIR/$BIN"
+
+# ---- agent skills (the CLI only) ------------------------------------------
+# A failure here is a WARNING: the CLI is installed and verified, and the
+# skills are one command away. The server and runner binaries skip this.
+if [ "$BIN" = wfx ] && [ "$SKILLS" != 0 ]; then
+  if out=$("$INSTALL_DIR/$BIN" install --skills 2>&1); then
+    n=$(printf '%s\n' "$out" | sed -n 's/^\([0-9][0-9]*\) skills: .*/\1/p' | head -n 1)
+    say "installed ${n:-the} agent skills into ~/.claude/skills and ~/.agents/skills (opt out: WFX_SKILLS=0)"
+  else
+    echo "wfx install: warning — the agent skills were not installed:" >&2
+    printf '%s\n' "$out" | tail -n 3 | sed 's/^/  /' >&2
+    echo "  the CLI is installed; retry with: $BIN install --skills" >&2
+  fi
+fi
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;

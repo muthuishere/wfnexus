@@ -173,6 +173,10 @@ func TestDeployPlans(t *testing.T) {
 			[]string{"AWS_SECRET_ACCESS_KEY="}},
 		{[]string{"server", "--to", "k8s", "--version", "v1.0.0", "--set", "ingress.enabled=true", "-f", "my.yaml"},
 			[]string{"helm upgrade --install wfnexus infra/helm/wfnexus --namespace wfnexus --create-namespace --set image.tag=v1.0.0 -f my.yaml --set ingress.enabled=true"}, nil},
+		{[]string{"server", "--compose", "--version", "v0.2.0"},
+			[]string{"sh -c", "git clone --depth 1 --branch v0.2.0 https://github.com/muthuishere/wfnexus.git wfnexus", "cp compose.env.example .env", "docker compose up -d --build"}, nil},
+		{[]string{"server", "--compose", "--to", "ssh://ops@box", "--dir", "/srv/wfx"},
+			[]string{"ssh ops@box", "git -C /srv/wfx pull --ff-only", "[ -f .env ] ||"}, nil},
 	}
 	for _, c := range cases {
 		o, err := parseDeploy(c.args)
@@ -195,10 +199,24 @@ func TestDeployPlans(t *testing.T) {
 			}
 		}
 	}
+	for _, bad := range [][]string{{"runner", "--compose"}, {"server", "--compose", "--to", "k8s"}, {"server", "--compose", "--image"}} {
+		if _, err := parseDeploy(bad); err == nil {
+			t.Errorf("%v must be refused", bad)
+		}
+	}
 	if _, err := parseDeploy([]string{"server", "--to", "ftp://x"}); err == nil {
 		t.Error("an unknown target must be refused")
 	}
-	if err := run([]string{"install", "server", "--to", "k8s", "--dry-run"}); err != nil {
+	writeContexts(t, map[string]string{})
+	if err := run([]string{"profile", "create", "k", "--install", "k8s", "--dry-run"}); err != nil {
 		t.Errorf("dry run: %v", err)
+	}
+	if err := run([]string{"worker", "install", "--to", "ssh://ops@box", "--dry-run"}); err != nil {
+		t.Errorf("worker dry run: %v", err)
+	}
+	// The old spelling is gone, and says where it went.
+	err := run([]string{"install", "server", "--to", "local"})
+	if err == nil || !strings.Contains(err.Error(), "wfx profile create") {
+		t.Fatalf("`wfx install server` must point at `wfx profile create`, got %v", err)
 	}
 }

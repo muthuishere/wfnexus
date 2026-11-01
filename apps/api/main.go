@@ -259,6 +259,8 @@ func main() {
 
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)
+	// Skills, MCP servers and providers reload when their files change.
+	eng.StartCatalogWatcher(ctx)
 	eng.StartChannelReceivers(ctx)
 	for _, d := range workflow.Sorted(defs) {
 		for _, sched := range d.On.Schedule {

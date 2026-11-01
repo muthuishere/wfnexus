@@ -150,3 +150,31 @@ jobs:
             && 'go test ./internal/auth/... ./internal/buildinfo/... ./internal/bundle/... ./internal/catalog/... ./internal/config/... ./internal/secrets/... ./internal/skills/... ./internal/store/... ./cmd/...'
             || 'go test ./internal/... ./cmd/...' }}
         working-directory: apps/api
+
+  install-cmd:
+    # install.cmd runs on a real Windows against the LATEST published release:
+    # download, checksum against checksums.txt, install, user PATH, skills step.
+    # Advisory, like the test matrix. A release older than the skills fallback
+    # takes the skills step's warning path, which must still exit 0.
+    name: install.cmd (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.cmd
+        shell: cmd
+        run: |
+          call install.cmd || exit /b 1
+          "%LOCALAPPDATA%\wfx\bin\wfx.exe" version || exit /b 1
+          reg query HKCU\Environment /v Path | find /i "%LOCALAPPDATA%\wfx\bin" || exit /b 1
+      - name: install.cmd refuses a bad checksum
+        shell: cmd
+        run: |
+          mkdir fake\download\v0
+          copy /y "%LOCALAPPDATA%\wfx\bin\wfx.exe" fake\download\v0\wfx-windows-amd64.exe
+          echo 0000000000000000000000000000000000000000000000000000000000000000  wfx-windows-amd64.exe> fake\download\v0\checksums.txt
+          set "WFX_BASE_URL=file:///%CD:\=/%/fake"
+          set "WFX_VERSION=v0"
+          set "WFX_INSTALL_DIR=%CD%\fakebin"
+          call install.cmd --no-skills && exit /b 1
+          if exist fakebin\wfx.exe exit /b 1
+          exit /b 0

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/assets"
 )
 
 // `wfx install --skills` — put this platform's agent skills where YOUR agents
@@ -40,7 +42,8 @@ func skillRoots() []string {
 // verb.
 func installCmd(args []string) error {
 	if c := first(args); c == "server" || c == "runner" {
-		return deployCmd(args)
+		return fmt.Errorf("`wfx install %s` is gone — a server is `wfx profile create <name> --install local|ssh://…|k8s`,\n"+
+			"a runner is `wfx worker install --to …`", c)
 	}
 	if hasFlag(args, "--skills") {
 		return skillInstall(args)
@@ -48,8 +51,7 @@ func installCmd(args []string) error {
 	if hasFlag(args, "--list") {
 		return skillList()
 	}
-	return fmt.Errorf("usage: wfx install server|runner --to local|ssh://user@host|k8s [--image] [--version v] [--dry-run]\n" +
-		"       wfx install --skills [name…] [--to DIR] [--force]\n" +
+	return fmt.Errorf("usage: wfx install --skills [name…] [--to DIR] [--force]\n" +
 		"       wfx install --list            what this platform ships")
 }
 
@@ -155,6 +157,14 @@ func skillSourceDir() (string, error) {
 	}
 	if root := os.Getenv("WFX_ROOT"); root != "" {
 		return filepath.Join(root, "skills"), nil
+	}
+	// A downloaded binary has no checkout beside it: the skills compiled into
+	// it (task assets:stage) are extracted and installed from there. This is
+	// what lets install.sh run `wfx install --skills` straight after landing.
+	if dir, err := assets.Extract(assets.SkillsName); err == nil {
+		if names, _ := localSkillNames(dir); len(names) > 0 {
+			return dir, nil
+		}
 	}
 	return "", fmt.Errorf("cannot find this platform's skills — set WFX_SKILLS_DIR")
 }

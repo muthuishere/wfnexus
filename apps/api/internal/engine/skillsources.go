@@ -178,7 +178,7 @@ func cleanSkillPath(p string) (string, error) {
 }
 
 // reservedSkillLabels are the labels the registry already gives built-in roots.
-var reservedSkillLabels = map[string]bool{"project": true, "claude": true, "agents": true}
+var reservedSkillLabels = map[string]bool{"project": true, "claude": true, "agents": true, "installed": true}
 
 // ---- persistence -------------------------------------------------------------
 
