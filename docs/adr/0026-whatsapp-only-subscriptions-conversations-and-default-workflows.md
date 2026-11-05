@@ -18,7 +18,7 @@ The platform pieces stay generic. The only adapter and the only templates are fo
 
    Changes apply without a restart. They are made with `wfx sub add|update|ls|pause|resume|rm|validate`, `/api/subscriptions` or a UI view.
 2. **One inbox read per account per tick.**
-   - The tick goes from 10 s to 5 s.
+   - The interval is one of `30s`, `1m` (default) or `2m`. The existing 10 s tick is enough for that, so it stays.
    - Each subscription keeps its own read position.
    - A new subscription starts from when it is switched on. Reading older messages is opt-in, and those messages never get a reply.
 3. **Routing.**
@@ -41,19 +41,22 @@ The platform pieces stay generic. The only adapter and the only templates are fo
 
 ## Default workflows
 
+Every workflow keeps memory. It is on by default and stored per conversation when a run comes from a chat.
+
 | template | does |
 |---|---|
 | `whatsapp-subscription-manager` | add, update, pause, resume, delete, list, validate (checks the chat exists, the login can read it and the target workflow exists) |
-| `whatsapp-monitor` | health of the shared inbox poll: how far behind the read position is, error state |
-| `whatsapp-chat-handler` | receive → find the conversation → load memory → classify → pick a skill or `start:` a workflow → reply through the notifier → save memory |
-| `whatsapp-notifier` | sends under the response policy; result is `sent`, `failed` or `uncertain` |
-| `whatsapp-escalation` | sends an alert, waits for `#code ack`, then escalates after a timeout |
-| `whatsapp-digest` | scheduled summary of chosen chats: decisions, asks and owners |
+| `whatsapp-monitor` | reads the inbox on the subscription's interval (30s, 1m or 2m), keeps the read position, never sees a message twice, and hands each new message to the router |
+| `whatsapp-sender` | sends a message or a reply to a chat under the response policy; result is `sent`, `failed` or `uncertain` |
+| `router` (common, not WhatsApp-specific) | matches an event to its subscriptions (`fanout`, `exclusive` or `observe`) and starts each target workflow as its own run |
+| `pingpong` | reference handler: receives a message, reads its conversation memory, replies through `whatsapp-sender`, and saves what was said. It proves the whole loop end to end. |
+
+Further handlers (chat handler, escalation, digest) are built later on the same pieces.
 
 ## Order of work
 
 1. Subscriptions, including the API, CLI and UI.
 2. Inbox mode, shared poll, routing and no duplicates.
 3. Conversations and the `start:` step.
-4. The six templates, with a live run on a test group.
+4. The five workflows above, with `pingpong` run live on a test group.
 5. Password sign-in (ADR 0025).
