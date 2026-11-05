@@ -64,6 +64,7 @@ func deliveries(t *testing.T, h *harness, sub string) map[string]string {
 func TestSubscriptionRoutesADirectMessage(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, subDef("subdm"), newFakeLLM(t), "")
+	h.eng.SetConversationDebounce(10 * time.Millisecond)
 	dir := fakeChannel(t, h.eng, "wa-dm", false)
 	addSub(h.eng, catalog.Subscription{Name: "dm-sub", Channel: "wa-dm", Chat: "alice@s", Workflow: "subdm",
 		Allow: []string{"alice"}, Instructions: "be brief", ResponsePolicy: "auto"})
@@ -108,6 +109,7 @@ func TestSubscriptionRoutesADirectMessage(t *testing.T) {
 func TestSubscriptionGroupActivation(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, subDef("subgrp"), newFakeLLM(t), "")
+	h.eng.SetConversationDebounce(10 * time.Millisecond)
 	fakeChannelWith(t, h.eng, catalog.Channel{Name: "wa-grp", Self: []string{"me@s"}})
 	addSub(h.eng, catalog.Subscription{Name: "grp", Channel: "wa-grp", Chat: "g@g", Workflow: "subgrp",
 		Allow: []string{"*"}, Mode: catalog.ModeFanout})
@@ -130,7 +132,7 @@ func TestSubscriptionGroupActivation(t *testing.T) {
 	if _, ok := got["g-4"]; ok {
 		t.Fatal("a reaction must not match a message-only subscription")
 	}
-	runsOf(t, h, "subgrp", 2)
+	runsOf(t, h, "subgrp", 1) // g-2 and g-3 share one debounced conversation run
 }
 
 // exclusive takes the message from fanout subscriptions; observe records it
@@ -138,6 +140,7 @@ func TestSubscriptionGroupActivation(t *testing.T) {
 func TestSubscriptionModes(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, subDef("submode"), newFakeLLM(t), "")
+	h.eng.SetConversationDebounce(10 * time.Millisecond)
 	fakeChannel(t, h.eng, "wa-mode", false)
 	base := catalog.Subscription{Channel: "wa-mode", Chat: "c@s", Workflow: "submode", Allow: []string{"a"}}
 	for name, mode := range map[string]string{"x-excl": catalog.ModeExclusive, "f-fan": catalog.ModeFanout, "o-obs": catalog.ModeObserve} {
@@ -150,7 +153,7 @@ func TestSubscriptionModes(t *testing.T) {
 	addSub(h.eng, p)
 	c, _ := h.eng.channelEntry("wa-mode")
 	runs, matched := h.eng.routeSubscriptions(ctx, c, notify.Message{ID: "m-1", From: "a", Text: "hi", Chat: "c@s"})
-	if len(runs) != 1 || matched != 3 {
+	if len(runs) != 0 || matched != 3 { // queued on the conversation lane, not started inline
 		t.Fatalf("runs=%d matched=%d", len(runs), matched)
 	}
 	for sub, want := range map[string]string{"x-excl": DeliveryStarted, "f-fan": DeliverySkipped, "o-obs": DeliveryObserved} {
@@ -178,5 +181,39 @@ func TestSubscriptionCheck(t *testing.T) {
 	c, _ := h.eng.channelEntry("wa-chk")
 	if every, reads := h.eng.receiveEvery(c); !reads || every != 30*time.Second {
 		t.Fatalf("every=%s reads=%v", every, reads)
+	}
+}
+
+// A workflow.completed event from a run in a conversation goes through the
+// default event sink to the subscriptions of that chat that list the event,
+// once per child run; a chat with no such subscription falls back (false).
+func TestSubscriptionRoutesWorkflowCompleted(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, subDef("subdone"), newFakeLLM(t), "")
+	fakeChannel(t, h.eng, "wa-done", false)
+	addSub(h.eng, catalog.Subscription{Name: "done-sub", Channel: "wa-done", Chat: "c@s", Workflow: "subdone",
+		Events: []string{"workflow.completed"}})
+	ev := map[string]any{"type": "workflow.completed", "runId": "child-1", "channel": "wa-done", "chat": "c@s", "status": "done"}
+	if !h.eng.eventSink(ctx, ev) {
+		t.Fatal("the default sink must route workflow.completed to the subscription")
+	}
+	if !h.eng.eventSink(ctx, ev) {
+		t.Fatal("a repeat is still handled (already queued)")
+	}
+	if got := deliveries(t, h, "done-sub")["workflow.completed:child-1"]; got != DeliveryStarted {
+		t.Fatalf("delivery %q", got)
+	}
+	runsOf(t, h, "subdone", 1)
+	time.Sleep(100 * time.Millisecond)
+	runs, _ := h.store.FindRuns(ctx, store.RunFilter{Workflow: "subdone"})
+	if len(runs) != 1 {
+		t.Fatalf("want exactly one run, got %d", len(runs))
+	}
+	if in := string(runs[0].Input); !strings.Contains(in, "done-sub") || !strings.Contains(in, "child-1") {
+		t.Fatalf("input %s", in)
+	}
+	other := map[string]any{"type": "workflow.completed", "runId": "child-2", "channel": "wa-done", "chat": "zz@s"}
+	if h.eng.eventSink(ctx, other) {
+		t.Fatal("no subscription for that chat: the sink must decline")
 	}
 }

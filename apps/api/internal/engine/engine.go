@@ -129,6 +129,9 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 		log.Printf("engine: env store unavailable: %v", err)
 	}
 	e.loadPrices(context.Background())
+	// `workflow.completed` events go through the subscriptions router by
+	// default (ADR 0026); UseEventSink can still replace it.
+	e.eventSink = e.routeCompletedEvent
 	return e
 }
 

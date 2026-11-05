@@ -77,7 +77,7 @@ var (
 	subPolicies  = map[string]bool{"": true, "draft": true, "approval": true, "auto": true, "none": true}
 	subModes     = map[string]bool{"": true, ModeFanout: true, ModeExclusive: true, ModeObserve: true}
 	subActs      = map[string]bool{"": true, "mention": true, "always": true}
-	subEvents    = map[string]bool{"message": true, "reaction": true, "updated": true, "deleted": true}
+	subEvents    = map[string]bool{"message": true, "reaction": true, "updated": true, "deleted": true, "workflow.completed": true}
 	subStatuses  = map[string]bool{"": true, SubValidating: true, SubActive: true, SubPaused: true, SubError: true, SubDeleted: true}
 )
 

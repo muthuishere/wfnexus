@@ -310,7 +310,9 @@ func (e *Engine) launchBatch(key ConversationKey, b *convBatch) (uuid.UUID, erro
 	// A conversation's handler is started by a message; one that declares no
 	// `message` trigger is still startable the way a person would start it.
 	trig := workflow.TriggerMessage
-	if !def.On.Allows(trig) {
+	if _, viaSub := input["subscription"]; viaSub && def.On.Allows(workflow.TriggerSubscription) {
+		trig = workflow.TriggerSubscription
+	} else if !def.On.Allows(trig) {
 		trig = workflow.TriggerDispatch
 	}
 	raw, err := e.PrepareRun(b.workflow, trig, mustJSON(input))

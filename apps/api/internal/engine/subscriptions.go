@@ -424,7 +424,9 @@ func (e *Engine) routeSubscriptions(ctx context.Context, c catalog.Channel, m no
 			continue
 		}
 		_ = ss.SetSubscriptionDelivery(ctx, s.Name, m.ID, runID, DeliveryStarted)
-		runs = append(runs, runID)
+		if runID != "" {
+			runs = append(runs, runID)
+		}
 		if s.EffectiveMode() == catalog.ModeExclusive {
 			exclusiveTaken = true
 		}
@@ -432,9 +434,8 @@ func (e *Engine) routeSubscriptions(ctx context.Context, c catalog.Channel, m no
 	return runs, matched
 }
 
-// startSubscriptionRun starts the target workflow with the ADR 0026 input
-// shape and returns the run id.
-func (e *Engine) startSubscriptionRun(ctx context.Context, s catalog.Subscription, c catalog.Channel, m notify.Message) (string, error) {
+// subscriptionInput is the `input.subscription` the contract defines.
+func subscriptionInput(s catalog.Subscription) map[string]any {
 	sub := map[string]any{
 		"name": s.Name, "instructions": s.Instructions, "responsePolicy": s.ResponsePolicy,
 		"mode": s.EffectiveMode(), "memory": s.Memory, "skills": s.Skills, "owner": s.Owner,
@@ -442,7 +443,19 @@ func (e *Engine) startSubscriptionRun(ctx context.Context, s catalog.Subscriptio
 	if s.ResponsePolicy == "" {
 		sub["responsePolicy"] = "draft"
 	}
-	input := map[string]any{"message": messageEvent(c.Name, m), "subscription": sub}
+	return sub
+}
+
+// startSubscriptionRun hands a matched event to its target workflow with the
+// ADR 0026 input shape. An event that names its chat goes through the
+// conversation lane (one run per chat at a time, 3 s debounce), so the run
+// starts later and the returned id is empty. Only a chat-less event (an
+// adapter that predates the event fields) starts a run at once.
+func (e *Engine) startSubscriptionRun(ctx context.Context, s catalog.Subscription, c catalog.Channel, m notify.Message) (string, error) {
+	input := map[string]any{"message": messageEvent(c.Name, m), "subscription": subscriptionInput(s)}
+	if m.Chat != "" {
+		return "", e.StartForConversation(ctx, ConversationKey{Channel: c.Name, Chat: m.Chat}, s.Workflow, input)
+	}
 	raw, err := e.PrepareRun(s.Workflow, workflow.TriggerSubscription, mustJSON(input))
 	if err != nil {
 		return "", err
@@ -456,6 +469,56 @@ func (e *Engine) startSubscriptionRun(ctx context.Context, s catalog.Subscriptio
 	}
 	e.Start(run.ID)
 	return run.ID.String(), nil
+}
+
+// routeCompletedEvent is the default event sink: a `workflow.completed` event
+// from a run in a conversation is offered to the active subscriptions of that
+// (channel, chat) that list `workflow.completed` in their events. Each one is
+// claimed once per (subscription, child run) - the same dedupe as messages -
+// and queued on the conversation's lane without the debounce. It reports
+// whether any subscription took the event.
+func (e *Engine) routeCompletedEvent(ctx context.Context, ev map[string]any) bool {
+	channel, _ := ev["channel"].(string)
+	chat, _ := ev["chat"].(string)
+	runID, _ := ev["runId"].(string)
+	if channel == "" || chat == "" || runID == "" {
+		return false
+	}
+	ss, ok := e.subStore()
+	if !ok {
+		return false
+	}
+	handled := false
+	for _, s := range e.activeSubscriptions(channel) {
+		if s.EffectiveMode() == catalog.ModeObserve || !s.Matches(channel, chat, "workflow.completed") {
+			continue
+		}
+		if err := e.checkSubscription(s); err != nil {
+			continue
+		}
+		msgID := "workflow.completed:" + runID
+		fresh, err := ss.ClaimSubscriptionDelivery(ctx, model.SubscriptionDelivery{
+			Subscription: s.Name, MsgID: msgID, Channel: channel, Chat: chat,
+		})
+		if err != nil {
+			log.Printf("subscriptions: %s: record workflow.completed: %v", s.Name, err)
+			continue
+		}
+		if !fresh {
+			handled = true // already queued once
+			continue
+		}
+		input := map[string]any{"event": ev, "subscription": subscriptionInput(s),
+			"conversation": map[string]any{"channel": channel, "chat": chat}}
+		if err := e.enqueueConversation(ConversationKey{Channel: channel, Chat: chat}, s.Workflow, input, false); err != nil {
+			log.Printf("subscriptions: %s: workflow.completed: %v", s.Name, err)
+			_ = ss.SetSubscriptionDelivery(ctx, s.Name, msgID, "", DeliveryFailed)
+			continue
+		}
+		_ = ss.SetSubscriptionDelivery(ctx, s.Name, msgID, "", DeliveryStarted)
+		handled = true
+	}
+	return handled
 }
 
 // eventJSON is the ADR 0026 part of a message, as stored on its row.
