@@ -466,6 +466,72 @@ func (e *Engine) DeleteMemoryEntry(ctx context.Context, id string) error {
 	return e.store.DeleteMemory(ctx, id)
 }
 
+// handScrub scrubs text a person typed into a workflow's memory with every
+// sensitive value of the project's env store — the same guarantee a run's own
+// writes get, without a run to hang the redactions on.
+func (e *Engine) handScrub(ctx context.Context, project string) func(string) string {
+	tmp := uuid.New()
+	scrub := e.scrubber(ctx, tmp, project)
+	e.redactions.forget(tmp)
+	return scrub
+}
+
+// AddMemoryNote records a hand-written lesson for the next runs of a workflow.
+// It is a note like the ones the `remember` tool writes, so every agent step of
+// the next run reads it. An empty project means "local".
+func (e *Engine) AddMemoryNote(ctx context.Context, workflowName, project, text string) (model.MemoryEntry, error) {
+	if e.store == nil {
+		return model.MemoryEntry{}, ErrNoStateStore
+	}
+	if workflowName == "" {
+		return model.MemoryEntry{}, fmt.Errorf("which workflow?")
+	}
+	if strings.TrimSpace(text) == "" {
+		return model.MemoryEntry{}, fmt.Errorf("the note is empty")
+	}
+	if project == "" {
+		project = "local"
+	}
+	body := clip(e.handScrub(ctx, project)(text), memoryNoteMax)
+	return e.store.AddMemory(ctx, model.MemoryEntry{
+		Project: project, Workflow: workflowName, Kind: model.MemoryKindNote, Body: body,
+	})
+}
+
+// EditMemoryEntry rewrites one entry's text. A lesson is held to the same
+// limit as a written one; a run record or digest keeps its lines and is capped
+// at the digest size. The text is scrubbed like every other write.
+func (e *Engine) EditMemoryEntry(ctx context.Context, id, text string) (model.MemoryEntry, error) {
+	if e.store == nil {
+		return model.MemoryEntry{}, ErrNoStateStore
+	}
+	if strings.TrimSpace(text) == "" {
+		return model.MemoryEntry{}, fmt.Errorf("the text is empty — delete the entry instead")
+	}
+	m, err := e.store.GetMemory(ctx, id)
+	if err != nil {
+		return model.MemoryEntry{}, err
+	}
+	text = e.handScrub(ctx, m.Project)(text)
+	if m.Kind == model.MemoryKindNote {
+		text = clip(text, memoryNoteMax)
+	} else {
+		text = strings.TrimSpace(text)
+		if len(text) > memoryDigestMax {
+			n := memoryDigestMax
+			for n > 0 && !utf8.RuneStart(text[n]) {
+				n--
+			}
+			text = text[:n] + "…"
+		}
+	}
+	if err := e.store.UpdateMemoryBody(ctx, id, text); err != nil {
+		return model.MemoryEntry{}, err
+	}
+	m.Body = text
+	return m, nil
+}
+
 // PreviewMemory is what a run of this workflow would load, across projects —
 // the dry run's view.
 func (e *Engine) PreviewMemory(ctx context.Context, def *workflow.Definition) string {

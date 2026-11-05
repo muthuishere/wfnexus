@@ -1,10 +1,14 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
 // Workflow memory (engine/memory.go): what previous runs of a workflow left
@@ -46,4 +50,44 @@ func (s *Server) deleteMemoryEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// memoryText is the body of an add or an edit: the text the next run reads.
+type memoryText struct {
+	Body string `json:"body"`
+}
+
+// addWorkflowMemory records a hand-written lesson: `{"body": "..."}`,
+// `?project=` (default local).
+func (s *Server) addWorkflowMemory(w http.ResponseWriter, r *http.Request) {
+	var b memoryText
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	m, err := s.eng.AddMemoryNote(r.Context(), urlName(r, "name"), r.URL.Query().Get("project"), b.Body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, m)
+}
+
+// editMemoryEntry rewrites one entry's text: `{"body": "..."}`.
+func (s *Server) editMemoryEntry(w http.ResponseWriter, r *http.Request) {
+	var b memoryText
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	m, err := s.eng.EditMemoryEntry(r.Context(), chi.URLParam(r, "id"), b.Body)
+	if errors.Is(err, store.ErrNotFound) {
+		notFound(w)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
 }

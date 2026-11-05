@@ -103,3 +103,44 @@ func (s *Store) ForgetMemory(ctx context.Context, project, workflow string, anyP
 	}
 	return res.RowsAffected()
 }
+
+// GetMemory returns one entry by id, or ErrNotFound.
+func (s *Store) GetMemory(ctx context.Context, id string) (model.MemoryEntry, error) {
+	rows, err := s.query(ctx, `SELECT id, project, workflow, run_id, kind, status, step_id, body, created_ns
+		FROM workflow_memory WHERE id=$1`, id)
+	if err != nil {
+		return model.MemoryEntry{}, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return model.MemoryEntry{}, err
+		}
+		return model.MemoryEntry{}, ErrNotFound
+	}
+	var m model.MemoryEntry
+	var ns int64
+	if err := rows.Scan(&m.ID, &m.Project, &m.Workflow, &m.RunID, &m.Kind, &m.Status, &m.StepID, &m.Body, &ns); err != nil {
+		return model.MemoryEntry{}, err
+	}
+	m.CreatedAt = time.Unix(0, ns).UTC()
+	return m, nil
+}
+
+// UpdateMemoryBody rewrites one entry's text. Its place in the newest-first
+// order (created_ns) is kept, so an edit does not reorder memory. ErrNotFound
+// when no such entry exists.
+func (s *Store) UpdateMemoryBody(ctx context.Context, id, body string) error {
+	res, err := s.exec(ctx, `UPDATE workflow_memory SET body=$1 WHERE id=$2`, body, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

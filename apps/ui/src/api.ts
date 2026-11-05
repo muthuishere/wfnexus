@@ -461,6 +461,14 @@ export const api = {
       { method: 'DELETE' })),
   deleteMemory: (id: string) =>
     j(fetch(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+  /** A hand-written lesson every agent step of the next run reads. */
+  addMemoryNote: (name: string, body: string, project = '') =>
+    j<MemoryEntry>(post(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`, { body })),
+  /** Rewrite one entry's text. */
+  editMemory: (id: string, body: string) =>
+    j<MemoryEntry>(fetch(`/api/memory/${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
+    })),
   /** When the workflow's cron fires next (UTC instant), or null when unscheduled. */
   workflowSchedule: (name: string) =>
     j<{ nextRunAt: string | null; crons: string[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/schedule`)),

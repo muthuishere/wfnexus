@@ -80,6 +80,8 @@ type Store interface {
 	AddMemory(ctx context.Context, m model.MemoryEntry) (model.MemoryEntry, error)
 	ListMemory(ctx context.Context, f model.MemoryFilter) ([]model.MemoryEntry, error)
 	DeleteMemory(ctx context.Context, id string) error
+	GetMemory(ctx context.Context, id string) (model.MemoryEntry, error)
+	UpdateMemoryBody(ctx context.Context, id, body string) error
 	ForgetMemory(ctx context.Context, project, workflow string, anyProject bool) (int64, error)
 
 	// settings
