@@ -165,7 +165,7 @@ export default function WorkflowPage({ project, name }: { project: string; name:
               {triggerNames(def).map(t => <span key={t} className="pill">{t.replace('workflow_', '')}</span>)}
               <span className="pill">{shapeOf(def)}</span>
             </span>
-            <span className="muted mono" style={{ fontSize: 12 }}>{def.path}</span>
+            <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>{def.path}</span>
           </div>
           {def.steps.length > 1 && <WorkflowCanvas steps={def.steps} />}
           <div style={{ marginTop: 14 }}>

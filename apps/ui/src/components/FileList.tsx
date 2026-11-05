@@ -14,9 +14,9 @@ import type { FileInfo } from '../api'
  *  One shape, used by the Builder, the gallery and a project's table, so the
  *  files always read the same way. */
 export default function FileList({ files, empty }: { files?: FileInfo[]; empty?: string }) {
-  if (!files?.length) return <span className="muted" style={{ fontSize: 12 }}>{empty ?? '—'}</span>
+  if (!files?.length) return <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{empty ?? '—'}</span>
   return (
-    <ul className="mono" style={{ fontSize: 12, margin: 0, paddingLeft: 0, listStyle: 'none' }}>
+    <ul className="mono" style={{ fontSize: 'var(--fs-2xs)', margin: 0, paddingLeft: 0, listStyle: 'none' }}>
       {files.map(f => (
         <li key={f.path} style={{ display: 'flex', gap: 10, justifyContent: 'space-between' }}>
           <span>{f.path}</span>

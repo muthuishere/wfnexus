@@ -19,13 +19,15 @@ import type { Step } from '../api'
 type Mode = 'needs' | 'facts' | 'sequence'
 type Zoom = 'fit' | 'full'
 
-export default function WorkflowCanvas({ steps, active, onPick, status }: {
+export default function WorkflowCanvas({ steps, active, onPick, status, facts }: {
   steps: Step[]
   /** step id to highlight — the running step, or the one being edited */
   active?: string
   onPick?: (id: string) => void
   /** step id → run status (done, running, failed, …), on the run page */
   status?: Record<string, string>
+  /** step id → "model · tokens", on the run page */
+  facts?: Record<string, string>
 }) {
   const g = useMemo(() => layout(steps), [steps])
   // A callback ref, not useRef + [] deps: the box does not exist while there
@@ -94,7 +96,7 @@ export default function WorkflowCanvas({ steps, active, onPick, status }: {
                 <text x="12" y="22" className="nname">{clip(n.name, 24)}</text>
                 <text x="12" y="42" className="nkind">{clip(`${n.id} · ${n.kind}${n.provider ? ` · ${n.provider}` : ''}`, 28)}</text>
                 {(st || n.produces.length > 0) && <text x="12" y="60" className={st ? 'nstatus' : 'nfact'}>
-                  {st ? st.replace(/_/g, ' ') : clip(`⇒ ${n.produces.join(', ')}`, 28)}</text>}
+                  {st ? clip([st.replace(/_/g, ' '), facts?.[n.id]].filter(Boolean).join(' · '), 30) : clip(`⇒ ${n.produces.join(', ')}`, 28)}</text>}
                 {n.guarded && <text x={NODE_W - 12} y="22" className="nguard" textAnchor="end">?</text>}
               </g>)
           })}
