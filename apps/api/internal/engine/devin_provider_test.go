@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // A devin registry entry carries the step's model and its permission mode to
@@ -16,7 +16,7 @@ func TestDevinEntryCarriesModelAndPermissionMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := strings.Join(ag.(*devinadapter.CommandAgent).Args, " ")
+	args := strings.Join(ag.(*agentadapter.CommandAgent).Args, " ")
 	if !strings.Contains(args, "--model opus") || !strings.Contains(args, "--permission-mode accept-edits") {
 		t.Fatalf("cli argv = %s", args)
 	}

@@ -2,7 +2,7 @@ package engine
 
 import (
 	"context"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -343,7 +343,7 @@ func providerBinary(p catalog.Provider) string {
 		if name == "" {
 			name = "devin"
 		}
-		if pr, ok := devinadapter.ACPPresets[name]; ok {
+		if pr, ok := agentadapter.ACPPresets[name]; ok {
 			return pr.Bin // codex speaks ACP through npx, not through `codex`
 		}
 	}

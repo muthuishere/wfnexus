@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter_test
+package agentadapter_test
 
 // The adapter against THIS repo's real assets: the skills in /skills and the
 // output contract of the `validate-bug` step in /workflows/bug-fix.yaml. The
@@ -23,10 +23,10 @@ import (
 	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
-// repoRoot is four levels up: apps/api/internal/devinadapter.
+// repoRoot is four levels up: apps/api/internal/agentadapter.
 const repoRoot = "../../../.."
 
 func repoSkills(t *testing.T) string {
@@ -163,7 +163,7 @@ func TestLiveProjectValidateBug(t *testing.T) {
 	liveAgent(t) // skip guard
 	skills := repoSkills(t)
 
-	acp := devinadapter.NewACP(devinadapter.ACP{Model: liveModelName()})
+	acp := agentadapter.NewACP(agentadapter.ACP{Model: liveModelName()})
 	defer acp.Close()
 
 	var got *Validation
@@ -175,11 +175,11 @@ func TestLiveProjectValidateBug(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := devinadapter.New(devinadapter.Options{
+	a := agentadapter.New(agentadapter.Options{
 		Agent:   acp,
 		Workdir: t.TempDir(),
 		Timeout: 8 * time.Minute,
-		Trace: func(ex devinadapter.Exchange) {
+		Trace: func(ex agentadapter.Exchange) {
 			t.Logf("turn %d/%d (%d byte prompt)", ex.Turn, ex.Attempt, len(ex.Prompt))
 		},
 	})
@@ -249,7 +249,7 @@ func TestLiveACPSupersedeExperiment(t *testing.T) {
 				return "recorded " + name + "; now do the next step", nil
 			})
 
-		acp := devinadapter.NewACP(devinadapter.ACP{
+		acp := agentadapter.NewACP(agentadapter.ACP{
 			Model: liveModelName(), NoSupersede: noSupersede,
 		})
 		defer acp.Close()
@@ -260,7 +260,7 @@ func TestLiveACPSupersedeExperiment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: t.TempDir(), Timeout: 6 * time.Minute})
+		a := agentadapter.New(agentadapter.Options{Agent: acp, Workdir: t.TempDir(), Timeout: 6 * time.Minute})
 		opts := a.InProcessOptions()
 		opts.MaxTurns = 6
 

@@ -1,4 +1,4 @@
-package devinadapter_test
+package agentadapter_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // An agent refused its own tools usually goes silent. What it meant to do is
@@ -18,7 +18,7 @@ import (
 // guardrails. Only tools the step offers are used; an edit, a fetch or a
 // sub-task has no safe equivalent and stays refused.
 func TestRefusedNativeCallsBecomeThePlatformsOwnCalls(t *testing.T) {
-	native := []devinadapter.NativeCall{
+	native := []agentadapter.NativeCall{
 		{ID: "1", Tool: "read", Kind: "read", Input: map[string]any{"filePath": "/w/facts.txt"}},
 		{ID: "2", Tool: "grep", Kind: "search", Input: map[string]any{"pattern": "answer", "include": "*.py"}},
 		{ID: "3", Tool: "glob", Kind: "search", Input: map[string]any{"pattern": "**/*.md", "path": "/w"}},
@@ -26,7 +26,7 @@ func TestRefusedNativeCallsBecomeThePlatformsOwnCalls(t *testing.T) {
 		{ID: "5", Tool: "edit", Kind: "edit", Input: map[string]any{"filePath": "/w/x", "newString": "y"}},
 		{ID: "6", Tool: "list", Kind: "search", Input: map[string]any{"path": "/w"}},
 	}
-	got := devinadapter.TranslateNativeCalls(native, map[string]bool{"read": true, "grep": true, "glob": true})
+	got := agentadapter.TranslateNativeCalls(native, map[string]bool{"read": true, "grep": true, "glob": true})
 	var names []string
 	for _, c := range got {
 		b, _ := json.Marshal(c.Arguments)
@@ -93,9 +93,9 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatal(err)
 	}
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
-	a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: dir})
+	a := agentadapter.New(agentadapter.Options{Agent: acp, Workdir: dir})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "what is the answer in FACTS?", tk)
 	if err != nil {
 		t.Fatalf("run: %v", err)

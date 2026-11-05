@@ -12,7 +12,7 @@ import (
 	"github.com/muthuishere/toolnexus/golang/agents"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -172,8 +172,8 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 		}
 		// Devin discovers skills natively from <workdir>/.devin/skills, so the
 		// step's skills are put where it looks, not only described in the soul.
-		if devinadapter.IsDevin(p.Preset, p.Command) {
-			if err := devinadapter.MaterializeSkills(workdir, e.skillDirs(step)); err != nil {
+		if agentadapter.IsDevin(p.Preset, p.Command) {
+			if err := agentadapter.MaterializeSkills(workdir, e.skillDirs(step)); err != nil {
 				return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
 			}
 		}
@@ -206,7 +206,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 	if err != nil {
 		return resolved{}, err
 	}
-	ad := devinadapter.New(devinadapter.Options{
+	ad := agentadapter.New(agentadapter.Options{
 		Agent:          agent,
 		Model:          model,
 		Workdir:        workdir,
@@ -233,8 +233,8 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 // shared by a step's turns and by `wfx models`. An explicit command is run
 // exactly as written, with the model chosen over the protocol; the devin
 // preset keeps devin's own --model flag and implicit acp subcommand.
-func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinadapter.ACP, error) {
-	cfg := devinadapter.ACP{
+func acpConfig(p catalog.Provider, model, workdir string, env []string) (agentadapter.ACP, error) {
+	cfg := agentadapter.ACP{
 		Model: model, Cwd: workdir, Env: env, SessionPerTurn: !p.KeepSession,
 		StartTimeout: time.Duration(p.TimeoutSec) * time.Second,
 	}
@@ -248,7 +248,7 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinad
 	if name == "" {
 		name = "devin"
 	}
-	pr, ok := devinadapter.ACPPresets[name]
+	pr, ok := agentadapter.ACPPresets[name]
 	if !ok {
 		// Refused rather than guessed, the same rule cli follows. Running an
 		// unknown name as `<name> acp` meant a typo'd preset started some other
@@ -257,7 +257,7 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinad
 		// entry assembled in code.
 		return cfg, fmt.Errorf("provider %q: no acp preset named %q — presets are %s; "+
 			"for any other ACP agent give an explicit `command` in the registry",
-			p.Name, name, strings.Join(devinadapter.ACPPresetNames(), ", "))
+			p.Name, name, strings.Join(agentadapter.ACPPresetNames(), ", "))
 	}
 	cfg.Bin, cfg.Argv, cfg.ModelFlag, cfg.Mode = pr.Bin, pr.Argv, pr.ModelFlag, pr.Mode
 	if p.PermissionMode != "" {
@@ -270,7 +270,7 @@ func acpConfig(p catalog.Provider, model, workdir string, env []string) (devinad
 
 // localAgent builds the backend that executes one turn: a persistent ACP
 // process, or a fresh one-shot command per turn.
-func localAgent(p catalog.Provider, model, workdir string, env []string) (devinadapter.Agent, func(), error) {
+func localAgent(p catalog.Provider, model, workdir string, env []string) (agentadapter.Agent, func(), error) {
 	// KIND FIRST, then command. `kind: acp` says the process speaks the Agent
 	// Client Protocol; the command only says which binary to start. Testing
 	// the command first meant an `acp` entry that named its binary was run as
@@ -284,7 +284,7 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 		if err != nil {
 			return nil, nil, err
 		}
-		a := devinadapter.NewACP(cfg)
+		a := agentadapter.NewACP(cfg)
 		return a, func() { _ = a.Close() }, nil
 	}
 
@@ -292,7 +292,7 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 	// conveniences, and the generic argv template is what makes any agent CLI
 	// usable without this package learning its name.
 	if len(p.Command) > 0 {
-		return &devinadapter.CommandAgent{
+		return &agentadapter.CommandAgent{
 			Label: p.Name,
 			Env:   env,
 			Bin:   p.Command[0],
@@ -305,22 +305,22 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (devina
 		}, noClose, nil
 	}
 
-	cli := devinadapter.CLI{Model: model, PermissionMode: p.PermissionMode}
+	cli := agentadapter.CLI{Model: model, PermissionMode: p.PermissionMode}
 	// A preset builds its own CommandAgent, so the step's env is layered on
 	// after: the preset decides the argv, the step decides the environment.
-	withEnv := func(a *devinadapter.CommandAgent) (devinadapter.Agent, func(), error) {
+	withEnv := func(a *agentadapter.CommandAgent) (agentadapter.Agent, func(), error) {
 		a.Env = append(append([]string{}, a.Env...), env...)
 		return a, noClose, nil
 	}
 	switch p.Preset {
 	case "devin", "":
-		return withEnv(devinadapter.Devin(cli))
+		return withEnv(agentadapter.Devin(cli))
 	case "claude":
-		return withEnv(devinadapter.Claude(cli))
+		return withEnv(agentadapter.Claude(cli))
 	case "copilot":
-		return withEnv(devinadapter.Copilot(cli))
+		return withEnv(agentadapter.Copilot(cli))
 	case "opencode":
-		return withEnv(devinadapter.OpenCode(cli))
+		return withEnv(agentadapter.OpenCode(cli))
 	}
 	// Refused rather than guessed. A wrong argv template fails as a parse error
 	// twenty turns in, which is the worst place to learn the name was unknown.

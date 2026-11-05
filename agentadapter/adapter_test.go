@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter_test
+package agentadapter_test
 
 // Deterministic tests. No network, no real CLI: a scripted Agent stands in for
 // the backend so the translation, the tool loop, skills and concurrency are
@@ -27,7 +27,7 @@ import (
 	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // Triage is the structural answer — its json tags ARE the schema toolnexus
@@ -53,7 +53,7 @@ type scripted struct {
 
 func (s *scripted) Name() string { return "scripted" }
 
-func (s *scripted) Execute(_ context.Context, t devinadapter.Turn) (string, error) {
+func (s *scripted) Execute(_ context.Context, t agentadapter.Turn) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prompts = append(s.prompts, t.Prompt)
@@ -119,9 +119,9 @@ func submitTool(into **Triage) toolnexus.Tool {
 	)
 }
 
-func newAgent(t *testing.T, back devinadapter.Agent, tweak func(*toolnexus.InProcessOptions)) *toolnexus.Client {
+func newAgent(t *testing.T, back agentadapter.Agent, tweak func(*toolnexus.InProcessOptions)) *toolnexus.Client {
 	t.Helper()
-	a := devinadapter.New(devinadapter.Options{
+	a := agentadapter.New(agentadapter.Options{
 		Agent:   back,
 		Model:   "test-model",
 		Workdir: t.TempDir(),
@@ -367,12 +367,12 @@ func TestParseReply(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			res, err := devinadapter.ParseReply(c.in)
+			res, err := agentadapter.ParseReply(c.in)
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %+v", res)
 				}
-				if !errors.Is(err, devinadapter.ErrUnparseable) {
+				if !errors.Is(err, agentadapter.ErrUnparseable) {
 					t.Fatalf("error should wrap ErrUnparseable: %v", err)
 				}
 				return
@@ -447,10 +447,10 @@ func TestCommandAgentRunsARealProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	agent := &devinadapter.CommandAgent{
+	agent := &agentadapter.CommandAgent{
 		Label: "fake",
 		Bin:   script,
-		Args:  []string{"--prompt-file", devinadapter.PlaceholderFile},
+		Args:  []string{"--prompt-file", agentadapter.PlaceholderFile},
 	}
 	if agent.Name() != "fake" {
 		t.Errorf("Name() = %q", agent.Name())
@@ -460,7 +460,7 @@ func TestCommandAgentRunsARealProcess(t *testing.T) {
 	if err := os.WriteFile(f, []byte("PROMPT BODY"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := agent.Execute(context.Background(), devinadapter.Turn{
+	out, err := agent.Execute(context.Background(), agentadapter.Turn{
 		Index: 1, PromptFile: f, Prompt: "PROMPT BODY", Workdir: dir,
 	})
 	if err != nil {
@@ -477,8 +477,8 @@ func TestCommandAgentReportsFailureWithStderr(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'not logged in' >&2\nexit 3\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	agent := &devinadapter.CommandAgent{Label: "boom", Bin: script}
-	_, err := agent.Execute(context.Background(), devinadapter.Turn{Workdir: dir, PromptFile: script})
+	agent := &agentadapter.CommandAgent{Label: "boom", Bin: script}
+	_, err := agent.Execute(context.Background(), agentadapter.Turn{Workdir: dir, PromptFile: script})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -491,18 +491,18 @@ func TestCommandAgentReportsFailureWithStderr(t *testing.T) {
 func TestPresetsBuildTheRightArgv(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		agent *devinadapter.CommandAgent
+		agent *agentadapter.CommandAgent
 		want  []string
 	}{
-		{"devin", devinadapter.Devin(devinadapter.CLI{Model: "opus"}),
-			[]string{"--prompt-file", devinadapter.PlaceholderFile, "-p", "--permission-mode", devinadapter.PermissionBypass, "--model", "opus"}},
-		{"claude", devinadapter.Claude(devinadapter.CLI{}),
-			devinadapter.ClaudeArgs},
-		{"claude", devinadapter.Claude(devinadapter.CLI{Model: "sonnet"}),
-			append(append([]string{}, devinadapter.ClaudeArgs...), "--model", "sonnet")},
-		{"copilot", devinadapter.Copilot(devinadapter.CLI{}),
-			[]string{"-p", devinadapter.PlaceholderPrompt, "--log-level", "none", "--no-color"}},
-		{"opencode", devinadapter.OpenCode(devinadapter.CLI{Model: "opencode/ling-3.1-flash-free"}),
+		{"devin", agentadapter.Devin(agentadapter.CLI{Model: "opus"}),
+			[]string{"--prompt-file", agentadapter.PlaceholderFile, "-p", "--permission-mode", agentadapter.PermissionBypass, "--model", "opus"}},
+		{"claude", agentadapter.Claude(agentadapter.CLI{}),
+			agentadapter.ClaudeArgs},
+		{"claude", agentadapter.Claude(agentadapter.CLI{Model: "sonnet"}),
+			append(append([]string{}, agentadapter.ClaudeArgs...), "--model", "sonnet")},
+		{"copilot", agentadapter.Copilot(agentadapter.CLI{}),
+			[]string{"-p", agentadapter.PlaceholderPrompt, "--log-level", "none", "--no-color"}},
+		{"opencode", agentadapter.OpenCode(agentadapter.CLI{Model: "opencode/ling-3.1-flash-free"}),
 			[]string{"run", "--standalone", "-m", "opencode/ling-3.1-flash-free"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -525,8 +525,8 @@ func TestClaudePresetPromptOnStdin(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.Claude(devinadapter.CLI{Bin: script})
-	out, err := a.Execute(context.Background(), devinadapter.Turn{Workdir: dir, Prompt: "hello world", Model: "haiku"})
+	a := agentadapter.Claude(agentadapter.CLI{Bin: script})
+	out, err := a.Execute(context.Background(), agentadapter.Turn{Workdir: dir, Prompt: "hello world", Model: "haiku"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,8 +547,8 @@ func TestOpenCodePresetPromptOnStdin(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.OpenCode(devinadapter.CLI{Bin: script})
-	out, err := a.Execute(context.Background(), devinadapter.Turn{Workdir: dir, Prompt: "hello world", Model: "opencode/x-free"})
+	a := agentadapter.OpenCode(agentadapter.CLI{Bin: script})
+	out, err := a.Execute(context.Background(), agentadapter.Turn{Workdir: dir, Prompt: "hello world", Model: "opencode/x-free"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ var pingMarker = regexp.MustCompile(`ping-\d+`)
 
 // One adapter, several toolnexus clients, concurrent runs. Run with -race.
 func TestOneAdapterManyClientsConcurrently(t *testing.T) {
-	back := devinadapter.AgentFunc{Label: "echo", Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+	back := agentadapter.AgentFunc{Label: "echo", Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
 		// Echo the marker from the request body, so each client can prove it
 		// got its OWN reply and not another's.
 		if m := pingMarker.FindString(turn.Prompt); m != "" {
@@ -577,10 +577,10 @@ func TestOneAdapterManyClientsConcurrently(t *testing.T) {
 
 	var traced int64
 	var mu sync.Mutex
-	a := devinadapter.New(devinadapter.Options{
+	a := agentadapter.New(agentadapter.Options{
 		Agent:   back,
 		Workdir: t.TempDir(),
-		Trace:   func(devinadapter.Exchange) { mu.Lock(); traced++; mu.Unlock() },
+		Trace:   func(agentadapter.Exchange) { mu.Lock(); traced++; mu.Unlock() },
 	})
 
 	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
@@ -624,8 +624,8 @@ func TestOneAdapterManyClientsConcurrently(t *testing.T) {
 // Generate is usable without a client: one assembled request in, one assistant
 // message out.
 func TestGenerateStandsAlone(t *testing.T) {
-	a := devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.AgentFunc{Fn: func(context.Context, devinadapter.Turn) (string, error) { return answer("pong"), nil }},
+	a := agentadapter.New(agentadapter.Options{
+		Agent:   agentadapter.AgentFunc{Fn: func(context.Context, agentadapter.Turn) (string, error) { return answer("pong"), nil }},
 		Workdir: t.TempDir(),
 	})
 
@@ -650,8 +650,8 @@ func TestPromptFileLifecycle(t *testing.T) {
 		t.Run(fmt.Sprintf("keep=%v", keep), func(t *testing.T) {
 			dir := t.TempDir()
 			var seen string
-			a := devinadapter.New(devinadapter.Options{
-				Agent: devinadapter.AgentFunc{Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+			a := agentadapter.New(agentadapter.Options{
+				Agent: agentadapter.AgentFunc{Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
 					seen = turn.PromptFile
 					return answer("ok"), nil
 				}},
@@ -675,8 +675,8 @@ func TestPromptFileLifecycle(t *testing.T) {
 
 // A backend failure must surface, not be silently retried into a wrong answer.
 func TestBackendErrorSurfaces(t *testing.T) {
-	a := devinadapter.New(devinadapter.Options{
-		Agent: devinadapter.AgentFunc{Label: "broken", Fn: func(context.Context, devinadapter.Turn) (string, error) {
+	a := agentadapter.New(agentadapter.Options{
+		Agent: agentadapter.AgentFunc{Label: "broken", Fn: func(context.Context, agentadapter.Turn) (string, error) {
 			return "", fmt.Errorf("devin: not authenticated")
 		}},
 		Workdir: t.TempDir(),
@@ -697,7 +697,7 @@ func TestBackendErrorSurfaces(t *testing.T) {
 // used. The run must not see the failure at all.
 func TestBadReplyIsRepairedAndRetried(t *testing.T) {
 	var prompts []string
-	back := devinadapter.AgentFunc{Label: "flaky", Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+	back := agentadapter.AgentFunc{Label: "flaky", Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
 		prompts = append(prompts, turn.Prompt)
 		if turn.Attempt == 1 {
 			// The exact live drift: the payload placed in content as an object.
@@ -708,7 +708,7 @@ func TestBadReplyIsRepairedAndRetried(t *testing.T) {
 		return answer("repaired"), nil
 	}}
 
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
 	if err != nil {
@@ -736,12 +736,12 @@ func TestBadReplyIsRepairedAndRetried(t *testing.T) {
 // fall back to passing prose off as an answer.
 func TestExhaustedRepairsFailsTheRun(t *testing.T) {
 	var attempts int
-	back := devinadapter.AgentFunc{Label: "stubborn", Fn: func(context.Context, devinadapter.Turn) (string, error) {
+	back := agentadapter.AgentFunc{Label: "stubborn", Fn: func(context.Context, agentadapter.Turn) (string, error) {
 		attempts++
 		return "I refuse to emit json.", nil
 	}}
 
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: 2})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: 2})
 	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	_, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
 	if err == nil {
@@ -758,11 +758,11 @@ func TestExhaustedRepairsFailsTheRun(t *testing.T) {
 // Repairs can be switched off entirely, for a caller who would rather fail fast.
 func TestRepairsCanBeDisabled(t *testing.T) {
 	var attempts int
-	back := devinadapter.AgentFunc{Fn: func(context.Context, devinadapter.Turn) (string, error) {
+	back := agentadapter.AgentFunc{Fn: func(context.Context, agentadapter.Turn) (string, error) {
 		attempts++
 		return "nope", nil
 	}}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: -1})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: -1})
 	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	if _, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk); err == nil {
 		t.Fatal("expected failure")
@@ -783,7 +783,7 @@ func TestModelNameRouting(t *testing.T) {
 		wantTurn    string // what the Agent should see
 		wantReport  string // what RunResult.Model shows (toolnexus's own view)
 	}{
-		{name: "nothing chosen", wantTurn: "", wantReport: devinadapter.DefaultModelLabel},
+		{name: "nothing chosen", wantTurn: "", wantReport: agentadapter.DefaultModelLabel},
 		{name: "client chooses", clientModel: "claude-opus-4.6", wantTurn: "claude-opus-4.6", wantReport: "claude-opus-4.6"},
 		// A pinned adapter overrides what the client asked for, downstream.
 		// RunResult.Model still reports the client's own setting — that field
@@ -793,10 +793,10 @@ func TestModelNameRouting(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var seen string
-			a := devinadapter.New(devinadapter.Options{
+			a := agentadapter.New(agentadapter.Options{
 				Model:   c.optsModel,
 				Workdir: t.TempDir(),
-				Agent: devinadapter.AgentFunc{Fn: func(_ context.Context, turn devinadapter.Turn) (string, error) {
+				Agent: agentadapter.AgentFunc{Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
 					seen = turn.Model
 					return answer("ok"), nil
 				}},
@@ -832,9 +832,9 @@ func TestCommandAgentModelFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run := func(agent *devinadapter.CommandAgent, model string) string {
+	run := func(agent *agentadapter.CommandAgent, model string) string {
 		agent.Bin = script
-		out, err := agent.Execute(context.Background(), devinadapter.Turn{
+		out, err := agent.Execute(context.Background(), agentadapter.Turn{
 			Index: 1, PromptFile: f, Prompt: "x", Model: model, Workdir: dir,
 		})
 		if err != nil {
@@ -843,14 +843,14 @@ func TestCommandAgentModelFlag(t *testing.T) {
 		return out
 	}
 
-	if got := run(devinadapter.Devin(devinadapter.CLI{}), "opus"); !strings.Contains(got, "--model opus") {
+	if got := run(agentadapter.Devin(agentadapter.CLI{}), "opus"); !strings.Contains(got, "--model opus") {
 		t.Errorf("per-turn model not passed: %q", got)
 	}
-	if got := run(devinadapter.Devin(devinadapter.CLI{}), ""); strings.Contains(got, "--model") {
+	if got := run(agentadapter.Devin(agentadapter.CLI{}), ""); strings.Contains(got, "--model") {
 		t.Errorf("empty model should not produce a flag: %q", got)
 	}
 	// A pinned preset ignores the per-turn model instead of passing both.
-	got := run(devinadapter.Devin(devinadapter.CLI{Model: "pinned"}), "opus")
+	got := run(agentadapter.Devin(agentadapter.CLI{Model: "pinned"}), "opus")
 	if !strings.Contains(got, "--model pinned") || strings.Contains(got, "opus") {
 		t.Errorf("pinned model should win alone: %q", got)
 	}
@@ -861,7 +861,7 @@ func TestCommandAgentModelFlag(t *testing.T) {
 // of holding the turn for its whole Timeout.
 func TestAStalledCallIsRetriedOnceWithTheSamePrompt(t *testing.T) {
 	var calls int
-	back := devinadapter.AgentFunc{Label: "stalls", Fn: func(ctx context.Context, turn devinadapter.Turn) (string, error) {
+	back := agentadapter.AgentFunc{Label: "stalls", Fn: func(ctx context.Context, turn agentadapter.Turn) (string, error) {
 		calls++
 		if calls == 1 {
 			<-ctx.Done() // goes quiet until killed
@@ -870,7 +870,7 @@ func TestAStalledCallIsRetriedOnceWithTheSamePrompt(t *testing.T) {
 		return answer("after the stall"), nil
 	}}
 
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir(), AttemptTimeout: 50 * time.Millisecond, Timeout: 5 * time.Second})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(), AttemptTimeout: 50 * time.Millisecond, Timeout: 5 * time.Second})
 	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
 	if err != nil {

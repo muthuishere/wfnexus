@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter_test
+package agentadapter_test
 
 // The ACP backend against a REAL subprocess speaking real JSON-RPC — a fake
 // agent, but a genuine pipe, so the framing, demultiplexing, session handling
@@ -22,7 +22,7 @@ import (
 	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // fakeACP writes a python ACP server that replays canned replies and records
@@ -108,7 +108,7 @@ func TestACPReusesOneProcessAcrossTurns(t *testing.T) {
 		answer("Filed."),
 	})
 
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Model: "SWE-1.6 Slow"})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Model: "SWE-1.6 Slow"})
 	defer acp.Close()
 
 	var got *Triage
@@ -119,7 +119,7 @@ func TestACPReusesOneProcessAcrossTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: acp, Workdir: t.TempDir()})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).
 		Run(context.Background(), "triage this", tk)
 	if err != nil {
@@ -158,14 +158,14 @@ func TestACPReusesOneProcessAcrossTurns(t *testing.T) {
 // The repair tells it why and asks again, in the same session.
 func TestAnEmptyACPTurnIsRepairedNotFatal(t *testing.T) {
 	bin, log := fakeACP(t, []string{"", answer("second time lucky")})
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
 
 	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{Agent: acp, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: acp, Workdir: t.TempDir()})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "say something", tk)
 	if err != nil {
 		t.Fatalf("an empty turn killed the run: %v", err)
@@ -184,10 +184,10 @@ func TestAnEmptyACPTurnIsRepairedNotFatal(t *testing.T) {
 // process, and sends no supersede marker (there is nothing to supersede).
 func TestACPSessionPerTurnOpensAFreshSessionInOneProcess(t *testing.T) {
 	bin, log := fakeACP(t, []string{answer("one"), answer("two")})
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, SessionPerTurn: true})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin, SessionPerTurn: true})
 	defer acp.Close()
 	for i := 1; i <= 2; i++ {
-		if _, err := acp.Execute(context.Background(), devinadapter.Turn{Index: i, Attempt: 1, Prompt: "turn", Workdir: t.TempDir()}); err != nil {
+		if _, err := acp.Execute(context.Background(), agentadapter.Turn{Index: i, Attempt: 1, Prompt: "turn", Workdir: t.TempDir()}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,9 +207,9 @@ func TestACPSessionPerTurnOpensAFreshSessionInOneProcess(t *testing.T) {
 // crash surfaced as a bare "broken pipe" with the cause thrown away.
 func TestACPDeathCarriesTheAgentsStderr(t *testing.T) {
 	bin, _ := fakeACP(t, []string{answer("never")})
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
-	_, err := acp.Execute(context.Background(), devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "please DIE", Workdir: t.TempDir()})
+	_, err := acp.Execute(context.Background(), agentadapter.Turn{Index: 1, Attempt: 1, Prompt: "please DIE", Workdir: t.TempDir()})
 	if err == nil {
 		t.Fatal("a dead agent returned no error")
 	}
@@ -221,10 +221,10 @@ func TestACPDeathCarriesTheAgentsStderr(t *testing.T) {
 // Thought chunks and tool narration are not the reply.
 func TestACPIgnoresNonMessageUpdates(t *testing.T) {
 	bin, _ := fakeACP(t, []string{answer("just the answer")})
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
 
-	out, err := acp.Execute(context.Background(), devinadapter.Turn{
+	out, err := acp.Execute(context.Background(), agentadapter.Turn{
 		Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir(),
 	})
 	if err != nil {
@@ -233,7 +233,7 @@ func TestACPIgnoresNonMessageUpdates(t *testing.T) {
 	if strings.Contains(out, "thinking out loud") {
 		t.Errorf("a thought chunk leaked into the reply: %q", out)
 	}
-	res, err := devinadapter.ParseReply(out)
+	res, err := agentadapter.ParseReply(out)
 	if err != nil {
 		t.Fatalf("streamed reply did not reassemble into valid json: %v\n%s", err, out)
 	}
@@ -249,10 +249,10 @@ func TestACPProcessDeathSurfaces(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
 
-	_, err := acp.Execute(context.Background(), devinadapter.Turn{Index: 1, Prompt: "hi", Workdir: dir})
+	_, err := acp.Execute(context.Background(), agentadapter.Turn{Index: 1, Prompt: "hi", Workdir: dir})
 	if err == nil {
 		t.Fatal("expected an error from a dead agent")
 	}
@@ -263,7 +263,7 @@ func TestACPProcessDeathSurfaces(t *testing.T) {
 
 // Close is idempotent and safe before any start.
 func TestACPCloseIsSafe(t *testing.T) {
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: "does-not-exist"})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: "does-not-exist"})
 	if err := acp.Close(); err != nil {
 		t.Errorf("close before start: %v", err)
 	}
@@ -327,16 +327,16 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 	bin := fakeACPPermission(t, answer("permitted"))
 
 	t.Run("answered completes", func(t *testing.T) {
-		acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+		acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 		defer acp.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		out, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+		out, err := acp.Execute(ctx, agentadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
 		if err != nil {
 			t.Fatalf("answering permission should complete the turn: %v", err)
 		}
-		res, err := devinadapter.ParseReply(out)
+		res, err := agentadapter.ParseReply(out)
 		if err != nil || res.Content != "permitted" {
 			t.Fatalf("reply = %q (%v)", out, err)
 		}
@@ -352,9 +352,9 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 			want  string
 		}{{false, "no"}, {true, "yes"}} {
 			_ = os.Remove(bin + ".chosen")
-			acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, AllowNativeTools: tc.allow})
+			acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin, AllowNativeTools: tc.allow})
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if _, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()}); err != nil {
+			if _, err := acp.Execute(ctx, agentadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()}); err != nil {
 				t.Fatalf("allow=%v: the turn must still complete: %v", tc.allow, err)
 			}
 			cancel()
@@ -367,13 +367,13 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 	})
 
 	t.Run("unanswered hangs", func(t *testing.T) {
-		acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin, NoAnswerPermission: true})
+		acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin, NoAnswerPermission: true})
 		defer acp.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
 		start := time.Now()
-		_, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+		_, err := acp.Execute(ctx, agentadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
 		if err == nil {
 			t.Fatal("GATE 2 NOT REPRODUCED: the turn completed without the permission being answered")
 		}
@@ -389,12 +389,12 @@ func TestACPGate2PermissionMustBeAnswered(t *testing.T) {
 // facts.txt yourself — call the request's read" instead of a vague "no reply".
 func TestAnEmptyTurnNamesTheOwnToolsThatWereRefused(t *testing.T) {
 	bin := fakeACPPermission(t, "")
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := acp.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
-	if !errors.Is(err, devinadapter.ErrEmptyTurn) {
+	_, err := acp.Execute(ctx, agentadapter.Turn{Index: 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir()})
+	if !errors.Is(err, agentadapter.ErrEmptyTurn) {
 		t.Fatalf("want ErrEmptyTurn, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "read facts.txt") {
@@ -406,13 +406,13 @@ func TestAnEmptyTurnNamesTheOwnToolsThatWereRefused(t *testing.T) {
 // a 15s startup? Measured against the FAKE agent, where startup is ~nothing.
 func TestACPGate4WarmWinIsStartupOnly(t *testing.T) {
 	bin, _ := fakeACP(t, []string{answer("one"), answer("two"), answer("three")})
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: bin})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: bin})
 	defer acp.Close()
 
 	var times []time.Duration
 	for i := 0; i < 3; i++ {
 		start := time.Now()
-		if _, err := acp.Execute(context.Background(), devinadapter.Turn{
+		if _, err := acp.Execute(context.Background(), agentadapter.Turn{
 			Index: i + 1, Attempt: 1, Prompt: "hi", Workdir: t.TempDir(),
 		}); err != nil {
 			t.Fatal(err)

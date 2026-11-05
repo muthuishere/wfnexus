@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/registry"
 )
 
@@ -434,9 +434,9 @@ func validateProvider(p Provider) error {
 		// engine no longer guesses `<name> acp` for a name it does not know,
 		// so an entry like that could only ever fail later, further from here.
 		if p.Kind == KindACP && len(p.Command) == 0 {
-			if _, ok := devinadapter.ACPPresets[p.Preset]; !ok {
+			if _, ok := agentadapter.ACPPresets[p.Preset]; !ok {
 				return fmt.Errorf("no acp preset named %q — presets are %s; for any other ACP agent give an explicit command",
-					p.Preset, strings.Join(devinadapter.ACPPresetNames(), ", "))
+					p.Preset, strings.Join(agentadapter.ACPPresetNames(), ", "))
 			}
 		}
 	case "":

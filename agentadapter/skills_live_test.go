@@ -1,4 +1,4 @@
-package devinadapter
+package agentadapter
 
 import (
 	"context"

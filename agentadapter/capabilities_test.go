@@ -1,4 +1,4 @@
-package devinadapter_test
+package agentadapter_test
 
 // The rest of the toolnexus surface through the adapter: soul, hooks,
 // guardrails, the completion gate, conversation memory, budgets, suspension,
@@ -19,13 +19,13 @@ import (
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // agentsFor wires a sub-agent runtime onto the adapter.
-func agentsFor(t *testing.T, back devinadapter.Agent) (agents.Options, *devinadapter.Adapter) {
+func agentsFor(t *testing.T, back agentadapter.Agent) (agents.Options, *agentadapter.Adapter) {
 	t.Helper()
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	baseURL, apiKey, model := a.AgentsLLM()
 	return agents.Options{
 		Transport: a.Transport(),
@@ -147,7 +147,7 @@ func TestHooksFireAndOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	opts := a.InProcessOptions()
 	opts.MaxTurns = 4
 	opts.Hooks = &toolnexus.Hooks{
@@ -305,7 +305,7 @@ func TestConversationMemoryAcrossCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	client := toolnexus.CreateInProcessClient(a.InProcessOptions())
 
 	if _, err := client.Ask(context.Background(), "my favourite colour is indigo", tk, "conv-1"); err != nil {
@@ -344,7 +344,7 @@ func TestBudgetExhaustionIsLoud(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	opts := a.InProcessOptions()
 	opts.MaxTurns = 3
 
@@ -403,7 +403,7 @@ func TestSuspensionAndWaitFor(t *testing.T) {
 	}
 
 	// 1. No WaitFor ⇒ the run HALTS with status pending rather than hanging.
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	res, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).
 		Run(context.Background(), "deploy", tk)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestSuspensionAndWaitFor(t *testing.T) {
 		}
 		return answer("deployed")
 	}}
-	a2 := devinadapter.New(devinadapter.Options{Agent: back2, Workdir: t.TempDir()})
+	a2 := agentadapter.New(agentadapter.Options{Agent: back2, Workdir: t.TempDir()})
 	opts := a2.InProcessOptions()
 	opts.MaxTurns = 4
 	opts.WaitFor = func(req toolnexus.Request) (toolnexus.Answer, error) {
@@ -464,7 +464,7 @@ func TestMetricsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	opts := a.InProcessOptions()
 	opts.MaxTurns = 4
 	opts.OnMetric = func(ev toolnexus.MetricEvent) { kinds[ev.Event]++ }
@@ -508,7 +508,7 @@ func TestA2ARemoteAgentBecomesATool(t *testing.T) {
 
 	// The served agent needs its own model; the adapter plays that part too.
 	remoteBack := &byName{reply: func(string, int) string { return answer("a one-line summary") }}
-	remoteAdapter := devinadapter.New(devinadapter.Options{Agent: remoteBack, Workdir: t.TempDir()})
+	remoteAdapter := agentadapter.New(agentadapter.Options{Agent: remoteBack, Workdir: t.TempDir()})
 	remoteClient := toolnexus.CreateInProcessClient(remoteAdapter.InProcessOptions())
 
 	handle, err := remoteTk.Serve("127.0.0.1:0", toolnexus.ServeOptions{
@@ -557,7 +557,7 @@ func TestA2ARemoteAgentBecomesATool(t *testing.T) {
 // one chunk pretending to be many.
 func TestStreamingIsRefusedNotFaked(t *testing.T) {
 	back := &byName{reply: func(string, int) string { return answer("hello") }}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
 	if err != nil {
 		t.Fatal(err)
@@ -586,7 +586,7 @@ func TestEveryFeatureStillSendsTheSameEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	opts := a.InProcessOptions()
 	opts.SystemPrompt = "SYSTEM MARKER"
 	opts.RequestParams = map[string]any{"temperature": 0.1, "custom_key": "custom_value"}

@@ -1,7 +1,7 @@
 {
   "title": "How a wfnexus run flows",
   "subtitle": ["A person or an agent asks; wfx-server runs typed steps; a human gates; git keeps the receipt."],
-  "chips": ["internal/engine", "internal/catalog", "internal/proposal", "internal/devinadapter", "internal/judge"],
+  "chips": ["internal/engine", "internal/catalog", "internal/proposal", "internal/judge"],
   "footnote": "Package names checked against apps/api/internal by site/scripts/verify-symbols.mjs.",
   "nodes": [
     { "id": "who", "title": "Agent", "detail": "or a person", "kind": "card" },

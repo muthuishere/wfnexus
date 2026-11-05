@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter
+package agentadapter
 
 import (
 	"bytes"
@@ -103,9 +103,13 @@ func Devin(c CLI) *CommandAgent {
 //   - --disable-slash-commands: the operator's personal ~/.claude skills stay
 //     out of a workflow step; the step's own skills arrive in the request.
 //   - --no-session-persistence: a turn is not a resumable chat session.
+//   - --strict-mcp-config --setting-sources "": the operator's MCP servers,
+//     settings, CLAUDE.md and plugins stay out too. Measured on claude
+//     2.1.318 (issue #68): ~16.7k input tokens per turn without them, ~3.0k
+//     with them.
 //
 // The prompt itself goes on stdin (CommandAgent.Stdin), never argv.
-var ClaudeArgs = []string{"-p", "--tools", "", "--disable-slash-commands", "--no-session-persistence"}
+var ClaudeArgs = []string{"-p", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
 
 // Claude is the CLI preset for `claude -p`.
 func Claude(c CLI) *CommandAgent {
@@ -120,6 +124,23 @@ func Claude(c CLI) *CommandAgent {
 		Env:       c.Env,
 		ModelFlag: c.modelFlag("--model"),
 		Stdin:     true,
+	}
+}
+
+// Gemini is the CLI preset for Google's `gemini` CLI in non-interactive mode
+// (`gemini -p <prompt>`, model by -m). Not run on the machine this was
+// written on (no gemini installed); the flags are the CLI's documented ones.
+func Gemini(c CLI) *CommandAgent {
+	args := []string{"-p", PlaceholderPrompt}
+	if c.Model != "" {
+		args = append(args, "-m", c.Model)
+	}
+	return &CommandAgent{
+		Label:     "gemini",
+		Bin:       c.bin("gemini"),
+		Args:      append(args, c.ExtraArgs...),
+		Env:       c.Env,
+		ModelFlag: c.modelFlag("-m"),
 	}
 }
 

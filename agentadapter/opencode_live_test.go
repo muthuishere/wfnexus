@@ -1,10 +1,10 @@
-package devinadapter_test
+package agentadapter_test
 
 // Live: the shipped DEFAULT provider — `opencode run -m <free Zen model>`,
 // prompt on stdin — driven through toolnexus's in-built loop exactly as a step
 // is, ending in a typed submit_answer. No key, no login.
 //
-//	DEVINADAPTER_LIVE=1 go test -run LiveOpenCode -v ./internal/devinadapter/
+//	DEVINADAPTER_LIVE=1 go test -run LiveOpenCode -v .
 //
 // OPENCODE_LIVE_MODEL overrides the model (default: the registry's).
 
@@ -18,7 +18,7 @@ import (
 	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 const liveOpenCodeModel = "opencode/ling-3.1-flash-free"
@@ -34,12 +34,12 @@ func TestLiveOpenCodeFreeModelStructuredAnswer(t *testing.T) {
 	if m := os.Getenv("OPENCODE_LIVE_MODEL"); m != "" {
 		model = m
 	}
-	a := devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.OpenCode(devinadapter.CLI{Model: model}),
+	a := agentadapter.New(agentadapter.Options{
+		Agent:   agentadapter.OpenCode(agentadapter.CLI{Model: model}),
 		Workdir: t.TempDir(),
 		Timeout: 90 * time.Second,
 		Repairs: 2,
-		Trace: func(ex devinadapter.Exchange) {
+		Trace: func(ex agentadapter.Exchange) {
 			t.Logf("turn %d — %d byte prompt, reply:\n%s", ex.Turn, len(ex.Prompt), ex.Reply)
 			if d := os.Getenv("OPENCODE_LIVE_DUMP"); d != "" {
 				_ = os.WriteFile(fmt.Sprintf("%s/turn-%d-%d.txt", d, ex.Turn, len(ex.Prompt)), []byte(ex.Prompt), 0o600)
