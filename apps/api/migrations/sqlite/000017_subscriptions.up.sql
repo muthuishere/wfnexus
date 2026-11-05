@@ -1,4 +1,4 @@
--- See migrations/000022_subscriptions.up.sql for why.
+-- See migrations/000023_subscriptions.up.sql for why.
 ALTER TABLE channel_messages ADD COLUMN event text NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS subscription_deliveries (

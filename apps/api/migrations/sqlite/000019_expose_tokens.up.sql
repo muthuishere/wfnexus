@@ -1,4 +1,4 @@
--- See migrations/000022_expose_tokens.up.sql for what these tables are.
+-- See migrations/000025_expose_tokens.up.sql for what these tables are.
 create table if not exists expose_tokens (
     id           text   primary key,
     project      text   not null,
@@ -8,6 +8,9 @@ create table if not exists expose_tokens (
     prefix       text   not null default '',
     created_ns   integer not null,
     revoked_ns   integer not null default 0,
+    -- hook only: the HMAC signing secret, sealed with the server's env-store
+    -- key (never the token hash: that is what a database leak hands out).
+    signing_sealed blob,
     last_used_ns integer not null default 0
 );
 create index if not exists expose_tokens_by_target on expose_tokens (project, workflow, kind, revoked_ns);

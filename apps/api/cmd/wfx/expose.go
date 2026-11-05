@@ -79,7 +79,13 @@ func exposeCmd(args []string) error {
 		url = u
 	}
 	fmt.Printf("%s exposed: %s\n", kind, url)
-	fmt.Printf("token (shown ONCE — store it now): %v\n\n", out["token"])
+	fmt.Printf("token (shown ONCE — store it now): %v\n", out["token"])
+	if sig, ok := out["signingSecret"].(string); ok && sig != "" {
+		fmt.Printf("signing secret for X-WFX-Signature HMAC (shown ONCE): %s\n", sig)
+	} else if note, ok := out["signingNote"].(string); ok {
+		fmt.Printf("note: %s\n", note)
+	}
+	fmt.Println()
 	switch snip := out["snippet"].(type) {
 	case string:
 		fmt.Println(snip)

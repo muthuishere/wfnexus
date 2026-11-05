@@ -19,8 +19,12 @@ workflow by a person:
 - **Hook** — `POST /hooks/{project}/{workflow}`. The JSON body is the run's
   input (validated by `input_schema` exactly like a manual run).
   `Authorization: Bearer <token>`, or `X-WFX-Signature: sha256=<hex>` — an
-  HMAC-SHA256 of the raw body keyed with the hex `sha256(token)`, for senders
-  that sign rather than carry a header. `?wait=1[&timeout=s]` waits (default
+  HMAC-SHA256 of the raw body keyed with the hook's **signing secret**, for
+  senders that sign rather than carry a header. The signing secret (`wfxs_` +
+  32 random bytes) is separate from the token, issued with it, shown once, and
+  stored sealed with the server's env-store key (`WFX_SECRET_KEY`, the same
+  box as stored env values). The token hash is never a key. With no server
+  key, no signing secret is issued and only the bearer token works. `?wait=1[&timeout=s]` waits (default
   30s, max 120s) and answers the last finished step's output; otherwise 202
   with the run id. `Idempotency-Key` maps to one run per (project, workflow):
   a retry answers the first run with `Idempotent-Replayed: true`.
@@ -53,9 +57,11 @@ the workflow page's **Expose** tab, and `wfx expose hook|mcp <wf>
 
 ## Consequences
 
-- The HMAC key is the stored hash, so a database leak exposes signing keys
-  (not bearer tokens). Accepted: the alternative is storing a reversible
-  secret, and a leaked DB is already a full compromise of the run history.
+- A database leak alone yields neither bearer tokens (only their sha256) nor
+  signing secrets (sealed; the key is not in the database). An earlier draft
+  keyed the HMAC with the stored hash, which a leaked database would have
+  handed out; that was rejected before merge. Rotating the hook token rotates
+  its signing secret too.
 - The rate limiter is per process; several API replicas each allow the rate.
 - `?wait` and `tools/call` hold a connection open while they poll; a run that
   pauses for approval answers immediately with that status.

@@ -151,23 +151,36 @@ func (s *Store) lookupExposeHash(ctx context.Context, hash string) (ExposeToken,
 	return scanExpose(rows)
 }
 
-// ActiveExposeHashes returns token id → stored hash for the active tokens that
-// could authorize (project, workflow, kind): the workflow's own, plus the
-// project token. HMAC verification needs the key, which is the hash.
-func (s *Store) ActiveExposeHashes(ctx context.Context, project, workflow, kind string) (map[string]string, error) {
-	rows, err := s.query(ctx, `SELECT id, token_hash FROM expose_tokens
-		WHERE project=$1 AND kind=$2 AND revoked_ns=0 AND (workflow=$3 OR workflow='')`, project, kind, workflow)
+// SetExposeSigning stores a token's SEALED HMAC signing secret. The secret is
+// separate from the token, and the token hash is never a key: a database
+// leak then yields neither a usable bearer token nor a signing key (the seal
+// needs the server's env-store key, which is not in the database).
+func (s *Store) SetExposeSigning(ctx context.Context, id string, sealed []byte) error {
+	_, err := s.exec(ctx, `UPDATE expose_tokens SET signing_sealed=$1 WHERE id=$2`, sealed, id)
+	return err
+}
+
+// ActiveExposeSigning returns token id → sealed signing secret for the active
+// tokens of (project, workflow, kind) that have one: the workflow's own, plus
+// the project token.
+func (s *Store) ActiveExposeSigning(ctx context.Context, project, workflow, kind string) (map[string][]byte, error) {
+	rows, err := s.query(ctx, `SELECT id, signing_sealed FROM expose_tokens
+		WHERE project=$1 AND kind=$2 AND revoked_ns=0 AND (workflow=$3 OR workflow='')
+		AND signing_sealed IS NOT NULL`, project, kind, workflow)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	out := map[string][]byte{}
 	for rows.Next() {
-		var id, h string
-		if err := rows.Scan(&id, &h); err != nil {
+		var id string
+		var sealed []byte
+		if err := rows.Scan(&id, &sealed); err != nil {
 			return nil, err
 		}
-		out[id] = h
+		if len(sealed) > 0 {
+			out[id] = sealed
+		}
 	}
 	return out, rows.Err()
 }

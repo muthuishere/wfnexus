@@ -683,4 +683,7 @@ export interface ExposeView {
 export interface ExposeIssued extends ExposeView {
   token: string
   snippet: unknown
+  /** hook only: the HMAC signing secret, shown once */
+  signingSecret?: string
+  signingNote?: string
 }

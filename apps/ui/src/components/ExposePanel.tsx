@@ -61,6 +61,11 @@ export default function ExposePanel({ workflow }: { workflow: string }) {
           <div className="card" style={{ marginTop: 12 }}>
             <strong>Copy this token now — it will not be shown again.</strong>
             <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{issued.token}</pre>
+            {issued.signingSecret && (<>
+              <div className="muted">Signing secret, for an X-WFX-Signature HMAC instead of the bearer token (also shown once)</div>
+              <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{issued.signingSecret}</pre>
+            </>)}
+            {issued.signingNote && <div className="muted">{issued.signingNote}</div>}
             <div className="muted">{kind === 'mcp' ? 'MCP client config' : 'Try it'}</div>
             <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               {typeof issued.snippet === 'string' ? issued.snippet : JSON.stringify(issued.snippet, null, 2)}

@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -334,7 +335,9 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 }
 
 // hookAuth accepts a bearer token issued for THIS workflow's hook, or an HMAC
-// of the body keyed with sha256(token) in X-WFX-Signature: sha256=<hex>.
+// of the body in X-WFX-Signature: sha256=<hex>, keyed with the hook's SIGNING
+// SECRET — a separate random secret shown once at issue and stored sealed
+// with the server's env-store key. The stored token hash is never a key.
 func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (string, bool) {
 	if tok := exposeBearer(r); tok != "" {
 		t, err := s.store.LookupExposeToken(r.Context(), tok)
@@ -348,18 +351,36 @@ func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (s
 	if sig == "" || err != nil {
 		return "", false
 	}
-	hashes, err := s.store.ActiveExposeHashes(r.Context(), project, name, store.ExposeHook)
+	box := s.eng.Secrets()
+	if box == nil {
+		return "", false // no server key: signed hooks are off, bearer only
+	}
+	sealed, err := s.store.ActiveExposeSigning(r.Context(), project, name, store.ExposeHook)
 	if err != nil {
 		return "", false
 	}
-	for id, h := range hashes {
-		mac := hmac.New(sha256.New, []byte(h))
+	for id, sl := range sealed {
+		key, err := box.Open(sl)
+		if err != nil {
+			continue
+		}
+		mac := hmac.New(sha256.New, []byte(key))
 		mac.Write(body)
 		if hmac.Equal(mac.Sum(nil), got) {
 			return id, true
 		}
 	}
 	return "", false
+}
+
+// newSigningSecret is a hook's HMAC key: 32 random bytes, hex, with a prefix
+// that says what it is.
+func newSigningSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "wfxs_" + hex.EncodeToString(b), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -586,10 +607,17 @@ func (s *Server) issueExpose(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, secret, err := s.store.IssueExposeToken(r.Context(), project, name, kind)
+	tok, secret, err := s.store.IssueExposeToken(r.Context(), project, name, kind)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
+	}
+	signing := ""
+	if kind == store.ExposeHook {
+		if signing, err = s.issueSigning(r.Context(), tok.ID); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
 	}
 	v, err := s.exposeView(r, project, name)
 	if err != nil {
@@ -597,6 +625,11 @@ func (s *Server) issueExpose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v["token"] = secret
+	if signing != "" {
+		v["signingSecret"] = signing
+	} else if kind == store.ExposeHook {
+		v["signingNote"] = "the server has no secret key (WFX_SECRET_KEY), so signed hooks are off: use the bearer token"
+	}
 	view := v[kind].(exposeKindView)
 	if kind == store.ExposeMCP {
 		v["snippet"] = mcpSnippet(view.URL, secret)
@@ -604,6 +637,28 @@ func (s *Server) issueExpose(w http.ResponseWriter, r *http.Request) {
 		v["snippet"] = fmt.Sprintf("curl -X POST '%s?wait=1' -H 'Authorization: Bearer %s' -H 'Content-Type: application/json' -d '{}'", view.URL, secret)
 	}
 	writeJSON(w, 201, v)
+}
+
+// issueSigning makes a hook token's HMAC signing secret, stores it sealed and
+// returns the plaintext (shown once). No server key: "" and no error — the
+// hook still works with its bearer token.
+func (s *Server) issueSigning(ctx context.Context, tokenID string) (string, error) {
+	box := s.eng.Secrets()
+	if box == nil {
+		return "", nil
+	}
+	secret, err := newSigningSecret()
+	if err != nil {
+		return "", err
+	}
+	sealed, err := box.Seal(secret)
+	if err != nil {
+		return "", err
+	}
+	if err := s.store.SetExposeSigning(ctx, tokenID, sealed); err != nil {
+		return "", err
+	}
+	return secret, nil
 }
 
 func (s *Server) revokeExpose(w http.ResponseWriter, r *http.Request) {

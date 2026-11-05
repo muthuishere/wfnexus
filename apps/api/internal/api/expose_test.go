@@ -71,7 +71,9 @@ func exposeServer(t *testing.T) exposeFixture {
 			t.Fatal(err)
 		}
 	}
-	cfg := config.Config{Addr: "127.0.0.1:0", WorkDir: t.TempDir(), WorkflowsDir: t.TempDir()}
+	// A server key, so hook signing secrets can be sealed (first-boot file).
+	cfg := config.Config{Addr: "127.0.0.1:0", WorkDir: t.TempDir(), WorkflowsDir: t.TempDir(),
+		SecretKeyEnv: "WFX_EXPOSE_TEST_NO_SUCH_KEY", SecretKeyPath: filepath.Join(t.TempDir(), "secret.key")}
 	eng := engine.New(cfg, st, nil, map[string]*workflow.Definition{}, skills.Load(), nil)
 	if _, err := eng.ImportRepo(context.Background(), "demo", repo, ""); err != nil {
 		t.Fatal(err)
@@ -94,6 +96,13 @@ func (f exposeFixture) call(t *testing.T, method, path string, body []byte, hdr 
 
 func (f exposeFixture) issue(t *testing.T, path string, rotate bool) string {
 	t.Helper()
+	tok, _ := f.issueFull(t, path, rotate)
+	return tok
+}
+
+// issueFull also returns the issue response (signingSecret for a hook).
+func (f exposeFixture) issueFull(t *testing.T, path string, rotate bool) (string, map[string]any) {
+	t.Helper()
 	b, _ := json.Marshal(map[string]any{"rotate": rotate})
 	code, out, _ := f.call(t, "POST", path, b, nil)
 	if code != http.StatusCreated {
@@ -103,7 +112,7 @@ func (f exposeFixture) issue(t *testing.T, path string, rotate bool) string {
 	if !strings.HasPrefix(tok, "wfxe_") {
 		t.Fatalf("no token in %v", out)
 	}
-	return tok
+	return tok, out
 }
 
 func TestHookIsOffUntilExposedAndOnlyForItsWorkflow(t *testing.T) {
@@ -114,8 +123,12 @@ func TestHookIsOffUntilExposedAndOnlyForItsWorkflow(t *testing.T) {
 	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{"Authorization": "Bearer wfxe_nope"}); code != 401 {
 		t.Fatalf("unexposed workflow = %d, want 401", code)
 	}
-	tok := f.issue(t, "/api/workflows/demo%2Fecho/expose/hook", false)
+	tok, issued := f.issueFull(t, "/api/workflows/demo%2Fecho/expose/hook", false)
 	auth := map[string]string{"Authorization": "Bearer " + tok}
+	signing, _ := issued["signingSecret"].(string)
+	if !strings.HasPrefix(signing, "wfxs_") || signing == tok {
+		t.Fatalf("want a separate signing secret, got %v", issued)
+	}
 
 	// Exposing again without rotate is refused; GET never shows the token.
 	if code, _, _ := f.call(t, "POST", "/api/workflows/demo%2Fecho/expose/hook", nil, nil); code != http.StatusConflict {
@@ -146,10 +159,20 @@ func TestHookIsOffUntilExposedAndOnlyForItsWorkflow(t *testing.T) {
 		t.Fatalf("output = %s", o)
 	}
 
-	// HMAC: key is sha256(token) hex, signature over the raw body.
-	mac := hmac.New(sha256.New, []byte(store.HashExposeToken(tok)))
-	mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	// HMAC: keyed with the signing secret (shown once), over the raw body.
+	sign := func(key string, b []byte) string {
+		mac := hmac.New(sha256.New, []byte(key))
+		mac.Write(b)
+		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	}
+	// The stored token hash is NOT a key: a database leak must not sign.
+	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sign(store.HashExposeToken(tok), body)}); code != 401 {
+		t.Fatalf("hmac keyed with the token hash = %d, want 401", code)
+	}
+	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sign(tok, body)}); code != 401 {
+		t.Fatalf("hmac keyed with the token = %d, want 401", code)
+	}
+	sig := sign(signing, body)
 	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sig}); code != 202 {
 		t.Fatalf("hmac = %d, want 202", code)
 	}

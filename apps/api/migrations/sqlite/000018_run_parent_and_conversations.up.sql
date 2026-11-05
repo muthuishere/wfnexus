@@ -1,5 +1,5 @@
 -- The SQLite half of the Postgres 000022 migration (ADR 0026 decisions 4 and 5).
--- See migrations/000022_run_parent_and_conversations.up.sql for the columns.
+-- See migrations/000024_run_parent_and_conversations.up.sql for the columns.
 ALTER TABLE workflow_runs ADD COLUMN parent_run_id text NOT NULL DEFAULT '';
 ALTER TABLE workflow_runs ADD COLUMN parent_step_id text NOT NULL DEFAULT '';
 ALTER TABLE workflow_runs ADD COLUMN parent_mode text NOT NULL DEFAULT '';

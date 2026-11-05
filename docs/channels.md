@@ -224,6 +224,12 @@ without its device suffix).
    fromOwner/reaction) and `input.subscription` (name, instructions,
    responsePolicy, mode, memory, skills, owner). `(subscription, message id)`
    is unique in `subscription_deliveries`, so a repeat starts nothing. A
+   matched event with a `chat` starts through its conversation lane
+   `(channel, chat)`: one run per chat at a time, messages within 3 s batched
+   into one run (`input.messages`). A subscription that lists
+   `workflow.completed` in `events` also receives the completion events of
+   `start: … continue: event` children from runs in that chat
+   (`input.event`), once per child run. A
    channel with an active subscription is read even when not `inbound`, at the
    shortest of its subscriptions' intervals (`30s`, `1m`, `2m`).
 

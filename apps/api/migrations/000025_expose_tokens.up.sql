@@ -15,6 +15,9 @@ create table if not exists expose_tokens (
     prefix       text   not null default '',
     created_ns   bigint not null,
     revoked_ns   bigint not null default 0,
+    -- hook only: the HMAC signing secret, sealed with the server's env-store
+    -- key (never the token hash: that is what a database leak hands out).
+    signing_sealed bytea,
     last_used_ns bigint not null default 0
 );
 create index if not exists expose_tokens_by_target on expose_tokens (project, workflow, kind, revoked_ns);
