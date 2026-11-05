@@ -74,22 +74,22 @@ export default function WorkflowMemory({ workflow, project }: { workflow: string
               <tr key={m.id}>
                 <td style={{ width: 120, verticalAlign: 'top' }}>
                   <span className="pill">{m.kind === 'note' ? 'lesson' : m.kind}</span>{' '}
-                  {m.status && <span className="muted" style={{ fontSize: 11 }}>{m.status}</span>}
+                  {m.status && <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{m.status}</span>}
                 </td>
                 <td style={{ verticalAlign: 'top' }}>
-                  {m.stepId && <span className="muted mono" style={{ fontSize: 11 }}>[{m.stepId}] </span>}
+                  {m.stepId && <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>[{m.stepId}] </span>}
                   {editing === m.id
                     ? <>
-                      <textarea className="mono" style={{ width: '100%', minHeight: 80, fontSize: 12 }} value={draft}
+                      <textarea className="mono" style={{ width: '100%', minHeight: 80, fontSize: 'var(--fs-2xs)' }} value={draft}
                         autoFocus onChange={e => setDraft(e.target.value)} />
                       <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
                         <button className="small" disabled={busy || !draft.trim()} onClick={() => save(m)}>Save</button>
                         <button className="ghost small" disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
                       </div>
                     </>
-                    : <pre className="mono" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{m.body}</pre>}
+                    : <pre className="mono" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 'var(--fs-2xs)' }}>{m.body}</pre>}
                 </td>
-                <td className="muted" style={{ width: 150, verticalAlign: 'top', fontSize: 12 }}>
+                <td className="muted" style={{ width: 150, verticalAlign: 'top', fontSize: 'var(--fs-2xs)' }}>
                   {new Date(m.createdAt).toLocaleString()}
                 </td>
                 <td style={{ width: 130, verticalAlign: 'top', whiteSpace: 'nowrap' }}>
@@ -112,7 +112,7 @@ export default function WorkflowMemory({ workflow, project }: { workflow: string
           <button className="ghost small" onClick={() => setPreview(p => !p)}>
             {preview ? 'Hide' : 'Show'} what the next run reads
           </button>
-          {preview && <pre className="mono" style={{ whiteSpace: 'pre-wrap', fontSize: 12, marginTop: 8 }}>{mem.preview}</pre>}
+          {preview && <pre className="mono" style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--fs-2xs)', marginTop: 8 }}>{mem.preview}</pre>}
         </div>}
     </div>
   )

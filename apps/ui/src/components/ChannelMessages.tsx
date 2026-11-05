@@ -24,7 +24,7 @@ export function ChannelMessages({ run, channel, title = 'Messages' }: { run?: st
       {rows.length === 0 && <p className="muted">Nothing received yet.</p>}
       {rows.map(m => (
         <div key={m.id} style={{ marginBottom: 6 }}>
-          <span className="muted mono" style={{ fontSize: 11.5 }}>{new Date(m.receivedAt).toLocaleString()} · {m.channel}</span>{' '}
+          <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>{new Date(m.receivedAt).toLocaleString()} · {m.channel}</span>{' '}
           <b>{m.name || m.from}</b>: {m.text}
           {m.outcome && <span className="pill" style={{ marginLeft: 6 }}>{m.outcome}</span>}
           {!run && m.runId && <a href={`/runs/${m.runId}`} style={{ marginLeft: 6 }}>run</a>}
@@ -53,8 +53,8 @@ export default function Channels() {
           <span className="mono" style={{ fontWeight: 550 }}>{c.name}</span>
           {c.default && <span className="pill" style={{ marginLeft: 6 }}>default</span>}
           <span className="muted"> · {c.inbound ? `send + receive every ${c.receiveEvery || '1m'}` : 'send only'} · {c.allow.length} allowed to answer</span>
-          {c.lastError && <div className="danger-text" style={{ fontSize: 12 }}>receiving is stalled — last receive failed{c.lastReceive ? ` at ${new Date(c.lastReceive).toLocaleString()}` : ''}: {c.lastError}</div>}
-          {c.lastNotice && <div className="muted" style={{ fontSize: 12 }}>⚠ {c.lastNotice}</div>}
+          {c.lastError && <div className="danger-text" style={{ fontSize: 'var(--fs-2xs)' }}>receiving is stalled — last receive failed{c.lastReceive ? ` at ${new Date(c.lastReceive).toLocaleString()}` : ''}: {c.lastError}</div>}
+          {c.lastNotice && <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>⚠ {c.lastNotice}</div>}
         </div>))}
     </div>
     {doc.channels.some(c => c.inbound) && <ChannelMessages title="Received" />}

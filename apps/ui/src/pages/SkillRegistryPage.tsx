@@ -84,7 +84,7 @@ function Report({ r }: { r: SkillSourceReport }) {
     <div className={`banner ${r.pinned ? 'warn' : 'ok'}`} aria-label="Result">
       <div>{r.message}</div>
       {!!(r.added.length + r.removed.length + r.updated.length) && (
-        <div className="mono" style={{ marginTop: 6, fontSize: 12.5 }}>
+        <div className="mono" style={{ marginTop: 6, fontSize: 'var(--fs-xs)' }}>
           {r.added.map(n => <div key={'a' + n}>+ {n}</div>)}
           {r.removed.map(n => <div key={'r' + n}>− {n}</div>)}
           {r.updated.map(n => <div key={'u' + n}>~ {n}</div>)}
@@ -203,7 +203,7 @@ function SourceSkills({ s }: { s: SkillSourceInfo }) {
     <div className="card" aria-label={`Skills in ${s.name}`}>
       <div className="subhead">
         <h2>{s.name}</h2>
-        <span className="muted mono" style={{ marginLeft: 'auto', fontSize: 12 }}>{s.refKind} {s.ref} · {short(s.commit)}</span>
+        <span className="muted mono" style={{ marginLeft: 'auto', fontSize: 'var(--fs-2xs)' }}>{s.refKind} {s.ref} · {short(s.commit)}</span>
       </div>
       {err && <div className="banner err">{err}</div>}
       {!files && !err && <div className="empty">loading…</div>}

@@ -362,7 +362,7 @@ export function EnvEditor({ env, onChange }: { env: Record<string, string>; onCh
   }
   return (
     <>
-      <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+      <p className="muted" style={{ fontSize: 'var(--fs-2xs)', marginBottom: 8 }}>
         Cascades workflow → job → step. Write <span className="mono">{'${VAR_NAME}'}</span> for anything
         secret: only the name is stored, and the value is read on the machine that runs the step.
         A credential written out in full is refused on save.
@@ -381,7 +381,7 @@ export function EnvEditor({ env, onChange }: { env: Record<string, string>; onCh
             <td style={{ width: 90 }}>
               {/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(v)
                 ? <span className="pill" title="only the name is stored">reference</span>
-                : v ? <span className="muted" style={{ fontSize: 12 }}>literal</span> : null}
+                : v ? <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>literal</span> : null}
             </td>
             <td style={{ width: 40 }}>
               <button className="ghost small" onClick={() => setRow(i, '', '')}>×</button>

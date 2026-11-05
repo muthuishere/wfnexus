@@ -46,14 +46,14 @@
   --sans: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   /* One scale. Every size in this file is one of these steps. */
-  --fs-2xs: 12px;    /* badges, tags, counters */
-  --fs-xs:  12.5px;  /* table heads, captions */
-  --fs-sm:  13.5px;  /* secondary text, code */
-  --fs-md:  15px;  /* body */
-  --fs-lg:  17px;
-  --fs-xl:  20px;
-  --fs-2xl: 26px;
-  --fs-3xl: 32px;
+  --fs-2xs: 13px;    /* badges, tags, counters */
+  --fs-xs:  13.5px;  /* table heads, captions */
+  --fs-sm:  14.5px;  /* secondary text, code */
+  --fs-md:  16px;  /* body */
+  --fs-lg:  18.5px;
+  --fs-xl:  22px;
+  --fs-2xl: 28px;
+  --fs-3xl: 34px;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(20, 32, 58, .05), 0 1px 3px rgba(20, 32, 58, .04);
   --shadow-lg: 0 4px 16px rgba(20, 32, 58, .08);
@@ -569,6 +569,7 @@ pre {
 .tlfacts { display: flex; gap: 12px; align-items: baseline; justify-content: flex-end;
   font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; flex-wrap: wrap }
 .tlfacts .t { color: var(--text); font-weight: 550 }
+.tlfacts .tlmodel { color: var(--text-2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tlprog { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm) }
 .tlprog .meter { flex: none; width: 120px; height: 6px; background: var(--accent-100); border-radius: 999px; overflow: hidden }
 .tlprog .meter i { display: block; height: 100%; background: var(--accent-600) }
@@ -751,7 +752,7 @@ section:first-child > .grouphead { border-top: 0 }
 .md ul, .md ol { padding-left: 20px }
 .md .md-h { font-weight: 640; margin: 6px 0 4px }
 .md .md-h1 { font-size: var(--fs-lg) }
-.md .md-h2 { font-size: 14px }
+.md .md-h2 { font-size: var(--fs-md) }
 .md .md-h3 { font-size: var(--fs-md) }
 .md code { font-family: var(--mono); font-size: .92em; background: var(--subtle); padding: 0 4px; border-radius: 4px }
 .md pre { margin: 4px 0 8px }

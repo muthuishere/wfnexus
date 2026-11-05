@@ -1,4 +1,4 @@
-package devinadapter_test
+package agentadapter_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // fakeModelAgent is an ACP agent that advertises models the way the measured
@@ -64,7 +64,7 @@ for line in sys.stdin:
 
 func TestACPListsTheModelsAnAgentGroupsInsideConfigOptions(t *testing.T) {
 	bin, _ := fakeModelAgent(t, "config", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}})
 	defer a.Close()
 	ms, cur, err := a.Models(context.Background(), t.TempDir())
 	if err != nil {
@@ -90,7 +90,7 @@ func TestACPListsTheModelsAnAgentGroupsInsideConfigOptions(t *testing.T) {
 
 func TestACPReadsTheOlderModelsShapeToo(t *testing.T) {
 	bin, _ := fakeModelAgent(t, "models", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}})
 	defer a.Close()
 	ms, cur, err := a.Models(context.Background(), t.TempDir())
 	if err != nil || len(ms) != 2 || cur != "opencode/big-pickle" {
@@ -100,7 +100,7 @@ func TestACPReadsTheOlderModelsShapeToo(t *testing.T) {
 
 func TestACPAnAgentThatAdvertisesNoModelsListsNone(t *testing.T) {
 	bin, _ := fakeModelAgent(t, "none", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}})
 	defer a.Close()
 	ms, _, err := a.Models(context.Background(), t.TempDir())
 	if err != nil || len(ms) != 0 {
@@ -110,9 +110,9 @@ func TestACPAnAgentThatAdvertisesNoModelsListsNone(t *testing.T) {
 
 func TestACPRunsTheTurnOnTheModelItWasAskedFor(t *testing.T) {
 	bin, log := fakeModelAgent(t, "config", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
 	defer a.Close()
-	out, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "hello", Workdir: t.TempDir(), Index: 1, Attempt: 1})
+	out, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "hello", Workdir: t.TempDir(), Index: 1, Attempt: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,9 +132,9 @@ func TestACPRunsTheTurnOnTheModelItWasAskedFor(t *testing.T) {
 
 func TestACPFallsBackToSetModelWhenConfigOptionsAreNotSupported(t *testing.T) {
 	bin, log := fakeModelAgent(t, "models", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
 	defer a.Close()
-	if _, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1}); err != nil {
+	if _, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(readLog(t, log), "SET model opencode/mimo-v2.6-flash-free") {
@@ -144,9 +144,9 @@ func TestACPFallsBackToSetModelWhenConfigOptionsAreNotSupported(t *testing.T) {
 
 func TestACPRefusesAModelTheAgentDoesNotOffer(t *testing.T) {
 	bin, log := fakeModelAgent(t, "config", false)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/typo-model"})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/typo-model"})
 	defer a.Close()
-	_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1})
+	_, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1})
 	if err == nil || !strings.Contains(err.Error(), "does not offer model") {
 		t.Fatalf("err = %v, want a refusal naming the model", err)
 	}
@@ -157,9 +157,9 @@ func TestACPRefusesAModelTheAgentDoesNotOffer(t *testing.T) {
 
 func TestACPAModelTheAgentQuietlyIgnoredIsAnError(t *testing.T) {
 	bin, _ := fakeModelAgent(t, "config", true)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{"acp"}, Model: "opencode/mimo-v2.6-flash-free"})
 	defer a.Close()
-	_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1})
+	_, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: t.TempDir(), Index: 1, Attempt: 1})
 	if err == nil || !strings.Contains(err.Error(), "the agent is on") {
 		t.Fatalf("err = %v, want the mismatch named", err)
 	}
@@ -179,9 +179,9 @@ for line in sys.stdin:
     else: r={}
     sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":mid,"result":r})+"\n"); sys.stdout.flush()
 `), 0o755)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{}, Env: []string{"WFX_T=from-the-step"}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{}, Env: []string{"WFX_T=from-the-step"}})
 	defer a.Close()
-	out, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
+	out, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
 	if err != nil || out != "from-the-step" {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
@@ -200,9 +200,9 @@ for line in sys.stdin:
         out={"jsonrpc":"2.0","id":mid,"result":{"sessionId":"s"} if meth=="session/new" else {}}
     sys.stdout.write(json.dumps(out)+"\n"); sys.stdout.flush()
 `), 0o755)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{}})
 	defer a.Close()
-	_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
+	_, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
 	if err == nil || !strings.Contains(err.Error(), "not supported on this plan") {
 		t.Fatalf("err = %v: the agent's reason was dropped", err)
 	}
@@ -221,10 +221,10 @@ for line in sys.stdin:
     r={"sessionId":"s"} if meth=="session/new" else {}
     sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":mid,"result":r})+"\n"); sys.stdout.flush()
 `), 0o755)
-	a := devinadapter.NewACP(devinadapter.ACP{Bin: bin, Argv: []string{}})
+	a := agentadapter.NewACP(agentadapter.ACP{Bin: bin, Argv: []string{}})
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.Execute(context.Background(), devinadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
+		_, err := a.Execute(context.Background(), agentadapter.Turn{Prompt: "x", Workdir: dir, Index: 1, Attempt: 1})
 		done <- err
 	}()
 	time.Sleep(500 * time.Millisecond)

@@ -109,7 +109,7 @@ export function ProposalView({ id, onChanged }: { id: string; onChanged?: () => 
         <ReviewBadge review={p.review} />
         {p.review?.reason && <span className="muted">{p.review.reason}</span>}
       </div>
-      <div className="muted mono" style={{ fontSize: 12, margin: '8px 0' }}>
+      <div className="muted mono" style={{ fontSize: 'var(--fs-2xs)', margin: '8px 0' }}>
         branch {p.branch}{p.pr_url && <> · <a href={p.pr_url} target="_blank" rel="noreferrer">{prLabel(p)}</a></>}
       </div>
       {rejecting && (

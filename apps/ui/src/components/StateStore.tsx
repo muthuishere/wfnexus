@@ -53,7 +53,7 @@ export default function StateStore({ workflow, project }: { workflow?: string; p
               <tr key={`${v.scope}/${v.scopeName}/${v.key}`}>
                 <td style={{ width: 150 }}>
                   <span className="pill">{v.scope}</span>{' '}
-                  {v.scopeName && <span className="muted mono" style={{ fontSize: 11 }}>{v.scopeName}</span>}
+                  {v.scopeName && <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>{v.scopeName}</span>}
                 </td>
                 <td className="mono" style={{ width: 220, fontWeight: 550 }}>{v.key}</td>
                 <td className="mono muted">{v.value}</td>

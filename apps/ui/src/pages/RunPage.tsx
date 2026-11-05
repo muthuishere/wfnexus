@@ -7,7 +7,7 @@ import ApprovalBanner from '../components/ApprovalBanner'
 import NeedsInputForm from '../components/NeedsInputForm'
 import OutputContract from '../components/OutputContract'
 import WorkflowCanvas from '../components/WorkflowCanvas'
-import RunTimeline, { Cost, dur, tokens, type Usage } from '../components/RunTimeline'
+import RunTimeline, { Cost, dur, modelsOf, tokenPair, tokens, type Usage } from '../components/RunTimeline'
 import Markdown from '../components/Markdown'
 import { headlineOf, hhmm, isScript, summaryOf } from '../lib/story'
 import { withIterations } from '../lib/loops'
@@ -135,11 +135,15 @@ export default function RunPage({ id }: { id: string }) {
   // The run's money and time, added up from the steps. A step with no price
   // is COUNTED but not added — the total says so rather than absorbing it.
   const totals = useMemo(() => {
-    let usd = 0, tok = 0, unpriced = 0, priced = 0
+    let usd = 0, tok = 0, unpriced = 0, priced = 0, tin = 0, tout = 0
+    const models = new Set<string>()
     let first = Infinity, last = 0
     for (const s of d?.steps || []) {
       const u = s.usage as Usage | undefined
       tok += u?.totalTokens ?? 0
+      tin += u?.promptTokens ?? 0
+      tout += u?.completionTokens ?? 0
+      modelsOf(u).forEach(m => models.add(m))
       if (s.startedAt) first = Math.min(first, Date.parse(s.startedAt))
       last = Math.max(last, s.finishedAt ? Date.parse(s.finishedAt) : (s.startedAt ? now : 0))
       if (typeof u?.costUsd === 'number') { usd += u.costUsd; priced++ }
@@ -147,7 +151,7 @@ export default function RunPage({ id }: { id: string }) {
     }
     // Wall clock, not the sum of the steps: steps can run in parallel (waves),
     // and a sum would claim a run took longer than it did.
-    return { usd, tok, unpriced, priced, ms: first === Infinity ? 0 : last - first }
+    return { usd, tok, tin, tout, models: [...models], unpriced, priced, ms: first === Infinity ? 0 : last - first }
   }, [d, now])
 
   if (!run) return <div className="muted">{err || 'loading…'}</div>
@@ -178,13 +182,13 @@ export default function RunPage({ id }: { id: string }) {
     <>
       <div className="head" style={{ alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
-          <div className="muted" style={{ fontSize: 12.5, marginBottom: 2 }}>
+          <div className="muted" style={{ fontSize: 'var(--fs-xs)', marginBottom: 2 }}>
             <a href="#/projects">Projects</a>
             {' / '}<a href={`#/projects/${encodeURIComponent(run.project || 'local')}`} className="mono">{run.project || 'local'}</a>
             {' / '}<a href={`#/projects/${encodeURIComponent(run.project || 'local')}/${encodeURIComponent(run.workflow)}`} className="mono">{run.workflow}</a>
           </div>
           <h1>{run.input?.title || run.workflow}</h1>
-          <div className="muted mono" style={{ fontSize: 12, marginTop: 3 }}>{run.id}</div>
+          <div className="muted mono" style={{ fontSize: 'var(--fs-2xs)', marginTop: 3 }}>{run.id}</div>
         </div>
         {['running', 'queued'].includes(run.status) && <button className="ghost" onClick={() => act(api.cancel(run.id))}>Cancel</button>}
       </div>
@@ -205,7 +209,7 @@ export default function RunPage({ id }: { id: string }) {
             <button style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, run.currentStep))}>Retry step</button>}
         </div>
         {run.status === 'failed' && run.error && head.text !== run.error.split('\n')[0] &&
-          <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>at <span className="mono">{run.currentStep}</span>: {run.error}</div>}
+          <div className="muted" style={{ marginTop: 8, fontSize: 'var(--fs-xs)' }}>at <span className="mono">{run.currentStep}</span>: {run.error}</div>}
         {run.status === 'done' && finalUrl &&
           <div style={{ marginTop: 8 }}><b>PR published</b> — <a href={finalUrl} target="_blank" rel="noreferrer">{finalUrl}</a></div>}
       </div>
@@ -245,7 +249,9 @@ export default function RunPage({ id }: { id: string }) {
                 for a number nobody recorded. */}
             {totals.priced > 0 && <span><Cost usage={{ costUsd: totals.usd }} />
               {totals.unpriced > 0 && <span className="muted"> + {totals.unpriced} unpriced</span>}</span>}
-            {totals.tok > 0 && <span>{tokens(totals.tok)} tokens</span>}
+            {totals.models.length > 0 && <span className="mono" title="models that answered in this run">{totals.models.join(', ')}</span>}
+            {totals.tok > 0 && <span title="input · output tokens, summed over the steps">
+              <b>{tokens(totals.tok)}</b> tokens{totals.tin + totals.tout > 0 && ` (${tokens(totals.tin)} in · ${tokens(totals.tout)} out)`}</span>}
             <span>{stepDefs.length} step{stepDefs.length === 1 ? '' : 's'}</span>
           </div>
         </div>
@@ -269,12 +275,16 @@ export default function RunPage({ id }: { id: string }) {
           <div className="kv" style={{ marginTop: 10 }}>
             <b>skills</b><span className="mono">{curDef?.skills?.join(', ') || '—'}</span>
             <b>tools</b><span className="mono">{curDef?.tools?.join(', ') || '—'}</span>
-            <b>model</b><span className="mono">{curDef?.model || curDef?.provider || 'default'}</span>
-            {curUsage?.totalTokens ? <><b>tokens</b><span className="mono">
-              {curUsage.promptTokens !== undefined
-                ? `${tokens(curUsage.promptTokens)} in · ${tokens(curUsage.completionTokens)} out`
-                : tokens(curUsage.totalTokens)}
-            </span></> : null}
+            <b>model</b><span className="mono">
+              {modelsOf(curUsage).join(', ') || '—'}
+              {(curDef?.model || curDef?.provider) && modelsOf(curUsage).join(', ') !== (curDef?.model || curDef?.provider) &&
+                <span className="muted"> (declared: {curDef?.model || curDef?.provider})</span>}
+            </span>
+            <b>tokens</b><span className="mono">{tokenPair(curUsage)}</span>
+            {Object.keys(curUsage?.models || {}).length > 1 && <><b>per model</b><span className="mono">
+              {Object.entries(curUsage!.models!).map(([m, v]) =>
+                <div key={m}>{m || curUsage?.provider || '—'}: {v.calls} calls · {tokens(v.promptTokens)} in · {tokens(v.completionTokens)} out</div>)}
+            </span></>}
             {(curUsage?.costUsd !== undefined || curUsage?.costUnknown) && <><b>cost</b><span><Cost usage={curUsage} /></span></>}
           </div>)}
         <details style={{ marginTop: 12 }}>
@@ -310,11 +320,16 @@ export default function RunPage({ id }: { id: string }) {
           {stepDefs.length > 1 && (
             <div style={{ marginTop: 10 }}>
               <WorkflowCanvas steps={stepDefs} active={current} onPick={setSel}
-                status={Object.fromEntries(Object.values(byId).map(s => [s.stepId, s.status]))} />
+                status={Object.fromEntries(Object.values(byId).map(s => [s.stepId, s.status]))}
+                facts={Object.fromEntries(Object.values(byId).map(s => {
+                  const u = s.usage as Usage | undefined
+                  const m = modelsOf(u)[0]
+                  return [s.stepId, [m, u?.totalTokens ? `${tokens(u.totalTokens)} tok` : ''].filter(Boolean).join(' · ')]
+                }))} />
             </div>)}
         </details>
       </div>
-      <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
+      <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 10 }}>
         {live ? 'live · updates as it runs' : `finished ${new Date(run.updatedAt).toLocaleString()}`}
       </div>
     </>

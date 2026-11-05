@@ -48,7 +48,7 @@ export default function EnvStore({ project }: { project?: string }) {
                 <td className="mono" style={{ width: 240, fontWeight: 550 }}>{v.key}</td>
                 <td style={{ width: 90 }}>
                   {v.secret ? <span className="pill">secret</span>
-                    : <span className="muted" style={{ fontSize: 12 }}>plain</span>}
+                    : <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>plain</span>}
                 </td>
                 <td className="mono muted">
                   {v.secret ? <span title="the value is not sent to this page">••••••••</span> : v.value}
@@ -63,7 +63,7 @@ export default function EnvStore({ project }: { project?: string }) {
           </tbody></table>}
 
       {list?.keySource && (
-        <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>
+        <p className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 12 }}>
           Encrypted with the key from <span className="mono">{list.keySource}</span>.
           Lose it and every value here is unreadable — back it up somewhere other than the database.
         </p>)}
@@ -94,12 +94,12 @@ function AddVar({ project, onDone, onError }: { project?: string; onDone: () => 
         // it should not land in a browser's form autofill.
         type={secret ? 'password' : 'text'} autoComplete="off"
         onChange={e => setValue(e.target.value)} />
-      <label className="muted" style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+      <label className="muted" style={{ fontSize: 'var(--fs-sm)', display: 'flex', gap: 6, alignItems: 'center' }}>
         <input type="checkbox" checked={secret} onChange={e => setSecret(e.target.checked)} />
         secret
       </label>
       <button disabled={busy || !key.trim() || !value} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
-      <span className="muted" style={{ fontSize: 12, flexBasis: '100%' }}>
+      <span className="muted" style={{ fontSize: 'var(--fs-2xs)', flexBasis: '100%' }}>
         Untick <em>secret</em> only for ordinary configuration — a URL, a flag — which stays readable here.
       </span>
     </div>

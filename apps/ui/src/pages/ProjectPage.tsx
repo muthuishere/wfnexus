@@ -147,7 +147,7 @@ export default function ProjectPage({ name }: { name: string }) {
                 <a href={href.fromTemplate(name)}><button className="ghost">Start from a template</button></a>
                 <a href={href.newWorkflow(name)}><button>Build a workflow</button></a>
               </div>
-              <p className="mono" style={{ marginTop: 16, fontSize: 12 }}>
+              <p className="mono" style={{ marginTop: 16, fontSize: 'var(--fs-2xs)' }}>
                 saved in {project.local ? project.dir : `${project.repo || project.dir}/.wfx/workflows/`}
               </p>
             </div>)}

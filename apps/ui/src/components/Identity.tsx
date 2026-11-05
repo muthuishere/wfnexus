@@ -37,7 +37,7 @@ export default function Identity() {
     if (!who?.authenticated) return null   // the solo install: no chrome at all
     const signOut = () => { api.signOut().catch(() => {}).finally(() => location.reload()) }
     return (
-      <span className="muted" style={{ fontSize: 12, display: 'inline-flex', gap: 8, alignItems: 'center' }}
+      <span className="muted" style={{ fontSize: 'var(--fs-2xs)', display: 'inline-flex', gap: 8, alignItems: 'center' }}
         title={who.role ? `${who.kind} · ${who.role}` : who.kind}>
         {who.name}
         {who.kind === 'user' ? <button className="ghost small" onClick={signOut}>Sign out</button> : null}
@@ -122,10 +122,10 @@ function SignInCard({ locked }: { locked: string }) {
           a terminal that is already signed in lets it in.
         </p>
 
-        <div style={{ fontSize: 13, fontWeight: 600 }}>On the machine running wfx, open the UI signed in:</div>
+        <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600 }}>On the machine running wfx, open the UI signed in:</div>
         <Command text="wfx ui" />
 
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Or approve this browser from any signed-in terminal:</div>
+        <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600 }}>Or approve this browser from any signed-in terminal:</div>
         {grant ? (
           <>
             <div className="mono" data-testid="signin-code"
@@ -133,19 +133,19 @@ function SignInCard({ locked }: { locked: string }) {
             <Command text={`wfx login --approve ${grant.user_code}`} />
           </>
         ) : (
-          <p className="muted" style={{ fontSize: 12, margin: '6px 0 14px' }}>
+          <p className="muted" style={{ fontSize: 'var(--fs-2xs)', margin: '6px 0 14px' }}>
             {state === 'unavailable' ? 'Could not get a sign-in code from the server.' : 'Getting a code…'}
           </p>
         )}
 
-        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginBottom: 12 }}>
           No terminal signed in yet? Start with <span className="mono">wfx login --url {origin}</span>.
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>
             {state === 'denied' ? 'The sign-in was denied.' : grant ? 'Waiting for approval — this page signs in by itself.' : ''}
           </span>
-          {locked && !grant ? <span className="muted" style={{ fontSize: 12 }}>{locked}</span> : null}
+          {locked && !grant ? <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{locked}</span> : null}
         </div>
       </div>
     </div>

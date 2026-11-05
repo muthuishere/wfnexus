@@ -31,7 +31,7 @@ The loop above is an SVG, 12 seconds long. There is also a
    SQLite or Postgres (`internal/store`).
 4. **Each step resolves its provider** from the catalog (`internal/catalog`, loaded from
    `registries.json`): an `http` model, a `cli` agent, or an `acp` agent through
-   `internal/devinadapter` (devin, opencode, claude, codex), each with a fresh session per turn. If
+   `agentadapter/` (devin, opencode, claude, codex), each with a fresh session per turn. If
    the provider cannot be reached and nothing was answered yet, the step moves down its
    [fallback chain](/wfnexus/providers/): the provider's own `fallback`, then the server-wide
    `WFX_FALLBACK_PROVIDERS`. Keys are names (`apiKeyEnv`) resolved from the env store. A step can go
@@ -80,7 +80,7 @@ through a one-box install.
 | `internal/workflow` | Loads the YAML and renders prompts. |
 | `internal/planner` | Derives execution order from `consumes` / `produces`. |
 | `internal/catalog` | Providers, classifiers and MCP servers: everything a step can name. |
-| `internal/devinadapter` | Makes an ACP agent CLI usable as a model. |
+| `agentadapter/` | Makes an ACP agent CLI usable as a model. |
 | `internal/judge` | Typed questions to classifier calls, and the verdict bands. |
 | `internal/proposal` | A workflow change becomes a git change. |
 | `internal/secrets` | AES-GCM seal and open for the env store. |

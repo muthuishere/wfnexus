@@ -197,13 +197,17 @@ tasks:
   # ---- check ----------------------------------------------------------------
   check:
     desc: Everything CI would run
-    cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate, task: adapters:test]
+    cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate, task: adapters:test, task: agentadapter:test]
   adapters:test:
     desc: The reference channel adapters against a fake apl (plain node, no deps)
     cmds: [node --test adapters/apl-whatsapp.test.js]
   test:
     dir: apps/api
     cmds: [go test ./internal/... ./cmd/...]
+  agentadapter:test:
+    desc: The public agent-CLI adapter module (agentadapter/), race detector on
+    dir: agentadapter
+    cmds: [go vet ./..., go test -race ./...]
   test:hostile:
     desc: The suite with this machine's ambient config and provider keys stripped
     # WHY THIS EXISTS: three separate failures on 2026-09-25 were tests reading

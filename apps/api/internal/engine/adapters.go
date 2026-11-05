@@ -8,7 +8,7 @@ import (
 	"sort"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // Adapter is one agent wfnexus can drive over ACP, and whether this machine
@@ -29,7 +29,7 @@ type Adapter struct {
 // Adapters lists every ACP adapter, sorted by name.
 func (e *Engine) Adapters() []Adapter {
 	var out []Adapter
-	for name, pr := range devinadapter.ACPPresets {
+	for name, pr := range agentadapter.ACPPresets {
 		a := Adapter{Name: name, Bin: pr.Bin, Argv: pr.Argv, ModelFlag: pr.ModelFlag, Mode: pr.Mode, Install: pr.Install, Providers: []string{}}
 		if path, err := exec.LookPath(pr.Bin); err == nil {
 			a.Installed, a.Path = true, path
@@ -55,7 +55,7 @@ func (e *Engine) Adapters() []Adapter {
 type ProviderModels struct {
 	Provider string                  `json:"provider"`
 	Current  string                  `json:"current"`
-	Models   []devinadapter.ACPModel `json:"models"`
+	Models   []agentadapter.ACPModel `json:"models"`
 	// Configured is the provider's `model:`; Offered says whether the agent
 	// lists it, so a step's failure to select it is visible before any run.
 	Configured string `json:"configured,omitempty"`
@@ -86,14 +86,14 @@ func (e *Engine) ProviderModels(ctx context.Context, name string) (ProviderModel
 	if err != nil {
 		return ProviderModels{}, err
 	}
-	a := devinadapter.NewACP(cfg)
+	a := agentadapter.NewACP(cfg)
 	defer a.Close()
 	ms, cur, err := a.Models(ctx, dir)
 	if err != nil {
 		return ProviderModels{}, err
 	}
 	if ms == nil {
-		ms = []devinadapter.ACPModel{}
+		ms = []agentadapter.ACPModel{}
 	}
 	out := ProviderModels{Provider: name, Current: cur, Models: ms, Configured: p.Model}
 	for _, m := range ms {

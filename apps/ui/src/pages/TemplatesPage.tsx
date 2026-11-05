@@ -117,7 +117,7 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
       <div className="subhead">
         <h2>{t.title}</h2>
         {t.needsSkills && <span className="pill">skills to add</span>}
-        <span className="muted mono" style={{ fontSize: 12 }}>{t.name}</span>
+        <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>{t.name}</span>
       </div>
       <p className="muted" style={{ marginBottom: 14 }}>{t.summary}</p>
 
@@ -130,8 +130,8 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
               border: '1px solid var(--line, #ddd)', borderRadius: 8, padding: '8px 12px',
               minWidth: 150, maxWidth: 220,
             }}>
-              <div className="mono" style={{ fontWeight: 550, fontSize: 13 }}>{p.id}</div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{p.name || p.kind}</div>
+              <div className="mono" style={{ fontWeight: 550, fontSize: 'var(--fs-sm)' }}>{p.id}</div>
+              <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 2 }}>{p.name || p.kind}</div>
               <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                 {p.approval && <span className="badge awaiting_approval">human gate</span>}
                 {(!p.skills || !p.skills.length) && p.kind === 'prompt' && <span className="pill">no skills yet</span>}
@@ -143,8 +143,8 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
 
       {!!t.fill?.length && (
         <>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>What is yours to supply:</div>
-          <ul className="muted" style={{ fontSize: 13, marginBottom: 14, paddingLeft: 18 }}>
+          <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginBottom: 4 }}>What is yours to supply:</div>
+          <ul className="muted" style={{ fontSize: 'var(--fs-sm)', marginBottom: 14, paddingLeft: 18 }}>
             {t.fill.map((f, i) => <li key={i}>{f}</li>)}
           </ul>
         </>)}
@@ -154,7 +154,7 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
           brings all of this, so all of it is shown. */}
       {!!t.files?.length && (
         <>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+          <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginBottom: 4 }}>
             Files that come with it ({t.files.length}):
           </div>
           <div style={{ maxWidth: 420, marginBottom: 14 }}><FileList files={t.files} /></div>
@@ -166,7 +166,7 @@ function TemplateCard({ t, project, onCopied, onError }: { t: Template; project?
         <button disabled={busy || !as.trim()} onClick={copy}>
           {busy ? 'Copying…' : 'Copy and edit'}
         </button>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>
           {project ? <>writes it into <b>{project}</b>, then opens it in the builder</> : 'writes a workflow you own into local, then opens it in the builder'}
         </span>
       </div>

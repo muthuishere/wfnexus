@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -122,7 +122,7 @@ func probeLocal(ctx context.Context, p catalog.Provider) (string, error) {
 		return "", err
 	}
 	defer closeAgent()
-	return agent.Execute(ctx, devinadapter.Turn{Index: 1, Attempt: 1, Model: p.Model,
+	return agent.Execute(ctx, agentadapter.Turn{Index: 1, Attempt: 1, Model: p.Model,
 		PromptFile: pf, Prompt: ProbePrompt, Workdir: dir})
 }
 

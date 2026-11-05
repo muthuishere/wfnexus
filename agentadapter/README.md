@@ -1,14 +1,45 @@
-# devinadapter
+# agentadapter
 
-Run a local agent CLI — `devin`, `opencode`, `claude`, `codex`, `copilot` — as the
+Run a local agent CLI — `devin`, `opencode`, `claude`, `codex`, `copilot`, `gemini` — as the
 model behind a toolnexus client. No API key, no hosted endpoint: the model is a
 process on this machine.
 
+Its own Go module, so any program can import it (wfnexus does, from here):
+
+```sh
+go get github.com/muthuishere/wfnexus/agentadapter@latest
+```
+
+## Warm agents: a CLI kept running by the host
+
+`ClaudeStream` (`claude -p --input-format stream-json`) and `CodexServer`
+(`codex app-server`) are started once — call `Warm(ctx)` at boot — and take
+request after request. Each turn gets a clean session by default, prepared
+before the turn; `Reuse: true` keeps one conversation instead. A dead process is
+restarted on the next turn with backoff, and its stderr tail is in the error.
+`Healthy()` says whether it is running. `NewPool(n, mk)` shares n of them among
+callers. They implement `Agent`, so `New(Options{Agent: warm})` works too.
+
 ```go
-acp := devinadapter.NewACP(devinadapter.ACP{Model: "SWE-1.6 Slow"})
+claude := agentadapter.NewClaudeStream(agentadapter.CLI{})
+_ = claude.Warm(ctx)                       // at boot
+out, err := claude.Execute(ctx, agentadapter.Turn{Prompt: "…"})
+```
+
+Measured on an M-series Mac, bare "reply ok", turns 3 s apart
+(`AGENTADAPTER_LIVE=1 go test -run WarmLive -v .`):
+
+| agent | per turn |
+|---|---|
+| `ClaudeStream` (fresh session or `Reuse`) | 1.1–1.25 s (a fresh `claude -p`: 2.6–3.5 s) |
+| `CodexServer{Reuse: true}` | ~2.1 s |
+| `CodexServer` (fresh thread) | 2.65–3.25 s — each new thread runs codex's session-start hooks |
+
+```go
+acp := agentadapter.NewACP(agentadapter.ACP{Model: "SWE-1.6 Slow"})
 defer acp.Close()
 
-a := devinadapter.New(devinadapter.Options{Agent: acp})
+a := agentadapter.New(agentadapter.Options{Agent: acp})
 client := toolnexus.CreateInProcessClient(a.InProcessOptions())
 
 res, err := client.Run(ctx, prompt, toolkit)
@@ -74,7 +105,7 @@ claude -p --tools "" --disable-slash-commands --no-session-persistence --model <
   host's loop.
 - **`--disable-slash-commands`** keeps the operator's personal `~/.claude`
   skills out of the step.
-- Live check: `CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v ./internal/devinadapter/`
+- Live check: `CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v .`
   (haiku, loads the `bug-triage` skill, 3 turns, ~24s).
 - Terms: see the `claude-cli` entry in `registries.json` — automated use of a
   subscription seat; the `anthropic` http provider is the API-key path.
@@ -141,7 +172,7 @@ steps:
 - **args** — anything else devin takes (`--sandbox`, `--config <path>`) is
   appended verbatim.
 
-Live check: `WFNEXUS_LIVE_DEVIN=1 go test -run TestLiveDevin ./internal/devinadapter/`
+Live check: `WFNEXUS_LIVE_DEVIN=1 go test -run TestLiveDevin .`
 (optional `WFNEXUS_LIVE_DEVIN_MODEL`).
 
 ## Speed: use ACP
@@ -184,8 +215,8 @@ for every other machine and for CI.
 go work init ./apps/api
 go work edit -replace github.com/muthuishere/toolnexus/golang=/path/to/toolnexus/golang
 
-go test -tags toolnexus_inprocess ./internal/devinadapter/          # 71 tests, offline
-go test -tags toolnexus_inprocess -race ./internal/devinadapter/
+go test -tags toolnexus_inprocess .          # 71 tests, offline
+go test -tags toolnexus_inprocess -race .
 ```
 
 Once a toolnexus release carries `InProcessTransport`, drop the build tag from
@@ -198,7 +229,7 @@ every file and the `go.work` replace, and this becomes an ordinary package.
 - **9 live**, skipped unless `DEVINADAPTER_LIVE=1`:
 
 ```sh
-DEVINADAPTER_LIVE=1 go test -tags toolnexus_inprocess -run Live -timeout 40m ./internal/devinadapter/
+DEVINADAPTER_LIVE=1 go test -tags toolnexus_inprocess -run Live -timeout 40m .
 ```
 
 `project_test.go` runs this repo's own `validate-bug` step — the six skills in
@@ -230,3 +261,11 @@ If #96 lands, most of `acp.go` should be deleted in favour of it.
 [toolnexus#95]: https://github.com/muthuishere/toolnexus/issues/95
 [toolnexus#96]: https://github.com/muthuishere/toolnexus/issues/96
 [toolnexus#97]: https://github.com/muthuishere/toolnexus/issues/97
+
+## Changing it from wfnexus
+
+`apps/api` requires this module by version, never through a `replace` (a
+`replace` breaks `go install …/apps/api/cmd/wfx@latest`). To work on both at
+once, `go work init ./apps/api ./agentadapter` locally (go.work is not
+committed). When the change is merged, tag `agentadapter/vX.Y.Z` and bump
+`apps/api`: `go get github.com/muthuishere/wfnexus/agentadapter@vX.Y.Z`.
