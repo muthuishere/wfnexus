@@ -305,6 +305,23 @@ type ChannelMessage struct {
 	// Handled is false between storing a message and acting on it; a message
 	// still pending at the next poll is handled then (a crash loses nothing).
 	Handled bool `json:"handled"`
+	// Event holds the ADR 0026 fields (chat, chatType, kind, replyTo, media,
+	// mentions, fromOwner, reaction) as the adapter sent them; {} for an
+	// adapter that predates them.
+	Event json.RawMessage `json:"event,omitempty"`
+}
+
+// SubscriptionDelivery is what the router did with one message for one
+// subscription (ADR 0026). (Subscription, MsgID) is unique: a message seen
+// twice starts no second run.
+type SubscriptionDelivery struct {
+	Subscription string    `json:"subscription"`
+	MsgID        string    `json:"msgId"`
+	Channel      string    `json:"channel"`
+	Chat         string    `json:"chat,omitempty"`
+	RunID        string    `json:"runId,omitempty"`
+	Outcome      string    `json:"outcome"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 // PauseCode maps the short code an outbound pause carries back to its step.

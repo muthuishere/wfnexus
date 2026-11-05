@@ -253,6 +253,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/workflows/{name}/runs", s.createRun)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		s.channelRoutes(r)
+		s.subscriptionRoutes(r)
 		r.Post("/workflows/{name}/dryrun", s.dryRun)
 		r.Post("/dryrun", s.dryRunDraft)
 		r.Get("/runs", s.listRuns)

@@ -337,6 +337,20 @@ export type ChannelMessage = {
   attachments?: Array<{ url?: string; filename?: string; mime?: string }>
   at?: string; runId?: string; outcome?: string; receivedAt: string; handled?: boolean
 }
+/** A subscription (ADR 0026): which messages on a channel start which workflow. */
+export type Subscription = {
+  name: string; channel: string; chat: string; events?: string[]; interval?: string
+  workflow: string; version?: string; skills?: string[]; instructions?: string
+  responsePolicy?: string; memory?: string; mode?: string; activation?: string; allow?: string[]
+  owner?: string; status?: string; error?: string; startedAt?: string; createdAt?: string; updatedAt?: string
+  /** the mode actually applied (exclusive when it replies, else fanout) */
+  effectiveMode?: string
+  /** why it cannot route right now, even though it is stored active */
+  problem?: string
+}
+export type SubscriptionDelivery = {
+  subscription: string; msgId: string; channel: string; chat?: string; runId?: string; outcome: string; createdAt: string
+}
 export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
 
 /** One entry of the platform's env store. A secret arrives with NO value: the
@@ -479,6 +493,18 @@ export const api = {
     if (q.limit) p.set('limit', String(q.limit))
     return j<ChannelMessage[]>(fetch('/api/channels/messages?' + p.toString()))
   },
+  subscriptions: (project?: string) =>
+    j<Subscription[]>(fetch('/api/subscriptions' + (project ? `?project=${encodeURIComponent(project)}` : ''))),
+  subscription: (name: string) =>
+    j<{ subscription: Subscription; deliveries: SubscriptionDelivery[] }>(fetch(`/api/subscriptions/${encodeURIComponent(name)}`)),
+  saveSubscription: (s: Subscription) =>
+    j<Subscription>(fetch(`/api/subscriptions/${encodeURIComponent(s.name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s),
+    })),
+  subscriptionAction: (name: string, action: 'pause' | 'resume' | 'validate') =>
+    j<Subscription>(post(`/api/subscriptions/${encodeURIComponent(name)}/${action}`)),
+  deleteSubscription: (name: string) =>
+    j(fetch(`/api/subscriptions/${encodeURIComponent(name)}`, { method: 'DELETE' })),
   setPrice: (p: { model: string; in: number; out: number }) =>
     j<{ ok: boolean }>(fetch('/api/prices', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
