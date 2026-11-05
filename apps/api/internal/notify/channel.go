@@ -164,7 +164,11 @@ type Command struct {
 	Run       string
 	Env       map[string]string
 	Dir       string
-	Timeout   time.Duration
+	// StateDir is a stable per-server directory the adapter may keep state in
+	// (its echo ledger), passed as WFX_CHANNEL_STATE_DIR to every verb so
+	// send and receive see the same files. Empty = not set.
+	StateDir string
+	Timeout  time.Duration
 	// Gap is the minimum spacing between two sends on this channel.
 	Gap time.Duration
 }
@@ -312,6 +316,11 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 	// it is killed rather than after.
 	cmd.Env = append(cmd.Env, "WFX_CHANNEL="+c.EntryName, "WFX_CHANNEL_VERB="+verb,
 		fmt.Sprintf("WFX_CHANNEL_TIMEOUT_MS=%d", timeout.Milliseconds()))
+	if _, own := c.Env["WFX_CHANNEL_STATE_DIR"]; c.StateDir != "" && !own {
+		if err := os.MkdirAll(c.StateDir, 0o700); err == nil {
+			cmd.Env = append(cmd.Env, "WFX_CHANNEL_STATE_DIR="+c.StateDir)
+		}
+	}
 	cmd.Stdin = bytes.NewReader(body)
 	// A grandchild that outlives the killed shell holds stdout open; without
 	// this a timed-out adapter hangs the caller until that child exits.

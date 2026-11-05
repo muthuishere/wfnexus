@@ -112,6 +112,7 @@ func (e *Engine) channelEntry(name string) (catalog.Channel, error) {
 
 func (e *Engine) adapter(c catalog.Channel) notify.Command {
 	cmd := notify.Command{EntryName: c.Name, Run: c.Run, Env: c.Env}
+	cmd.StateDir = e.channelStateDir()
 	// Relative to registries.json, so `node adapters/x.js` means the file
 	// beside the registry that names it.
 	if e.cfg.RegistriesPath != "" {
@@ -124,6 +125,17 @@ func (e *Engine) adapter(c catalog.Channel) notify.Command {
 		cmd.Gap = d
 	}
 	return cmd
+}
+
+// channelStateDir is the one directory every channel adapter of this server
+// keeps its state in (WFX_CHANNEL_STATE_DIR): beside the runs directory, so it
+// is stable across restarts and the same for `send` and `receive` — the echo
+// ledger a send writes is the file the next receive reads (ADR 0026).
+func (e *Engine) channelStateDir() string {
+	if e.cfg.WorkDir == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(filepath.Clean(e.cfg.WorkDir)), "channel-state")
 }
 
 // adapterErr scrubs an adapter's error before it reaches an event, a step
