@@ -38,11 +38,15 @@ func (s *Store) InsertChannelMessage(ctx context.Context, m *ChannelMessage) (bo
 	if len(att) == 0 {
 		att = []byte("[]")
 	}
+	ev := m.Event
+	if len(ev) == 0 {
+		ev = []byte("{}")
+	}
 	res, err := s.exec(ctx, `
-		INSERT INTO channel_messages (channel, msg_id, sender, sender_name, text, attachments, sent_at, received_at, handled)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8, false)
+		INSERT INTO channel_messages (channel, msg_id, sender, sender_name, text, attachments, sent_at, received_at, handled, event)
+		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8, false, $9::jsonb)
 		ON CONFLICT (channel, msg_id) DO NOTHING`,
-		m.Channel, m.MsgID, m.Sender, m.SenderName, m.Text, string(att), m.SentAt, s.ts(time.Now()))
+		m.Channel, m.MsgID, m.Sender, m.SenderName, m.Text, string(att), m.SentAt, s.ts(time.Now()), string(ev))
 	if err != nil {
 		return false, err
 	}
@@ -58,7 +62,7 @@ func (s *Store) SetChannelMessageOutcome(ctx context.Context, channel, msgID, ru
 	return err
 }
 
-const channelMessageCols = `id, channel, msg_id, sender, sender_name, text, attachments, sent_at, run_id, outcome, received_at, handled`
+const channelMessageCols = `id, channel, msg_id, sender, sender_name, text, attachments, sent_at, run_id, outcome, received_at, handled, event`
 
 func scanChannelMessages(rows *sql.Rows) ([]*ChannelMessage, error) {
 	defer rows.Close()
@@ -66,7 +70,7 @@ func scanChannelMessages(rows *sql.Rows) ([]*ChannelMessage, error) {
 	for rows.Next() {
 		var m ChannelMessage
 		if err := rows.Scan(&m.ID, &m.Channel, &m.MsgID, &m.Sender, &m.SenderName, &m.Text,
-			rawJSON{&m.Attachments}, &m.SentAt, &m.RunID, &m.Outcome, &m.ReceivedAt, &m.Handled); err != nil {
+			rawJSON{&m.Attachments}, &m.SentAt, &m.RunID, &m.Outcome, &m.ReceivedAt, &m.Handled, rawJSON{&m.Event}); err != nil {
 			return nil, err
 		}
 		out = append(out, &m)
@@ -181,4 +185,50 @@ func (s *Store) PruneChannels(ctx context.Context, msgsBefore, codesBefore time.
 	}
 	_, err := s.exec(ctx, `DELETE FROM pause_codes WHERE expires_at < $1 OR retired_at < $1`, s.ts(codesBefore))
 	return err
+}
+
+// ClaimSubscriptionDelivery records that the router saw this message for this
+// subscription. It reports false when (subscription, msg_id) was already
+// there: the message was seen before and must start nothing.
+func (s *Store) ClaimSubscriptionDelivery(ctx context.Context, d SubscriptionDelivery) (bool, error) {
+	res, err := s.exec(ctx, `
+		INSERT INTO subscription_deliveries (subscription, msg_id, channel, chat, run_id, outcome, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (subscription, msg_id) DO NOTHING`,
+		d.Subscription, d.MsgID, d.Channel, d.Chat, d.RunID, d.Outcome, s.ts(time.Now()))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SetSubscriptionDelivery records the outcome (and run) of a claimed delivery.
+func (s *Store) SetSubscriptionDelivery(ctx context.Context, subscription, msgID, runID, outcome string) error {
+	_, err := s.exec(ctx, `UPDATE subscription_deliveries SET run_id=$3, outcome=$4 WHERE subscription=$1 AND msg_id=$2`,
+		subscription, msgID, runID, outcome)
+	return err
+}
+
+// ListSubscriptionDeliveries is newest first; subscription "" lists all.
+func (s *Store) ListSubscriptionDeliveries(ctx context.Context, subscription string, limit int) ([]*SubscriptionDelivery, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.query(ctx, `
+		SELECT subscription, msg_id, channel, chat, run_id, outcome, created_at FROM subscription_deliveries
+		WHERE ($1 = '' OR subscription=$1) ORDER BY created_at DESC LIMIT $2`, subscription, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*SubscriptionDelivery{}
+	for rows.Next() {
+		var d SubscriptionDelivery
+		if err := rows.Scan(&d.Subscription, &d.MsgID, &d.Channel, &d.Chat, &d.RunID, &d.Outcome, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &d)
+	}
+	return out, rows.Err()
 }

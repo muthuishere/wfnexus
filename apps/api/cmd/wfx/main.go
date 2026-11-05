@@ -91,6 +91,8 @@ func run(args []string) error {
 		return sendCmd(rest)
 	case "messages":
 		return messagesCmd(rest)
+	case "sub", "subs", "subscription", "subscriptions":
+		return subCmd(rest)
 	case "channels", "channel":
 		return channelsCmd(rest)
 	case "registry":
@@ -268,6 +270,7 @@ func usage() {
   wfx messages [--channel c] [--run id]  messages received on channels, newest first, with what each did
   wfx channels                     channels, which is the default, inbound or not, allow-list size, last receive error
   wfx channels receive <name>      poll an inbound channel now instead of waiting for its interval
+  wfx sub ls|show|add|update|pause|resume|rm|validate   subscriptions: which chat messages start which workflow (ADR 0026)
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
   wfx eval <workflow> --corpus f.yaml --providers a,b [--json]  the portability matrix: same workflow, N backends, pass/tokens/$
   wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes

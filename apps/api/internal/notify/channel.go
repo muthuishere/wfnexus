@@ -104,6 +104,47 @@ type Message struct {
 	Text        string              `json:"text"`
 	At          *time.Time          `json:"at,omitempty"`
 	Attachments []InboundAttachment `json:"attachments,omitempty"`
+
+	// ADR 0026 event fields. All optional: an adapter that predates them
+	// still produces a valid message.
+	Chat      string       `json:"chat,omitempty"`
+	ChatName  string       `json:"chatName,omitempty"`
+	ChatType  string       `json:"chatType,omitempty"` // "dm" | "group"
+	Kind      string       `json:"kind,omitempty"`     // "message" | "reaction" | "updated" | "deleted"
+	ReplyTo   *ReplyRef    `json:"replyTo,omitempty"`
+	Media     *MediaRef    `json:"media,omitempty"`
+	Mentions  []string     `json:"mentions,omitempty"`
+	FromOwner bool         `json:"fromOwner,omitempty"`
+	Reaction  *ReactionRef `json:"reaction,omitempty"`
+}
+
+// ReplyRef is the message a received message quotes.
+type ReplyRef struct {
+	ID     string `json:"id,omitempty"`
+	Sender string `json:"sender,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+
+// MediaRef describes an attachment that is fetched on demand.
+type MediaRef struct {
+	Kind string `json:"kind,omitempty"`
+	Mime string `json:"mime,omitempty"`
+	Name string `json:"name,omitempty"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// ReactionRef is a reaction event's target and emoji.
+type ReactionRef struct {
+	TargetID string `json:"targetId,omitempty"`
+	Emoji    string `json:"emoji,omitempty"`
+}
+
+// EventKind is Kind with its default, "message".
+func (m Message) EventKind() string {
+	if m.Kind == "" {
+		return "message"
+	}
+	return m.Kind
 }
 
 // ReceiveResult is what `<run> receive` prints. Cursor is persisted and handed

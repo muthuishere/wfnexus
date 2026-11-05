@@ -162,6 +162,22 @@ error is kept and shown by `wfx channels`; the cursor does not move.
    `input.message = {channel, id, from, name, text, at, attachments}` and
    `triggeredBy = <from>`. The text is **untrusted**: never template it into a
    `run:` command or treat it as instructions.
+4. Also (ADR 0026), the message is offered to every **active subscription**
+   (`subscriptions` in registries.json; `wfx sub …`, `/api/subscriptions`, or
+   a project's Subscriptions tab) whose `channel`, `chat` (`*` = any) and
+   `events` (default `message`) match. Per subscription, in order:
+   message `at` before the subscription's `startedAt` → `backlog` (stored, no
+   reply); `mode: observe` → `observed`; sender not on its `allow` (empty =
+   nobody, `*` = everyone; `fromOwner` passes) → `refused`; a `group` message
+   that neither mentions nor replies to one of the channel's `self` ids, unless
+   `activation: always` → `inactive`; an `exclusive` subscription already took
+   it → `skipped`; else the target workflow starts with
+   `input.message` (the event, with chat/chatType/kind/replyTo/media/mentions/
+   fromOwner/reaction) and `input.subscription` (name, instructions,
+   responsePolicy, mode, memory, skills, owner). `(subscription, message id)`
+   is unique in `subscription_deliveries`, so a repeat starts nothing. A
+   channel with an active subscription is read even when not `inbound`, at the
+   shortest of its subscriptions' intervals (`30s`, `1m`, `2m`).
 
 ## Adapter author rules
 
