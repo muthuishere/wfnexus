@@ -155,6 +155,8 @@ func run(args []string) error {
 		return stateCmd(rest)
 	case "memory":
 		return memoryCmd(rest)
+	case "expose":
+		return exposeCmd(rest)
 	case "prices":
 		return pricesCmd(rest)
 	case "templates", "template":
@@ -248,6 +250,8 @@ func usage() {
   wfx memory forget --workflow w   delete a workflow's memory (or: wfx memory forget <id>)
   wfx memory add --workflow w "t"  write a lesson the next run's agent steps will read
   wfx memory edit <id> "text"      rewrite one entry's text
+  wfx expose hook|mcp <wf>         a token-protected hook URL / MCP endpoint for one workflow (--rotate, --revoke)
+  wfx expose mcp --project p       one MCP token for every opted-in workflow of a project
   wfx prices                       what each model costs per 1M tokens (approx until set)
   wfx prices set MODEL IN OUT      set it, e.g. claude-sonnet 3 15; MODEL * is the fallback
   wfx prices rm MODEL              drop it; a built-in family returns to its default
