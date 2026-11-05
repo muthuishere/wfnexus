@@ -261,3 +261,11 @@ If #96 lands, most of `acp.go` should be deleted in favour of it.
 [toolnexus#95]: https://github.com/muthuishere/toolnexus/issues/95
 [toolnexus#96]: https://github.com/muthuishere/toolnexus/issues/96
 [toolnexus#97]: https://github.com/muthuishere/toolnexus/issues/97
+
+## Changing it from wfnexus
+
+`apps/api` requires this module by version, never through a `replace` (a
+`replace` breaks `go install …/apps/api/cmd/wfx@latest`). To work on both at
+once, `go work init ./apps/api ./agentadapter` locally (go.work is not
+committed). When the change is merged, tag `agentadapter/vX.Y.Z` and bump
+`apps/api`: `go get github.com/muthuishere/wfnexus/agentadapter@vX.Y.Z`.
