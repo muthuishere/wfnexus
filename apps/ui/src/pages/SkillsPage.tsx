@@ -63,7 +63,7 @@ export default function SkillsPage() {
           <button className={tab === 'skills' ? '' : 'ghost'} onClick={() => setTab('skills')}>Skills {skills.length}</button>
           <button className={tab === 'tools' ? '' : 'ghost'} onClick={() => setTab('tools')}>Built-in tools {tools?.length ?? 0}</button>
           <button className={tab === 'shadowed' ? '' : 'ghost'} onClick={() => setTab('shadowed')}>Refused {skipped.length}</button>
-          {reg && <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
+          {reg && <span className="muted" style={{ marginLeft: 'auto', fontSize: 'var(--fs-2xs)' }}>
             roots in precedence order: {reg.roots.join(' → ')}
           </span>}
         </div>

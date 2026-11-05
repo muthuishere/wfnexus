@@ -100,7 +100,7 @@ export default function StepHarness({ step, index }: { step: Step; index: number
               {q.options && <div className="opts">{Object.entries(q.options).map(([id, desc]) => (
                 <div key={id}><span className="mono">{id}</span> <span className="muted">— {desc}</span></div>))}</div>}
               {q.levels && <div className="chips">{q.levels.map(l => <span key={l}>{l}</span>)}</div>}
-              {(q.true || q.false) && <div className="muted mono" style={{ fontSize: 11 }}>true: {q.true} · false: {q.false}</div>}
+              {(q.true || q.false) && <div className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>true: {q.true} · false: {q.false}</div>}
             </div>))}
           {(decide.gates || []).map((g, i) => (
             <div className="gate" key={i}>

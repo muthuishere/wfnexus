@@ -43,7 +43,7 @@ export default function NewRunPage({ name, project }: { name: string; project?: 
             : p.format === 'textarea' ? <textarea value={vals[k] ?? ''} onChange={e => setVals({ ...vals, [k]: e.target.value })} />
             : p.enum ? <select value={vals[k] ?? ''} onChange={e => setVals({ ...vals, [k]: e.target.value })}><option value="">—</option>{p.enum.map((o: string) => <option key={o}>{o}</option>)}</select>
             : <input type={p.type === 'number' || p.type === 'integer' ? 'number' : 'text'} value={vals[k] ?? ''} onChange={e => setVals({ ...vals, [k]: p.type === 'number' || p.type === 'integer' ? Number(e.target.value) : e.target.value })} />}
-          {p.description && <div className="muted" style={{ fontSize: 12 }}>{p.description}</div>}
+          {p.description && <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{p.description}</div>}
         </div>
       ))}
       <div className="actions"><button disabled={busy || required.some(k => !vals[k])} onClick={submit}>{busy ? 'starting…' : 'Start run'}</button><button className="ghost" onClick={() => history.back()}>Cancel</button></div>

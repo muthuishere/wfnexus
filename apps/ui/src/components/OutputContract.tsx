@@ -15,7 +15,7 @@ export default function OutputContract({ schema }: { schema?: JSONSchema }) {
           <span className="muted">{p.description || ''}</span>
         </div>
       ))}
-      {schema?.additionalProperties === false && <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>closed object — no extra fields accepted</div>}
+      {schema?.additionalProperties === false && <div className="muted" style={{ fontSize: 'var(--fs-2xs)', marginTop: 6 }}>closed object — no extra fields accepted</div>}
     </div>
   )
 }
