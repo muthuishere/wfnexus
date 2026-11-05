@@ -54,6 +54,10 @@ type SubscriptionInfo struct {
 	// Problem is why the subscription cannot route right now (channel or
 	// workflow missing), even when its stored status is active.
 	Problem string `json:"problem,omitempty"`
+	// Warning is a problem that does not stop routing but will surprise:
+	// a mention-activated subscription that can see groups on a channel whose
+	// own ids (`self`) are unknown never starts a run from a group.
+	Warning string `json:"warning,omitempty"`
 }
 
 func (e *Engine) subscriptionsFromCatalog() []catalog.Subscription {
@@ -81,9 +85,28 @@ func (e *Engine) subInfo(s catalog.Subscription) SubscriptionInfo {
 	if s.Status != catalog.SubError {
 		if err := e.checkSubscription(s); err != nil {
 			info.Problem = err.Error()
+		} else {
+			info.Warning = e.selfWarning(s)
 		}
 	}
 	return info
+}
+
+// selfWarning is set when a subscription may see group messages, needs a
+// mention or reply to activate, and the channel's own ids are unknown (no
+// `self` in the registry and the adapter cannot report them).
+func (e *Engine) selfWarning(s catalog.Subscription) string {
+	if s.Activation == "always" || s.EffectiveMode() == catalog.ModeObserve {
+		return ""
+	}
+	if s.Chat != "*" && !strings.HasSuffix(s.Chat, "@g.us") {
+		return "" // a DM: activation does not apply
+	}
+	c, err := e.channelEntry(s.Channel)
+	if err != nil || len(e.selfIDs(context.Background(), c)) > 0 {
+		return ""
+	}
+	return fmt.Sprintf("channel %q has no `self` ids and its adapter cannot report them: group messages will never mention us, so this subscription starts nothing from a group — set `self` on the channel or `activation: always`", s.Channel)
 }
 
 // GetSubscription is one subscription, from the live catalog.
@@ -333,12 +356,12 @@ func messageEvent(channel string, m notify.Message) map[string]any {
 // activated applies the group rule: in a group, a subscription with mention
 // activation (the default) takes a message only when it mentions us or
 // replies to one of ours. A DM, or activation always, always passes.
-func activated(s catalog.Subscription, c catalog.Channel, m notify.Message) bool {
+func activated(s catalog.Subscription, self []string, m notify.Message) bool {
 	if m.ChatType != "group" || s.Activation == "always" {
 		return true
 	}
 	isSelf := func(id string) bool {
-		for _, me := range c.Self {
+		for _, me := range self {
 			if me != "" && me == id {
 				return true
 			}
@@ -394,7 +417,7 @@ func (e *Engine) routeSubscriptions(ctx context.Context, c catalog.Channel, m no
 			outcome = DeliveryObserved
 		case !m.FromOwner && !s.AllowsSender(m.From):
 			outcome = DeliveryRefused
-		case !activated(s, c, m):
+		case !activated(s, e.selfIDs(ctx, c), m):
 			outcome = DeliveryInactive
 		case exclusiveTaken:
 			outcome = DeliverySkipped

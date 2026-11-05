@@ -104,6 +104,9 @@ type Engine struct {
 	// (start.go). Both are in-memory, per process, like the scheduler.
 	conv      convLanes
 	eventSink func(ctx context.Context, ev map[string]any) bool
+	// self caches what each channel adapter's `self` verb reported, for a
+	// channel whose registry entry has no `self` list (subscriptions.go).
+	self selfCache
 }
 
 func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {

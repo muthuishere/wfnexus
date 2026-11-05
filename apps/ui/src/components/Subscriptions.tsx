@@ -64,6 +64,8 @@ export default function Subscriptions({ project, workflows }: { project: string;
               </tr>
               {(s.error || s.problem) && (
                 <tr key={s.name + ':err'}><td colSpan={6} className="danger-text" style={{ fontSize: 'var(--fs-2xs)' }}>{s.error || s.problem}</td></tr>)}
+              {!s.error && !s.problem && s.warning && (
+                <tr key={s.name + ':warn'}><td colSpan={6} style={{ fontSize: 'var(--fs-2xs)' }}>{s.warning}</td></tr>)}
               {open === s.name && <tr key={s.name + ':d'}><td colSpan={6}><Deliveries name={s.name} /></td></tr>}
             </Fragment>))}
           </tbody></table>}

@@ -31,6 +31,8 @@ if (writes.includes(cmd)) {
   else if (cmd === "send react") ok({ sent: true, to: flag("--to"), id: "R1", target: flag("--id"), reaction: flag("--reaction") });
   else if ((cmd === "send file" || cmd === "send voice") && !process.env.FAKE_APL_NOFILE) ok({ sent: true, to: flag("--to"), id: "SENT1", file: { name: "x" } });
   else ok({ sent: true, to: flag("--to"), id: "SENT1" });
+} else if (cmd === "auth status") {
+  ok({ authenticated: true, linked_jid: "999:7@s.whatsapp.net", phone: "999" });
 } else if (cmd === "messages show") {
   const m = group.find((x) => x.MsgID === flag("--id") && inChat(x));
   if (!m) {

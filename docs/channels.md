@@ -52,8 +52,15 @@ older than the cursor are not seen). Test fixture: the fake adapter in
 | `target` | optional default address, passed through as `target` |
 | `inbound` | poll `receive` every `receiveEvery` (default `1m`) |
 | `allow` | sender ids whose replies may resolve a pause, and who may fire this channel's `message` triggers (unless a trigger lists its own). **Empty (default) = nobody.** |
+| `self` | the ids that are US on this channel (our WhatsApp JIDs, plain and device form). A group subscription with `activation: mention` (the default) starts a run only when a message mentions one of them or replies to one. Leave it out and wfnexus asks the adapter's optional `self` verb (cached; retried every 5 min on failure); if neither knows, such a subscription shows a **warning** and starts nothing from groups |
 | `sendGap` | minimum time between sends on this channel; sends are always one at a time |
 | `timeoutSec` | per invocation (default 60). The adapter is told it as `WFX_CHANNEL_TIMEOUT_MS` and should finish (or fail, saying so) before it |
+
+Every verb also gets `WFX_CHANNEL`, `WFX_CHANNEL_VERB` and
+`WFX_CHANNEL_STATE_DIR`: one stable per-server directory (`<dir of the runs
+dir>/channel-state`, created on demand) shared by `send` and `receive`, so
+state such as an echo ledger written by a send is the file the next receive
+reads. A channel's own `env` may override it.
 | `enabled` | `false` switches it off |
 
 `config.yaml` picks the server-wide default (pauses, and any `send:` that names
@@ -176,6 +183,13 @@ triggers.
 
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
+
+## `<run> self` (optional)
+
+Prints `{"self": ["<id>", ...]}`: who the account is, for a channel with no
+`self` list. Read-only; an adapter without it just fails the verb. The
+reference adapter answers from `wacli auth status` (the linked JID, with and
+without its device suffix).
 
 ## What wfnexus does with a received message
 

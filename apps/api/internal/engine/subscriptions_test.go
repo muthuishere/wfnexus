@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +184,39 @@ func TestSubscriptionCheck(t *testing.T) {
 	if every, reads := h.eng.receiveEvery(c); !reads || every != 30*time.Second {
 		t.Fatalf("every=%s reads=%v", every, reads)
 	}
+}
+
+// A channel with no `self` list asks the adapter who we are; when the adapter
+// cannot say, a group subscription carries a warning and starts nothing.
+func TestSubscriptionSelfFromAdapter(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, subDef("subself"), newFakeLLM(t), "")
+	h.eng.SetConversationDebounce(10 * time.Millisecond)
+	dirKnown := fakeChannel(t, h.eng, "wa-known", false)
+	if err := os.WriteFile(filepath.Join(dirKnown, "self"), []byte("me@s"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeChannel(t, h.eng, "wa-blind", false)
+	addSub(h.eng, catalog.Subscription{Name: "known", Channel: "wa-known", Chat: "g@g.us", Workflow: "subself", Allow: []string{"*"}})
+	addSub(h.eng, catalog.Subscription{Name: "blind", Channel: "wa-blind", Chat: "g@g.us", Workflow: "subself", Allow: []string{"*"}})
+	if info, _ := h.eng.GetSubscription("known"); info.Warning != "" {
+		t.Fatalf("adapter reported self, no warning expected: %q", info.Warning)
+	}
+	if info, _ := h.eng.GetSubscription("blind"); !strings.Contains(info.Warning, "self") {
+		t.Fatalf("want a self warning, got %q", info.Warning)
+	}
+	m := notify.Message{ID: "s-1", From: "bob", Text: "x", Chat: "g@g.us", ChatType: "group", Mentions: []string{"me@s"}}
+	ck, _ := h.eng.channelEntry("wa-known")
+	cb, _ := h.eng.channelEntry("wa-blind")
+	h.eng.routeSubscriptions(ctx, ck, m)
+	h.eng.routeSubscriptions(ctx, cb, m)
+	if got := deliveries(t, h, "known")["s-1"]; got != DeliveryStarted {
+		t.Fatalf("known: %q", got)
+	}
+	if got := deliveries(t, h, "blind")["s-1"]; got != DeliveryInactive {
+		t.Fatalf("blind: %q", got)
+	}
+	runsOf(t, h, "subself", 1)
 }
 
 // A workflow.completed event from a run in a conversation goes through the

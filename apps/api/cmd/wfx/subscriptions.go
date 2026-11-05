@@ -49,6 +49,7 @@ type subRow struct {
 	StartedAt      string   `json:"startedAt,omitempty"`
 	EffectiveMode  string   `json:"effectiveMode,omitempty"`
 	Problem        string   `json:"problem,omitempty"`
+	Warning        string   `json:"warning,omitempty"`
 }
 
 // applySubFlags overlays the flags that were given onto r.
@@ -108,6 +109,9 @@ func subCmd(args []string) error {
 			note := r.Error
 			if note == "" {
 				note = r.Problem
+			}
+			if note == "" {
+				note = r.Warning
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", r.Name, r.Status, r.Channel, r.Chat, r.Workflow,
 				r.EffectiveMode, or(r.Interval, "1m"), len(r.Allow), note)
@@ -174,6 +178,8 @@ func printSub(r subRow) error {
 		fmt.Printf("  error: %s\n", r.Error)
 	} else if r.Problem != "" {
 		fmt.Printf("  problem: %s\n", r.Problem)
+	} else if r.Warning != "" {
+		fmt.Printf("  warning: %s\n", r.Warning)
 	}
 	if len(r.Allow) == 0 && r.EffectiveMode != "observe" {
 		fmt.Println("  note: the allow list is empty, so no sender can start a run (use --allow)")

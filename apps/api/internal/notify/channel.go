@@ -257,6 +257,23 @@ func (c Command) Receive(ctx context.Context, req ReceiveRequest) (ReceiveResult
 	return res, nil
 }
 
+// Self runs the optional `<run> self` verb: the ids that are the account
+// itself ({"self": [id, ...]}). An adapter without the verb fails; callers
+// treat that as "unknown", not as an error worth surfacing.
+func (c Command) Self(ctx context.Context) ([]string, error) {
+	out, err := c.exec(ctx, "self", map[string]string{"version": Version, "channel": c.EntryName})
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Self []string `json:"self"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &res); err != nil {
+		return nil, fmt.Errorf("channel %s: self printed something that is not JSON: %w", c.EntryName, err)
+	}
+	return res.Self, nil
+}
+
 // ErrMaybeDelivered marks a send that was cut off rather than refused: the
 // adapter may already have delivered it, so it is neither retried nor
 // released from dedup.

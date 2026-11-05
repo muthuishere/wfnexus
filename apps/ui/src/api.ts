@@ -347,6 +347,8 @@ export type Subscription = {
   effectiveMode?: string
   /** why it cannot route right now, even though it is stored active */
   problem?: string
+  /** routes, but will surprise (e.g. a group subscription on a channel with no self ids) */
+  warning?: string
 }
 export type SubscriptionDelivery = {
   subscription: string; msgId: string; channel: string; chat?: string; runId?: string; outcome: string; createdAt: string

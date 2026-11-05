@@ -240,3 +240,11 @@ test("send: reaction, edit and delete of our own message", () => {
   assert.strictEqual(r.status, 0, r.stderr);
   assert.deepStrictEqual(t.calls()[0].slice(5), ["messages", "revoke", "--chat", G, "--id", "SENT9"]);
 });
+
+test("self: reports our own JID (device suffix stripped), read-only", () => {
+  const { run, calls } = setup(msgs);
+  const r = run("self", {});
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout), { self: ["999@s.whatsapp.net", "999:7@s.whatsapp.net"] });
+  assert.deepStrictEqual(calls()[0], ["with", "whatsapp:biz", "--read-only", "--", "wacli", "--json", "auth", "status"]);
+});
