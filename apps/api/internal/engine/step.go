@@ -504,7 +504,8 @@ func trim(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + fmt.Sprintf("\n… (%d more bytes)", len(s)-n)
+	cut := runeCut(s, n)
+	return cut + fmt.Sprintf("\n… (%d more bytes)", len(s)-len(cut))
 }
 
 // assistantText pulls the visible assistant text out of a raw provider response.

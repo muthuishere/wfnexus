@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -93,7 +94,7 @@ func readCapped(path string, n int) string {
 		return ""
 	}
 	if len(b) > n {
-		b = append(b[:n], []byte("\n\n…(truncated)")...)
+		b = append([]byte(runeCut(string(b), n)), []byte("\n\n…(truncated)")...)
 	}
 	return string(b)
 }
@@ -193,7 +194,7 @@ func NormalizeOutcome(s string) string {
 		line = v + ": " + text
 	}
 	if len(line) > maxOutcomeLen {
-		line = line[:maxOutcomeLen] + "…"
+		line = runeCut(line, maxOutcomeLen) + "…"
 	}
 	return line
 }
@@ -270,4 +271,16 @@ func (e *Engine) settleOutcome(ctx context.Context, runID uuid.UUID, status, err
 	if err := e.store.SetRunOutcome(ctx, runID, DeriveOutcome(status, errMsg, steps)); err != nil {
 		log.Printf("engine: outcome: %v", err)
 	}
+}
+
+// runeCut returns at most n bytes of s, cut on a rune boundary: a byte cut
+// through a multi-byte character is invalid UTF-8, which Postgres refuses.
+func runeCut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

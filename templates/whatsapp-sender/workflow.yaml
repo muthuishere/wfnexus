@@ -1,0 +1,132 @@
+# whatsapp-sender — the ONE way a workflow says something on WhatsApp (ADR 0026).
+#
+# The mirror of whatsapp-monitor: text, quote-reply, attachment/voice/sticker,
+# reaction, and edit/delete of our own message. Every other default workflow
+# (pingpong, frontdesk, whatsapp-monitor's alert) sends through this one with
+# `start: {workflow: whatsapp-sender, wait: true}`, so the policy, the ledger
+# and the "never resend uncertain" rule live in one place.
+#
+# The 7-point bar:
+#   trigger        `start:` from a handler, a hook, an MCP tool call, or a person
+#   system of record  the channel adapter's echo ledger + this workflow's send ledger
+#   typed output   {status: sent|failed|uncertain|drafted|skipped|already, id, action, chat, key, error}
+#   verification   `sent` only on the adapter's confirmation; anything else is failed or uncertain
+#   human gate     responsePolicy approval pauses before the send; draft never sends
+#   no silent failure  failed/uncertain fail the run with the reason; uncertain is NEVER resent
+#   success number    sent / (sent + failed + uncertain) per week, from the ledger
+name: whatsapp-sender
+template:
+  title: WhatsApp sender — one send, policy-checked, never duplicated
+  category: debugging-ops
+  summary: >-
+    Sends text, a quote-reply, an attachment, a reaction, or edits/deletes our
+    own message, after applying the subscription's responsePolicy
+    (draft, approval, auto, none). Reports sent, failed or uncertain, and never
+    resends an uncertain send.
+  fill:
+    - "env WA_ADAPTER: the channel adapter command (verb appended), e.g. `node adapters/apl-whatsapp.js`, with APL_WA_LABEL set in the project env"
+    - "env WA_CHANNEL: the channel name from registries.json (recorded on the envelope)"
+    - "optional WA_SENDER_LEDGER: where the send ledger lives (default: the channel state dir)"
+
+description: >-
+  Sends one WhatsApp message (text, reply, attachment, reaction, edit or delete)
+  after applying the response policy: draft stores it, approval waits for a
+  person, auto sends, none skips. Answers sent, failed or uncertain; an
+  uncertain send is never repeated.
+
+on: [workflow_dispatch, workflow_call]
+
+memory:
+  scope: workflow
+
+input_schema:
+  type: object
+  required: [chat]
+  properties:
+    chat:           { type: string, title: "Chat JID (DM or group)" }
+    text:           { type: string, title: "Text (the new text for an edit)" }
+    replyTo:        { type: string, title: "Message id to quote-reply to" }
+    replyToSender:  { type: string, title: "Sender JID of the quoted/reacted message (groups)" }
+    mentions:       { type: string, title: "JIDs to @mention, comma separated" }
+    media:          { type: string, title: "Local path of an attachment" }
+    mediaKind:      { type: string, enum: [file, image, voice, sticker], default: file }
+    reaction:       { type: string, title: "Emoji to react with (empty removes)" }
+    reactTo:        { type: string, title: "Message id to react to" }
+    edit:           { type: string, title: "Id of OUR message to edit" }
+    delete:         { type: string, title: "Id of OUR message to delete" }
+    responsePolicy: { type: string, enum: [draft, approval, auto, none], default: auto }
+    key:            { type: string, title: "Idempotency key (default: hash of the request)" }
+
+env:
+  WA_ADAPTER: "node adapters/apl-whatsapp.js"   # FILL
+  WA_CHANNEL: "whatsapp"                         # FILL
+  WA_TIMEOUT_SEC: "60"
+
+steps:
+  - id: plan
+    name: Apply the response policy
+    description: Validates the request, picks the action, and checks the ledger so a sent or uncertain key is never sent again.
+    continue-on-error: true
+    run: |
+      cat > input.json <<'WFX_INPUT_EOF'
+      {{ json .Input }}
+      WFX_INPUT_EOF
+      python3 ./sender.py plan
+    timeout_sec: 30
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The send request is invalid — see stdout."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: approve
+    name: A person approves this send
+    description: Only for responsePolicy approval. The run pauses here; the approval card shows what will be sent.
+    needs: [plan]
+    when:
+      - path: plan.exitCode
+        equals: 10
+    requires_approval: true
+    run: python3 -c "import json; p=json.load(open('plan.json')); print(p['action'], 'to', p['chat']); print(p['input'].get('text',''))"
+    timeout_sec: 30
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: deliver
+    name: Send, draft or skip
+    description: Runs the adapter once, records the result in the ledger, and prints the typed result.
+    needs: [plan, approve]
+    continue-on-error: true
+    run: python3 ./sender.py deliver
+    timeout_sec: 120
+    state:
+      workflow:
+        last_send: "{{ .Output.stdout }}"
+    gates:
+      - field: exitCode
+        equals: 5
+        action: fail
+        message: "WhatsApp send FAILED — the transport said no. See stdout for the reason."
+      - field: exitCode
+        equals: 6
+        action: fail
+        message: "WhatsApp send is UNCERTAIN — it may have gone out, so it will not be resent. Check the chat."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string, description: "the typed result: {status, id, action, chat, key, error}" }
+        stderr:   { type: string }
