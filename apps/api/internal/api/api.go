@@ -247,6 +247,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/workflows/{name}/runs", s.createRun)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		s.channelRoutes(r)
+		s.conversationRoutes(r)
 		r.Post("/workflows/{name}/dryrun", s.dryRun)
 		r.Post("/dryrun", s.dryRunDraft)
 		r.Get("/runs", s.listRuns)
@@ -970,7 +971,17 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		// stored answers with a definition rather than `null`.
 		def = definitionFromSteps(run, steps)
 	}
-	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": def})
+	// The runs this run's `start:` steps started (ADR 0026); the parent is
+	// on the run itself (parentRunId).
+	children, err := s.store.ChildRuns(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("reading the child runs of run %s: %w", id, err))
+		return
+	}
+	if children == nil {
+		children = []*store.Run{}
+	}
+	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": def, "children": children})
 }
 
 // definitionFromSteps reconstructs the MINIMUM a reader needs — the workflow's

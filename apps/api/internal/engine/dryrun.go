@@ -625,6 +625,8 @@ func stepKind(s *workflow.Step) string {
 		return "judge"
 	case s.Send != nil:
 		return "send"
+	case s.Start != nil:
+		return "start"
 	}
 	return "prompt"
 }

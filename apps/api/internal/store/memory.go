@@ -25,9 +25,9 @@ func (s *Store) AddMemory(ctx context.Context, m model.MemoryEntry) (model.Memor
 		m.CreatedAt = time.Now()
 	}
 	_, err := s.exec(ctx, `
-		INSERT INTO workflow_memory (id, project, workflow, run_id, kind, status, step_id, body, created_ns)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		m.ID, m.Project, m.Workflow, m.RunID, m.Kind, m.Status, m.StepID, m.Body, m.CreatedAt.UnixNano())
+		INSERT INTO workflow_memory (id, project, workflow, run_id, kind, status, step_id, body, created_ns, conversation)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		m.ID, m.Project, m.Workflow, m.RunID, m.Kind, m.Status, m.StepID, m.Body, m.CreatedAt.UnixNano(), m.Conversation)
 	return m, err
 }
 
@@ -54,7 +54,10 @@ func (s *Store) ListMemory(ctx context.Context, f MemoryFilter) ([]model.MemoryE
 	if f.RunID != "" {
 		add("run_id=$%d", f.RunID)
 	}
-	q := `SELECT id, project, workflow, run_id, kind, status, step_id, body, created_ns FROM workflow_memory`
+	if f.ByConversation {
+		add("conversation=$%d", f.Conversation)
+	}
+	q := `SELECT id, project, workflow, run_id, kind, status, step_id, body, created_ns, conversation FROM workflow_memory`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -71,7 +74,7 @@ func (s *Store) ListMemory(ctx context.Context, f MemoryFilter) ([]model.MemoryE
 	for rows.Next() {
 		var m model.MemoryEntry
 		var ns int64
-		if err := rows.Scan(&m.ID, &m.Project, &m.Workflow, &m.RunID, &m.Kind, &m.Status, &m.StepID, &m.Body, &ns); err != nil {
+		if err := rows.Scan(&m.ID, &m.Project, &m.Workflow, &m.RunID, &m.Kind, &m.Status, &m.StepID, &m.Body, &ns, &m.Conversation); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = time.Unix(0, ns).UTC()

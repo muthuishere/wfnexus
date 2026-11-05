@@ -98,6 +98,12 @@ type Engine struct {
 	// goroutine and stays queued, so the cap is on machine load, not on
 	// accepting work.
 	slots chan struct{}
+
+	// conv holds the per-conversation lanes and debounce batches
+	// (conversation.go); eventSink receives `workflow.completed` events
+	// (start.go). Both are in-memory, per process, like the scheduler.
+	conv      convLanes
+	eventSink func(ctx context.Context, ev map[string]any) bool
 }
 
 func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
@@ -502,6 +508,9 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 		log.Printf("engine: update run: %v", err)
 	}
 	e.emit(ctx, runID, step, "run.status", map[string]any{"status": status, "step": step, "error": errMsg})
+	// AFTER the status landed: a waiting parent re-reads its children, and the
+	// next message of a conversation may start (start.go, conversation.go).
+	e.afterRunStatus(ctx, runID, status)
 }
 
 // failureLine is the ERROR line a failed run writes to the server log.

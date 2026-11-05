@@ -171,11 +171,11 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 	return r, err
 }
 
-const runCols = `id, project, workflow, status, input, current_step, base_ref, error, started_at, triggered_by, outcome, created_at, updated_at`
+const runCols = `id, project, workflow, status, input, current_step, base_ref, error, started_at, triggered_by, outcome, parent_run_id, parent_step_id, parent_mode, conversation, created_at, updated_at`
 
 func scanRun(row rowScanner) (*Run, error) {
 	r := &Run{}
-	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.StartedAt, &r.TriggeredBy, &r.Outcome, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.Project, &r.Workflow, &r.Status, rawJSON{&r.Input}, &r.CurrentStep, &r.BaseRef, &r.Error, &r.StartedAt, &r.TriggeredBy, &r.Outcome, &r.ParentRunID, &r.ParentStepID, &r.ParentMode, &r.Conversation, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -236,7 +236,11 @@ type RunFilter struct {
 	// person" is a status question, and answering it from the newest 100 runs
 	// would lose a pause that is older than the hundredth.
 	Status []string
-	Limit  int
+	// ParentRunID narrows to the runs a `start:` step of that run started.
+	ParentRunID string
+	// Conversation narrows to the runs of one conversation key.
+	Conversation string
+	Limit        int
 }
 
 // RunsInStatus lists runs currently in any of these states, oldest first.
@@ -263,6 +267,14 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 	if f.Workflow != "" {
 		args = append(args, f.Workflow)
 		where = append(where, fmt.Sprintf("workflow=$%d", len(args)))
+	}
+	if f.ParentRunID != "" {
+		args = append(args, f.ParentRunID)
+		where = append(where, fmt.Sprintf("parent_run_id=$%d", len(args)))
+	}
+	if f.Conversation != "" {
+		args = append(args, f.Conversation)
+		where = append(where, fmt.Sprintf("conversation=$%d", len(args)))
 	}
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))
@@ -322,6 +334,24 @@ func (s *Store) SetRunOutcome(ctx context.Context, id uuid.UUID, outcome string)
 // created, by the path that knows who asked for it.
 func (s *Store) SetTriggeredBy(ctx context.Context, id uuid.UUID, by string) error {
 	_, err := s.exec(ctx, `UPDATE workflow_runs SET triggered_by=$2 WHERE id=$1`, id, by)
+	return err
+}
+
+// ChildRuns lists the runs a `start:` step of parent started, oldest first.
+func (s *Store) ChildRuns(ctx context.Context, parent uuid.UUID) ([]*Run, error) {
+	runs, err := s.FindRuns(ctx, RunFilter{ParentRunID: parent.String(), Limit: 1000})
+	for i, j := 0, len(runs)-1; i < j; i, j = i+1, j-1 {
+		runs[i], runs[j] = runs[j], runs[i]
+	}
+	return runs, err
+}
+
+// SetRunLinks records where a run came from: the parent run and step whose
+// `start:` started it (and how the parent waits on it), and the conversation
+// it belongs to. Set once, right after the row is created.
+func (s *Store) SetRunLinks(ctx context.Context, id uuid.UUID, parentRunID, parentStepID, parentMode, conversation string) error {
+	_, err := s.exec(ctx, `UPDATE workflow_runs SET parent_run_id=$2, parent_step_id=$3, parent_mode=$4, conversation=$5 WHERE id=$1`,
+		id, parentRunID, parentStepID, parentMode, conversation)
 	return err
 }
 

@@ -88,7 +88,8 @@ func (e *Engine) startRunDirSweeper(ctx context.Context, every time.Duration) {
 }
 
 // liveStatuses are runs that may still use their directory.
-var liveStatuses = map[string]bool{"queued": true, "running": true, "awaiting_approval": true, "needs_input": true}
+// `waiting` is a run parked on the children its `start:` step started.
+var liveStatuses = map[string]bool{"queued": true, "running": true, "awaiting_approval": true, "needs_input": true, "waiting": true}
 
 // endedStatuses are runs whose directory is archived and removed when they end.
 var endedStatuses = map[string]bool{"done": true, "cancelled": true, "failed": true}

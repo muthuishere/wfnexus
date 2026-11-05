@@ -69,7 +69,9 @@ var resourcePerms = map[string][2]string{
 	// Sending on a channel is what a `send:` step does; reading one is
 	// reading what runs were told (ADR 0023).
 	"channels": {PermRunsRead, PermRunsWrite},
-	"skills":   {PermRegistryRead, PermRegistryWrite},
+	// A conversation is the runs of one chat (ADR 0026).
+	"conversations": {PermRunsRead, PermRunsWrite},
+	"skills":        {PermRegistryRead, PermRegistryWrite},
 	// Git repositories of skills: importing one changes the registry.
 	"skill-sources": {PermRegistryRead, PermRegistryWrite},
 	"tools":         {PermRegistryRead, PermRegistryWrite},

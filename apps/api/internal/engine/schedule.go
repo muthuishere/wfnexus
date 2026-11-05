@@ -243,6 +243,10 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		}
 	}
 
+	// A start node starts other runs, and may park this one on them.
+	if step.Start != nil {
+		return e.runStartStep(ctx, runID, def, step, data)
+	}
 	// A run or judge node produces its facts without an agent; only a prompt
 	// node pays for one.
 	if !isAgent(step) {
