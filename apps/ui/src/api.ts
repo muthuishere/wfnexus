@@ -532,6 +532,14 @@ export const api = {
     j<MemoryEntry>(fetch(`/api/memory/${encodeURIComponent(id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
     })),
+  /** Inbound exposure (ADR 0027): the hook URL and MCP endpoint, never a token. */
+  workflowExpose: (name: string) =>
+    j<ExposeView>(fetch(`/api/workflows/${encodeURIComponent(name)}/expose`)),
+  /** Issue (or rotate) a token. The answer is the ONLY time the token is shown. */
+  issueExpose: (name: string, kind: ExposeKind, rotate = false) =>
+    j<ExposeIssued>(post(`/api/workflows/${encodeURIComponent(name)}/expose/${kind}`, { rotate })),
+  revokeExpose: (name: string, kind: ExposeKind) =>
+    j<{ ok: boolean; revoked: number }>(fetch(`/api/workflows/${encodeURIComponent(name)}/expose/${kind}`, { method: 'DELETE' })),
   /** When the workflow's cron fires next (UTC instant), or null when unscheduled. */
   workflowSchedule: (name: string) =>
     j<{ nextRunAt: string | null; crons: string[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/schedule`)),
@@ -651,4 +659,26 @@ export type Metrics = {
     models: Array<{ provider: string; model: string; calls: number; errors: number; promptTokens: number; completionTokens: number; costUsd: number; costKnown: boolean }> | null }
   workers: { total: number; online: number; workers: Array<{ name: string; labels: string[]; status: string; lastSeen: string; version: string }> }
   queue: { runsQueued: number; runsRunning: number; jobsQueued: number; jobsLeased: number; oldestQueued: string | null }
+}
+
+export type ExposeKind = 'hook' | 'mcp'
+export interface ExposeKindView {
+  enabled: boolean
+  path: string
+  url: string
+  prefix?: string
+  createdAt?: string
+  lastUsedAt?: string
+}
+export interface ExposeView {
+  workflow: string
+  project: string
+  tool: string
+  hook: ExposeKindView
+  mcp: ExposeKindView
+  projectMcp: { path: string; url: string }
+}
+export interface ExposeIssued extends ExposeView {
+  token: string
+  snippet: unknown
 }

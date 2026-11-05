@@ -60,6 +60,9 @@ type Server struct {
 	// approval (ADR 0017). Local users are the only implementation; the field
 	// exists so the next one is a constructor change, not a handler rewrite.
 	authn auth.Authenticator
+
+	// exposeLimit rate-limits the public hook and MCP endpoints (expose.go).
+	exposeLimit *rateLimiter
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -93,7 +96,7 @@ func isLoopback(addr string) bool {
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
 	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
-		authn: auth.Local{Store: st}}
+		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst)}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -251,6 +254,13 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// Git-native workflows: a save on a git-backed project is a proposal.
 		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
+		// Inbound exposure (ADR 0027): issue, rotate and revoke the tokens.
+		r.Get("/workflows/{name}/expose", s.getExpose)
+		r.Post("/workflows/{name}/expose/{kind}", s.issueExpose)
+		r.Delete("/workflows/{name}/expose/{kind}", s.revokeExpose)
+		r.Get("/projects/{name}/expose", s.getProjectExpose)
+		r.Post("/projects/{name}/expose/{kind}", s.issueProjectExpose)
+		r.Delete("/projects/{name}/expose/{kind}", s.revokeProjectExpose)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		s.channelRoutes(r)
 		s.subscriptionRoutes(r)
@@ -281,6 +291,11 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	// Prometheus text exposition, behind the same subject and permission as
 	// /api/metrics: a scraper sends a bearer token like any other client.
 	r.With(s.requireSubject, s.authorize).Get("/metrics", s.prometheus)
+	// The public doors (ADR 0027): outside /api, authenticated ONLY by a
+	// per-workflow (or per-project) token, never a user session.
+	r.Post("/hooks/{project}/{workflow}", s.hook)
+	r.HandleFunc("/mcp/{project}", s.mcpEndpoint)
+	r.HandleFunc("/mcp/{project}/{workflow}", s.mcpEndpoint)
 	r.Get("/*", s.ui)
 	return r
 }
