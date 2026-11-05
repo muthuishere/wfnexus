@@ -11,6 +11,10 @@ export default function WorkflowMemory({ workflow, project }: { workflow: string
   const [mem, setMem] = useState<MemoryList>()
   const [err, setErr] = useState('')
   const [preview, setPreview] = useState(false)
+  const [editing, setEditing] = useState<string>()
+  const [draft, setDraft] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
 
   const load = useCallback(() => {
     api.workflowMemory(workflow, project || '')
@@ -22,6 +26,23 @@ export default function WorkflowMemory({ workflow, project }: { workflow: string
   const forget = (m: MemoryEntry) => {
     if (!confirm('Forget this entry? Later runs will no longer read it.')) return
     api.deleteMemory(m.id).then(load).catch(e => setErr(String(e.message || e)))
+  }
+  const startEdit = (m: MemoryEntry) => { setEditing(m.id); setDraft(m.body) }
+  const save = (m: MemoryEntry) => {
+    if (!draft.trim()) return
+    setBusy(true)
+    api.editMemory(m.id, draft)
+      .then(() => { setEditing(undefined); load() })
+      .catch(e => setErr(String(e.message || e)))
+      .finally(() => setBusy(false))
+  }
+  const addNote = () => {
+    if (!note.trim()) return
+    setBusy(true)
+    api.addMemoryNote(workflow, note, project || '')
+      .then(() => { setNote(''); load() })
+      .catch(e => setErr(String(e.message || e)))
+      .finally(() => setBusy(false))
   }
   const forgetAll = () => {
     if (!confirm(`Forget everything ${workflow} remembers? The next run starts blind.`)) return
@@ -57,16 +78,34 @@ export default function WorkflowMemory({ workflow, project }: { workflow: string
                 </td>
                 <td style={{ verticalAlign: 'top' }}>
                   {m.stepId && <span className="muted mono" style={{ fontSize: 11 }}>[{m.stepId}] </span>}
-                  <pre className="mono" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{m.body}</pre>
+                  {editing === m.id
+                    ? <>
+                      <textarea className="mono" style={{ width: '100%', minHeight: 80, fontSize: 12 }} value={draft}
+                        autoFocus onChange={e => setDraft(e.target.value)} />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                        <button className="small" disabled={busy || !draft.trim()} onClick={() => save(m)}>Save</button>
+                        <button className="ghost small" disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
+                      </div>
+                    </>
+                    : <pre className="mono" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>{m.body}</pre>}
                 </td>
                 <td className="muted" style={{ width: 150, verticalAlign: 'top', fontSize: 12 }}>
                   {new Date(m.createdAt).toLocaleString()}
                 </td>
-                <td style={{ width: 80, verticalAlign: 'top' }}>
+                <td style={{ width: 130, verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                  {editing !== m.id &&
+                    <button className="ghost small" title="Edit" aria-label="Edit entry" onClick={() => startEdit(m)}>✎</button>}{' '}
                   <button className="ghost small danger-text" onClick={() => forget(m)}>Forget</button>
                 </td>
               </tr>))}
           </tbody></table>}
+
+      <div style={{ marginTop: 12 }}>
+        <textarea style={{ width: '100%', minHeight: 46 }} value={note}
+          placeholder="Add a note the next run must read — e.g. “staging is down until Friday; check prod logs instead”"
+          onChange={e => setNote(e.target.value)} />
+        <button className="small" style={{ marginTop: 6 }} disabled={busy || !note.trim()} onClick={addNote}>Add note</button>
+      </div>
 
       {mem?.preview &&
         <div style={{ marginTop: 12 }}>

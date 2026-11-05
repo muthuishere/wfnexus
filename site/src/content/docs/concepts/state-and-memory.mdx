@@ -111,18 +111,22 @@ Before a record or a lesson is stored, it is scrubbed of every value the run red
 value in the [env store](/wfnexus/concepts/env-and-secrets/). Each value is scrubbed before it
 is truncated, so a cut can never leave part of a secret behind.
 
-### Seeing and forgetting it
+### Seeing, editing and forgetting it
 
 ```bash
-wfx memory ls --workflow <w>       # every entry, newest first
-wfx memory show --workflow <w>     # the section the next run reads, then every entry
-wfx memory forget --workflow <w>   # delete all of it (or: wfx memory forget <id>)
+wfx memory ls --workflow <w>         # every entry, newest first
+wfx memory show --workflow <w>       # the section the next run reads, then every entry
+wfx memory add --workflow <w> "text" # a lesson by hand; the next run's agent steps read it
+wfx memory edit <id> "text"          # rewrite one entry's text
+wfx memory forget --workflow <w>     # delete all of it (or: wfx memory forget <id>)
 ```
 
-The workflow page's **Memory & State** tab shows the same entries, lets you forget them one at a
-time, and shows the section the next run will read. A dry run reports it under `memory`. The REST
-endpoints are `GET` and `DELETE /api/workflows/{name}/memory` (with an optional `?project=`) and
-`DELETE /api/memory/{id}`.
+A hand-written lesson is a note like the ones the `remember` tool writes, and an edit replaces an
+entry's text in place; both are scrubbed of env-store secrets like every other write. The workflow
+page's **Memory & State** tab shows the same entries, lets you edit or forget them one at a time,
+add a note, and shows the section the next run will read. A dry run reports it under `memory`. The
+REST endpoints are `GET`, `POST` (`{"body": "..."}`) and `DELETE /api/workflows/{name}/memory`
+(with an optional `?project=`), and `PATCH` (`{"body": "..."}`) and `DELETE /api/memory/{id}`.
 
 Per-agent memory from toolnexus (a persona or "agent home") and conversation memory are still
 **pending** and listed in `docs/ROADMAP.md`.

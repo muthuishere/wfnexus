@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -70,6 +71,41 @@ func TestMemoryStore(t *testing.T) {
 		rest, _ := st.ListMemory(ctx, model.MemoryFilter{AnyProject: true, Workflow: wf})
 		if len(rest) != 1 || rest[0].Project != "p2" {
 			t.Fatalf("forgetting one project touched another: %+v", rest)
+		}
+	})
+}
+
+// Editing an entry rewrites its text in place, keeps its order, and a missing
+// id is ErrNotFound — on both databases.
+func TestMemoryStoreEdit(t *testing.T) {
+	eachStore(t, func(t *testing.T, st *Store) {
+		ctx := context.Background()
+		wf := "test-mem-edit-" + uuid.NewString()[:8]
+		t.Cleanup(func() { _, _ = st.ForgetMemory(ctx, "", wf, true) })
+		base := time.Now()
+		first, err := st.AddMemory(ctx, model.MemoryEntry{Project: "p", Workflow: wf, Kind: model.MemoryKindNote, Body: "old text", CreatedAt: base})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddMemory(ctx, model.MemoryEntry{Project: "p", Workflow: wf, Kind: model.MemoryKindNote, Body: "later", CreatedAt: base.Add(time.Millisecond)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.UpdateMemoryBody(ctx, first.ID, "new text"); err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.GetMemory(ctx, first.ID)
+		if err != nil || got.Body != "new text" || got.Kind != model.MemoryKindNote || got.Workflow != wf {
+			t.Fatalf("after edit: %+v err=%v", got, err)
+		}
+		list, _ := st.ListMemory(ctx, model.MemoryFilter{Project: "p", Workflow: wf})
+		if len(list) != 2 || list[0].Body != "later" || list[1].Body != "new text" {
+			t.Fatalf("edit reordered memory: %+v", list)
+		}
+		if err := st.UpdateMemoryBody(ctx, uuid.NewString(), "x"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("edit of a missing id: %v, want ErrNotFound", err)
+		}
+		if _, err := st.GetMemory(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("get of a missing id: %v, want ErrNotFound", err)
 		}
 	})
 }

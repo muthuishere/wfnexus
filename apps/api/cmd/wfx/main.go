@@ -246,6 +246,8 @@ func usage() {
   wfx memory ls --workflow w       what previous runs of a workflow left behind (on by default)
   wfx memory show --workflow w     the section the next run's agent steps will read, then every entry
   wfx memory forget --workflow w   delete a workflow's memory (or: wfx memory forget <id>)
+  wfx memory add --workflow w "t"  write a lesson the next run's agent steps will read
+  wfx memory edit <id> "text"      rewrite one entry's text
   wfx prices                       what each model costs per 1M tokens (approx until set)
   wfx prices set MODEL IN OUT      set it, e.g. claude-sonnet 3 15; MODEL * is the fallback
   wfx prices rm MODEL              drop it; a built-in family returns to its default

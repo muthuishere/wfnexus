@@ -12,6 +12,8 @@ import (
 //	wfx memory ls --workflow triage            every entry, newest first
 //	wfx memory show --workflow triage          the section the next run's steps will read, then every entry
 //	wfx memory forget --workflow triage        delete all of it (or: wfx memory forget <id>)
+//	wfx memory add --workflow triage "text"    a hand-written lesson the next run reads
+//	wfx memory edit <id> "text"                rewrite one entry's text
 //
 // `--project p` narrows to one project; without it every project's memory of
 // that workflow is shown (and forgotten).
@@ -35,7 +37,7 @@ type memoryList struct {
 	Enabled  *bool         `json:"enabled"`
 }
 
-const memoryUsage = `usage: wfx memory <ls|show|forget> --workflow NAME [--project P] | wfx memory forget ID`
+const memoryUsage = `usage: wfx memory <ls|show|forget> --workflow NAME [--project P] | wfx memory add --workflow NAME [--project P] TEXT | wfx memory edit ID TEXT | wfx memory forget ID`
 
 func memoryCmd(args []string) error {
 	wf := flagOf(args, "--workflow", "")
@@ -51,6 +53,26 @@ func memoryCmd(args []string) error {
 			return fmt.Errorf("which workflow? --workflow NAME\n%s", memoryUsage)
 		}
 		return memoryShow(wf, project, verb == "show")
+	case "add":
+		if wf == "" || len(rest) == 0 || strings.TrimSpace(strings.Join(rest, " ")) == "" {
+			return fmt.Errorf("add what? --workflow NAME \"text\"\n%s", memoryUsage)
+		}
+		var out memoryEntry
+		if err := call("POST", memoryPath(wf, project), map[string]string{"body": strings.Join(rest, " ")}, &out); err != nil {
+			return err
+		}
+		fmt.Printf("remembered %s for %s\n", out.ID, wf)
+		return nil
+	case "edit":
+		if len(rest) < 2 || strings.TrimSpace(strings.Join(rest[1:], " ")) == "" {
+			return fmt.Errorf("edit what? an entry id and its new text\n%s", memoryUsage)
+		}
+		var out memoryEntry
+		if err := call("PATCH", "/api/memory/"+url.PathEscape(rest[0]), map[string]string{"body": strings.Join(rest[1:], " ")}, &out); err != nil {
+			return err
+		}
+		fmt.Printf("edited %s\n", out.ID)
+		return nil
 	case "forget", "rm":
 		if len(rest) == 1 && wf == "" {
 			if err := call("DELETE", "/api/memory/"+url.PathEscape(rest[0]), nil, nil); err != nil {
