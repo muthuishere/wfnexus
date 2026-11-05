@@ -9,6 +9,7 @@ import OutputContract from '../components/OutputContract'
 import WorkflowCanvas from '../components/WorkflowCanvas'
 import RunTimeline, { Cost, dur, modelsOf, tokenPair, tokens, type Usage } from '../components/RunTimeline'
 import Markdown from '../components/Markdown'
+import { ChildRuns, ParentLine } from '../components/RunLineage'
 import { headlineOf, hhmm, isScript, summaryOf } from '../lib/story'
 import { withIterations } from '../lib/loops'
 
@@ -98,7 +99,8 @@ export default function RunPage({ id }: { id: string }) {
     })
   }, [id, refresh])
 
-  const live = !!d && ['running', 'queued', ...PAUSED].includes(d.run.status)
+  // `waiting` is a run parked on the runs its `start:` step started (ADR 0026).
+  const live = !!d && ['running', 'queued', 'waiting', ...PAUSED].includes(d.run.status)
   useEffect(() => {
     if (!live) return
     // The clock ticks every second; the data comes from SSE (which refreshes on
@@ -189,8 +191,9 @@ export default function RunPage({ id }: { id: string }) {
           </div>
           <h1>{run.input?.title || run.workflow}</h1>
           <div className="muted mono" style={{ fontSize: 'var(--fs-2xs)', marginTop: 3 }}>{run.id}</div>
+          <ParentLine run={run} />
         </div>
-        {['running', 'queued'].includes(run.status) && <button className="ghost" onClick={() => act(api.cancel(run.id))}>Cancel</button>}
+        {['running', 'queued', 'waiting'].includes(run.status) && <button className="ghost" onClick={() => act(api.cancel(run.id))}>Cancel</button>}
       </div>
       {err && <div className="banner err">{err}</div>}
 
@@ -230,6 +233,8 @@ export default function RunPage({ id }: { id: string }) {
 
       {resolved && (
         <div className="banner ok"><span className="mono">{resolved.stepId}</span>: <Resolved s={resolved} /></div>)}
+
+      <ChildRuns runs={d?.children} />
 
       {found.length > 0 && (
         <div className="card">

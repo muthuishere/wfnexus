@@ -114,7 +114,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; /** headline verdict `ok|incident|waiting|failed: text` (engine/story.go) */ outcome?: string; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; /** headline verdict `ok|incident|waiting|failed: text` (engine/story.go) */ outcome?: string; /** the run whose `start:` step started this one (ADR 0026) */ parentRunId?: string; parentStepId?: string; parentMode?: string; /** conversation key `<channel>:<chat>` */ conversation?: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
@@ -126,7 +126,7 @@ export type StepRun = {
   skipReason?: string
 }
 export type Artifact = { id: string; runId: string; stepId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }
-export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow }
+export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow; /** runs this run's `start:` steps started */ children?: Run[] }
 export type Event = { id: number; runId: string; stepId: string; kind: string; payload: any; createdAt: string }
 
 // ── the registries a step draws from ────────────────────────────────────────

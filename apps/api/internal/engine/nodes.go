@@ -145,4 +145,6 @@ func (e *Engine) runJudge(ctx context.Context, runID uuid.UUID, step *workflow.S
 }
 
 // isAgent reports whether a step actually runs an agent — the expensive kind.
-func isAgent(s *workflow.Step) bool { return s.Run == "" && s.Judge == nil && s.Send == nil }
+func isAgent(s *workflow.Step) bool {
+	return s.Run == "" && s.Judge == nil && s.Send == nil && s.Start == nil
+}

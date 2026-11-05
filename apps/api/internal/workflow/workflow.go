@@ -179,6 +179,9 @@ type Step struct {
 	// channel adapter (ADR 0023). No model, no shell — and dedup by key, so
 	// a schedule saying the same thing twice says it once.
 	Send *SendStep `yaml:"send,omitempty" json:"send,omitempty"`
+	// Start makes this step START OTHER WORKFLOWS as independent runs of their
+	// own, with this run recorded as their parent (ADR 0026, start.go).
+	Start *StartStep `yaml:"start,omitempty" json:"start,omitempty"`
 	// Run makes this step a DETERMINISTIC NODE rather than an agent: the shell
 	// command is executed in the run's workspace, no model is called, and it
 	// costs nothing. Exactly GitHub Actions' `run:`. A step has `run` or
@@ -488,7 +491,7 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: step %d needs an id", d.Name, i)
 		}
 		kinds := 0
-		for _, set := range []bool{s.Prompt != "", s.Run != "", s.Judge != nil, s.Send != nil} {
+		for _, set := range []bool{s.Prompt != "", s.Run != "", s.Judge != nil, s.Send != nil, s.Start != nil} {
 			if set {
 				kinds++
 			}
@@ -499,10 +502,18 @@ func (d *Definition) validate(cat Catalog) error {
 		if kinds == 0 && s.IsGroup() {
 			// A loop over a `steps:` body: the body is the work, checked below.
 		} else if kinds == 0 {
-			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision) or `send` (a message)", d.Name, s.ID)
+			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision), `send` (a message) or `start` (other workflows)", d.Name, s.ID)
 		}
 		if kinds > 1 {
-			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision or a message — `prompt`, `run`, `judge` and `send` are mutually exclusive", d.Name, s.ID)
+			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision, a message or a start — `prompt`, `run`, `judge`, `send` and `start` are mutually exclusive", d.Name, s.ID)
+		}
+		if s.Start != nil {
+			if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Team) > 0 || s.Decide != nil {
+				return fmt.Errorf("%s/%s: a `start` step calls no model, so skills, tools, team and decide have no meaning on it", d.Name, s.ID)
+			}
+			if err := s.Start.validate(); err != nil {
+				return fmt.Errorf("%s/%s: start: %w", d.Name, s.ID, err)
+			}
 		}
 		if s.Send != nil {
 			if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Team) > 0 || s.Decide != nil {
@@ -910,6 +921,9 @@ func normalize(d *Definition) {
 		}
 		if s.Send != nil && s.OutputSchema == nil {
 			s.OutputSchema = SendOutputSchema()
+		}
+		if s.Start != nil && s.OutputSchema == nil {
+			s.OutputSchema = StartOutputSchema()
 		}
 		// A loop body is normalised like a workflow of its own, inheriting
 		// the loop step's (already merged) env and placement.

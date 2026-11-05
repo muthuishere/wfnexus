@@ -48,9 +48,19 @@ type Run struct {
 	// Outcome is the run's headline verdict, one line:
 	// `ok|incident|waiting|failed: <text>` (migration 000017). A step writes it
 	// to $WFX_OUTCOME; otherwise the engine derives it when the run ends.
-	Outcome   string    `json:"outcome"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Outcome string `json:"outcome"`
+	// ParentRunID is the run whose `start:` step started this one, "" for a
+	// top-level run; ParentStepID is that step and ParentMode how the parent
+	// waits on it: wait | nowait | event (ADR 0026, migration 000022).
+	ParentRunID  string `json:"parentRunId,omitempty"`
+	ParentStepID string `json:"parentStepId,omitempty"`
+	ParentMode   string `json:"parentMode,omitempty"`
+	// Conversation is the conversation key this run belongs to ("" when it did
+	// not come from a chat): memory is keyed by it, and runs of one
+	// conversation go one at a time (engine/conversation.go).
+	Conversation string    `json:"conversation,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type StepRun struct {
@@ -198,15 +208,32 @@ const (
 
 // MemoryEntry is one remembered thing about a workflow.
 type MemoryEntry struct {
-	ID        string    `json:"id"`
-	Project   string    `json:"project"`
+	ID       string `json:"id"`
+	Project  string `json:"project"`
+	Workflow string `json:"workflow"`
+	RunID    string `json:"runId,omitempty"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status,omitempty"`
+	StepID   string `json:"stepId,omitempty"`
+	Body     string `json:"body"`
+	// Conversation is the conversation key a run record belongs to ("" for
+	// workflow-wide memory). Lessons are written with it but read workflow-wide.
+	Conversation string    `json:"conversation,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// Conversation is one chat's conversation (ADR 0026 decision 4), keyed by
+// (channel, chat). State is active | waiting | resolved | closed; a new
+// message reopens it.
+type Conversation struct {
+	Channel   string    `json:"channel"`
+	Chat      string    `json:"chat"`
 	Workflow  string    `json:"workflow"`
-	RunID     string    `json:"runId,omitempty"`
-	Kind      string    `json:"kind"`
-	Status    string    `json:"status,omitempty"`
-	StepID    string    `json:"stepId,omitempty"`
-	Body      string    `json:"body"`
+	Project   string    `json:"project"`
+	State     string    `json:"state"`
+	LastRunID string    `json:"lastRunId"`
 	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // MemoryFilter selects memory entries. Empty fields match everything.
@@ -220,7 +247,11 @@ type MemoryFilter struct {
 	NotWorkflow string
 	Kind        string
 	RunID       string
-	Limit       int
+	// ByConversation narrows to entries whose conversation equals
+	// Conversation exactly — "" then means the workflow-wide entries only.
+	ByConversation bool
+	Conversation   string
+	Limit          int
 }
 
 // Sealer is the encryption the store writes through. It is an interface so the

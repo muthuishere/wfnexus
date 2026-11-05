@@ -118,14 +118,20 @@ func (e *Engine) recordMemory(ctx context.Context, runID uuid.UUID, status, errM
 	for _, old := range existing {
 		_ = e.store.DeleteMemory(ctx, old.ID)
 	}
+	// A run from a chat remembers into ITS conversation, unless the workflow
+	// said `memory: {scope: workflow}` (conversation.go).
+	conv := ""
+	if plan.Scope != workflow.MemoryScopeWorkflow {
+		conv = conversationOfRun(run)
+	}
 	if _, err := e.store.AddMemory(ctx, model.MemoryEntry{
 		Project: run.Project, Workflow: run.Workflow, RunID: runID.String(),
-		Kind: model.MemoryKindRun, Status: status, Body: body,
+		Kind: model.MemoryKindRun, Status: status, Body: body, Conversation: conv,
 	}); err != nil {
 		log.Printf("engine: memory for run %s: %v", runID, err)
 		return
 	}
-	e.consolidateMemory(ctx, run.Project, run.Workflow, plan.Retain)
+	e.consolidateMemoryIn(ctx, run.Project, run.Workflow, conv, plan.Retain)
 }
 
 // runRecord is the deterministic record of one run. Every free-text value is
@@ -192,17 +198,23 @@ func shortID(s string) string {
 // records — older ones fold into the rolling digest, which is itself capped —
 // and at most 2×retain lessons.
 func (e *Engine) consolidateMemory(ctx context.Context, project, wf string, retain int) {
+	e.consolidateMemoryIn(ctx, project, wf, "", retain)
+}
+
+// consolidateMemoryIn is consolidateMemory for one conversation's records ("" is
+// the workflow-wide ones): each conversation keeps its own records and digest.
+func (e *Engine) consolidateMemoryIn(ctx context.Context, project, wf, conv string, retain int) {
 	if retain <= 0 {
 		retain = workflow.DefaultMemoryRetain
 	}
-	runs, err := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindRun})
+	runs, err := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindRun, ByConversation: true, Conversation: conv})
 	if err == nil && len(runs) > retain {
 		folded := runs[retain:]
 		var lines []string
 		for _, r := range folded { // newest first
 			lines = append(lines, "- "+digestLine(r))
 		}
-		digests, _ := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindDigest})
+		digests, _ := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindDigest, ByConversation: true, Conversation: conv})
 		for _, d := range digests {
 			if d.Body != "" {
 				lines = append(lines, strings.Split(d.Body, "\n")...)
@@ -213,7 +225,7 @@ func (e *Engine) consolidateMemory(ctx context.Context, project, wf string, reta
 			lines = lines[:len(lines)-1]
 		}
 		if _, err := e.store.AddMemory(ctx, model.MemoryEntry{
-			Project: project, Workflow: wf, Kind: model.MemoryKindDigest, Body: strings.Join(lines, "\n"),
+			Project: project, Workflow: wf, Kind: model.MemoryKindDigest, Body: strings.Join(lines, "\n"), Conversation: conv,
 		}); err == nil {
 			for _, d := range digests {
 				_ = e.store.DeleteMemory(ctx, d.ID)
@@ -297,6 +309,12 @@ func (e *Engine) rememberTool(runID uuid.UUID, wfName string, step *workflow.Ste
 // memoryFor is the section one step of a run reads. Empty when memory is off
 // for the step or nothing has been remembered yet.
 func (e *Engine) memoryFor(ctx context.Context, def *workflow.Definition, stepID, project string) string {
+	return e.memoryForConv(ctx, def, stepID, project, "")
+}
+
+// memoryForConv is memoryFor inside one conversation: the run records and
+// digest are that conversation's, the lessons stay workflow-wide.
+func (e *Engine) memoryForConv(ctx context.Context, def *workflow.Definition, stepID, project, conv string) string {
 	if e.store == nil || def == nil {
 		return ""
 	}
@@ -308,13 +326,23 @@ func (e *Engine) memoryFor(ctx context.Context, def *workflow.Definition, stepID
 	if !plan.On {
 		return ""
 	}
-	return e.memorySection(ctx, def.Name, project, false, plan)
+	if plan.Scope == workflow.MemoryScopeWorkflow {
+		conv = ""
+	}
+	return e.memorySectionIn(ctx, def.Name, project, conv, false, plan)
 }
 
 // memorySection renders own memory, then every included source, newest first,
 // cut at the plan's budget.
 func (e *Engine) memorySection(ctx context.Context, wf, project string, anyProject bool, plan workflow.MemoryPlan) string {
+	return e.memorySectionIn(ctx, wf, project, "", anyProject, plan)
+}
+
+func (e *Engine) memorySectionIn(ctx context.Context, wf, project, conv string, anyProject bool, plan workflow.MemoryPlan) string {
 	own := model.MemoryFilter{Project: project, AnyProject: anyProject, Workflow: wf}
+	// Run records and the digest are per conversation; lessons are not.
+	ownRuns := own
+	ownRuns.ByConversation, ownRuns.Conversation = true, conv
 	var blocks []string
 
 	if notes := e.listMem(ctx, own, model.MemoryKindNote, memoryNotesShown); len(notes) > 0 {
@@ -329,7 +357,7 @@ func (e *Engine) memorySection(ctx context.Context, wf, project string, anyProje
 		}
 		blocks = append(blocks, b.String())
 	}
-	if runs := e.listMem(ctx, own, model.MemoryKindRun, memoryRecentShown); len(runs) > 0 {
+	if runs := e.listMem(ctx, ownRuns, model.MemoryKindRun, memoryRecentShown); len(runs) > 0 {
 		var b strings.Builder
 		b.WriteString("### Recent runs (newest first)\n")
 		for _, r := range runs {
@@ -338,7 +366,7 @@ func (e *Engine) memorySection(ctx context.Context, wf, project string, anyProje
 		}
 		blocks = append(blocks, strings.TrimRight(b.String(), "\n")+"\n")
 	}
-	if dg := e.listMem(ctx, own, model.MemoryKindDigest, 1); len(dg) > 0 && dg[0].Body != "" {
+	if dg := e.listMem(ctx, ownRuns, model.MemoryKindDigest, 1); len(dg) > 0 && dg[0].Body != "" {
 		blocks = append(blocks, "### Older runs (digest)\n"+dg[0].Body+"\n")
 	}
 
