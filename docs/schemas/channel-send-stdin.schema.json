@@ -3,30 +3,170 @@
   "$id": "https://wfnexus.dev/schemas/channel-send-stdin.schema.json",
   "title": "wfnexus.channel/v1 — send: the envelope on stdin",
   "type": "object",
-  "required": ["version", "type", "channel", "text", "at"],
+  "required": [
+    "version",
+    "type",
+    "channel",
+    "text",
+    "at"
+  ],
   "properties": {
-    "version": { "const": "wfnexus.channel/v1" },
-    "type": { "enum": ["pause", "notice", "send"] },
-    "channel": { "type": "string", "minLength": 1 },
-    "text": { "type": "string", "description": "complete, ready to post" },
-    "runUrl": { "type": "string", "description": "a pointer at the run; never a capability" },
-    "code": { "type": "string", "pattern": "^[a-z0-9]{4,8}$", "description": "pause only: what a reply quotes as #code" },
-    "pauseKind": { "type": "string", "description": "pause only: approval | input" },
-    "workflow": { "type": "string" },
-    "project": { "type": "string" },
-    "runId": { "type": "string" },
-    "stepId": { "type": "string" },
-    "dedupKey": { "type": "string" },
-    "target": { "type": "string", "description": "adapter-specific address; opaque to wfnexus" },
+    "version": {
+      "const": "wfnexus.channel/v1"
+    },
+    "type": {
+      "enum": [
+        "pause",
+        "notice",
+        "send"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text": {
+      "type": "string",
+      "description": "complete, ready to post"
+    },
+    "runUrl": {
+      "type": "string",
+      "description": "a pointer at the run; never a capability"
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[a-z0-9]{4,8}$",
+      "description": "pause only: what a reply quotes as #code"
+    },
+    "pauseKind": {
+      "type": "string",
+      "description": "pause only: approval | input"
+    },
+    "workflow": {
+      "type": "string"
+    },
+    "project": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "stepId": {
+      "type": "string"
+    },
+    "dedupKey": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string",
+      "description": "adapter-specific address; opaque to wfnexus"
+    },
     "attachment": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "a local file the adapter can read" },
-        "url": { "type": "string", "pattern": "^https://", "description": "https to a public address only; the server refuses internal targets" },
-        "filename": { "type": "string" }
+        "path": {
+          "type": "string",
+          "description": "a local file the adapter can read"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "https to a public address only; the server refuses internal targets"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "image",
+            "voice",
+            "sticker"
+          ],
+          "description": "default file"
+        }
       },
-      "oneOf": [{ "required": ["path"] }, { "required": ["url"] }]
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        }
+      ]
     },
-    "at": { "type": "string", "format": "date-time" }
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "replyTo": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string",
+          "description": "the quoted message's sender (needed for group replies)"
+        }
+      }
+    },
+    "mentions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "JIDs or phone numbers to @mention"
+    },
+    "reaction": {
+      "type": "object",
+      "required": [
+        "targetId"
+      ],
+      "properties": {
+        "targetId": {
+          "type": "string"
+        },
+        "emoji": {
+          "type": "string",
+          "description": "empty removes the reaction"
+        },
+        "sender": {
+          "type": "string",
+          "description": "the target's sender (needed in groups)"
+        }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "one of our own sent ids; `text` is the new text"
+        }
+      }
+    },
+    "delete": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "one of our own sent ids; deleted for everyone"
+        }
+      }
+    }
   }
 }

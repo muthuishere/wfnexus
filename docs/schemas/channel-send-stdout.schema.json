@@ -4,6 +4,23 @@
   "title": "wfnexus.channel/v1 — send: what stdout may carry (optional; empty is fine)",
   "type": "object",
   "properties": {
-    "id": { "type": "string", "description": "the transport's message or job id" }
+    "id": {
+      "type": "string",
+      "description": "the transport's message or job id"
+    },
+    "status": {
+      "enum": [
+        "sent",
+        "failed",
+        "uncertain"
+      ],
+      "description": "sent with exit 0; failed or uncertain with a non-zero exit"
+    },
+    "error": {
+      "type": "string"
+    },
+    "warning": {
+      "type": "string"
+    }
   }
 }

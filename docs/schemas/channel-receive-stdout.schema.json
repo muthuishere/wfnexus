@@ -3,35 +3,144 @@
   "$id": "https://wfnexus.dev/schemas/channel-receive-stdout.schema.json",
   "title": "wfnexus.channel/v1 — receive: what stdout must carry",
   "type": "object",
-  "required": ["messages", "cursor"],
+  "required": [
+    "messages",
+    "cursor"
+  ],
   "properties": {
     "messages": {
       "type": "array",
       "description": "oldest first; the server's own messages left out",
       "items": {
         "type": "object",
-        "required": ["id", "from", "text"],
+        "required": [
+          "id",
+          "from",
+          "text"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1, "description": "the transport's message id; (channel, id) is stored once" },
-          "from": { "type": "string", "description": "the sender id the allow list matches; must be one the transport authenticated" },
-          "name": { "type": "string" },
-          "text": { "type": "string" },
-          "at": { "type": "string", "format": "date-time" },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "the transport's message id; (channel, id) is stored once"
+          },
+          "from": {
+            "type": "string",
+            "description": "the sender id the allow list matches; must be one the transport authenticated"
+          },
+          "name": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
           "attachments": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "url": { "type": "string" },
-                "filename": { "type": "string" },
-                "mime": { "type": "string" }
+                "url": {
+                  "type": "string"
+                },
+                "filename": {
+                  "type": "string"
+                },
+                "mime": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "chat": {
+            "type": "string",
+            "description": "the conversation id (WhatsApp chat JID); the conversation key is (channel, chat)"
+          },
+          "chatName": {
+            "type": "string"
+          },
+          "chatType": {
+            "enum": [
+              "dm",
+              "group"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "message",
+              "reaction",
+              "updated",
+              "deleted"
+            ],
+            "description": "absent = message"
+          },
+          "replyTo": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          "media": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "image | video | audio | voice | sticker | document"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              }
+            }
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fromOwner": {
+            "type": "boolean",
+            "description": "sent from the account itself but not by this adapter (typed on the phone)"
+          },
+          "reaction": {
+            "type": "object",
+            "properties": {
+              "targetId": {
+                "type": "string"
+              },
+              "emoji": {
+                "type": "string",
+                "description": "empty = reaction removed"
               }
             }
           }
         }
       }
     },
-    "cursor": { "type": "string", "description": "handed back as `after`; empty keeps the previous one" },
-    "notice": { "type": "string", "description": "something the operator should see although the receive worked, e.g. a lost cursor that was reset" }
+    "cursor": {
+      "type": "string",
+      "description": "handed back as `after`; empty keeps the previous one"
+    },
+    "notice": {
+      "type": "string",
+      "description": "something the operator should see although the receive worked, e.g. a lost cursor that was reset"
+    }
   }
 }

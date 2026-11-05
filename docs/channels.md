@@ -13,7 +13,14 @@ Schemas are in [`docs/schemas/`](schemas/).
 | `schemas/channel-receive-stdout.schema.json` | what `receive` must print |
 
 Reference adapter: [`adapters/apl-whatsapp.js`](../adapters/apl-whatsapp.js)
-(WhatsApp groups through the apl CLI). Test fixture: the fake adapter in
+(WhatsApp through the apl CLI). `APL_WA_GROUP` unset or `*` = inbox mode: every
+DM and group, cursor `<chat>|<id>`, sends need `target`. A JID = that chat only
+(the pre-0026 behaviour). Its echo ledger is a JSON-lines file of sent ids:
+`APL_WA_LEDGER`, else `$WFX_CHANNEL_STATE_DIR/apl-whatsapp-<label>.sent.jsonl`,
+else `~/.local/state/wfnexus/apl-whatsapp-<label>.sent.jsonl`; a `FromMe` row in
+it is dropped, any other `FromMe` row is emitted as `fromOwner`. Follow-up: the
+`apl serve /subscribe` push listener (until then, edits/deletes of messages
+older than the cursor are not seen). Test fixture: the fake adapter in
 `apps/api/internal/engine/fakeadapter_test.go`.
 
 ## Configuration
@@ -88,7 +95,22 @@ channels:
   fetches it should re-check and refuse redirects.
 - `target` is opaque to wfnexus: a group, a mailbox. Empty ⇒ the adapter's own default.
 
-**stdout** — optional: `{"id": "<transport message id>"}`.
+Optional richer sends (ADR 0026; an adapter that cannot do one must fail, not
+fall back to plain text):
+
+| field | meaning |
+|---|---|
+| `replyTo` `{id, sender}` | quote-reply to a message; `sender` is the quoted message's sender (needed in groups) |
+| `mentions` `[jid]` | ids to @mention; put `@<number>` in `text` too |
+| `attachment.kind` | `file` (default), `image`, `voice` (OGG/Opus note), `sticker` (WebP) |
+| `reaction` `{targetId, emoji, sender}` | react to a message instead of posting; empty `emoji` removes it |
+| `edit` `{id}` | edit one of OUR sent messages; `text` is the new text |
+| `delete` `{id}` | delete one of OUR sent messages for everyone |
+
+**stdout** — optional: `{"id": "<transport message id>", "status": "sent"}`.
+On a non-zero exit an adapter may print `{"status": "failed" | "uncertain",
+"error": "…"}`: `failed` = the transport said no; `uncertain` = it may have gone
+out (timeout, lost answer, or an attachment the transport did not confirm).
 
 **exit** — `0` means sent. Anything else is a failure: wfnexus shows the
 (scrubbed) **stderr** on the run and does **not** retry. A send killed at the
@@ -129,7 +151,19 @@ triggers.
 }
 ```
 
-- Oldest first. Leave out messages the server itself sent.
+- Oldest first. Leave out messages the server itself sent (its echoes).
+- Optional event fields (ADR 0026; adapters without them stay valid):
+
+  | field | meaning |
+  |---|---|
+  | `chat`, `chatName` | the conversation id and its display name; the conversation key is `(channel, chat)` |
+  | `chatType` | `dm` or `group` |
+  | `kind` | `message` (default), `reaction`, `updated` (edited), `deleted` |
+  | `replyTo` `{id, sender, text}` | the message this one quotes |
+  | `media` `{kind, mime, name, size}` | metadata only; `kind` is image, video, audio, voice, sticker or document |
+  | `mentions` `[jid]` | who was @mentioned |
+  | `reaction` `{targetId, emoji}` | for `kind: reaction`; empty `emoji` = removed |
+  | `fromOwner` | `true` when the account itself sent it but this adapter did not (typed on the phone) |
 - `id` is the transport's message id. wfnexus stores each `(channel, id)` once,
   so returning a message twice is harmless.
 - `from` is what the allow list is matched against, exactly.
