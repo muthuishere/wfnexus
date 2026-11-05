@@ -13,6 +13,8 @@ export type Usage = {
   totalTokens?: number; promptTokens?: number; completionTokens?: number
   llmCalls?: number; toolCalls?: number; elapsedMs?: number
   costUsd?: number; costUnknown?: boolean; priceSource?: string
+  /** the registry provider the step ran on (engine/usage.go) */
+  provider?: string
   models?: Record<string, { calls: number; promptTokens: number; completionTokens: number; ms: number }>
 }
 
@@ -42,6 +44,26 @@ export function tokens(n?: number): string {
   if (n < 1000) return String(n)
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
   return `${(n / 1e6).toFixed(2)}M`
+}
+
+/** The model(s) that actually answered a step, as RECORDED by the engine (the
+ *  `models` map in the step's usage, keyed by the model id the provider
+ *  reported). A provider that reports no model id (some cli/acp agents) books
+ *  its calls under "" — then the provider name is the most we know. Nothing
+ *  recorded → empty: the caller renders "—", never the declared default. */
+export function modelsOf(u?: Usage): string[] {
+  const named = Object.keys(u?.models || {}).filter(Boolean)
+  if (named.length) return named
+  return u?.provider ? [u.provider] : []
+}
+
+/** "1.2k in · 340 out", or "—" when the provider reported no tokens for calls
+ *  it did make (a cli/acp agent that does not surface usage). */
+export function tokenPair(u?: Usage): string {
+  if (!u) return '—'
+  if (!u.totalTokens) return '—'
+  if (u.promptTokens === undefined) return `${tokens(u.totalTokens)} tok`
+  return `${tokens(u.promptTokens)} in · ${tokens(u.completionTokens)} out`
 }
 
 /** THE money distinction, and the most product-specific thing on this page.
@@ -175,7 +197,9 @@ export default function RunTimeline({ steps, byId, events, now, selected, onPick
               {/* Script steps: status and duration only. Agent steps: the
                   model facts, each one only when there is one to show. */}
               {!script && turns > 0 && <span>{turns}{r.ceiling ? `/${r.ceiling}` : ''} turns</span>}
-              {!script && !!u?.totalTokens && <span>{tokens(u.totalTokens)} tok</span>}
+              {!script && r.run && <span className="tlmodel mono" title={modelsOf(u).join(', ') || 'no model recorded'}>
+                {modelsOf(u).join(', ') || '—'}</span>}
+              {!script && r.run && (u?.llmCalls || u?.totalTokens) ? <span title="input · output tokens, as the provider reported them">{tokenPair(u)}</span> : null}
               {!script && <Cost usage={u} />}
             </div>
             {running && !script && (
