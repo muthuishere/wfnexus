@@ -245,7 +245,23 @@ export type WhoAmI = {
   authenticated: boolean
   loopback?: boolean
   kind?: string; name?: string; role?: string; project?: string
+  /** true off loopback: the password form and the admin pages apply (ADR 0025) */
+  authRequired?: boolean
+  /** the signed-in person must set a new password before anything else */
+  mustChange?: boolean
 }
+
+/** A person (GET /api/users). The password hash never leaves the server;
+ *  only whether one is set. */
+export type User = {
+  id: string; name: string; displayName: string; role: string; project: string
+  disabled: boolean; mustChange: boolean; hasPassword: boolean; createdAt: string
+}
+/** A role is a row: a name and its permission strings ("*" is everything). */
+export type Role = { name: string; permissions: string[] }
+
+const send = (method: string, url: string, body?: unknown) =>
+  fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 
 // A 401 is handled ONCE, here, rather than by every page: any call that comes
 // back unauthenticated notifies the listeners, and the shell explains that
@@ -386,6 +402,27 @@ export const api = {
   },
   /** Revoke this browser's token and clear its cookie. */
   signOut: () => j(fetch('/api/tokens/self', { method: 'DELETE' })),
+  /** Username and password (ADR 0025). Answered with the same session cookie
+   *  as the device grant. A failure is NOT a 401 broadcast: the form shows it. */
+  passwordSignIn: async (username: string, password: string): Promise<{ ok: boolean; mustChange?: boolean; error?: string }> => {
+    const res = await post('/api/auth/password', { username, password })
+    const body = await res.json().catch(() => ({}))
+    return res.ok ? { ok: true, mustChange: !!body.mustChange } : { ok: false, error: body.error || res.statusText }
+  },
+  changePassword: (current: string, next: string) =>
+    j<{ changed: boolean }>(post('/api/auth/password/change', { current, new: next })),
+  users: () => j<User[]>(fetch('/api/users')),
+  createUser: (u: { name: string; role: string; project?: string; displayName?: string }) =>
+    j<{ user: User }>(post('/api/users', u)),
+  updateUser: (u: User) =>
+    j<User>(send('PUT', `/api/users/${encodeURIComponent(u.name)}`,
+      { displayName: u.displayName, role: u.role, project: u.project, disabled: u.disabled })),
+  /** An admin reset. With no password the server generates one, returned once. */
+  resetPassword: (name: string, password?: string) =>
+    j<{ password?: string; mustChange: boolean }>(post(`/api/users/${encodeURIComponent(name)}/password`, password ? { password } : {})),
+  roles: () => j<Role[]>(fetch('/api/roles')),
+  saveRole: (name: string, permissions: string[]) =>
+    j<Role>(send('PUT', `/api/roles/${encodeURIComponent(name)}`, { permissions })),
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),

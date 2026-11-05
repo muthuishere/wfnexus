@@ -213,14 +213,15 @@ func TestBootRefusesNonLoopbackWithNoUsers(t *testing.T) {
 	if !strings.Contains(string(out), "REFUSING TO SERVE") {
 		t.Fatalf("no boot refusal in the output:\n%s", out)
 	}
-	if !strings.Contains(string(out), "admin token: wfx_") {
+	// ADR 0025: a username and a one-time password, not a token.
+	if !strings.Contains(string(out), "username: admin") {
 		t.Fatalf("the refusal did not print a bootstrap credential:\n%s", out)
 	}
 	// And the value it printed is not in any row: only its hash is.
 	value := ""
 	for _, line := range strings.Split(string(out), "\n") {
-		if i := strings.Index(line, "wfx_"); i >= 0 {
-			value = strings.TrimSpace(line[i:])
+		if i := strings.Index(line, "password: "); i >= 0 {
+			value = strings.TrimSpace(line[i+len("password: "):])
 		}
 	}
 	if value == "" {

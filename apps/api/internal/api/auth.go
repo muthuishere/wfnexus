@@ -92,6 +92,9 @@ var publicAPIPaths = map[string]bool{
 	// with the device code it was issued, exactly as /device/token is polled,
 	// and is answered with a session cookie instead of a bearer value.
 	"/api/auth/session": true,
+	// Username and password sign-in (ADR 0025): how a browser obtains a
+	// subject without a terminal. Rate limited in the handler.
+	"/api/auth/password": true,
 }
 
 // requireSubject resolves the bearer to a user or a worker.
@@ -188,11 +191,14 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 	sub, ok := SubjectFrom(r.Context())
 	if !ok {
-		writeJSON(w, 200, map[string]any{"authenticated": false, "loopback": s.loopbackOnly})
+		writeJSON(w, 200, map[string]any{"authenticated": false, "loopback": s.loopbackOnly, "authRequired": !s.loopbackOnly})
 		return
 	}
+	mustChange := sub.User != nil && sub.User.MustChange
 	writeJSON(w, 200, map[string]any{
 		"authenticated": true,
+		"authRequired":  !s.loopbackOnly,
+		"mustChange":    mustChange,
 		"kind":          string(sub.Kind),
 		"name":          sub.Name,
 		"role":          sub.Role,

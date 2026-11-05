@@ -62,9 +62,16 @@ func refuseAndBootstrap(ctx context.Context, addr string, st *store.Store) error
 	if err := st.CreateUser(ctx, admin); err != nil {
 		return fmt.Errorf("identity: creating the first admin: %w", err)
 	}
-	value := auth.NewToken()
-	if _, err := st.IssueUserToken(ctx, admin.ID, auth.HashToken(value), "bootstrap", ""); err != nil {
-		return fmt.Errorf("identity: issuing the bootstrap credential: %w", err)
+	// ADR 0025: the first admin signs in with a username and a one-time
+	// password, and that first sign-in must set a new one. Only the argon2id
+	// hash is stored.
+	password := auth.NewPassword()
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("identity: hashing the bootstrap password: %w", err)
+	}
+	if err := st.SetPassword(ctx, admin.Name, hash, true); err != nil {
+		return fmt.Errorf("identity: storing the bootstrap password: %w", err)
 	}
 	// stdout, not the log: a log line is shipped somewhere, and this is the one
 	// moment the value exists outside a client.
@@ -73,18 +80,15 @@ REFUSING TO SERVE — %s is not a loopback address and this install has no users
 
 An unauthenticated API on a reachable address is the one thing this server will
 not do. An administrator has been created and this is the only time its
-credential is shown:
+one-time password is shown:
 
-    admin token: %s
+    username: %s
+    password: %s
 
-Do this, on the machine you want to administer from:
+Start the server again: it will serve with authentication required. Then open
+http://%s in a browser and sign in — the first sign-in asks for a new password.
+Terminals sign in with `+"`wfx login --url http://%s`"+`, approved from that browser.
 
-    wfx login --url http://%s        # then approve with the token above
-    # or, to use it directly:
-    export WFX_API=http://%s
-
-Then start the server again: it will serve with authentication required.
-
-`, addr, value, addr, addr)
+`, addr, admin.Name, password, addr, addr)
 	return errors.New("refusing to serve: non-loopback bind with no users (an admin has just been created; restart to serve)")
 }

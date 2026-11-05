@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"io"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/api"
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -80,5 +85,38 @@ func TestALoopbackBootCreatesNoAdminAndNoRoles(t *testing.T) {
 	}
 	if n, err := st.CountRoles(ctx); err != nil || n != 0 {
 		t.Fatalf("a loopback boot created %d role(s) (err %v)", n, err)
+	}
+}
+
+// ADR 0025 — the first admin gets a username and a ONE-TIME password on
+// stdout, stored only as an argon2id hash and marked must-change.
+func TestFirstBootPrintsAUsernameAndOneTimePassword(t *testing.T) {
+	ctx := context.Background()
+	st := bootStore(t)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	_ = bootstrapIdentity(ctx, ":8090", st)
+	os.Stdout = old
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+
+	m := regexp.MustCompile(`password: (\S+)`).FindSubmatch(out)
+	if !strings.Contains(string(out), "username: admin") || m == nil {
+		t.Fatalf("first boot printed:\n%s", out)
+	}
+	u, hash, err := st.PasswordHashByName(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.MustChange {
+		t.Fatal("the bootstrap admin is not marked must-change")
+	}
+	if strings.Contains(hash, string(m[1])) || !auth.VerifyPassword(hash, string(m[1])) {
+		t.Fatal("the stored hash does not verify the printed password")
 	}
 }

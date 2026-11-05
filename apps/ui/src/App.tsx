@@ -13,7 +13,9 @@ import ProjectPage from './pages/ProjectPage'
 import WorkflowPage from './pages/WorkflowPage'
 import WorkersPage from './pages/WorkersPage'
 import TemplatesPage from './pages/TemplatesPage'
-import Identity from './components/Identity'
+import Identity, { ChangePasswordCard } from './components/Identity'
+import UsersPage from './pages/UsersPage'
+import RolesPage from './pages/RolesPage'
 import WaitingOnYou from './components/WaitingOnYou'
 import Icon, { type IconName } from './components/Icon'
 
@@ -40,6 +42,10 @@ export default function App() {
   // arrived — a header that states the backend has to read it, not assume it.
   const [backend, setBackend] = useState('')
   useEffect(() => { api.doctor().then(d => setBackend(`${d.storage.driver} · ${d.storage.artifacts}`)).catch(() => setBackend('')) }, [])
+  // Users and Roles are pages only where sign-in exists (ADR 0025): on the
+  // loopback solo install auth is absent, and so are they.
+  const [authRequired, setAuthRequired] = useState(false)
+  useEffect(() => { api.whoami().then(w => setAuthRequired(!!w.authRequired)).catch(() => {}) }, [])
   const d = (x: string) => decodeURIComponent(x)
   let page = <ProjectsPage />
   if (r[0] === 'projects' && r[1]) {
@@ -62,6 +68,9 @@ export default function App() {
   else if (r[0] === 'workers') page = <WorkersPage />
   else if (r[0] === 'system') page = <SystemPage />
   else if (r[0] === 'metrics') page = <MetricsPage />
+  else if (r[0] === 'users') page = <UsersPage />
+  else if (r[0] === 'roles') page = <RolesPage />
+  else if (r[0] === 'password') page = <div><div className="subhead"><h1>Change password</h1></div><ChangePasswordCard /></div>
   const inProjects = !r[0] || ['projects', 'runs', 'workflows'].includes(r[0])
   const nav: Array<[string, string, IconName, boolean]> = [
     ['Projects', '#/projects', 'projects', inProjects],
@@ -71,6 +80,10 @@ export default function App() {
     ['Workers', '#/workers', 'workers', r[0] === 'workers'],
     ['Metrics', '#/metrics', 'metrics', r[0] === 'metrics'],
     ['System', '#/system', 'system', r[0] === 'system'],
+    ...(authRequired ? [
+      ['Users', '#/users', 'users', r[0] === 'users'],
+      ['Roles', '#/roles', 'roles', r[0] === 'roles'],
+    ] as Array<[string, string, IconName, boolean]> : []),
   ]
   return (
     <div className="shell">

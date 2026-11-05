@@ -125,6 +125,10 @@ func run(args []string) error {
 		return login(rest)
 	case "logout":
 		return logout(rest)
+	case "user", "users":
+		return userCmd(rest)
+	case "role", "roles":
+		return roleCmd(rest)
 	case "ui", "open":
 		return uiCmd(rest)
 	case "context", "contexts":
@@ -210,6 +214,8 @@ func usage() {
   wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
   wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
   wfx logout [--url <host>]        revoke this host's token and forget it locally
+  wfx user ls | add NAME --role R | disable NAME | passwd [NAME] | role NAME R   users (admin)
+  wfx role ls | set NAME PERM,…    roles and their permissions (admin)
   wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
   wfx profile create <name> --url U [--via ssh://user@host [--key k] [--accept-host-key]]
                                    register a server you can already reach (kubectl-style)
