@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter
+package agentadapter
 
 // Translation between what toolnexus sends (an OpenAI chat request) and what a
 // one-shot CLI understands (one block of text in, prose out).
@@ -35,7 +35,7 @@ import (
 // ErrUnparseable is returned by ParseReply when the CLI's output is not a
 // usable OpenAI assistant message. Adapter turns it into a repair attempt,
 // and ultimately into a failed run.
-var ErrUnparseable = errors.New("devinadapter: reply is not an OpenAI assistant message")
+var ErrUnparseable = errors.New("agentadapter: reply is not an OpenAI assistant message")
 
 // RenderTranscript flattens the OpenAI message array into text a one-shot CLI
 // can read. Tool results get their own labelled block, so turn 2 of the loop

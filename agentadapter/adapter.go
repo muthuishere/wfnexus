@@ -3,16 +3,16 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-// Package devinadapter makes a local agent CLI usable as a toolnexus model.
+// Package agentadapter makes a local agent CLI usable as a toolnexus model.
 //
 // It is one function in toolnexus terms — a Generate for
 // toolnexus.CreateInProcessClient:
 //
-//	a := devinadapter.New(devinadapter.Options{
-//	    Agent: devinadapter.Devin(devinadapter.CLI{Model: "SWE-1.6 Slow"}),
+//	a := agentadapter.New(agentadapter.Options{
+//	    Agent: agentadapter.Devin(agentadapter.CLI{Model: "SWE-1.6 Slow"}),
 //	})
 //	client := toolnexus.CreateInProcessClient(a.InProcessOptions())
 //	res, err := client.Run(ctx, prompt, toolkit)
@@ -37,7 +37,7 @@
 // Skills need nothing extra: toolnexus injects the catalog into the system
 // message and exposes `skill` as an ordinary tool, so both are already in the
 // request the CLI receives.
-package devinadapter
+package agentadapter
 
 import (
 	"context"
@@ -160,7 +160,7 @@ func (a *Adapter) Generate(req toolnexus.InProcessRequest) (toolnexus.InProcessR
 	// having to learn about it first.
 	body, err := json.MarshalIndent(req.Body, "", "  ")
 	if err != nil {
-		return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: encode request: %w", err)
+		return toolnexus.InProcessResponse{}, fmt.Errorf("agentadapter: encode request: %w", err)
 	}
 
 	// A pinned adapter wins; otherwise the caller's model goes down to the CLI,
@@ -222,7 +222,7 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	}
 	// The rejected reply itself, clipped, is what makes this debuggable: "invalid
 	// json" alone does not say whether the model truncated, narrated, or wrapped.
-	return toolnexus.InProcessResponse{}, fmt.Errorf("devinadapter: %s gave no valid reply after %d attempts: %w; last reply (%d chars): %s",
+	return toolnexus.InProcessResponse{}, fmt.Errorf("agentadapter: %s gave no valid reply after %d attempts: %w; last reply (%d chars): %s",
 		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr, len(lastText), clipEnds(lastText, 300))
 }
 
@@ -236,7 +236,7 @@ func clipEnds(s string, n int) string {
 }
 
 // errStalled is one backend call outliving AttemptTimeout.
-var errStalled = errors.New("devinadapter: the backend call stalled")
+var errStalled = errors.New("agentadapter: the backend call stalled")
 
 // invokeBounded is invoke under AttemptTimeout, when one is set.
 func (a *Adapter) invokeBounded(ctx context.Context, turn, attempt int, prompt, model string, prev error) (string, error) {

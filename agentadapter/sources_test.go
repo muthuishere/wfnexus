@@ -2,10 +2,10 @@
 // shipped on the issues-devin-acp branch, not in v0.18.1 which this module
 // pins). Without the tag this file breaks `go build ./...` for the whole
 // module. Nothing here is deleted: build or test it with
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // and drop the tag once a toolnexus release carries the export.
 
-package devinadapter_test
+package agentadapter_test
 
 // Every toolnexus tool source, driven through the adapter: native tools,
 // built-ins, skills, a real MCP server over HTTP, and sub-agents. The point is
@@ -24,7 +24,7 @@ import (
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 // byName replies by looking at which tools the request offers and what has
@@ -39,7 +39,7 @@ type byName struct {
 
 func (b *byName) Name() string { return "by-name" }
 
-func (b *byName) Execute(_ context.Context, t devinadapter.Turn) (string, error) {
+func (b *byName) Execute(_ context.Context, t agentadapter.Turn) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.prompts = append(b.prompts, t.Prompt)
@@ -57,9 +57,9 @@ func (b *byName) first() string {
 	return b.prompts[0]
 }
 
-func runWith(t *testing.T, back devinadapter.Agent, tk *toolnexus.Toolkit, prompt string) toolnexus.RunResult {
+func runWith(t *testing.T, back agentadapter.Agent, tk *toolnexus.Toolkit, prompt string) toolnexus.RunResult {
 	t.Helper()
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	opts := a.InProcessOptions()
 	opts.MaxTurns = 8
 	res, err := toolnexus.CreateInProcessClient(opts).Run(context.Background(), prompt, tk)
@@ -251,7 +251,7 @@ func TestSubAgentsWork(t *testing.T) {
 		}
 	}
 
-	a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 	baseURL, apiKey, model := a.AgentsLLM()
 
 	// Runtime.Close closes a HANDLE, not the runtime, so a one-shot Run needs

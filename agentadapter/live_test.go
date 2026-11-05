@@ -3,10 +3,10 @@
 // pins). Without the tag transport.go breaks `go build ./...` for the whole
 // module, and the package is tagged as a unit so its tests keep compiling.
 // Nothing is deleted:
-//   go test -tags toolnexus_inprocess ./internal/devinadapter/
+//   go test -tags toolnexus_inprocess .
 // Drop the tag once a toolnexus release carries the export.
 
-package devinadapter_test
+package agentadapter_test
 
 // Live tests: the real `devin` binary, a real account, real latency.
 // They are skipped unless DEVINADAPTER_LIVE=1 so `go test ./...` stays fast
@@ -25,7 +25,7 @@ import (
 	"time"
 
 	toolnexus "github.com/muthuishere/toolnexus/golang"
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 const liveBugReport = `# Bug: cart total is wrong when a coupon is applied twice
@@ -50,7 +50,7 @@ func liveModelName() string {
 	return liveModel
 }
 
-func liveAgent(t *testing.T) *devinadapter.Adapter {
+func liveAgent(t *testing.T) *agentadapter.Adapter {
 	t.Helper()
 	if os.Getenv("DEVINADAPTER_LIVE") != "1" {
 		t.Skip("set DEVINADAPTER_LIVE=1 to run against the real devin CLI")
@@ -58,11 +58,11 @@ func liveAgent(t *testing.T) *devinadapter.Adapter {
 	if _, err := exec.LookPath("devin"); err != nil {
 		t.Skipf("devin not on PATH: %v", err)
 	}
-	return devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.Devin(devinadapter.CLI{Model: liveModelName()}),
+	return agentadapter.New(agentadapter.Options{
+		Agent:   agentadapter.Devin(agentadapter.CLI{Model: liveModelName()}),
 		Workdir: t.TempDir(),
 		Timeout: 8 * time.Minute,
-		Trace: func(ex devinadapter.Exchange) {
+		Trace: func(ex agentadapter.Exchange) {
 			t.Logf("turn %d — %d byte prompt, reply:\n%s", ex.Turn, len(ex.Prompt), ex.Reply)
 		},
 	})
@@ -136,11 +136,11 @@ func TestLiveSkillsChangeTheAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.Devin(devinadapter.CLI{Model: liveModelName()}),
+	a := agentadapter.New(agentadapter.Options{
+		Agent:   agentadapter.Devin(agentadapter.CLI{Model: liveModelName()}),
 		Workdir: t.TempDir(),
 		Timeout: 8 * time.Minute,
-		Trace: func(ex devinadapter.Exchange) {
+		Trace: func(ex agentadapter.Exchange) {
 			if strings.Contains(ex.Prompt, "bug-triage") {
 				sawCatalog = true
 			}
@@ -190,7 +190,7 @@ func TestLiveCommandAgentDirect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	out, err := devinadapter.Devin(devinadapter.CLI{}).Execute(ctx, devinadapter.Turn{
+	out, err := agentadapter.Devin(agentadapter.CLI{}).Execute(ctx, agentadapter.Turn{
 		Index: 1, PromptFile: f, Prompt: "Reply with exactly the word: PONG", Workdir: dir,
 	})
 	if err != nil {
@@ -293,7 +293,7 @@ func TestLiveAllSources(t *testing.T) {
 func TestLiveACPIsFasterThanOneShot(t *testing.T) {
 	liveAgent(t) // skip guard
 
-	run := func(name string, back devinadapter.Agent) (time.Duration, int, *Triage) {
+	run := func(name string, back agentadapter.Agent) (time.Duration, int, *Triage) {
 		var got *Triage
 		tk, err := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{
 			Builtins:   false,
@@ -303,7 +303,7 @@ func TestLiveACPIsFasterThanOneShot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := devinadapter.New(devinadapter.Options{Agent: back, Workdir: t.TempDir()})
+		a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir()})
 		opts := a.InProcessOptions()
 		opts.MaxTurns = 6
 		opts.SystemPrompt = "You triage bugs. Load the bug-triage skill, then call submit_answer."
@@ -321,9 +321,9 @@ func TestLiveACPIsFasterThanOneShot(t *testing.T) {
 		return took, res.Turns, got
 	}
 
-	oneShot, oneShotTurns, _ := run("one-shot", devinadapter.Devin(devinadapter.CLI{Model: liveModelName()}))
+	oneShot, oneShotTurns, _ := run("one-shot", agentadapter.Devin(agentadapter.CLI{Model: liveModelName()}))
 
-	acp := devinadapter.NewACP(devinadapter.ACP{Model: liveModelName()})
+	acp := agentadapter.NewACP(agentadapter.ACP{Model: liveModelName()})
 	defer acp.Close()
 	acpTook, acpTurns, _ := run("acp", acp)
 
@@ -340,13 +340,13 @@ func TestLiveACPIsFasterThanOneShot(t *testing.T) {
 func TestLiveACPWarmsUp(t *testing.T) {
 	liveAgent(t) // skip guard
 
-	acp := devinadapter.NewACP(devinadapter.ACP{Model: liveModelName()})
+	acp := agentadapter.NewACP(agentadapter.ACP{Model: liveModelName()})
 	defer acp.Close()
 
 	var times []time.Duration
 	for i, word := range []string{"PONG", "PING", "PANG"} {
 		start := time.Now()
-		out, err := acp.Execute(context.Background(), devinadapter.Turn{
+		out, err := acp.Execute(context.Background(), agentadapter.Turn{
 			Index: i + 1, Attempt: 1, Workdir: t.TempDir(),
 			Prompt: "Reply with exactly this one word and nothing else: " + word,
 		})
@@ -375,14 +375,14 @@ func TestLiveOpencodeACP(t *testing.T) {
 		t.Skipf("opencode not on PATH: %v", err)
 	}
 
-	acp := devinadapter.NewACP(devinadapter.ACP{Bin: "opencode"})
+	acp := agentadapter.NewACP(agentadapter.ACP{Bin: "opencode"})
 	defer acp.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	start := time.Now()
-	out, err := acp.Execute(ctx, devinadapter.Turn{
+	out, err := acp.Execute(ctx, agentadapter.Turn{
 		Index: 1, Attempt: 1, Workdir: t.TempDir(),
 		Prompt: "Reply with exactly this one word and nothing else: PONG",
 	})
@@ -396,7 +396,7 @@ func TestLiveOpencodeACP(t *testing.T) {
 
 	// Second prompt on the warm session.
 	start = time.Now()
-	out2, err := acp.Execute(ctx, devinadapter.Turn{
+	out2, err := acp.Execute(ctx, agentadapter.Turn{
 		Index: 2, Attempt: 1, Workdir: t.TempDir(),
 		Prompt: "Reply with exactly this one word and nothing else: PING",
 	})
@@ -409,7 +409,7 @@ func TestLiveOpencodeACP(t *testing.T) {
 // Live: the claude preset end to end — the step's skill is loaded through the
 // host's `skill` tool and its rule changes the structured answer.
 //
-//	CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v ./internal/devinadapter/
+//	CLAUDE_LIVE=1 go test -run TestLiveClaudeSkills -v .
 func TestLiveClaudeSkills(t *testing.T) {
 	if os.Getenv("CLAUDE_LIVE") != "1" {
 		t.Skip("set CLAUDE_LIVE=1 to run against the real claude CLI")
@@ -426,11 +426,11 @@ func TestLiveClaudeSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := devinadapter.New(devinadapter.Options{
-		Agent:   devinadapter.Claude(devinadapter.CLI{Model: "haiku"}),
+	a := agentadapter.New(agentadapter.Options{
+		Agent:   agentadapter.Claude(agentadapter.CLI{Model: "haiku"}),
 		Workdir: t.TempDir(),
 		Timeout: 5 * time.Minute,
-		Trace: func(ex devinadapter.Exchange) {
+		Trace: func(ex agentadapter.Exchange) {
 			t.Logf("turn %d reply:\n%s", ex.Turn, ex.Reply)
 		},
 	})

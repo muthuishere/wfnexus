@@ -10,9 +10,9 @@
     { "symbol": "DefaultBands", "in": "apps/api/internal/judge" },
     { "symbol": "ScrubServerEnv", "in": "apps/api/internal/config" },
     { "symbol": "ScrubServerEnv", "in": "apps/api/main.go" },
-    { "symbol": "ACPPresets", "in": "apps/api/internal/devinadapter" },
-    { "symbol": "ACPModeBypass", "in": "apps/api/internal/devinadapter" },
-    { "symbol": "isFree", "in": "apps/api/internal/devinadapter" },
+    { "symbol": "ACPPresets", "in": "agentadapter" },
+    { "symbol": "ACPModeBypass", "in": "agentadapter" },
+    { "symbol": "isFree", "in": "agentadapter" },
     { "symbol": "BranchName", "in": "apps/api/internal/proposal" },
     { "symbol": "Drift", "in": "apps/api/internal/proposal" },
     { "symbol": "Merge", "in": "apps/api/internal/proposal" },
@@ -22,7 +22,7 @@
     { "symbol": "minRedactLen", "in": "apps/api/internal/engine" },
     { "symbol": "secretEnvFile", "in": "apps/api/internal/engine" },
     { "symbol": "submit_output", "in": "apps/api/internal/engine" },
-    { "symbol": "SessionPerTurn", "in": "apps/api/internal/devinadapter" }
+    { "symbol": "SessionPerTurn", "in": "agentadapter" }
   ],
   "yamlKeys": [
     "name", "description", "input_schema", "on", "runs-on", "env", "mount", "steps", "jobs", "template", "max_parallel",

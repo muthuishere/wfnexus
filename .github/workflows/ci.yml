@@ -133,8 +133,6 @@ jobs:
         #                        refused. ADR 0006 calls containment a
         #                        guardrail; on windows it does not guard.
         #                        Tracked in docs/not-now.md.
-        #   internal/devinadapter  the fakes are shell scripts, which windows
-        #                        cannot exec. Harness, not product.
         #   internal/blob        folder-store key validation is POSIX-shaped
         #                        ("/etc/passwd" is accepted as a key).
         #   internal/workflow    same family: checkFiles and checkMounts refuse
@@ -150,6 +148,16 @@ jobs:
             && 'go test ./internal/auth/... ./internal/buildinfo/... ./internal/bundle/... ./internal/catalog/... ./internal/config/... ./internal/secrets/... ./internal/skills/... ./internal/store/... ./cmd/...'
             || 'go test ./internal/... ./cmd/...' }}
         working-directory: apps/api
+
+      - name: go test (agentadapter)
+        # Its own module, imported by wfnexus and by other products. On
+        # windows only the warm-agent tests run: their fakes are this test
+        # binary re-run, while the older tests' fakes are shell scripts.
+        run: >-
+          ${{ runner.os == 'Windows'
+            && 'go test -run "ClaudeStream|CodexServer|Pool|Backoff" .'
+            || 'go test ./...' }}
+        working-directory: agentadapter
 
   install-cmd:
     # install.cmd runs on a real Windows against the LATEST published release:

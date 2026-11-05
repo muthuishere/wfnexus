@@ -8,7 +8,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
-	"github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -229,7 +229,7 @@ func TestAnACPEntryWithACommandStillSpeaksACP(t *testing.T) {
 			t.Fatalf("%s: %v", p.Name, err)
 		}
 		t.Cleanup(closeFn)
-		if _, ok := agent.(*devinadapter.ACPAgent); !ok {
+		if _, ok := agent.(*agentadapter.ACPAgent); !ok {
 			t.Fatalf("%s: kind=acp resolved to %T — the command was run as a one-shot CLI and ACP was never spoken", p.Name, agent)
 		}
 	}
@@ -242,7 +242,7 @@ func TestAnACPEntryWithACommandStillSpeaksACP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := agent.(*devinadapter.CommandAgent); !ok {
+	if _, ok := agent.(*agentadapter.CommandAgent); !ok {
 		t.Fatalf("a cli command resolved to %T", agent)
 	}
 }

@@ -1,4 +1,4 @@
-package devinadapter_test
+package agentadapter_test
 
 // Live: the ARGV TEMPLATES that registries.json ships for each agent CLI,
 // executed exactly as the engine builds them (CommandAgent = Bin + Command[1:]
@@ -10,7 +10,7 @@ package devinadapter_test
 // from the CLI's own `--help`, never guessed — the help output is quoted in
 // docs/spikes/FINDINGS.md.
 //
-//	DEVINADAPTER_LIVE=1 go test -run LiveRegistry -v -timeout 20m ./internal/devinadapter/
+//	DEVINADAPTER_LIVE=1 go test -run LiveRegistry -v -timeout 20m .
 //
 // ollama is the one that needs no account and no network, so it is the entry
 // this file proves end to end on any machine.
@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	devinadapter "github.com/muthuishere/wfnexus/apps/api/internal/devinadapter"
+	agentadapter "github.com/muthuishere/wfnexus/agentadapter"
 )
 
 type registryArgv struct {
@@ -87,14 +87,14 @@ func TestLiveRegistryArgvs(t *testing.T) {
 			if _, err := exec.LookPath(e.bin); err != nil {
 				t.Skipf("%s not on PATH: %v", e.bin, err)
 			}
-			a := &devinadapter.CommandAgent{
+			a := &agentadapter.CommandAgent{
 				Label: e.provider, Bin: e.bin, Args: e.args, ModelFlag: e.modelFlag,
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 			defer cancel()
 
 			start := time.Now()
-			out, err := a.Execute(ctx, devinadapter.Turn{
+			out, err := a.Execute(ctx, agentadapter.Turn{
 				Index: 1, Attempt: 1, Workdir: t.TempDir(), Model: e.model,
 				Prompt: "Reply with exactly this one word and nothing else: PONG",
 			})
