@@ -53,6 +53,8 @@ type Server struct {
 
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
+	// Password sign-in attempts, per source and per username (ADR 0025).
+	pwLimit *passwordLimiter
 
 	// authn answers "which person is this" for subject resolution and device
 	// approval (ADR 0017). Local users are the only implementation; the field
@@ -90,7 +92,7 @@ func isLoopback(addr string) bool {
 // bound anywhere else it is not. That is a property of the code rather than a
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(),
+	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
 		authn: auth.Local{Store: st}}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
@@ -138,12 +140,16 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// the one-time sign-in link `wfx ui` asks for.
 		r.Post("/auth/session", s.browserSession)
 		r.Post("/auth/link", s.browserLink)
+		// Username and password (ADR 0025): the same session cookie.
+		r.Post("/auth/password", s.passwordSignIn)
+		r.Post("/auth/password/change", s.changeOwnPassword)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
 		r.Get("/users", s.listUsers)
 		r.Post("/users", s.createUser)
 		r.Put("/users/{name}", s.updateUser)
+		r.Post("/users/{name}/password", s.setUserPassword)
 		r.Delete("/users/{name}", s.deleteUser)
 		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
 		// be attributed and stored — see publishingEnabled. On a default

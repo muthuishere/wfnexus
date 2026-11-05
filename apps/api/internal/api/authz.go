@@ -193,6 +193,10 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("forbidden"))
 			return
 		}
+		if passwordChangeRequired(r) {
+			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
+			return
+		}
 		if !s.can(r, perm) {
 			writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden: this subject does not hold %s", perm))
 			return
