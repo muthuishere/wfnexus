@@ -45,12 +45,8 @@ type Subject struct {
 	Project string
 	User    *store.User
 	Worker  *store.Worker
-	// TokenHash is kept so a subject can revoke its OWN credential (logout)
-	// without the value ever being held anywhere. The value is not here and
-	// never is.
-	TokenHash string
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
-	// logout deletes it. Nil for a legacy wfx_ bearer.
+	// logout deletes it.
 	SessionID uuid.UUID
 
 	// The caller's member rows, loaded once per request (roles.go).
@@ -181,18 +177,10 @@ func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, erro
 	if !strings.HasPrefix(tok, "wfx_") {
 		return nil, errors.New("unauthenticated")
 	}
-	hash := auth.HashToken(tok)
-	if s.authn != nil {
-		if u, t, err := s.authn.UserByToken(ctx, tok); err == nil && !isRefreshLabel(t.Label) {
-			project := u.Project
-			if t.Project != "" {
-				project = t.Project
-			}
-			return &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, Project: project, User: u, TokenHash: hash}, nil
-		}
-	}
+	// A person presents a JWT (above); a wfx_ value is only ever a worker's
+	// machine token here (ADR 0028).
 	if wk, err := s.eng.AuthWorker(ctx, tok); err == nil {
-		return &Subject{Kind: SubjectWorker, Name: wk.Name, Worker: wk, TokenHash: hash}, nil
+		return &Subject{Kind: SubjectWorker, Name: wk.Name, Worker: wk}, nil
 	}
 	return nil, errors.New("unauthenticated")
 }
@@ -209,13 +197,7 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 	if bearer(r) == "" && (sessionCookie(r) != "" || refreshCookie(r) != "") {
 		clearSessionCookie(w, r)
 	}
-	var err error
-	if sub.SessionID != uuid.Nil {
-		err = s.store.RevokeUserToken(r.Context(), sub.SessionID)
-	} else {
-		err = s.store.RevokeUserTokenByHash(r.Context(), sub.TokenHash)
-	}
-	if err != nil {
+	if err := s.store.RevokeUserToken(r.Context(), sub.SessionID); err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("token not found"))
 		return
 	}

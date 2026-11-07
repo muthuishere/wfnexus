@@ -46,24 +46,6 @@ func (s *Store) RevokeUserToken(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// UsersWithRole lists the users holding a users.role value.
-func (s *Store) UsersWithRole(ctx context.Context, role string) ([]*User, error) {
-	rows, err := s.query(ctx, `SELECT `+userCols+` FROM users WHERE role=$1 ORDER BY name`, role)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []*User{}
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
 // SetUserRole sets users.role ("superadmin" or "").
 func (s *Store) SetUserRole(ctx context.Context, name, role string) error {
 	_, err := s.exec(ctx, `UPDATE users SET role=$2 WHERE name=$1`, name, role)

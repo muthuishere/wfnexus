@@ -106,6 +106,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
 		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst),
 		jwtKey: jwtKeyFor(eng.Secrets())}
+	if fixedJWTKey != nil {
+		s.jwtKey = fixedJWTKey
+	}
 	buildProviders(s)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)

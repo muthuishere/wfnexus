@@ -6,94 +6,37 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
-
-	"github.com/muthuishere/wfnexus/apps/api/internal/store/pgtest"
-	"github.com/muthuishere/wfnexus/apps/api/migrations"
 )
 
-// ADR 0028: the role-rename migration, and workflow members, on BOTH dialects.
-
-// stepMigration moves one dialect's schema by n steps (negative = down).
-func stepMigration(t *testing.T, driver, dsn string, n int) {
-	t.Helper()
-	dir, url := ".", dsn
-	if normalizeDriver(driver) == driverSQLite {
-		dir, url = "sqlite", sqliteMigrateURL(dsn)
-	}
-	src, err := iofs.New(migrations.FS, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	if err := m.Steps(n); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("migrate %d steps: %v", n, err)
-	}
-}
-
-func TestRolesMigration(t *testing.T) {
-	check := func(t *testing.T, driver, dsn string) {
+// ADR 0028: the members table on BOTH dialects.
+func TestMembers(t *testing.T) {
+	check := func(t *testing.T, st *Store) {
 		ctx := context.Background()
-		// Back to the schema before 0028, with the OLD role names in use.
-		stepMigration(t, driver, dsn, -1)
-		st, err := Open(ctx, driver, dsn)
-		if err != nil {
-			t.Fatal(err)
-		}
 		suffix := uuid.NewString()[:8]
-		names := map[string]string{"admin": "a-" + suffix, "publisher": "p-" + suffix, "viewer": "v-" + suffix, "custom": "c-" + suffix}
-		for role, name := range names {
-			if err := st.CreateUser(ctx, &User{Name: name, Role: role}); err != nil {
-				t.Fatal(err)
-			}
-		}
-		st.Close()
-
-		stepMigration(t, driver, dsn, 1)
-		st, err = Open(ctx, driver, dsn)
-		if err != nil {
+		u := &User{Name: "m-" + suffix}
+		if err := st.CreateUser(ctx, u); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			for _, n := range names {
-				_ = st.DeleteUser(ctx, n)
-			}
-			st.Close()
-		})
-		// admin -> superadmin now; publisher/viewer are marked for the boot
-		// conversion (which needs the workflows); anything else -> none.
-		want := map[string]string{"admin": "superadmin", "publisher": "legacy:publisher", "viewer": "legacy:viewer", "custom": ""}
-		for old, name := range names {
-			u, err := st.UserByName(ctx, name)
-			if err != nil || u.Role != want[old] {
-				t.Fatalf("%s (was %s) migrated to %+v, %v", name, old, u, err)
-			}
-		}
-
-		// members exists, upserts, and refuses a role that does not fit its scope.
-		u, _ := st.UserByName(ctx, names["viewer"])
+		t.Cleanup(func() { _ = st.DeleteUser(ctx, u.Name) })
 		wf, proj := "wf-"+suffix, "p-"+suffix
+
 		if err := st.SetMember(ctx, MemberWorkflow, wf, u.ID, WorkflowRunner); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.SetMember(ctx, MemberWorkflow, wf, u.ID, WorkflowAdmin); err != nil {
+		if err := st.SetMember(ctx, MemberWorkflow, wf, u.ID, WorkflowAdmin); err != nil { // upsert
 			t.Fatal(err)
 		}
 		if err := st.SetMember(ctx, MemberProject, proj, u.ID, ProjectAdmin); err != nil {
 			t.Fatal(err)
 		}
-		if ms, _ := st.ListMembers(ctx, MemberWorkflow, wf); len(ms) != 1 || ms[0].Role != WorkflowAdmin || ms[0].User != names["viewer"] {
+		if ms, _ := st.ListMembers(ctx, MemberWorkflow, wf); len(ms) != 1 || ms[0].Role != WorkflowAdmin || ms[0].User != u.Name {
 			t.Fatalf("workflow members: %+v", ms)
 		}
 		if gs, _ := st.GrantsOf(ctx, u.ID); len(gs) != 2 {
 			t.Fatalf("grants: %+v", gs)
 		}
+		// A role that does not belong to the scope is refused by the schema.
 		for _, bad := range [][2]string{{MemberProject, WorkflowRunner}, {MemberWorkflow, ProjectAdmin}, {MemberWorkflow, "editor"}} {
 			if err := st.SetMember(ctx, bad[0], "x-"+suffix, u.ID, bad[1]); err == nil {
 				t.Fatalf("stored %s on a %s", bad[1], bad[0])
@@ -105,20 +48,31 @@ func TestRolesMigration(t *testing.T) {
 		if err := st.RemoveMember(ctx, MemberWorkflow, wf, u.ID); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("second remove: %v", err)
 		}
+		// Deleting the user deletes its grants.
+		if err := st.DeleteUser(ctx, u.Name); err != nil {
+			t.Fatal(err)
+		}
+		if gs, _ := st.GrantsOf(ctx, u.ID); len(gs) != 0 {
+			t.Fatalf("grants outlived the user: %+v", gs)
+		}
 	}
-
 	t.Run("sqlite", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "m.db")
 		if err := Migrate(driverSQLite, path); err != nil {
 			t.Fatal(err)
 		}
-		check(t, driverSQLite, path)
+		st, err := Open(context.Background(), driverSQLite, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		check(t, st)
 	})
 	t.Run("postgres", func(t *testing.T) {
-		if openPostgres(t) == nil {
+		st := openPostgres(t)
+		if st == nil {
 			t.Skip("no postgres reachable — run `task infra:up`, or point TEST_DATABASE_URL at a server")
 		}
-		dsn, _ := pgtest.DSN()
-		check(t, driverPostgres, dsn)
+		check(t, st)
 	})
 }

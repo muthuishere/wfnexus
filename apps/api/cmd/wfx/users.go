@@ -139,8 +139,7 @@ func formatUsers(users []apiUser) string {
 
 func userAdd(name, role, project string, fromStdin bool) error {
 	body := map[string]any{"name": name, "role": role, "project": project}
-	// The create route also mints a token; the CLI has no use for it and
-	// does not print it — a person signs in with the password.
+	// No credential comes back: a person signs in with the password.
 	if err := call("POST", "/api/users", body, nil); err != nil {
 		return err
 	}

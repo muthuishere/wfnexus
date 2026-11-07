@@ -1,10 +1,4 @@
 -- The SQLite half of the Postgres 000026 migration (ADR 0028).
-UPDATE users SET role = CASE role
-    WHEN 'admin'     THEN 'superadmin'
-    WHEN 'publisher' THEN 'legacy:publisher'
-    WHEN 'viewer'    THEN 'legacy:viewer'
-    ELSE '' END;
-
 CREATE TABLE IF NOT EXISTS members (
     scope      text NOT NULL CHECK (scope IN ('project', 'workflow')),
     name       text NOT NULL,

@@ -105,28 +105,19 @@ auth:
 - Loopback means no auth (ADR 0017).
 - Worker tokens and the hook/MCP exposure tokens (ADR 0027) stay machine
   credentials.
-- `wfx_…` user tokens minted before this change keep working as bearers
-  until they are revoked.
 
-## Migration
+## Greenfield: no migration path
 
-Paired migrations: Postgres 000026 and SQLite 000020.
-- `admin` becomes `superadmin`. Any other custom role becomes none.
-- `publisher` and `viewer` are marked first and converted at boot, because
-  workflows are files, not rows:
-  - publisher becomes **workflow admin** on every workflow of its project
-    (on every workflow if the user had no project scope);
-  - viewer becomes **workflow runner** on the same set.
-  - Workflows added later are not granted automatically.
-- The migration adds the `members` table. Its CHECK constraint ties each
-  role to its scope.
+wfnexus has no existing users to preserve, so there is no compatibility
+layer. A person authenticates only with a JWT; a `wfx_…` value is a worker
+or exposure token, never a person's bearer. Creating a user mints no
+credential. Old role names (admin, publisher, viewer) are not mapped.
+The schema change is one paired migration (Postgres 000026, SQLite 000020)
+that adds the `members` table, whose CHECK ties each role to its scope.
 
 ## Consequences
 
 - Rotating `WFX_SECRET_KEY` also signs everyone out.
-- A publisher becomes an admin of the workflows that exist, not of the
-  project. That is the least surprising mapping; a superadmin can make
-  them a project admin instead.
 - The roles table is no longer consulted. It stays for the Roles page.
 - No UI for members yet; the API and the CLI cover it.
 - No Firebase.

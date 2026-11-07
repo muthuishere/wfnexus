@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -258,28 +256,4 @@ func (s *Server) grantSpec(ctx context.Context, u *store.User, spec string) erro
 		return s.store.SetMember(ctx, store.MemberWorkflow, name, u.ID, role)
 	}
 	return errors.New("unknown role " + spec)
-}
-
-// ConvertLegacyRoles finishes the 0028 migration at boot, when the workflows
-// are known: a former publisher becomes workflow_admin, a former viewer
-// workflow_runner, on every workflow of its project (all, when unscoped).
-func ConvertLegacyRoles(ctx context.Context, eng *engine.Engine, st *store.Store) {
-	for legacy, role := range map[string]string{"legacy:publisher": store.WorkflowAdmin, "legacy:viewer": store.WorkflowRunner} {
-		users, err := st.UsersWithRole(ctx, legacy)
-		if err != nil {
-			continue
-		}
-		for _, u := range users {
-			n := 0
-			for wf := range eng.Definitions() {
-				if u.Project == "" || eng.ProjectFor(wf) == u.Project {
-					if err := st.SetMember(ctx, store.MemberWorkflow, wf, u.ID, role); err == nil {
-						n++
-					}
-				}
-			}
-			_ = st.SetUserRole(ctx, u.Name, "")
-			log.Printf("auth: %s (%s) is now %s on %d workflow(s) (ADR 0028)", u.Name, strings.TrimPrefix(legacy, "legacy:"), role, n)
-		}
-	}
 }

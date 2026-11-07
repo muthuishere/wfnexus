@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
@@ -23,6 +24,18 @@ import (
 // A server on a real SQLite file, bound (notionally) to addr. Nothing listens —
 // the handler is exercised directly, which is the point: the decision is made
 // from the bind address, not from where a packet came from.
+func init() { fixedJWTKey = []byte("test-signing-key-test-signing-key") }
+
+// jwtFor signs a person in directly: a refresh row and an access JWT for it.
+func jwtFor(t *testing.T, st *store.Store, u *store.User, project string) string {
+	t.Helper()
+	row, err := st.IssueUserToken(context.Background(), u.ID, auth.HashToken(auth.NewToken()), refreshLabelPrefix+"test", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return auth.SignJWT(fixedJWTKey, auth.Claims{Sub: u.ID.String(), Name: u.Name, Sid: row.ID.String()}, time.Now(), auth.AccessTTL)
+}
+
 func testServer(t *testing.T, addr string) (http.Handler, *store.Store) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "wfnexus.db")
@@ -110,15 +123,20 @@ func TestAnUnknownOrRevokedCredentialIsRefused(t *testing.T) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	value := auth.NewToken()
-	if _, err := st.IssueUserToken(ctx, u.ID, auth.HashToken(value), "cli", ""); err != nil {
-		t.Fatal(err)
-	}
+	value := jwtFor(t, st, u, "")
 	if res := do(h, "GET", "/api/workflows", value, nil); res.Code != 200 {
 		t.Fatalf("a valid user token was refused: %d %s", res.Code, res.Body)
 	}
-	if err := st.RevokeUserTokenByHash(ctx, auth.HashToken(value)); err != nil {
+	if res := do(h, "DELETE", "/api/tokens/self", value, nil); res.Code != 200 {
+		t.Fatalf("logout: %d", res.Code)
+	}
+	// A wfx_ value is never a person's bearer (ADR 0028), even one in the table.
+	legacy := auth.NewToken()
+	if _, err := st.IssueUserToken(ctx, u.ID, auth.HashToken(legacy), "cli", ""); err != nil {
 		t.Fatal(err)
+	}
+	if res := do(h, "GET", "/api/workflows", legacy, nil); res.Code != 401 {
+		t.Fatalf("a wfx_ user token authenticated: %d", res.Code)
 	}
 	if res := do(h, "GET", "/api/workflows", value, nil); res.Code != 401 {
 		t.Fatalf("a revoked token still authenticates: %d", res.Code)
@@ -134,10 +152,7 @@ func TestBothSubjectKindsResolveOnOneMiddleware(t *testing.T) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	userTok := auth.NewToken()
-	if _, err := st.IssueUserToken(ctx, u.ID, auth.HashToken(userTok), "cli", ""); err != nil {
-		t.Fatal(err)
-	}
+	userTok := jwtFor(t, st, u, "")
 	workerTok := auth.NewToken()
 	if err := st.RegisterWorker(ctx, &store.Worker{Name: "box-1", Labels: []string{"linux"}}, auth.HashToken(workerTok)); err != nil {
 		t.Fatal(err)

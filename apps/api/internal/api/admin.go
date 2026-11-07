@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -53,12 +52,9 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	value := auth.NewToken()
-	if _, err := s.store.IssueUserToken(r.Context(), u.ID, auth.HashToken(value), "created", b.Project); err != nil {
-		writeErr(w, 500, err)
-		return
-	}
-	writeJSON(w, 201, map[string]any{"user": u, "token": value})
+	// No credential is minted here: the person signs in (password reset,
+	// a login provider, or the device grant) and gets a JWT (ADR 0028).
+	writeJSON(w, 201, map[string]any{"user": u})
 }
 
 // updateUser refuses the change that would leave the host with no

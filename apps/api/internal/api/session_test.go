@@ -25,11 +25,7 @@ func signedInServer(t *testing.T) (http.Handler, *store.Store, string) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	cli := auth.NewToken()
-	if _, err := st.IssueUserToken(ctx, u.ID, auth.HashToken(cli), "cli", ""); err != nil {
-		t.Fatal(err)
-	}
-	return h, st, cli
+	return h, st, jwtFor(t, st, u, "")
 }
 
 // browser is a request carrying only what a browser would: a cookie, and an

@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -22,11 +21,7 @@ func user(t *testing.T, st *store.Store, name, role, project string) string {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
-	value := auth.NewToken()
-	if _, err := st.IssueUserToken(ctx, u.ID, auth.HashToken(value), "test", project); err != nil {
-		t.Fatalf("issue token for %s: %v", name, err)
-	}
-	return value
+	return jwtFor(t, st, u, project)
 }
 
 // task 7.2 — every /api route maps to a NAMED permission. The test walks the

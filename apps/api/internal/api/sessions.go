@@ -35,6 +35,10 @@ const (
 // moves it to prove expiry.
 var jwtNow = time.Now
 
+// fixedJWTKey, when set (tests only), replaces the derived signing key so a
+// test can mint access tokens directly.
+var fixedJWTKey []byte
+
 func isRefreshLabel(label string) bool { return strings.HasPrefix(label, refreshLabelPrefix) }
 
 // jwtKeyFor derives the signing key from the env-store key. With no env store
