@@ -77,10 +77,12 @@ var resourcePerms = map[string][2]string{
 	"skills":        {PermRegistryRead, PermRegistryWrite},
 	// Git repositories of skills: importing one changes the registry.
 	"skill-sources": {PermRegistryRead, PermRegistryWrite},
-	"tools":         {PermRegistryRead, PermRegistryWrite},
-	"mcp":           {PermRegistryRead, PermRegistryWrite},
-	"providers":     {PermRegistryRead, PermRegistryWrite},
-	"classifiers":   {PermRegistryRead, PermRegistryWrite},
+	// Modules ride skill sources (ADR 0028); listing them is a registry read.
+	"modules":     {PermRegistryRead, PermRegistryWrite},
+	"tools":       {PermRegistryRead, PermRegistryWrite},
+	"mcp":         {PermRegistryRead, PermRegistryWrite},
+	"providers":   {PermRegistryRead, PermRegistryWrite},
+	"classifiers": {PermRegistryRead, PermRegistryWrite},
 	// Asking the server's classifier spends its key, so it is a run-level
 	// action, not a registry read.
 	"judge":      {PermRunsWrite, PermRunsWrite},

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // A skill source is a git repository of skills — every directory under `path`
@@ -73,6 +74,8 @@ type SkillSourceView struct {
 	// Clashes are this source's skills whose name an earlier root already
 	// owns. They are not loaded under that name; the owner keeps it.
 	Clashes []SkillClash `json:"clashes,omitempty"`
+	// Modules are the module.yaml manifests in the same checkout (modules.go).
+	Modules []string `json:"modules,omitempty"`
 }
 
 // SkillClash is one name a source wanted and did not get.
@@ -769,6 +772,10 @@ func (e *Engine) viewOf(s SkillSource) SkillSourceView {
 		}
 	}
 	v.Count = len(v.Skills)
+	mods, _ := workflow.FindModules(s.Name, e.skillSourceDir(s.Name))
+	for _, m := range mods {
+		v.Modules = append(v.Modules, m.Name+"@"+m.Version)
+	}
 	return v
 }
 

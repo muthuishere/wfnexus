@@ -198,7 +198,7 @@ func (e *Engine) ReloadDefinitions() error {
 	// has happened, so the load runs again once with the registry rebuilt over
 	// them. The second pass is a cache hit by construction: it makes no network
 	// call, and a load with no remote `use:` never takes it.
-	var opts []workflow.LoadOption
+	opts := []workflow.LoadOption{e.moduleLoadOption()}
 	if e.remote != nil {
 		opts = append(opts, workflow.WithRemoteResolver(e.remote))
 	}

@@ -14,6 +14,9 @@ type RemoteResolver interface {
 // loadOptions is what a caller may vary about a load.
 type loadOptions struct {
 	remote RemoteResolver
+	// modules are installed modules (module.go), the last fallback for a
+	// `use:` name after local tasks and workflows.
+	modules map[string]*Task
 	// workflow resolves a `use:` naming a sibling workflow in the same
 	// directory. found=false means no such workflow.
 	workflow func(name string) (t *Task, found bool, err error)

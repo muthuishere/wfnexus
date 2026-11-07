@@ -22,6 +22,14 @@ func (s *Server) skillSourceRoutes(r chi.Router) {
 	r.Put("/skill-sources/{name}/ref", s.setSkillSourceRef)
 	r.Post("/skill-sources/{name}/refresh", s.refreshSkillSource)
 	r.Delete("/skill-sources/{name}", s.removeSkillSource)
+	r.Get("/modules", s.listModules)
+}
+
+// listModules is every module.yaml in the imported sources, with what each
+// still needs configured (ADR 0028). Install/pin/Sync are the source routes.
+func (s *Server) listModules(w http.ResponseWriter, r *http.Request) {
+	mods, errs := s.eng.ModuleViews(r.Context())
+	writeJSON(w, 200, map[string]any{"modules": mods, "errors": errs})
 }
 
 func (s *Server) listSkillSources(w http.ResponseWriter, _ *http.Request) {
