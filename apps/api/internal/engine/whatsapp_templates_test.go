@@ -453,6 +453,13 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 	if fd := defs["frontdesk"]; len(fd.Steps) == 0 || fd.Steps[0].ID != "ctx.gather" {
 		t.Fatalf("frontdesk must embed load-context first, got %v", fd.Steps[0].ID)
 	}
+	// load-context's typed inputs (#82) resolve to their defaults in both forms.
+	for _, n := range []string{"frontdesk", "load-context"} {
+		run := defs[n].Steps[0].Run
+		if strings.Contains(run, ".Inputs.") || !strings.Contains(run, `open("context.json", "w")`) || !strings.Contains(run, `or "auto"`) {
+			t.Fatalf("%s: load-context inputs not substituted:\n%s", n, run)
+		}
+	}
 	h := waHarness(t, defs, "frontdesk")
 	msg := map[string]any{"channel": "wa", "chat": "g@g.us", "id": "M1", "from": "1555@s.whatsapp.net", "text": "hi", "kind": "message"}
 	inputs := map[string]map[string]any{
