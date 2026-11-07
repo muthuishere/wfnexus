@@ -36,7 +36,7 @@ export default function UsersPage() {
       cell: u => (
         <select aria-label={`Role of ${u.name}`} value={u.role}
           onChange={e => act(api.updateUser({ ...u, role: e.target.value }))}>
-          {roleNames(roles, u.role).map(r => <option key={r} value={r}>{r}</option>)}
+          {roleNames(roles, u.role).map(r => <option key={r} value={r}>{r || '(none)'}</option>)}
         </select>
       ) },
     { key: 'project', header: 'Project', width: 130, value: u => u.project,
@@ -79,7 +79,7 @@ function AddUser({ roles, onAdded, onError }: {
   roles: Role[]; onAdded: (name: string, password?: string) => void; onError: (e: string) => void
 }) {
   const [name, setName] = useState('')
-  const [role, setRole] = useState('viewer')
+  const [role, setRole] = useState('')
   const [project, setProject] = useState('')
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -92,7 +92,7 @@ function AddUser({ roles, onAdded, onError }: {
       <label>Username<input name="name" value={name} onChange={e => setName(e.target.value)} required /></label>
       <label>Role
         <select name="role" value={role} onChange={e => setRole(e.target.value)}>
-          {roleNames(roles, role).map(r => <option key={r} value={r}>{r}</option>)}
+          {roleNames(roles, role).map(r => <option key={r} value={r}>{r || '(none)'}</option>)}
         </select>
       </label>
       <label>Project (optional)<input name="project" value={project} onChange={e => setProject(e.target.value)} placeholder="all" /></label>
@@ -101,8 +101,10 @@ function AddUser({ roles, onAdded, onError }: {
   )
 }
 
-function roleNames(roles: Role[], current: string): string[] {
-  const names = roles.map(r => r.name)
+// ADR 0028: the only GLOBAL role is superadmin (or none). Project and
+// workflow roles are granted per scope with `wfx member add`.
+function roleNames(_roles: Role[], current: string): string[] {
+  const names = ['', 'superadmin']
   return names.includes(current) ? names : [current, ...names]
 }
 

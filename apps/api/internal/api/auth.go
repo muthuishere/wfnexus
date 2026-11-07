@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
@@ -47,6 +49,13 @@ type Subject struct {
 	// without the value ever being held anywhere. The value is not here and
 	// never is.
 	TokenHash string
+	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
+	// logout deletes it. Nil for a legacy wfx_ bearer.
+	SessionID uuid.UUID
+
+	// The caller's member rows, loaded once per request (roles.go).
+	grants       []*store.Member
+	grantsLoaded bool
 }
 
 type subjectCtxKey struct{}
@@ -95,12 +104,19 @@ var publicAPIPaths = map[string]bool{
 	// Username and password sign-in (ADR 0025): how a browser obtains a
 	// subject without a terminal. Rate limited in the handler.
 	"/api/auth/password": true,
+	// Trading a refresh token for a new access JWT (ADR 0028): the refresh
+	// value is the credential, checked in the handler.
+	"/api/auth/refresh": true,
+	// Which login providers exist, for the sign-in page (ADR 0028). The
+	// /api/auth/oauth/ round trip is public by prefix: it is how a browser
+	// signed in with OIDC, Google or GitHub obtains a subject.
+	"/api/auth/providers": true,
 }
 
 // requireSubject resolves the bearer to a user or a worker.
 func (s *Server) requireSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicAPIPaths[r.URL.Path] {
+		if publicAPIPaths[r.URL.Path] || strings.HasPrefix(r.URL.Path, "/api/auth/oauth/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -111,7 +127,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 		// page's behalf, a bearer is not.
 		viaCookie := false
 		if tok == "" {
-			if c := sessionCookie(r); c != "" {
+			if c, rc := sessionCookie(r), refreshCookie(r); c != "" || rc != "" {
 				if !sameOrigin(r) {
 					writeErr(w, http.StatusForbidden, errors.New("cross-origin request refused"))
 					return
@@ -119,8 +135,19 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 				tok, viaCookie = c, true
 			}
 		}
-		if tok != "" {
+		if tok != "" || viaCookie {
 			sub, err := s.resolveSubject(r.Context(), tok)
+			// A browser whose access JWT has expired (or whose JWT cookie is
+			// gone) is refreshed in place from its refresh cookie, so the UI
+			// never has to know a JWT is short-lived.
+			if err != nil && viaCookie {
+				if rc := refreshCookie(r); rc != "" {
+					if access, rsub, rerr := s.refreshAccess(r.Context(), rc); rerr == nil {
+						setSessionCookie(w, r, access)
+						sub, err = rsub, nil
+					}
+				}
+			}
 			if err == nil {
 				next.ServeHTTP(w, r.WithContext(withSubject(r.Context(), sub)))
 				return
@@ -148,12 +175,15 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 // presented value, match a stored hash. The value is never compared in the
 // clear and never leaves this function.
 func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, error) {
+	if auth.LooksLikeJWT(tok) {
+		return s.subjectFromJWT(ctx, tok)
+	}
 	if !strings.HasPrefix(tok, "wfx_") {
 		return nil, errors.New("unauthenticated")
 	}
 	hash := auth.HashToken(tok)
 	if s.authn != nil {
-		if u, t, err := s.authn.UserByToken(ctx, tok); err == nil {
+		if u, t, err := s.authn.UserByToken(ctx, tok); err == nil && !isRefreshLabel(t.Label) {
 			project := u.Project
 			if t.Project != "" {
 				project = t.Project
@@ -176,10 +206,16 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A browser signing out: the cookie goes whether or not the row does.
-	if bearer(r) == "" && sessionCookie(r) != "" {
+	if bearer(r) == "" && (sessionCookie(r) != "" || refreshCookie(r) != "") {
 		clearSessionCookie(w, r)
 	}
-	if err := s.store.RevokeUserTokenByHash(r.Context(), sub.TokenHash); err != nil {
+	var err error
+	if sub.SessionID != uuid.Nil {
+		err = s.store.RevokeUserToken(r.Context(), sub.SessionID)
+	} else {
+		err = s.store.RevokeUserTokenByHash(r.Context(), sub.TokenHash)
+	}
+	if err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("token not found"))
 		return
 	}
@@ -195,6 +231,10 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mustChange := sub.User != nil && sub.User.MustChange
+	grants := s.grants(r)
+	if grants == nil {
+		grants = []*store.Member{}
+	}
 	writeJSON(w, 200, map[string]any{
 		"authenticated": true,
 		"authRequired":  !s.loopbackOnly,
@@ -203,6 +243,7 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 		"name":          sub.Name,
 		"role":          sub.Role,
 		"project":       sub.Project,
+		"grants":        grants,
 	})
 }
 

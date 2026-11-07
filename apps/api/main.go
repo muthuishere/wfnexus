@@ -219,6 +219,9 @@ func main() {
 	}
 
 	eng := engine.New(cfg, st, bl, defs, reg, cat)
+	// ADR 0028: former publishers and viewers become workflow roles, now
+	// that the workflows are known.
+	api.ConvertLegacyRoles(ctx, eng, st)
 	// The engine has its secrets key now; nothing a run starts should inherit
 	// the server's own configuration (names only are logged, never values).
 	if gone := config.ScrubServerEnv(cfg); len(gone) > 0 {

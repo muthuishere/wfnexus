@@ -28,6 +28,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/login"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -63,6 +64,13 @@ type Server struct {
 
 	// exposeLimit rate-limits the public hook and MCP endpoints (expose.go).
 	exposeLimit *rateLimiter
+
+	// jwtKey signs and verifies access tokens (ADR 0028), derived from the
+	// env-store key.
+	jwtKey []byte
+
+	// providers are the configured login providers (ADR 0028), by name.
+	providers map[string]*login.Provider
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -96,7 +104,9 @@ func isLoopback(addr string) bool {
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
 	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
-		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst)}
+		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst),
+		jwtKey: jwtKeyFor(eng.Secrets())}
+	buildProviders(s)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -146,6 +156,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// Username and password (ADR 0025): the same session cookie.
 		r.Post("/auth/password", s.passwordSignIn)
 		r.Post("/auth/password/change", s.changeOwnPassword)
+		r.Post("/auth/refresh", s.refresh)
+		r.Get("/auth/providers", s.listLoginProviders)
+		r.Get("/auth/oauth/{provider}/start", s.oauthStart)
+		r.Get("/auth/oauth/{provider}/callback", s.oauthCallback)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
@@ -255,6 +269,12 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		// Inbound exposure (ADR 0027): issue, rotate and revoke the tokens.
+		r.Get("/projects/{name}/members", s.listMembers)
+		r.Put("/projects/{name}/members/{user}", s.setMember)
+		r.Delete("/projects/{name}/members/{user}", s.removeMember)
+		r.Get("/workflows/{name}/members", s.listMembers)
+		r.Put("/workflows/{name}/members/{user}", s.setMember)
+		r.Delete("/workflows/{name}/members/{user}", s.removeMember)
 		r.Get("/workflows/{name}/expose", s.getExpose)
 		r.Post("/workflows/{name}/expose/{kind}", s.issueExpose)
 		r.Delete("/workflows/{name}/expose/{kind}", s.revokeExpose)
@@ -920,12 +940,16 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 			status = append(status, st)
 		}
 	}
-	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
+	f := store.RunFilter{
 		Project:  project,
 		Workflow: r.URL.Query().Get("workflow"),
 		Status:   status,
 		Limit:    100,
-	})
+	}
+	// ADR 0028: anyone but a superadmin sees the runs it started and the
+	// runs of what it holds a role on.
+	f.Visible = s.visibility(r)
+	runs, err := s.store.FindRuns(r.Context(), f)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -949,6 +973,14 @@ func (s *Server) runID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 	if scope := s.scopeOf(r); scope != "" {
 		run, err := s.store.GetRun(r.Context(), id)
 		if err != nil || run.Project != scope {
+			notFound(w)
+			return id, false
+		}
+	}
+	// ADR 0028: anyone but a superadmin reaches only the runs it may see.
+	if !s.isSuper(r) {
+		run, err := s.store.GetRun(r.Context(), id)
+		if err != nil || !s.runVisible(r, run) {
 			notFound(w)
 			return id, false
 		}

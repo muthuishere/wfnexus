@@ -21,7 +21,7 @@ func signedInServer(t *testing.T) (http.Handler, *store.Store, string) {
 	t.Helper()
 	h, st := testServer(t, "0.0.0.0:8090")
 	ctx := context.Background()
-	u := &store.User{Name: "muthu", DisplayName: "muthu", Role: "admin"}
+	u := &store.User{Name: "muthu", DisplayName: "muthu", Role: "superadmin"}
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}

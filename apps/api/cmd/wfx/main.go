@@ -131,6 +131,8 @@ func run(args []string) error {
 		return userCmd(rest)
 	case "role", "roles":
 		return roleCmd(rest)
+	case "member", "members":
+		return memberCmd(rest)
 	case "ui", "open":
 		return uiCmd(rest)
 	case "context", "contexts":
@@ -216,10 +218,12 @@ func usage() {
   wfx run <workflow> -i k=v [-f] [-v]  start a run (-f follows it; -v every tool call)
   wfx runs [--project p] [--workflow w]  recent runs, newest first
   wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
+  wfx login --url <host> --user N [--provider ldap-name]  sign in with a password (WFX_PASSWORD, prompt or stdin)
   wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
   wfx logout [--url <host>]        revoke this host's token and forget it locally
   wfx user ls | add NAME --role R | disable NAME | passwd [NAME] | role NAME R   users (admin)
-  wfx role ls | set NAME PERM,…    roles and their permissions (admin)
+  wfx member add|rm|ls USER --project P | --workflow W [--role R]   scoped roles
+  wfx role ls                      the four roles
   wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
   wfx profile create <name> --url U [--via ssh://user@host [--key k] [--accept-host-key]]
                                    register a server you can already reach (kubectl-style)

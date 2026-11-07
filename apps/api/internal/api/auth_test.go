@@ -106,7 +106,7 @@ func TestAnUnknownOrRevokedCredentialIsRefused(t *testing.T) {
 		t.Fatalf("an unknown token got %d", res.Code)
 	}
 
-	u := &store.User{Name: "muthu", Role: "admin"}
+	u := &store.User{Name: "muthu", Role: "superadmin"}
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestBothSubjectKindsResolveOnOneMiddleware(t *testing.T) {
 	h, st := testServer(t, "0.0.0.0:8090")
 	ctx := context.Background()
 
-	u := &store.User{Name: "muthu", Role: "admin"}
+	u := &store.User{Name: "muthu", Role: "superadmin"}
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}

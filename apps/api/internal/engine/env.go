@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/secrets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -35,6 +36,9 @@ import (
 // Secrets is the box the env store is written and read through. Nil when no
 // key could be loaded, which makes the store unavailable rather than plaintext.
 func (e *Engine) Secrets() model.Sealer { return e.secrets }
+
+// AuthConfig is the server's login-provider config (ADR 0028).
+func (e *Engine) AuthConfig() config.Auth { return e.cfg.Auth }
 
 // SecretsSource names where the key came from, for the System page. The NAME —
 // an env var or a path — never the key.

@@ -24,8 +24,10 @@ import (
 // loose private key. A warning is not a mitigation.
 
 type wfxContext struct {
-	URL     string `json:"url"`
-	Token   string `json:"token,omitempty"`
+	URL   string `json:"url"`
+	Token string `json:"token,omitempty"`
+	// Refresh trades for a new access JWT when Token expires (ADR 0028).
+	Refresh string `json:"refresh,omitempty"`
 	User    string `json:"user,omitempty"`
 	Project string `json:"project,omitempty"`
 	// Via reaches URL through an SSH tunnel: ssh://user@host[:port][?key=path].
@@ -176,7 +178,11 @@ func resolveContext(urlFlag string) (resolved, error) {
 		if !ok {
 			return resolved{}, fmt.Errorf("no context for %s — run `wfx login --url %s` first", key, normalizeURL(urlFlag))
 		}
-		return viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: key}, ctx)
+		r, err := viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: key}, ctx)
+		if err != nil {
+			return r, err
+		}
+		return freshen(r, ctx), nil
 	}
 	if v := os.Getenv("WFX_API"); v != "" {
 		r := resolved{url: normalizeURL(v), name: hostKey(v)}
@@ -184,6 +190,7 @@ func resolveContext(urlFlag string) (resolved, error) {
 		// is the unchanged, tokenless WFX_API path.
 		if ctx, ok := c.Contexts[r.name]; ok && normalizeURL(ctx.URL) == r.url {
 			r.token = ctx.Token
+			r = freshen(r, ctx)
 		}
 		// A workflow step has no contexts file. On a server that requires
 		// authentication it is GIVEN a credential by name — `wfx env set
@@ -195,7 +202,11 @@ func resolveContext(urlFlag string) (resolved, error) {
 	}
 	if c.Current != "" {
 		if ctx, ok := c.Contexts[c.Current]; ok {
-			return viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: c.Current}, ctx)
+			r, err := viaResolved(resolved{url: ctx.URL, token: ctx.Token, name: c.Current}, ctx)
+			if err != nil {
+				return r, err
+			}
+			return freshen(r, ctx), nil
 		}
 	}
 	return resolved{url: "http://127.0.0.1:8090", name: "127.0.0.1:8090"}, nil
@@ -217,7 +228,10 @@ func viaResolved(r resolved, ctx *wfxContext) (resolved, error) {
 
 // putContext adds or replaces ONE context. Every other context's credential is
 // rewritten byte for byte as it was read, so logging in to B cannot disturb A.
-func putContext(hostURL, token, user string) error {
+func putContext(hostURL, token, user string) error { return putSession(hostURL, token, "", user) }
+
+// putSession is putContext with the refresh token a JWT login returns.
+func putSession(hostURL, token, refresh, user string) error {
 	c, err := loadContexts()
 	if err != nil {
 		return err
@@ -226,12 +240,12 @@ func putContext(hostURL, token, user string) error {
 	if prev, ok := c.Contexts[key]; ok && (prev.Via != "" || !strings.Contains(hostURL, "://")) {
 		// A login through a via context — or through a profile addressed by
 		// its NAME — keeps that profile's URL and tunnel.
-		prev.Token, prev.User = token, user
+		prev.Token, prev.Refresh, prev.User = token, refresh, user
 		c.Current = key
 		return saveContexts(c)
 	}
 	c.Contexts[key] = &wfxContext{
-		URL: normalizeURL(hostURL), Token: token, User: user,
+		URL: normalizeURL(hostURL), Token: token, Refresh: refresh, User: user,
 		Created: time.Now().UTC().Format(time.RFC3339),
 	}
 	c.Current = key

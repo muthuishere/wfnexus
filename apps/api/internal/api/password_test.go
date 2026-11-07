@@ -72,7 +72,7 @@ func withCookie(h http.Handler, method, path, cookie string, body any) *httptest
 
 func TestPasswordSignInSetsTheSessionCookie(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "viewer", "a-long-password-1", false)
+	pwUser(t, st, "ana", "user", "a-long-password-1", false)
 
 	res := signIn(h, "192.0.2.1", "ana", "a-long-password-1")
 	if res.Code != 200 {
@@ -95,12 +95,12 @@ func TestPasswordSignInSetsTheSessionCookie(t *testing.T) {
 
 func TestUnknownUserAndWrongPasswordLookIdentical(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "viewer", "a-long-password-1", false)
-	pwUser(t, st, "gone", "viewer", "a-long-password-2", false)
-	if _, err := st.UpdateUser(context.Background(), "gone", "", "viewer", "", true); err != nil {
+	pwUser(t, st, "ana", "user", "a-long-password-1", false)
+	pwUser(t, st, "gone", "user", "a-long-password-2", false)
+	if _, err := st.UpdateUser(context.Background(), "gone", "", "user", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateUser(context.Background(), &store.User{Name: "nopw", Role: "viewer"}); err != nil {
+	if err := st.CreateUser(context.Background(), &store.User{Name: "nopw", Role: "user"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,7 +126,7 @@ func TestUnknownUserAndWrongPasswordLookIdentical(t *testing.T) {
 
 func TestPasswordAttemptsAreLimitedPerUsernameAndPerIP(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "viewer", "a-long-password-1", false)
+	pwUser(t, st, "ana", "user", "a-long-password-1", false)
 
 	// Per username: many addresses against one account.
 	for i := 0; i < verifyPerMinute; i++ {
@@ -151,7 +151,7 @@ func TestPasswordAttemptsAreLimitedPerUsernameAndPerIP(t *testing.T) {
 
 func TestMustChangeBlocksEverythingButChangingThePassword(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "admin", "admin", "one-time-password-1", true)
+	pwUser(t, st, "admin", "superadmin", "one-time-password-1", true)
 
 	res := signIn(h, "192.0.2.1", "admin", "one-time-password-1")
 	if res.Code != 200 || !strings.Contains(res.Body.String(), `"mustChange":true`) {
@@ -192,8 +192,8 @@ func TestMustChangeBlocksEverythingButChangingThePassword(t *testing.T) {
 
 func TestAdminResetPasswordIsOneTimeAndRequiresAdmin(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "boss", "admin", "boss-password-123", false)
-	pwUser(t, st, "ana", "viewer", "ana-password-123", false)
+	pwUser(t, st, "boss", "superadmin", "boss-password-123", false)
+	pwUser(t, st, "ana", "user", "ana-password-123", false)
 	boss := pwSession(t, signIn(h, "192.0.2.1", "boss", "boss-password-123"))
 	ana := pwSession(t, signIn(h, "192.0.2.2", "ana", "ana-password-123"))
 
@@ -228,7 +228,7 @@ func TestAdminResetPasswordIsOneTimeAndRequiresAdmin(t *testing.T) {
 
 func TestPasswordSignInIsNotOfferedOnLoopback(t *testing.T) {
 	h, st := testServer(t, "127.0.0.1:8090")
-	pwUser(t, st, "ana", "viewer", "a-long-password-1", false)
+	pwUser(t, st, "ana", "user", "a-long-password-1", false)
 	if res := signIn(h, "127.0.0.1", "ana", "a-long-password-1"); res.Code != 404 {
 		t.Fatalf("loopback password sign-in: %d", res.Code)
 	}
@@ -243,7 +243,7 @@ func TestPasswordsAreNeverLogged(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(prev)
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "viewer", "secret-password-xyz", false)
+	pwUser(t, st, "ana", "user", "secret-password-xyz", false)
 	signIn(h, "192.0.2.1", "ana", "secret-password-xyz")
 	signIn(h, "192.0.2.1", "ana", "wrong-secret-abc")
 	if strings.Contains(buf.String(), "secret-password-xyz") || strings.Contains(buf.String(), "wrong-secret-abc") {

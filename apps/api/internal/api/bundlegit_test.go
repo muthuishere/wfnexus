@@ -14,7 +14,7 @@ import (
 func TestAnIndexedBundleCarriesItsGitOrigin(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "fix the author")
-	tok := user(t, m.st, "ana", "publisher", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	_, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 
 	remote, commit := "ssh://git@nas.lan/srv/wf.git", "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
@@ -43,7 +43,7 @@ func TestAnIndexedBundleCarriesItsGitOrigin(t *testing.T) {
 func TestADirectUploadHasNoGitOrigin(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "publisher", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	_, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 
 	w := do(m.h, "POST", "/api/bundles", tok, publishBodyFor(digest, tar, "1.0.0"))
@@ -60,7 +60,7 @@ func TestADirectUploadHasNoGitOrigin(t *testing.T) {
 func TestAHalfGitOriginIsRefusedAndStoresNothing(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "publisher", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	_, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 
 	body := publishBodyFor(digest, tar, "1.0.0")
