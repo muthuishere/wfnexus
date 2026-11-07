@@ -505,8 +505,19 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 	// propose: one apply-mode run per proposal — one pending approval each,
 	// carrying the change byte for byte.
 	*writes = nil
-	if code, out := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url); code != 0 {
-		t.Fatalf("propose: exit %d %s", code, out)
+	code, pout := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url)
+	if code != 0 || len(pout) > 4000 {
+		t.Fatalf("propose: exit %d (%d chars) %s", code, len(pout), pout)
+	}
+	// propose is retrospective's last step: frontdesk's explain reads ITS stdout.
+	for chat, want := range map[string]int{"": 20, "g@g.us": 0} {
+		edir := t.TempDir()
+		writeJSON(t, filepath.Join(edir, "diagnosis.json"), map[string]any{"ok": true, "exitCode": 0, "stdout": pout})
+		writeJSON(t, filepath.Join(edir, "context.json"), map[string]any{"chat": chat})
+		code, ex := runScript(t, "templates/frontdesk/explain.py", edir)
+		if code != want || !strings.Contains(ex, "deploy push fails on a missing token") || !strings.Contains(ex, "3 proposed change(s) wait for approval") {
+			t.Fatalf("explain over propose's stdout: exit %d %q", code, ex)
+		}
 	}
 	if len(*writes) != 3 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
 		t.Fatalf("propose writes %v", *writes)

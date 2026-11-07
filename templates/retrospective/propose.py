@@ -47,7 +47,11 @@ def main():
                             "runId": ((r or {}).get("run") or r or {}).get("id")})
         except Exception as e:
             failed.append({"fingerprint": p.get("fingerprint"), "error": str(e)[:300]})
-    print(json.dumps({"pending": started, "failed": failed}, indent=2))
+    # This is retrospective's LAST step: its stdout is what a `start: … wait:
+    # true` caller (frontdesk) reads, so it carries the findings and summary
+    # too — compact, because the engine clips stdout at 4000 characters.
+    print(json.dumps({"summary": checked.get("summary", ""), "findings": checked.get("findings") or [],
+                      "pending": started, "failed": failed}, separators=(",", ":")))
     return 2 if failed else 0
 
 

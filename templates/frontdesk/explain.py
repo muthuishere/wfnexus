@@ -2,7 +2,7 @@
 """frontdesk: turn retrospective's checked findings into one short reply.
 
     explain.py   reads diagnosis.json (the diagnose step's output: retrospective's
-                 last step, whose stdout is {findings, summary, ...}) and
+                 last step, propose, whose stdout is {summary, findings, pending, failed}) and
                  context.json; prints the reply.
                  exit 0 there is a chat to send it to · 20 no chat (the reply
                  is this step's stdout) · 2 the diagnosis is unreadable
@@ -25,6 +25,10 @@ def main():
         lines.append(f"- {f.get('what', '')} ({cite}). Why: {f.get('why', '')}. Fix: {f.get('fix', '')}")
     if not findings:
         lines.append("No failure with evidence in the window.")
+    pending = r.get("pending") or []
+    if pending:
+        lines.append(f"{len(pending)} proposed change(s) wait for approval: "
+                     + ", ".join(f"{p.get('kind')} {(p.get('target') or {}).get('workflow', '')} (run {p.get('runId')})" for p in pending[:5]))
     print("\n".join(lines))
     try:
         chat = json.load(open("context.json")).get("chat")
