@@ -69,3 +69,7 @@ flowchart LR
 - Password sign-in: `apps/api/internal/api/password.go`, `docs/adr/0025-username-and-password-sign-in-with-roles.md`
 - carry for tools: `apps/api/cmd/wfx/carry.go`, `apps/api/internal/carryops/carryops.go`
 - Human gates: `docs/adr/0021-a-pause-names-who-may-answer.md`, `apps/api/internal/notify/`
+
+## Why it is shaped this way
+
+The reasoning, the measurements and the non-goals: [docs/architecture-design.md](docs/architecture-design.md).
