@@ -56,18 +56,22 @@ func TestEveryApiRouteHasANamedPermission(t *testing.T) {
 	}
 }
 
-// task 7.3 — a role edit takes effect on the NEXT authorization decision.
-func TestARoleEditFlipsTheNextRequest(t *testing.T) {
+// task 7.3 — a grant takes effect on the NEXT authorization decision.
+func TestAGrantFlipsTheNextRequest(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "user", "")
+	tok := user(t, st, "ana", "", "")
 	if got := do(h, "GET", "/api/workflows", tok, nil).Code; got != 200 {
-		t.Fatalf("viewer could not read workflows: %d", got)
+		t.Fatalf("a signed-in person could not read workflows: %d", got)
 	}
-	if err := st.UpsertRole(context.Background(), "user", []string{"runs:read"}); err != nil {
+	if got := do(h, "POST", "/api/workflows/w1/runs", tok, map[string]any{}).Code; got != 403 {
+		t.Fatalf("running with no role answered %d, want 403", got)
+	}
+	u, _ := st.UserByName(context.Background(), "ana")
+	if err := st.SetMember(context.Background(), store.MemberWorkflow, "w1", u.ID, store.WorkflowRunner); err != nil {
 		t.Fatal(err)
 	}
-	if got := do(h, "GET", "/api/workflows", tok, nil).Code; got != 403 {
-		t.Fatalf("after revoking workflows:read the next request was %d, want 403", got)
+	if got := do(h, "POST", "/api/workflows/w1/runs", tok, map[string]any{}).Code; got == 403 || got == 401 {
+		t.Fatalf("after the grant the next run was still %d", got)
 	}
 }
 
@@ -76,7 +80,7 @@ func TestTheLastAdministratorCannotBeRemoved(t *testing.T) {
 	h, st := testServer(t, ":8090")
 	admin := user(t, st, "root", "superadmin", "")
 
-	if w := do(h, "PUT", "/api/users/root", admin, map[string]any{"role": "user"}); w.Code != 409 {
+	if w := do(h, "PUT", "/api/users/root", admin, map[string]any{"role": ""}); w.Code != 409 {
 		t.Fatalf("demoting the last admin answered %d: %s", w.Code, w.Body.String())
 	}
 	if w := do(h, "DELETE", "/api/users/root", admin, nil); w.Code != 409 {
@@ -96,7 +100,7 @@ func TestTheLastAdministratorCannotBeRemoved(t *testing.T) {
 // and the refusal is INDISTINGUISHABLE from not-found.
 func TestProjectScopeIsIndistinguishableFromNotFound(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "editor", "acme")
+	tok := user(t, st, "ana", "superadmin", "acme")
 
 	// The fixture's engine holds no workflows, so every workflow is "local":
 	// a subject scoped to acme is out of scope for all of them.
@@ -130,7 +134,7 @@ func TestListingIsFilteredByProject(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	scoped := user(t, st, "ana", "editor", "acme")
+	scoped := user(t, st, "ana", "superadmin", "acme")
 	unscoped := user(t, st, "root", "superadmin", "")
 
 	var runs []*store.Run
@@ -158,7 +162,7 @@ func TestListingIsFilteredByProject(t *testing.T) {
 // carrying role claims has no effect; the local table decides.
 func TestProviderAssertedRolesHaveNoEffect(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "user", "")
+	tok := user(t, st, "ana", "", "")
 	req := func(hdrs map[string]string) int {
 		w := doWithHeaders(h, "POST", "/api/users", tok, map[string]any{"name": "x", "role": "superadmin"}, hdrs)
 		return w.Code
@@ -179,7 +183,7 @@ func TestProviderAssertedRolesHaveNoEffect(t *testing.T) {
 		}
 	}
 	// ...and a role granted LOCALLY does, immediately.
-	if err := st.UpsertRole(context.Background(), "user", []string{"admin:write", "admin:read"}); err != nil {
+	if err := st.SetUserRole(context.Background(), "ana", "superadmin"); err != nil {
 		t.Fatal(err)
 	}
 	if got := req(nil); got != 201 {

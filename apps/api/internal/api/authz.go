@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"net/http"
 	"strings"
 )
@@ -25,50 +26,36 @@ const (
 	PermWorkflowsWrite = "workflows:write"
 	PermRunsRead       = "runs:read"
 	PermRunsWrite      = "runs:write"
-	// PermRunsAll sees every run; without it a caller sees its own (ADR 0028).
-	PermRunsAll       = "runs:all"
-	PermRegistryRead  = "registry:read"
-	PermRegistryWrite = "registry:write"
-	PermProjectsRead  = "projects:read"
-	PermProjectsWrite = "projects:write"
-	PermEnvRead       = "env:read"
-	PermEnvWrite      = "env:write"
-	PermStateRead     = "state:read"
-	PermStateWrite    = "state:write"
-	PermWorkersRead   = "workers:read"
-	PermWorkersWrite  = "workers:write"
-	PermBundlesRead   = "bundles:read"
-	PermPublish       = "publish"
-	PermAdminRead     = "admin:read"
-	PermAdminWrite    = "admin:write"
+	PermRegistryRead   = "registry:read"
+	PermRegistryWrite  = "registry:write"
+	PermProjectsRead   = "projects:read"
+	PermProjectsWrite  = "projects:write"
+	PermEnvRead        = "env:read"
+	PermEnvWrite       = "env:write"
+	PermStateRead      = "state:read"
+	PermStateWrite     = "state:write"
+	PermWorkersRead    = "workers:read"
+	PermWorkersWrite   = "workers:write"
+	PermBundlesRead    = "bundles:read"
+	PermPublish        = "publish"
+	PermAdminRead      = "admin:read"
+	PermAdminWrite     = "admin:write"
 )
 
-// DefaultRoles is what first boot SEEDS — as rows, editable afterwards. It is
-// a seed, not the authority: the authority is whatever the table holds when a
-// request arrives.
-//
-// ADR 0028: three global roles. `superadmin` does everything; `editor` edits,
-// runs and publishes every workflow and sees every run; `user` reads, runs
-// what it can see, and sees only its own runs. Per-workflow `owner` and
-// `editor` grants live in workflow_members, not here.
+// DefaultRoles is the role vocabulary, written to the roles table at first
+// boot so the Roles page has rows to show (ADR 0028). It is NOT consulted for
+// authorization: the four roles are fixed and their reach is code (roles.go).
 func DefaultRoles() map[string][]string {
-	user := []string{PermWorkflowsRead, PermRunsRead, PermRunsWrite, PermRegistryRead, PermProjectsRead,
-		PermEnvRead, PermStateRead, PermWorkersRead, PermBundlesRead}
-	editor := append(append([]string{}, user...),
-		PermWorkflowsWrite, PermRunsAll, PermStateWrite, PermPublish)
 	return map[string][]string{
-		RoleSuperadmin: {"*"},
-		RoleEditor:     editor,
-		RoleUser:       user,
+		RoleSuperadmin:       {"*"},
+		store.ProjectAdmin:   {"one project: its workflows, members and settings"},
+		store.WorkflowAdmin:  {"one workflow: edit, publish, expose, approve, members"},
+		store.WorkflowRunner: {"one workflow: run it, see its runs, answer its approvals"},
 	}
 }
 
-// The seeded global role names (ADR 0028).
-const (
-	RoleSuperadmin = "superadmin"
-	RoleEditor     = "editor"
-	RoleUser       = "user"
-)
+// RoleSuperadmin is the one global role; users.role is it or "".
+const RoleSuperadmin = "superadmin"
 
 // resourcePerms maps the first path segment under /api to its read and write
 // permission. Two permissions per resource, read on GET and write on anything
@@ -161,6 +148,13 @@ func PermissionFor(method, path string) string {
 		(strings.HasSuffix(path, "/runs") || strings.HasSuffix(path, "/dispatches")) {
 		return PermRunsWrite
 	}
+	// A project's env holds its settings and secrets: env, not project, perms.
+	if strings.HasPrefix(path, "/api/projects/") && strings.Contains(path, "/env") {
+		if method == http.MethodGet || method == http.MethodHead {
+			return PermEnvRead
+		}
+		return PermEnvWrite
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]
@@ -192,19 +186,13 @@ func (s *Server) can(r *http.Request, perm string) bool {
 	if sub.Kind == SubjectWorker {
 		return true
 	}
-	// Read from the TABLE on every decision. No cache, so an admin editing a
-	// role changes the next request's outcome — which is what "takes effect on
-	// the next authorization decision" means.
-	perms, err := s.store.Role(r.Context(), sub.Role)
-	if err != nil {
-		return false
+	if sub.Role == RoleSuperadmin {
+		return true
 	}
-	for _, p := range perms {
-		if p == "*" || p == perm {
-			return true
-		}
-	}
-	return false
+	// Everyone signed in may READ the catalogue (runs are then filtered to
+	// what they may see). Every write, and the sensitive reads, is a scoped
+	// check in roles.go.
+	return signedInReads[perm]
 }
 
 // authorize is the middleware half: it refuses before the handler runs.
@@ -222,9 +210,9 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return
 		}
-		// A grant on the addressed workflow (ADR 0028) can allow what the
-		// global role does not; it never refuses what the role allows.
-		if !s.can(r, perm) && !s.memberAllows(r) {
+		// A grant at the addressed scope (ADR 0028) allows what reading
+		// alone does not.
+		if !s.can(r, perm) && !s.scopedAllows(r) {
 			writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden: this subject does not hold %s", perm))
 			return
 		}

@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sessions and per-workflow members (ADR 0028).
+// Sessions and scoped members (ADR 0028).
 
 // UserBySession resolves an access token's sid: the refresh row must still
 // exist (not revoked) and its user must be enabled. This is what makes a
@@ -46,25 +46,60 @@ func (s *Store) RevokeUserToken(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// WorkflowMember is one per-workflow grant: owner or editor.
-type WorkflowMember struct {
-	Workflow string    `json:"workflow"`
-	User     string    `json:"user"`
-	Role     string    `json:"role"`
-	Created  time.Time `json:"createdAt"`
+// UsersWithRole lists the users holding a users.role value.
+func (s *Store) UsersWithRole(ctx context.Context, role string) ([]*User, error) {
+	rows, err := s.query(ctx, `SELECT `+userCols+` FROM users WHERE role=$1 ORDER BY name`, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
-// SetWorkflowMember grants (or changes) a user's role on one workflow.
-func (s *Store) SetWorkflowMember(ctx context.Context, workflow string, userID uuid.UUID, role string) error {
-	_, err := s.exec(ctx, `
-		INSERT INTO workflow_members (workflow, user_id, role) VALUES ($1,$2,$3)
-		ON CONFLICT (workflow, user_id) DO UPDATE SET role = excluded.role`, workflow, userID, role)
+// SetUserRole sets users.role ("superadmin" or "").
+func (s *Store) SetUserRole(ctx context.Context, name, role string) error {
+	_, err := s.exec(ctx, `UPDATE users SET role=$2 WHERE name=$1`, name, role)
 	return err
 }
 
-// RemoveWorkflowMember drops a grant. ErrNotFound when there was none.
-func (s *Store) RemoveWorkflowMember(ctx context.Context, workflow string, userID uuid.UUID) error {
-	res, err := s.exec(ctx, `DELETE FROM workflow_members WHERE workflow=$1 AND user_id=$2`, workflow, userID)
+// The scopes and the three scoped roles.
+const (
+	MemberProject  = "project"
+	MemberWorkflow = "workflow"
+	ProjectAdmin   = "project_admin"
+	WorkflowAdmin  = "workflow_admin"
+	WorkflowRunner = "workflow_runner"
+)
+
+// Member is one grant: a user holds a role on a project or a workflow.
+type Member struct {
+	Scope   string    `json:"scope"`
+	Name    string    `json:"name"`
+	User    string    `json:"user"`
+	Role    string    `json:"role"`
+	Created time.Time `json:"createdAt"`
+}
+
+// SetMember grants (or changes) a user's role at a scope. The table's CHECK
+// refuses a role that does not belong to the scope.
+func (s *Store) SetMember(ctx context.Context, scope, name string, userID uuid.UUID, role string) error {
+	_, err := s.exec(ctx, `
+		INSERT INTO members (scope, name, user_id, role) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (scope, name, user_id) DO UPDATE SET role = excluded.role`, scope, name, userID, role)
+	return err
+}
+
+// RemoveMember drops a grant. ErrNotFound when there was none.
+func (s *Store) RemoveMember(ctx context.Context, scope, name string, userID uuid.UUID) error {
+	res, err := s.exec(ctx, `DELETE FROM members WHERE scope=$1 AND name=$2 AND user_id=$3`, scope, name, userID)
 	if err != nil {
 		return err
 	}
@@ -74,33 +109,34 @@ func (s *Store) RemoveWorkflowMember(ctx context.Context, workflow string, userI
 	return nil
 }
 
-// WorkflowMemberRole is the user's role on a workflow, "" when none.
-func (s *Store) WorkflowMemberRole(ctx context.Context, workflow string, userID uuid.UUID) (string, error) {
-	var role string
-	err := s.qrow(ctx, `SELECT role FROM workflow_members WHERE workflow=$1 AND user_id=$2`, workflow, userID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return role, err
-}
-
-// ListWorkflowMembers lists a workflow's grants by user name.
-func (s *Store) ListWorkflowMembers(ctx context.Context, workflow string) ([]*WorkflowMember, error) {
-	rows, err := s.query(ctx, `
-		SELECT m.workflow, u.name, m.role, m.created_at
-		  FROM workflow_members m JOIN users u ON u.id = m.user_id
-		 WHERE m.workflow=$1 ORDER BY u.name`, workflow)
+func (s *Store) scanMembers(rows *sql.Rows, err error) ([]*Member, error) {
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []*WorkflowMember{}
+	out := []*Member{}
 	for rows.Next() {
-		m := &WorkflowMember{}
-		if err := rows.Scan(&m.Workflow, &m.User, &m.Role, &m.Created); err != nil {
+		m := &Member{}
+		if err := rows.Scan(&m.Scope, &m.Name, &m.User, &m.Role, &m.Created); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ListMembers lists the grants at one scope.
+func (s *Store) ListMembers(ctx context.Context, scope, name string) ([]*Member, error) {
+	return s.scanMembers(s.query(ctx, `
+		SELECT m.scope, m.name, u.name, m.role, m.created_at
+		  FROM members m JOIN users u ON u.id = m.user_id
+		 WHERE m.scope=$1 AND m.name=$2 ORDER BY u.name`, scope, name))
+}
+
+// GrantsOf lists every grant one user holds.
+func (s *Store) GrantsOf(ctx context.Context, userID uuid.UUID) ([]*Member, error) {
+	return s.scanMembers(s.query(ctx, `
+		SELECT m.scope, m.name, u.name, m.role, m.created_at
+		  FROM members m JOIN users u ON u.id = m.user_id
+		 WHERE m.user_id=$1 ORDER BY m.scope, m.name`, userID))
 }

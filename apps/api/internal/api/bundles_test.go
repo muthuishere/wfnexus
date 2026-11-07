@@ -131,7 +131,7 @@ func publishBodyFor(digest string, tar []byte, version string) map[string]any {
 func TestAPublishCarriesItsSkillsAndRecordsItsPublisher(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "fix the author")
-	tok := user(t, m.st, "ana", "editor", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	b, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 
 	if len(b.Manifest.Skills) != 1 || b.Manifest.Skills[0].Name != "fix-author" {
@@ -181,7 +181,7 @@ func TestPublishingWithNoSubjectIsRefused(t *testing.T) {
 func TestPublishingIntoAnotherProjectIsRefused(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "editor", "acme")
+	tok := user(t, m.st, "ana", "superadmin", "acme")
 	_, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 	body := publishBodyFor(digest, tar, "1.0.0")
 	body["project"] = "other"
@@ -196,7 +196,7 @@ func TestPublishingIntoAnotherProjectIsRefused(t *testing.T) {
 func TestAVersionIsImmutableAndATagMoves(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "editor", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	_, d1, tar1 := m.buildBundle(t, sampleWorkflow, "1.0.0")
 	if w := do(m.h, "POST", "/api/bundles", tok, publishBodyFor(d1, tar1, "1.0.0")); w.Code != 201 {
 		t.Fatalf("first publish: %d %s", w.Code, w.Body.String())
@@ -271,7 +271,7 @@ func TestAnUnresolvableSkillFailsThePublish(t *testing.T) {
 func TestTheServerRefusesAPastedCredentialInAReceivedBundle(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "editor", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	const pasted = "sk-live-AAAABBBBCCCCDDDD/EEEE+FFFF=="
 	planted := strings.Replace(sampleWorkflow, "    tools: [read]\n",
 		"    tools: [read]\n    env:\n      \""+pasted+"\": \"1\"\n", 1)
@@ -317,7 +317,7 @@ func TestTheServerRefusesAPastedCredentialInAReceivedBundle(t *testing.T) {
 func TestTamperedBytesAreRefusedAndNothingIsStored(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "x")
-	tok := user(t, m.st, "ana", "editor", "")
+	tok := user(t, m.st, "ana", "superadmin", "")
 	_, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 	tar[len(tar)/2] ^= 0xff // corrupt the archive
 
@@ -371,7 +371,7 @@ func TestPublishingIsAbsentOnALoopbackInstall(t *testing.T) {
 func TestABundleRunsIdenticallyOnAMachineHoldingNoneOfItsSkills(t *testing.T) {
 	a := newMachine(t, ":8090")
 	a.installSkill(t, "fix-author", "fix the author")
-	tokA := user(t, a.st, "ana", "editor", "")
+	tokA := user(t, a.st, "ana", "superadmin", "")
 	_, digest, tar := a.buildBundle(t, sampleWorkflow, "1.0.0")
 	if w := do(a.h, "POST", "/api/bundles", tokA, publishBodyFor(digest, tar, "1.0.0")); w.Code != 201 {
 		t.Fatalf("publish: %d %s", w.Code, w.Body.String())
@@ -387,7 +387,7 @@ func TestABundleRunsIdenticallyOnAMachineHoldingNoneOfItsSkills(t *testing.T) {
 
 	// Machine B holds nothing. It receives the same bytes.
 	b := newMachine(t, ":8091")
-	tokB := user(t, b.st, "bo", "editor", "")
+	tokB := user(t, b.st, "bo", "superadmin", "")
 	if len(b.eng.Skills().List()) != 0 {
 		t.Fatalf("the receiving machine was not empty: %+v", b.eng.Skills().List())
 	}

@@ -241,10 +241,17 @@ type RunFilter struct {
 	ParentRunID string
 	// Conversation narrows to the runs of one conversation key.
 	Conversation string
-	// TriggeredBy narrows to the runs one person started (ADR 0028: a
-	// `user` sees only its own runs).
+	// Visible narrows to what a non-superadmin may see (ADR 0028).
+	Visible *Visibility
+	Limit   int
+}
+
+// Visibility is a caller's reach over runs: the runs it started, plus every
+// run of these workflows and projects.
+type Visibility struct {
 	TriggeredBy string
-	Limit       int
+	Workflows   []string
+	Projects    []string
 }
 
 // RunsInStatus lists runs currently in any of these states, oldest first.
@@ -280,9 +287,20 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 		args = append(args, f.Conversation)
 		where = append(where, fmt.Sprintf("conversation=$%d", len(args)))
 	}
-	if f.TriggeredBy != "" {
-		args = append(args, f.TriggeredBy)
-		where = append(where, fmt.Sprintf("triggered_by=$%d", len(args)))
+	if v := f.Visible; v != nil {
+		// ADR 0028: own runs OR runs of a granted workflow OR of an
+		// administered project.
+		args = append(args, v.TriggeredBy)
+		or := []string{fmt.Sprintf("triggered_by=$%d", len(args))}
+		for _, w := range v.Workflows {
+			args = append(args, w)
+			or = append(or, fmt.Sprintf("workflow=$%d", len(args)))
+		}
+		for _, p := range v.Projects {
+			args = append(args, p)
+			or = append(or, fmt.Sprintf("project=$%d", len(args)))
+		}
+		where = append(where, "("+strings.Join(or, " OR ")+")")
 	}
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))

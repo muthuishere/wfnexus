@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
+	"github.com/muthuishere/wfnexus/apps/api/internal/login"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
 // Username and password sign-in (ADR 0025).
@@ -59,19 +61,23 @@ type passwordBody struct {
 	// instead of cookies (ADR 0028). A browser never sets it, so its refresh
 	// value never reaches page script.
 	Client string `json:"client"`
+	// Provider names a password-checking login provider (ldap, mock-ldap;
+	// ADR 0028). Empty or "password" is a local user.
+	Provider string `json:"provider"`
 }
 
 // passwordSignIn is POST /api/auth/password.
 func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	// The form is offered only where auth is required; a loopback install
 	// has nothing to sign in to (ADR 0017).
-	if s.loopbackOnly {
-		writeErr(w, http.StatusNotFound, errors.New("sign-in is not used on a loopback install"))
-		return
-	}
 	var b passwordBody
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&b); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("expected {username, password}"))
+		return
+	}
+	external := b.Provider != "" && b.Provider != "password"
+	if s.loopbackOnly && !external {
+		writeErr(w, http.StatusNotFound, errors.New("sign-in is not used on a loopback install"))
 		return
 	}
 	b.Username = strings.TrimSpace(b.Username)
@@ -80,14 +86,34 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	u, hash, err := s.store.PasswordHashByName(ctx, b.Username)
-	if err != nil {
-		hash = "" // unknown or disabled: verified against nothing, at full cost
-	}
-	if !auth.VerifyPassword(hash, b.Password) || u == nil {
-		s.pwLimit.fail(b.Username, time.Now())
-		writeErr(w, http.StatusUnauthorized, errBadCredentials)
-		return
+	var u *store.User
+	if external {
+		p := s.providers[b.Provider]
+		var id *login.Identity
+		var err error
+		if p != nil && p.Password != nil {
+			id, err = p.Password.Authenticate(ctx, b.Username, b.Password)
+		}
+		if p == nil || p.Password == nil || err != nil {
+			s.pwLimit.fail(b.Provider+":"+b.Username, time.Now())
+			writeErr(w, http.StatusUnauthorized, errBadCredentials)
+			return
+		}
+		if u, err = s.externalUser(ctx, p, id); err != nil {
+			writeErr(w, http.StatusUnauthorized, errBadCredentials)
+			return
+		}
+	} else {
+		lu, hash, err := s.store.PasswordHashByName(ctx, b.Username)
+		if err != nil {
+			hash = "" // unknown or disabled: verified against nothing, at full cost
+		}
+		if !auth.VerifyPassword(hash, b.Password) || lu == nil {
+			s.pwLimit.fail(b.Username, time.Now())
+			writeErr(w, http.StatusUnauthorized, errBadCredentials)
+			return
+		}
+		u = lu
 	}
 	if b.Client == "cli" {
 		sess, err := s.issueSession(ctx, u.ID, "password")

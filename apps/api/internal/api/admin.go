@@ -40,12 +40,12 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	if b.Name == "" || b.Role == "" {
-		writeErr(w, 400, errors.New("`name` and `role` are required"))
+	if b.Name == "" {
+		writeErr(w, 400, errors.New("`name` is required"))
 		return
 	}
-	if _, err := s.store.Role(r.Context(), b.Role); err != nil {
-		writeErr(w, 400, fmt.Errorf("no such role %q", b.Role))
+	if !globalRoleOK(b.Role) {
+		writeErr(w, 400, fmt.Errorf("role %q: the only global role is superadmin (or none); grant the others with `wfx member add`", b.Role))
 		return
 	}
 	u := &store.User{Name: b.Name, DisplayName: b.DisplayName, Role: b.Role, Project: b.Project}
@@ -68,6 +68,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	var b userBody
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if !globalRoleOK(b.Role) {
+		writeErr(w, 400, fmt.Errorf("role %q: the only global role is superadmin (or none)", b.Role))
 		return
 	}
 	cur, err := s.store.UserByName(r.Context(), name)
@@ -121,47 +125,21 @@ func (s *Server) anotherAdminRemains(r *http.Request, name string) (bool, error)
 	return n > 0, err
 }
 
+// globalRoleOK: users.role is superadmin or nothing (ADR 0028).
+func globalRoleOK(role string) bool { return role == "" || role == RoleSuperadmin }
+
+// listRoles names the four fixed roles. They are not editable.
 func (s *Server) listRoles(w http.ResponseWriter, r *http.Request) {
-	roles, err := s.store.ListRoles(r.Context())
-	if err != nil {
-		writeErr(w, 500, err)
-		return
+	out := []*store.Role{}
+	for _, n := range []string{RoleSuperadmin, store.ProjectAdmin, store.WorkflowAdmin, store.WorkflowRunner} {
+		out = append(out, &store.Role{Name: n, Permissions: DefaultRoles()[n]})
 	}
-	writeJSON(w, 200, roles)
+	writeJSON(w, 200, out)
 }
 
+// saveRole and deleteRole: the roles are fixed (ADR 0028).
 func (s *Server) saveRole(w http.ResponseWriter, r *http.Request) {
-	var b struct {
-		Permissions []string `json:"permissions"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	name := urlName(r, "name")
-	if err := s.store.UpsertRole(r.Context(), name, b.Permissions); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	writeJSON(w, 200, &store.Role{Name: name, Permissions: b.Permissions})
+	writeErr(w, http.StatusGone, errors.New("roles are fixed: superadmin, project_admin, workflow_admin, workflow_runner"))
 }
 
-// deleteRole removes a role NO SUBJECT HOLDS. Deleting one somebody holds
-// would leave every one of their requests refused for a reason nobody chose.
-func (s *Server) deleteRole(w http.ResponseWriter, r *http.Request) {
-	name := urlName(r, "name")
-	n, err := s.store.CountUsersWithRole(r.Context(), name)
-	if err != nil {
-		writeErr(w, 500, err)
-		return
-	}
-	if n > 0 {
-		writeErr(w, 409, fmt.Errorf("refused: %d user(s) still hold the role %q", n, name))
-		return
-	}
-	if err := s.store.DeleteRole(r.Context(), name); err != nil {
-		notFound(w)
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true})
-}
+func (s *Server) deleteRole(w http.ResponseWriter, r *http.Request) { s.saveRole(w, r) }

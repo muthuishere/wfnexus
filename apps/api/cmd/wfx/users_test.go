@@ -65,8 +65,9 @@ func TestUserAddCreatesThenSetsAOneTimePassword(t *testing.T) {
 	if b := f.body["POST /api/users"]; b["role"] != "publisher" || b["project"] != "p2" {
 		t.Fatalf("create body %v", b)
 	}
-	if err := userCmd([]string{"add", "bo"}); err == nil {
-		t.Fatal("add without --role was accepted")
+	// ADR 0028: --role is optional; a new user starts with no roles.
+	if err := userCmd([]string{"add"}); err == nil {
+		t.Fatal("add without a name was accepted")
 	}
 }
 

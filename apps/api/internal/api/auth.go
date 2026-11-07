@@ -52,6 +52,10 @@ type Subject struct {
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
 	// logout deletes it. Nil for a legacy wfx_ bearer.
 	SessionID uuid.UUID
+
+	// The caller's member rows, loaded once per request (roles.go).
+	grants       []*store.Member
+	grantsLoaded bool
 }
 
 type subjectCtxKey struct{}
@@ -103,12 +107,16 @@ var publicAPIPaths = map[string]bool{
 	// Trading a refresh token for a new access JWT (ADR 0028): the refresh
 	// value is the credential, checked in the handler.
 	"/api/auth/refresh": true,
+	// Which login providers exist, for the sign-in page (ADR 0028). The
+	// /api/auth/oauth/ round trip is public by prefix: it is how a browser
+	// signed in with OIDC, Google or GitHub obtains a subject.
+	"/api/auth/providers": true,
 }
 
 // requireSubject resolves the bearer to a user or a worker.
 func (s *Server) requireSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicAPIPaths[r.URL.Path] {
+		if publicAPIPaths[r.URL.Path] || strings.HasPrefix(r.URL.Path, "/api/auth/oauth/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -223,6 +231,10 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mustChange := sub.User != nil && sub.User.MustChange
+	grants := s.grants(r)
+	if grants == nil {
+		grants = []*store.Member{}
+	}
 	writeJSON(w, 200, map[string]any{
 		"authenticated": true,
 		"authRequired":  !s.loopbackOnly,
@@ -231,6 +243,7 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 		"name":          sub.Name,
 		"role":          sub.Role,
 		"project":       sub.Project,
+		"grants":        grants,
 	})
 }
 

@@ -95,7 +95,7 @@ func login(args []string) error {
 	}
 
 	if name := flagOf(args, "--user", ""); name != "" {
-		return passwordLogin(host, saveAs, name)
+		return passwordLogin(host, saveAs, name, flagOf(args, "--provider", ""))
 	}
 
 	var start deviceStart
@@ -209,7 +209,7 @@ func logout(args []string) error {
 // and refresh token the device grant ends in, from a username and password.
 // The password comes from WFX_PASSWORD, a hidden prompt, or one line of stdin;
 // it is never an argument, so it never lands in shell history or `ps`.
-func passwordLogin(host, saveAs, name string) error {
+func passwordLogin(host, saveAs, name, provider string) error {
 	pw := os.Getenv("WFX_PASSWORD")
 	if pw == "" {
 		var err error
@@ -223,7 +223,7 @@ func passwordLogin(host, saveAs, name string) error {
 		deviceAnswer
 		MustChange bool `json:"mustChange"`
 	}
-	raw, _ := json.Marshal(map[string]string{"username": name, "password": pw, "client": "cli"})
+	raw, _ := json.Marshal(map[string]string{"username": name, "password": pw, "client": "cli", "provider": provider})
 	res, err := http.Post(host+"/api/auth/password", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("%s — is %s reachable?", err, host)

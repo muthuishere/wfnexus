@@ -54,7 +54,7 @@ func moveClock(t *testing.T, d time.Duration) {
 
 func TestJWTWorksExpiresAndRefreshes(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "user", "a-long-password-1", false)
+	pwUser(t, st, "ana", "", "a-long-password-1", false)
 	access, refresh := cliSignIn(t, h, "ana", "a-long-password-1")
 
 	if w := do(h, "GET", "/api/whoami", access, nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"name":"ana"`) {
@@ -90,7 +90,7 @@ func TestJWTWorksExpiresAndRefreshes(t *testing.T) {
 
 func TestLogoutRevokesTheJWTAndTheRefreshToken(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "user", "a-long-password-1", false)
+	pwUser(t, st, "ana", "", "a-long-password-1", false)
 	access, refresh := cliSignIn(t, h, "ana", "a-long-password-1")
 	if w := do(h, "DELETE", "/api/tokens/self", access, nil); w.Code != 200 {
 		t.Fatalf("logout: %d %s", w.Code, w.Body)
@@ -105,7 +105,7 @@ func TestLogoutRevokesTheJWTAndTheRefreshToken(t *testing.T) {
 
 	// Disabling the user ends their other sessions too.
 	access2, refresh2 := cliSignIn(t, h, "ana", "a-long-password-1")
-	if _, err := st.UpdateUser(context.Background(), "ana", "", "user", "", true); err != nil {
+	if _, err := st.UpdateUser(context.Background(), "ana", "", "", "", true); err != nil {
 		t.Fatal(err)
 	}
 	if w := do(h, "GET", "/api/workflows", access2, nil); w.Code != 401 {
@@ -118,7 +118,7 @@ func TestLogoutRevokesTheJWTAndTheRefreshToken(t *testing.T) {
 
 func TestBrowserCookieRefreshesItself(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
-	pwUser(t, st, "ana", "user", "a-long-password-1", false)
+	pwUser(t, st, "ana", "", "a-long-password-1", false)
 	res := signIn(h, "192.0.2.1", "ana", "a-long-password-1")
 	var session, refresh string
 	for _, c := range res.Result().Cookies() {
@@ -163,72 +163,81 @@ func TestBrowserCookieRefreshesItself(t *testing.T) {
 	}
 }
 
-// Each role, allowed and denied (ADR 0028).
 func TestFourRoles(t *testing.T) {
 	h, st := testServer(t, remoteAddr)
 	ctx := context.Background()
 	tok := map[string]string{}
-	for name, role := range map[string]string{
-		"root": "superadmin", "ed": "editor", "own": "user", "med": "user", "plain": "user", "other": "user",
-	} {
+	for _, name := range []string{"root", "padm", "padmOther", "wadm", "runner", "none", "target", "other"} {
+		role := ""
+		if name == "root" {
+			role = RoleSuperadmin
+		}
 		pwUser(t, st, name, role, "a-long-password-1", false)
 		tok[name], _ = cliSignIn(t, h, name, "a-long-password-1")
 	}
-	setMember := func(user, role string) {
+	grant := func(user, scope, name, role string) {
 		u, _ := st.UserByName(ctx, user)
-		if err := st.SetWorkflowMember(ctx, "w1", u.ID, role); err != nil {
+		if err := st.SetMember(ctx, scope, name, u.ID, role); err != nil {
 			t.Fatal(err)
 		}
 	}
-	setMember("own", "owner")
-	setMember("med", "editor")
+	// With no workflow files loaded, every workflow belongs to project "local".
+	grant("padm", store.MemberProject, "local", store.ProjectAdmin)
+	grant("padmOther", store.MemberProject, "other", store.ProjectAdmin)
+	grant("wadm", store.MemberWorkflow, "w1", store.WorkflowAdmin)
+	grant("runner", store.MemberWorkflow, "w1", store.WorkflowRunner)
 
 	run, err := st.CreateRun(ctx, "local", "w1", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetTriggeredBy(ctx, run.ID, "other"); err != nil {
-		t.Fatal(err)
-	}
+	_ = st.SetTriggeredBy(ctx, run.ID, "other")
 	mine, _ := st.CreateRun(ctx, "local", "w2", json.RawMessage(`{}`))
-	_ = st.SetTriggeredBy(ctx, mine.ID, "plain")
+	_ = st.SetTriggeredBy(ctx, mine.ID, "none")
 
 	denied := func(w *httptest.ResponseRecorder) bool { return w.Code == 401 || w.Code == 403 }
+	hidden := func(w *httptest.ResponseRecorder) bool { return w.Code == 404 || denied(w) }
 	type action struct {
 		name string
 		call func(tok string) *httptest.ResponseRecorder
-		gone func(w *httptest.ResponseRecorder) bool // what "refused" looks like
+		gone func(w *httptest.ResponseRecorder) bool
 	}
-	hidden := func(w *httptest.ResponseRecorder) bool { return w.Code == 404 || denied(w) }
 	actions := []action{
+		{"read", func(t string) *httptest.ResponseRecorder { return do(h, "GET", "/api/workflows", t, nil) }, denied},
 		{"edit", func(t string) *httptest.ResponseRecorder {
 			return do(h, "PUT", "/api/workflows/w1", t, map[string]any{})
 		}, denied},
 		{"run", func(t string) *httptest.ResponseRecorder {
 			return do(h, "POST", "/api/workflows/w1/runs", t, map[string]any{})
 		}, denied},
-		{"publish", func(t string) *httptest.ResponseRecorder {
+		{"expose", func(t string) *httptest.ResponseRecorder {
 			return do(h, "POST", "/api/workflows/w1/expose/hook", t, nil)
 		}, denied},
-		{"members", func(t string) *httptest.ResponseRecorder {
-			return do(h, "PUT", "/api/workflows/w1/members/other", t, map[string]string{"role": "editor"})
+		{"workflow-members", func(t string) *httptest.ResponseRecorder {
+			return do(h, "PUT", "/api/workflows/w1/members/target", t, map[string]string{"role": "workflow_runner"})
 		}, denied},
-		{"see-others-run", func(t string) *httptest.ResponseRecorder {
+		{"project-members", func(t string) *httptest.ResponseRecorder {
+			return do(h, "PUT", "/api/projects/local/members/target", t, map[string]string{"role": "project_admin"})
+		}, denied},
+		{"project-settings", func(t string) *httptest.ResponseRecorder {
+			return do(h, "PATCH", "/api/projects/local", t, map[string]any{})
+		}, denied},
+		{"project-env", func(t string) *httptest.ResponseRecorder { return do(h, "GET", "/api/projects/local/env", t, nil) }, denied},
+		{"see-run", func(t string) *httptest.ResponseRecorder {
 			return do(h, "GET", "/api/runs/"+run.ID.String(), t, nil)
 		}, hidden},
-		{"approve-others-run", func(t string) *httptest.ResponseRecorder {
+		{"approve", func(t string) *httptest.ResponseRecorder {
 			return do(h, "POST", "/api/runs/"+run.ID.String()+"/approve", t, map[string]any{"stepId": "x"})
 		}, hidden},
-		{"users", func(t string) *httptest.ResponseRecorder {
-			return do(h, "GET", "/api/users", t, nil)
-		}, denied},
+		{"users", func(t string) *httptest.ResponseRecorder { return do(h, "GET", "/api/users", t, nil) }, denied},
 	}
 	allow := map[string][]string{
-		"root":  {"edit", "run", "publish", "members", "see-others-run", "approve-others-run", "users"},
-		"ed":    {"edit", "run", "publish", "see-others-run", "approve-others-run"},
-		"own":   {"edit", "run", "publish", "members", "see-others-run", "approve-others-run"},
-		"med":   {"edit", "run", "see-others-run", "approve-others-run"},
-		"plain": {"run"},
+		"root":      {"read", "edit", "run", "expose", "workflow-members", "project-members", "project-settings", "project-env", "see-run", "approve", "users"},
+		"padm":      {"read", "edit", "run", "expose", "workflow-members", "project-members", "project-settings", "project-env", "see-run", "approve"},
+		"padmOther": {"read"},
+		"wadm":      {"read", "edit", "run", "expose", "workflow-members", "see-run", "approve"},
+		"runner":    {"read", "run", "see-run", "approve"},
+		"none":      {"read"},
 	}
 	for who, allowed := range allow {
 		for _, a := range actions {
@@ -243,16 +252,36 @@ func TestFourRoles(t *testing.T) {
 		}
 	}
 
-	// A user lists only the runs it started.
-	var runs []*store.Run
-	_ = json.Unmarshal(do(h, "GET", "/api/runs", tok["plain"], nil).Body.Bytes(), &runs)
-	if len(runs) != 1 || runs[0].ID != mine.ID {
-		t.Fatalf("a user's run listing: %+v", runs)
+	// Removing a member: a runner may not, the workflow admin may.
+	if w := do(h, "DELETE", "/api/workflows/w1/members/target", tok["runner"], nil); w.Code != 403 {
+		t.Fatalf("a runner removed a member: %d", w.Code)
 	}
-	// An editor sees them all.
-	runs = nil
-	_ = json.Unmarshal(do(h, "GET", "/api/runs", tok["ed"], nil).Body.Bytes(), &runs)
-	if len(runs) != 2 {
-		t.Fatalf("an editor's run listing has %d runs", len(runs))
+	if w := do(h, "DELETE", "/api/workflows/w1/members/target", tok["wadm"], nil); w.Code != 200 {
+		t.Fatalf("the workflow admin could not remove a member: %d %s", w.Code, w.Body)
+	}
+	// A role that does not fit the scope is refused.
+	if w := do(h, "PUT", "/api/workflows/w1/members/target", tok["wadm"], map[string]string{"role": "project_admin"}); w.Code != 400 {
+		t.Fatalf("project_admin on a workflow: %d", w.Code)
+	}
+	// Only superadmin is a global role.
+	if w := do(h, "PUT", "/api/users/none", tok["root"], map[string]any{"role": "editor"}); w.Code != 400 {
+		t.Fatalf("a non-role was accepted as a global role: %d %s", w.Code, w.Body)
+	}
+
+	// Run listings: a person with no roles sees only its own run; the runner
+	// sees w1's; the superadmin sees both.
+	count := func(who string) int {
+		var runs []*store.Run
+		_ = json.Unmarshal(do(h, "GET", "/api/runs", tok[who], nil).Body.Bytes(), &runs)
+		return len(runs)
+	}
+	if n := count("none"); n != 1 {
+		t.Fatalf("none sees %d runs, want 1", n)
+	}
+	if n := count("runner"); n != 1 {
+		t.Fatalf("runner sees %d runs, want 1 (w1)", n)
+	}
+	if n := count("root"); n != 2 {
+		t.Fatalf("root sees %d runs", n)
 	}
 }

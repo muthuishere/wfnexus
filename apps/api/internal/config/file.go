@@ -99,6 +99,10 @@ type File struct {
 		Default string `yaml:"default,omitempty"`
 	} `yaml:"channels,omitempty"`
 
+	// Auth lists the login providers (ADR 0028). None configured means
+	// local username + password only.
+	Auth Auth `yaml:"auth,omitempty"`
+
 	Paths struct {
 		Workflows  string `yaml:"workflows,omitempty"`
 		Templates  string `yaml:"templates,omitempty"`

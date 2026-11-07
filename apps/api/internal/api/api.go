@@ -28,6 +28,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/login"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -67,6 +68,9 @@ type Server struct {
 	// jwtKey signs and verifies access tokens (ADR 0028), derived from the
 	// env-store key.
 	jwtKey []byte
+
+	// providers are the configured login providers (ADR 0028), by name.
+	providers map[string]*login.Provider
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -102,6 +106,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
 		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst),
 		jwtKey: jwtKeyFor(eng.Secrets())}
+	buildProviders(s)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -152,6 +157,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/auth/password", s.passwordSignIn)
 		r.Post("/auth/password/change", s.changeOwnPassword)
 		r.Post("/auth/refresh", s.refresh)
+		r.Get("/auth/providers", s.listLoginProviders)
+		r.Get("/auth/oauth/{provider}/start", s.oauthStart)
+		r.Get("/auth/oauth/{provider}/callback", s.oauthCallback)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
@@ -261,6 +269,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		// Inbound exposure (ADR 0027): issue, rotate and revoke the tokens.
+		r.Get("/projects/{name}/members", s.listMembers)
+		r.Put("/projects/{name}/members/{user}", s.setMember)
+		r.Delete("/projects/{name}/members/{user}", s.removeMember)
 		r.Get("/workflows/{name}/members", s.listMembers)
 		r.Put("/workflows/{name}/members/{user}", s.setMember)
 		r.Delete("/workflows/{name}/members/{user}", s.removeMember)
@@ -935,13 +946,9 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 		Status:   status,
 		Limit:    100,
 	}
-	// ADR 0028: without runs:all a caller sees the runs it started — or every
-	// run of one workflow it holds a grant on, when it asks for that workflow.
-	if sub, ok := SubjectFrom(r.Context()); ok && !s.can(r, PermRunsAll) {
-		if f.Workflow == "" || s.memberRole(r, f.Workflow) == "" {
-			f.TriggeredBy = sub.Name
-		}
-	}
+	// ADR 0028: anyone but a superadmin sees the runs it started and the
+	// runs of what it holds a role on.
+	f.Visible = s.visibility(r)
 	runs, err := s.store.FindRuns(r.Context(), f)
 	if err != nil {
 		writeErr(w, 500, err)
@@ -970,9 +977,8 @@ func (s *Server) runID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 			return id, false
 		}
 	}
-	// ADR 0028: a caller without runs:all reaches only its own runs and the
-	// runs of workflows it holds a grant on — to read, approve or cancel.
-	if !s.can(r, PermRunsAll) {
+	// ADR 0028: anyone but a superadmin reaches only the runs it may see.
+	if !s.isSuper(r) {
 		run, err := s.store.GetRun(r.Context(), id)
 		if err != nil || !s.runVisible(r, run) {
 			notFound(w)
