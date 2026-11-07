@@ -47,3 +47,22 @@ Rules:
   input with no default renders empty.
 - `outputs:` is documentation in this MVP; a step's `output_schema` is still the
   enforced contract.
+
+## Calling a module from a step
+
+Inside `steps:` (flat or in a job), a step can call a task the GitHub Actions way:
+
+```yaml
+steps:
+  - id: ctx
+    uses: load-context@1        # name@major pins the task's version
+    with: { channel: ops }      # typed input values, checked at load
+  - id: reply
+    needs: [ctx]                # rewritten to the call's last step(s)
+    prompt: ...
+```
+
+The step is replaced in place by the task's steps (`ctx.<step>`). On a step,
+`with:` holds the inputs; on a top-level/job `uses:` list it keeps its
+override meaning and values go under `inputs:`. A `uses:` step may not also
+carry `prompt`/`run`/`judge`/`send`/`start`.

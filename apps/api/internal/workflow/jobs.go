@@ -100,7 +100,10 @@ func (d *Definition) expandJobs(tasks map[string]*Task, opt loadOptions) error {
 			job.RunsOn = d.RunsOn
 		}
 		job.Env = MergeEnv(d.Env, job.Env)
-		steps := job.Steps
+		steps, err := expandSteps(d, "job "+id, job.Steps, tasks, opt)
+		if err != nil {
+			return err
+		}
 		if len(job.Uses) > 0 {
 			expanded, err := expandInto(d, id, job.Uses, tasks, opt)
 			if err != nil {

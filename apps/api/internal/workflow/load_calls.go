@@ -239,6 +239,9 @@ func (x *expander) expand(d *Definition, chain []string) error {
 	if err := d.expandUses(g.tasks, o); err != nil {
 		return err
 	}
+	if err := d.expandStepUses(g.tasks, o); err != nil {
+		return err
+	}
 	if err := d.expandJobs(g.tasks, o); err != nil {
 		return err
 	}
