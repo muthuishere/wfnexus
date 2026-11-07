@@ -1,0 +1,123 @@
+# pingpong — the reference handler: the smallest thing that proves the loop.
+#
+#   WhatsApp message → subscription → THIS run → whatsapp-sender → WhatsApp,
+#   and the next message in the same chat remembers this one.
+#
+# Three steps, no model: read the conversation's memory and count the pongs,
+# reply through whatsapp-sender (wait: true, so this run knows whether it went
+# out), save what was said as the run's outcome — which is exactly what the next
+# run of this conversation reads back as memory (memory is per conversation by
+# default: ADR 0026).
+#
+# The 7-point bar:
+#   trigger        a subscription on a WhatsApp chat (or a hook / MCP call with the same input)
+#   system of record  the chat itself + this conversation's memory
+#   typed output   {heard, said, status, id}
+#   verification   the sender's confirmed status is what is saved, not "we tried"
+#   human gate     the subscription's responsePolicy (draft / approval) is passed to the sender
+#   no silent failure  a failed or uncertain send fails this run (the sender's own gate)
+#   success number    pong #N keeps counting up in one chat = memory works end to end
+name: pingpong
+template:
+  title: Pingpong — prove a WhatsApp subscription end to end
+  category: debugging-ops
+  summary: >-
+    Answers every text in a chat with "pong #N", counting from the
+    conversation's memory, through whatsapp-sender. Point a subscription at a
+    test group to prove receive, route, reply and memory in one minute.
+  fill:
+    - "copy whatsapp-sender too — this sends through it"
+    - "subscribe it: wfx sub add pingpong-test --channel <channel> --chat <test-group-jid> --workflow pingpong --allow <your-jid> --response auto"
+
+description: >-
+  Reference handler for a WhatsApp subscription: reads this chat's memory,
+  replies "pong #N" through whatsapp-sender, and saves what was said so the
+  next message in the chat continues the count.
+
+on: [workflow_dispatch, workflow_call]
+
+# On by default; said here because remembering per chat is the point.
+memory:
+  scope: conversation
+
+input_schema:
+  type: object
+  required: [message]
+  properties:
+    message:
+      type: object
+      title: "The WhatsApp event (from the subscription)"
+      required: [chat]
+      properties:
+        id:   { type: string }
+        chat: { type: string }
+        from: { type: string }
+        text: { type: string }
+        kind: { type: string }
+    subscription:
+      type: object
+      title: "The subscription that matched (name, instructions, responsePolicy)"
+
+steps:
+  - id: reply
+    name: Count the pongs in this chat's memory
+    description: The reply is "pong #N"; N is one more than the highest pong this conversation remembers. Exit 3 = not a text, nothing to answer.
+    continue-on-error: true
+    run: |
+      cat > input.json <<'WFX_INPUT_EOF'
+      {{ json .Input }}
+      WFX_INPUT_EOF
+      cat > memory.md <<'WFX_MEMORY_EOF'
+      {{ .Memory }}
+      WFX_MEMORY_EOF
+      python3 ./pong.py reply
+    timeout_sec: 30
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string, description: "the reply text" }
+        stderr:   { type: string }
+
+  - id: send
+    name: Reply through whatsapp-sender
+    description: Waits for the sender, so this run knows whether the reply went out.
+    needs: [reply]
+    when:
+      - path: reply.exitCode
+        equals: 0
+    start:
+      workflow: whatsapp-sender
+      wait: true
+      input:
+        chat: "{{ .Input.message.chat }}"
+        text: "{{ .Steps.reply.stdout }}"
+        replyTo: "{{ .Input.message.id }}"
+        replyToSender: "{{ .Input.message.from }}"
+        responsePolicy: "{{ or .Input.subscription.responsePolicy \"auto\" }}"
+        key: "pingpong-{{ .Input.message.chat }}-{{ .Input.message.id }}"
+
+  - id: save
+    name: Save what was said
+    description: Writes "pong #N — answered <who>, sent <id>" as the run's outcome; the conversation's memory carries it to the next run.
+    needs: [send]
+    when:
+      - path: reply.exitCode
+        equals: 0
+    run: |
+      cat > input.json <<'WFX_INPUT_EOF'
+      {{ json .Input }}
+      WFX_INPUT_EOF
+      cat > sent.json <<'WFX_SENT_EOF'
+      {{ .Steps.send.output.stdout }}
+      WFX_SENT_EOF
+      python3 ./pong.py save
+    timeout_sec: 30
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string, description: "{heard, said, status, id}" }
+        stderr:   { type: string }

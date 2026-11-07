@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,6 +166,9 @@ func (e *Engine) startChildren(ctx context.Context, parent *model.Run, def *work
 		if err != nil {
 			return nil, fmt.Errorf("start: workflow: %w", err)
 		}
+		// A name computed by an earlier step (a router's `run:` printing it)
+		// usually ends in a newline.
+		name = strings.TrimSpace(name)
 		if e.Definitions()[name] == nil {
 			return nil, fmt.Errorf("start: workflow %q is not loaded", name)
 		}
@@ -216,11 +221,25 @@ func (e *Engine) startChild(ctx context.Context, parent *model.Run, stepID, mode
 	return run, nil
 }
 
-// renderAny renders every string inside v as a template.
+// jsonOnly is a value that is exactly `{{ json <path> }}`.
+var jsonOnly = regexp.MustCompile(`^\s*\{\{-?\s*json\s+[^{}]+?\s*-?\}\}\s*$`)
+
+// renderAny renders every string inside v as a template. A value that is
+// exactly `{{ json <path> }}` passes that value WITH ITS TYPE — an object
+// stays an object — so a router can hand an event to a workflow whose
+// input_schema wants `message: {type: object}`.
 func renderAny(v any, data workflow.TemplateData) (any, error) {
 	switch t := v.(type) {
 	case string:
-		return workflow.Render(t, data)
+		out, err := workflow.Render(t, data)
+		if err != nil || !jsonOnly.MatchString(t) {
+			return out, err
+		}
+		var typed any
+		if json.Unmarshal([]byte(out), &typed) == nil {
+			return typed, nil
+		}
+		return out, nil
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, x := range t {
