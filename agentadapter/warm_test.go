@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -40,9 +44,16 @@ func fakeClaude() {
 			fmt.Fprintln(os.Stderr, "fake claude: boom")
 			os.Exit(3)
 		}
+		if text == "sleep" {
+			if f := os.Getenv("WARM_FAKE_PIDFILE"); f != "" {
+				_ = os.WriteFile(f, []byte(fmt.Sprint(os.Getpid())), 0o644)
+			}
+			time.Sleep(time.Hour)
+		}
 		n++
 		fmt.Println(`{"type":"system","subtype":"init"}`)
-		b, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "result": fmt.Sprintf("n=%d: %s", n, text)})
+		b, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "result": fmt.Sprintf("n=%d: %s", n, text),
+			"total_cost_usd": 0.0125, "usage": map[string]any{"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 7, "cache_creation_input_tokens": 3}})
 		fmt.Println(string(b))
 	}
 	os.Exit(0)
@@ -267,4 +278,52 @@ func TestBackoffGrowsAndResets(t *testing.T) {
 	if err := b.wait(context.Background()); err != nil || b.fails != 0 {
 		t.Fatal("ok did not reset the backoff")
 	}
+}
+
+func TestClaudeStreamReportsUsage(t *testing.T) {
+	var got []Usage
+	a := &ClaudeStream{Bin: os.Args[0], Env: fakeEnv("claude"), OnUsage: func(u Usage) { got = append(got, u) }}
+	defer a.Close()
+	if _, err := a.Execute(context.Background(), turnText("hi")); err != nil {
+		t.Fatal(err)
+	}
+	want := Usage{InputTokens: 100, OutputTokens: 20, CacheReadTokens: 7, CacheWriteTokens: 3, CostUSD: 0.0125}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("usage = %+v, want %+v", got, want)
+	}
+}
+
+// Cancelling the turn's context kills the CLI process mid-turn.
+func TestClaudeStreamCancelKillsTheProcess(t *testing.T) {
+	pidfile := filepath.Join(t.TempDir(), "pid")
+	a := &ClaudeStream{Bin: os.Args[0], Env: append(fakeEnv("claude"), "WARM_FAKE_PIDFILE="+pidfile)}
+	defer a.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := a.Execute(ctx, turnText("sleep")); done <- err }()
+	var pid int
+	for i := 0; i < 200 && pid == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+		b, _ := os.ReadFile(pidfile)
+		pid, _ = strconv.Atoi(string(b))
+	}
+	if pid == 0 {
+		t.Fatal("fake claude never started its turn")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Execute did not return after cancel")
+	}
+	for i := 0; i < 100; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("fake claude pid %d still alive after cancel", pid)
 }
