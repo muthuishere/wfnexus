@@ -1,5 +1,7 @@
 # wfnexus
 
+> Architecture in one page: [ARCHITECTURE.md](ARCHITECTURE.md)
+
 **Typed pipelines for coding agents.** One Go binary and your repo. Nothing else, until you want it:
 with no configuration at all it runs on SQLite and a folder, and `mode: server` moves it to your
 Postgres and your bucket.

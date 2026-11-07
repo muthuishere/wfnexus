@@ -18,36 +18,15 @@ The loop above is an SVG, 12 seconds long. There is also a
 
 ## The path of a run
 
-1. **A person or an agent asks.** This happens in the UI, or through `wfx` from a terminal or from
-   Claude or Codex via the [agent skills](/wfnexus/skills/).
-2. **`wfx` calls `wfx-server`** over its REST and SSE API (`internal/api`). The CLI resolves the
-   host from `--url`, then `$WFX_API`, then the current context, then `http://127.0.0.1:8090`. A
-   context with `--via ssh://…` reaches a server that listens on loopback only, through a lazy SSH
-   tunnel that closes after 15 idle minutes ([remote access](/wfnexus/concepts/remote-access/)).
-   Before a run is created, the workflow's `concurrency:` group is checked: one active run per
-   group.
-3. **The engine runs the steps** (`internal/engine`). It runs one toolnexus agent per agent step,
-   or a shell node for `run:`, ordered as a list or a graph (`internal/planner`), with state in
-   SQLite or Postgres (`internal/store`).
-4. **Each step resolves its provider** from the catalog (`internal/catalog`, loaded from
-   `registries.json`): an `http` model, a `cli` agent, or an `acp` agent through
-   `agentadapter/` (devin, opencode, claude, codex), each with a fresh session per turn. If
-   the provider cannot be reached and nothing was answered yet, the step moves down its
-   [fallback chain](/wfnexus/providers/): the provider's own `fallback`, then the server-wide
-   `WFX_FALLBACK_PROVIDERS`. Keys are names (`apiKeyEnv`) resolved from the env store. A step can go
-   to another machine through a [worker](/wfnexus/concepts/workers/).
-5. **The classifier decides** where a question has a typed answer (`internal/judge`): `decide:`
-   before an agent, `judge:` as a step, or `wfx judge` in a shell step. Uncertain verdicts go to a
-   person.
-6. **A human gate** pauses the run (`requires_approval`, `needs_input`, `ask_human`) until
-   someone runs `wfx approve`, `wfx reject` or `wfx answer`. `internal/notify` tells them.
-7. **The run tells its story.** Steps write `WFX_STEP_SUMMARY`, `WFX_OUTCOME` and `WFX_STATE`
-   (or an agent's `summary` / `outcome` fields); the last outcome becomes the run's verdict on the
-   [run page](/wfnexus/concepts/runs-and-concurrency/).
-8. **Git keeps the receipt.** Templates publish their work as a branch and a PR. A change to the
-   workflow itself becomes a [proposal](/wfnexus/git-native/proposals/) (`internal/proposal`). A
-   finished workflow ships as a bundle (`internal/bundle`) with `wfx publish` to a host or to a git
-   remote.
+The one-page version, with the same diagram as text and a "where to change X" table, is
+[ARCHITECTURE.md](https://github.com/muthuishere/wfnexus/blob/main/ARCHITECTURE.md) in the repo.
+
+1. A person or agent starts a run: UI, `wfx` (CLI or [agent skills](/wfnexus/skills/)), cron, channel, hook or MCP call.
+2. `wfx` calls `wfx-server` over REST and SSE (`internal/api`); the concurrency group is checked.
+3. The engine (`internal/engine`) runs one toolnexus agent per step, ordered by `internal/planner`, on a provider from `internal/catalog`, here or on a [worker](/wfnexus/concepts/workers/).
+4. The classifier (`internal/judge`) answers `decide:` and `judge:` questions.
+5. A human gate pauses the run until someone runs `wfx approve`, `wfx reject` or `wfx answer`; `internal/notify` tells them.
+6. State lives in `internal/store`; the result lands in git as a PR, a [proposal](/wfnexus/git-native/proposals/) (`internal/proposal`) or a bundle (`internal/bundle`).
 
 ## The binaries
 
