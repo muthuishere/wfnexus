@@ -281,7 +281,7 @@ func (d *Definition) validateLoop(s *Step, pos map[string]int) error {
 		}
 	}
 	if s.IsGroup() {
-		if s.Prompt != "" || s.Run != "" || s.Judge != nil || s.Send != nil {
+		if s.Prompt != "" || s.Run != "" || s.Judge != nil || s.Send != nil || s.Start != nil {
 			return fmt.Errorf("%s: a loop with a `steps:` body runs those steps — it has no prompt/run/judge/send of its own", where)
 		}
 		if len(s.Skills) > 0 || len(s.Tools) > 0 || len(s.Gates) > 0 || s.Decide != nil || len(s.State) > 0 {
@@ -312,6 +312,9 @@ func (d *Definition) validateLoop(s *Step, pos map[string]int) error {
 		body[b.ID] = true
 		if b.IsLoop() || len(b.Steps) > 0 {
 			return fmt.Errorf("%s: a loop inside a loop is not supported — split it into two steps", bw)
+		}
+		if b.Start != nil && b.Start.Mode() != "nowait" {
+			return fmt.Errorf("%s: a `start:` inside a loop body can only fire and forget — use a `start:` list to wait on several workflows", bw)
 		}
 		if len(b.Needs) > 0 || len(b.Consumes) > 0 || len(b.Produces) > 0 {
 			return fmt.Errorf("%s: a body step runs in order within its iteration — needs/consumes/produces have no meaning there", bw)

@@ -104,6 +104,47 @@ type Message struct {
 	Text        string              `json:"text"`
 	At          *time.Time          `json:"at,omitempty"`
 	Attachments []InboundAttachment `json:"attachments,omitempty"`
+
+	// ADR 0026 event fields. All optional: an adapter that predates them
+	// still produces a valid message.
+	Chat      string       `json:"chat,omitempty"`
+	ChatName  string       `json:"chatName,omitempty"`
+	ChatType  string       `json:"chatType,omitempty"` // "dm" | "group"
+	Kind      string       `json:"kind,omitempty"`     // "message" | "reaction" | "updated" | "deleted"
+	ReplyTo   *ReplyRef    `json:"replyTo,omitempty"`
+	Media     *MediaRef    `json:"media,omitempty"`
+	Mentions  []string     `json:"mentions,omitempty"`
+	FromOwner bool         `json:"fromOwner,omitempty"`
+	Reaction  *ReactionRef `json:"reaction,omitempty"`
+}
+
+// ReplyRef is the message a received message quotes.
+type ReplyRef struct {
+	ID     string `json:"id,omitempty"`
+	Sender string `json:"sender,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+
+// MediaRef describes an attachment that is fetched on demand.
+type MediaRef struct {
+	Kind string `json:"kind,omitempty"`
+	Mime string `json:"mime,omitempty"`
+	Name string `json:"name,omitempty"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// ReactionRef is a reaction event's target and emoji.
+type ReactionRef struct {
+	TargetID string `json:"targetId,omitempty"`
+	Emoji    string `json:"emoji,omitempty"`
+}
+
+// EventKind is Kind with its default, "message".
+func (m Message) EventKind() string {
+	if m.Kind == "" {
+		return "message"
+	}
+	return m.Kind
 }
 
 // ReceiveResult is what `<run> receive` prints. Cursor is persisted and handed
@@ -123,7 +164,11 @@ type Command struct {
 	Run       string
 	Env       map[string]string
 	Dir       string
-	Timeout   time.Duration
+	// StateDir is a stable per-server directory the adapter may keep state in
+	// (its echo ledger), passed as WFX_CHANNEL_STATE_DIR to every verb so
+	// send and receive see the same files. Empty = not set.
+	StateDir string
+	Timeout  time.Duration
 	// Gap is the minimum spacing between two sends on this channel.
 	Gap time.Duration
 }
@@ -212,6 +257,23 @@ func (c Command) Receive(ctx context.Context, req ReceiveRequest) (ReceiveResult
 	return res, nil
 }
 
+// Self runs the optional `<run> self` verb: the ids that are the account
+// itself ({"self": [id, ...]}). An adapter without the verb fails; callers
+// treat that as "unknown", not as an error worth surfacing.
+func (c Command) Self(ctx context.Context) ([]string, error) {
+	out, err := c.exec(ctx, "self", map[string]string{"version": Version, "channel": c.EntryName})
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Self []string `json:"self"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &res); err != nil {
+		return nil, fmt.Errorf("channel %s: self printed something that is not JSON: %w", c.EntryName, err)
+	}
+	return res.Self, nil
+}
+
 // ErrMaybeDelivered marks a send that was cut off rather than refused: the
 // adapter may already have delivered it, so it is neither retried nor
 // released from dedup.
@@ -271,6 +333,11 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 	// it is killed rather than after.
 	cmd.Env = append(cmd.Env, "WFX_CHANNEL="+c.EntryName, "WFX_CHANNEL_VERB="+verb,
 		fmt.Sprintf("WFX_CHANNEL_TIMEOUT_MS=%d", timeout.Milliseconds()))
+	if _, own := c.Env["WFX_CHANNEL_STATE_DIR"]; c.StateDir != "" && !own {
+		if err := os.MkdirAll(c.StateDir, 0o700); err == nil {
+			cmd.Env = append(cmd.Env, "WFX_CHANNEL_STATE_DIR="+c.StateDir)
+		}
+	}
 	cmd.Stdin = bytes.NewReader(body)
 	// A grandchild that outlives the killed shell holds stdout open; without
 	// this a timed-out adapter hangs the caller until that child exits.

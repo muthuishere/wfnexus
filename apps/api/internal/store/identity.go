@@ -27,6 +27,11 @@ type User struct {
 	Role        string    `json:"role"`
 	Project     string    `json:"project"`
 	Disabled    bool      `json:"disabled"`
+	// MustChange: the next password sign-in must set a new password (ADR 0025).
+	MustChange bool `json:"mustChange"`
+	// HasPassword says whether a password is set. The hash itself is never
+	// on this struct, so it can never be marshalled.
+	HasPassword bool      `json:"hasPassword"`
 	Created     time.Time `json:"createdAt"`
 }
 
@@ -42,11 +47,11 @@ type UserToken struct {
 	LastUsed *time.Time `json:"lastUsed,omitempty"`
 }
 
-const userCols = `id, name, display_name, role, project, disabled, created_at`
+const userCols = `id, name, display_name, role, project, disabled, must_change, password_hash <> '', created_at`
 
 func scanUser(row rowScanner) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.Created)
+	err := row.Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -61,7 +66,7 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 		INSERT INTO users (id, name, display_name, role, project)
 		VALUES ($1,$2,$3,$4,$5) RETURNING `+userCols,
 		u.ID, u.Name, u.DisplayName, u.Role, u.Project,
-	).Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.Created)
+	).Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created)
 }
 
 func (s *Store) UserByName(ctx context.Context, name string) (*User, error) {
@@ -83,6 +88,36 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// PasswordHashByName returns an ENABLED user and their stored password hash
+// (empty when none is set). A disabled user is ErrNotFound, exactly like an
+// unknown one, so the sign-in handler cannot tell them apart.
+func (s *Store) PasswordHashByName(ctx context.Context, name string) (*User, string, error) {
+	var hash string
+	u := &User{}
+	err := s.qrow(ctx, `SELECT `+userCols+`, password_hash FROM users WHERE name=$1 AND disabled = false`, name).
+		Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", ErrNotFound
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return u, hash, nil
+}
+
+// SetPassword stores a new hash (computed by the caller) and whether the next
+// sign-in must replace it.
+func (s *Store) SetPassword(ctx context.Context, name, hash string, mustChange bool) error {
+	res, err := s.exec(ctx, `UPDATE users SET password_hash=$2, must_change=$3 WHERE name=$1`, name, hash, mustChange)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // CountUsers is what the boot refusal reads: a non-loopback bind with zero
@@ -113,11 +148,11 @@ func (s *Store) UserByTokenHash(ctx context.Context, tokenHash string) (*User, *
 	u := &User{}
 	t := &UserToken{}
 	err := s.qrow(ctx, `
-		SELECT u.id, u.name, u.display_name, u.role, u.project, u.disabled, u.created_at,
+		SELECT u.id, u.name, u.display_name, u.role, u.project, u.disabled, u.must_change, u.password_hash <> '', u.created_at,
 		       t.id, t.label, t.project, t.created_at
 		  FROM user_tokens t JOIN users u ON u.id = t.user_id
 		 WHERE t.token_hash=$1 AND u.disabled = false`, tokenHash).
-		Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.Created,
+		Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created,
 			&t.ID, &t.Label, &t.Project, &t.Created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrNotFound

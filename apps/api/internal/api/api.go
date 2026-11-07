@@ -53,11 +53,16 @@ type Server struct {
 
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
+	// Password sign-in attempts, per source and per username (ADR 0025).
+	pwLimit *passwordLimiter
 
 	// authn answers "which person is this" for subject resolution and device
 	// approval (ADR 0017). Local users are the only implementation; the field
 	// exists so the next one is a constructor change, not a handler rewrite.
 	authn auth.Authenticator
+
+	// exposeLimit rate-limits the public hook and MCP endpoints (expose.go).
+	exposeLimit *rateLimiter
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -90,8 +95,8 @@ func isLoopback(addr string) bool {
 // bound anywhere else it is not. That is a property of the code rather than a
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
-	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(),
-		authn: auth.Local{Store: st}}
+	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
+		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst)}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -138,12 +143,16 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// the one-time sign-in link `wfx ui` asks for.
 		r.Post("/auth/session", s.browserSession)
 		r.Post("/auth/link", s.browserLink)
+		// Username and password (ADR 0025): the same session cookie.
+		r.Post("/auth/password", s.passwordSignIn)
+		r.Post("/auth/password/change", s.changeOwnPassword)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
 		r.Get("/users", s.listUsers)
 		r.Post("/users", s.createUser)
 		r.Put("/users/{name}", s.updateUser)
+		r.Post("/users/{name}/password", s.setUserPassword)
 		r.Delete("/users/{name}", s.deleteUser)
 		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
 		// be attributed and stored — see publishingEnabled. On a default
@@ -245,8 +254,17 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// Git-native workflows: a save on a git-backed project is a proposal.
 		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
+		// Inbound exposure (ADR 0027): issue, rotate and revoke the tokens.
+		r.Get("/workflows/{name}/expose", s.getExpose)
+		r.Post("/workflows/{name}/expose/{kind}", s.issueExpose)
+		r.Delete("/workflows/{name}/expose/{kind}", s.revokeExpose)
+		r.Get("/projects/{name}/expose", s.getProjectExpose)
+		r.Post("/projects/{name}/expose/{kind}", s.issueProjectExpose)
+		r.Delete("/projects/{name}/expose/{kind}", s.revokeProjectExpose)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		s.channelRoutes(r)
+		s.subscriptionRoutes(r)
+		s.conversationRoutes(r)
 		r.Post("/workflows/{name}/dryrun", s.dryRun)
 		r.Post("/dryrun", s.dryRunDraft)
 		r.Get("/runs", s.listRuns)
@@ -273,6 +291,11 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	// Prometheus text exposition, behind the same subject and permission as
 	// /api/metrics: a scraper sends a bearer token like any other client.
 	r.With(s.requireSubject, s.authorize).Get("/metrics", s.prometheus)
+	// The public doors (ADR 0027): outside /api, authenticated ONLY by a
+	// per-workflow (or per-project) token, never a user session.
+	r.Post("/hooks/{project}/{workflow}", s.hook)
+	r.HandleFunc("/mcp/{project}", s.mcpEndpoint)
+	r.HandleFunc("/mcp/{project}/{workflow}", s.mcpEndpoint)
 	r.Get("/*", s.ui)
 	return r
 }
@@ -970,7 +993,17 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		// stored answers with a definition rather than `null`.
 		def = definitionFromSteps(run, steps)
 	}
-	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": def})
+	// The runs this run's `start:` steps started (ADR 0026); the parent is
+	// on the run itself (parentRunId).
+	children, err := s.store.ChildRuns(r.Context(), id)
+	if err != nil {
+		writeErr(w, 500, fmt.Errorf("reading the child runs of run %s: %w", id, err))
+		return
+	}
+	if children == nil {
+		children = []*store.Run{}
+	}
+	writeJSON(w, 200, map[string]any{"run": run, "steps": steps, "artifacts": arts, "definition": def, "children": children})
 }
 
 // definitionFromSteps reconstructs the MINIMUM a reader needs — the workflow's

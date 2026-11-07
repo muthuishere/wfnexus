@@ -112,6 +112,7 @@ func (e *Engine) channelEntry(name string) (catalog.Channel, error) {
 
 func (e *Engine) adapter(c catalog.Channel) notify.Command {
 	cmd := notify.Command{EntryName: c.Name, Run: c.Run, Env: c.Env}
+	cmd.StateDir = e.channelStateDir()
 	// Relative to registries.json, so `node adapters/x.js` means the file
 	// beside the registry that names it.
 	if e.cfg.RegistriesPath != "" {
@@ -124,6 +125,17 @@ func (e *Engine) adapter(c catalog.Channel) notify.Command {
 		cmd.Gap = d
 	}
 	return cmd
+}
+
+// channelStateDir is the one directory every channel adapter of this server
+// keeps its state in (WFX_CHANNEL_STATE_DIR): beside the runs directory, so it
+// is stable across restarts and the same for `send` and `receive` — the echo
+// ledger a send writes is the file the next receive reads (ADR 0026).
+func (e *Engine) channelStateDir() string {
+	if e.cfg.WorkDir == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(filepath.Clean(e.cfg.WorkDir)), "channel-state")
 }
 
 // adapterErr scrubs an adapter's error before it reaches an event, a step
@@ -501,13 +513,12 @@ func (e *Engine) StartChannelReceivers(ctx context.Context) {
 					continue
 				}
 				for _, c := range cat.Channels.List() {
+					// A channel is read when it is inbound or has an active
+					// subscription, at the shortest interval either asks for.
+					every, reads := e.receiveEvery(c)
 					mu.Lock()
-					due := c.Inbound && !busy[c.Name] && !now.Before(next[c.Name])
+					due := reads && !busy[c.Name] && !now.Before(next[c.Name])
 					if due {
-						every := defaultReceiveEach
-						if d, err := time.ParseDuration(c.ReceiveEvery); err == nil && d > 0 {
-							every = d
-						}
 						next[c.Name] = now.Add(every)
 						busy[c.Name] = true
 					}
@@ -543,8 +554,8 @@ func (e *Engine) ReceiveNow(ctx context.Context, name string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !c.Inbound {
-		return 0, fmt.Errorf("channel %s is not inbound", c.Name)
+	if !c.Inbound && len(e.activeSubscriptions(c.Name)) == 0 {
+		return 0, fmt.Errorf("channel %s is not inbound and has no active subscription", c.Name)
 	}
 	cs, ok := e.chStore()
 	if !ok {
@@ -590,7 +601,7 @@ func (e *Engine) ReceiveNow(ctx context.Context, name string) (int, error) {
 			att = []byte("[]")
 		}
 		row := &model.ChannelMessage{Channel: c.Name, MsgID: m.ID, Sender: m.From, SenderName: m.Name,
-			Text: m.Text, Attachments: att, SentAt: m.At}
+			Text: m.Text, Attachments: att, SentAt: m.At, Event: eventJSON(m)}
 		fresh, err := cs.InsertChannelMessage(ctx, row)
 		if err != nil {
 			return n, err
@@ -618,6 +629,7 @@ func (e *Engine) handlePending(ctx context.Context, c catalog.Channel, cs channe
 		if len(row.Attachments) > 0 {
 			_ = json.Unmarshal(row.Attachments, &m.Attachments)
 		}
+		m = withEvent(m, row.Event)
 		runID, outcome := e.handleInbound(ctx, c, m)
 		if err := cs.SetChannelMessageOutcome(ctx, c.Name, m.ID, runID, outcome); err != nil {
 			return err
@@ -657,7 +669,9 @@ func (e *Engine) handleInbound(ctx context.Context, c catalog.Channel, m notify.
 		}
 		return pc.RunID, e.answerFromChat(ctx, c, m, pc, rest)
 	}
-	started, refused := 0, 0
+	// Subscriptions (ADR 0026) see every message that is not a pause answer.
+	routed, _ := e.routeSubscriptions(ctx, c, m)
+	started, refused := len(routed), 0
 	for _, def := range workflow.Sorted(e.Definitions()) {
 		matching := def.On.MatchingMessageTriggers(c.Name, m.Text)
 		if len(matching) == 0 {
@@ -689,6 +703,8 @@ func (e *Engine) handleInbound(ctx context.Context, c catalog.Channel, m notify.
 		started++
 	}
 	switch {
+	case len(routed) == 1 && started == 1:
+		return routed[0], "routed"
 	case started > 0:
 		return "", "triggered"
 	case refused > 0:

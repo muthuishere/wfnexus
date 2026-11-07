@@ -13,7 +13,14 @@ Schemas are in [`docs/schemas/`](schemas/).
 | `schemas/channel-receive-stdout.schema.json` | what `receive` must print |
 
 Reference adapter: [`adapters/apl-whatsapp.js`](../adapters/apl-whatsapp.js)
-(WhatsApp groups through the apl CLI). Test fixture: the fake adapter in
+(WhatsApp through the apl CLI). `APL_WA_GROUP` unset or `*` = inbox mode: every
+DM and group, cursor `<chat>|<id>`, sends need `target`. A JID = that chat only
+(the pre-0026 behaviour). Its echo ledger is a JSON-lines file of sent ids:
+`APL_WA_LEDGER`, else `$WFX_CHANNEL_STATE_DIR/apl-whatsapp-<label>.sent.jsonl`,
+else `~/.local/state/wfnexus/apl-whatsapp-<label>.sent.jsonl`; a `FromMe` row in
+it is dropped, any other `FromMe` row is emitted as `fromOwner`. Follow-up: the
+`apl serve /subscribe` push listener (until then, edits/deletes of messages
+older than the cursor are not seen). Test fixture: the fake adapter in
 `apps/api/internal/engine/fakeadapter_test.go`.
 
 ## Configuration
@@ -45,8 +52,15 @@ Reference adapter: [`adapters/apl-whatsapp.js`](../adapters/apl-whatsapp.js)
 | `target` | optional default address, passed through as `target` |
 | `inbound` | poll `receive` every `receiveEvery` (default `1m`) |
 | `allow` | sender ids whose replies may resolve a pause, and who may fire this channel's `message` triggers (unless a trigger lists its own). **Empty (default) = nobody.** |
+| `self` | the ids that are US on this channel (our WhatsApp JIDs, plain and device form). A group subscription with `activation: mention` (the default) starts a run only when a message mentions one of them or replies to one. Leave it out and wfnexus asks the adapter's optional `self` verb (cached; retried every 5 min on failure); if neither knows, such a subscription shows a **warning** and starts nothing from groups |
 | `sendGap` | minimum time between sends on this channel; sends are always one at a time |
 | `timeoutSec` | per invocation (default 60). The adapter is told it as `WFX_CHANNEL_TIMEOUT_MS` and should finish (or fail, saying so) before it |
+
+Every verb also gets `WFX_CHANNEL`, `WFX_CHANNEL_VERB` and
+`WFX_CHANNEL_STATE_DIR`: one stable per-server directory (`<dir of the runs
+dir>/channel-state`, created on demand) shared by `send` and `receive`, so
+state such as an echo ledger written by a send is the file the next receive
+reads. A channel's own `env` may override it.
 | `enabled` | `false` switches it off |
 
 `config.yaml` picks the server-wide default (pauses, and any `send:` that names
@@ -88,7 +102,22 @@ channels:
   fetches it should re-check and refuse redirects.
 - `target` is opaque to wfnexus: a group, a mailbox. Empty ⇒ the adapter's own default.
 
-**stdout** — optional: `{"id": "<transport message id>"}`.
+Optional richer sends (ADR 0026; an adapter that cannot do one must fail, not
+fall back to plain text):
+
+| field | meaning |
+|---|---|
+| `replyTo` `{id, sender}` | quote-reply to a message; `sender` is the quoted message's sender (needed in groups) |
+| `mentions` `[jid]` | ids to @mention; put `@<number>` in `text` too |
+| `attachment.kind` | `file` (default), `image`, `voice` (OGG/Opus note), `sticker` (WebP) |
+| `reaction` `{targetId, emoji, sender}` | react to a message instead of posting; empty `emoji` removes it |
+| `edit` `{id}` | edit one of OUR sent messages; `text` is the new text |
+| `delete` `{id}` | delete one of OUR sent messages for everyone |
+
+**stdout** — optional: `{"id": "<transport message id>", "status": "sent"}`.
+On a non-zero exit an adapter may print `{"status": "failed" | "uncertain",
+"error": "…"}`: `failed` = the transport said no; `uncertain` = it may have gone
+out (timeout, lost answer, or an attachment the transport did not confirm).
 
 **exit** — `0` means sent. Anything else is a failure: wfnexus shows the
 (scrubbed) **stderr** on the run and does **not** retry. A send killed at the
@@ -129,7 +158,19 @@ triggers.
 }
 ```
 
-- Oldest first. Leave out messages the server itself sent.
+- Oldest first. Leave out messages the server itself sent (its echoes).
+- Optional event fields (ADR 0026; adapters without them stay valid):
+
+  | field | meaning |
+  |---|---|
+  | `chat`, `chatName` | the conversation id and its display name; the conversation key is `(channel, chat)` |
+  | `chatType` | `dm` or `group` |
+  | `kind` | `message` (default), `reaction`, `updated` (edited), `deleted` |
+  | `replyTo` `{id, sender, text}` | the message this one quotes |
+  | `media` `{kind, mime, name, size}` | metadata only; `kind` is image, video, audio, voice, sticker or document |
+  | `mentions` `[jid]` | who was @mentioned |
+  | `reaction` `{targetId, emoji}` | for `kind: reaction`; empty `emoji` = removed |
+  | `fromOwner` | `true` when the account itself sent it but this adapter did not (typed on the phone) |
 - `id` is the transport's message id. wfnexus stores each `(channel, id)` once,
   so returning a message twice is harmless.
 - `from` is what the allow list is matched against, exactly.
@@ -142,6 +183,13 @@ triggers.
 
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
+
+## `<run> self` (optional)
+
+Prints `{"self": ["<id>", ...]}`: who the account is, for a channel with no
+`self` list. Read-only; an adapter without it just fails the verb. The
+reference adapter answers from `wacli auth status` (the linked JID, with and
+without its device suffix).
 
 ## What wfnexus does with a received message
 
@@ -162,6 +210,28 @@ error is kept and shown by `wfx channels`; the cursor does not move.
    `input.message = {channel, id, from, name, text, at, attachments}` and
    `triggeredBy = <from>`. The text is **untrusted**: never template it into a
    `run:` command or treat it as instructions.
+4. Also (ADR 0026), the message is offered to every **active subscription**
+   (`subscriptions` in registries.json; `wfx sub …`, `/api/subscriptions`, or
+   a project's Subscriptions tab) whose `channel`, `chat` (`*` = any) and
+   `events` (default `message`) match. Per subscription, in order:
+   message `at` before the subscription's `startedAt` → `backlog` (stored, no
+   reply); `mode: observe` → `observed`; sender not on its `allow` (empty =
+   nobody, `*` = everyone; `fromOwner` passes) → `refused`; a `group` message
+   that neither mentions nor replies to one of the channel's `self` ids, unless
+   `activation: always` → `inactive`; an `exclusive` subscription already took
+   it → `skipped`; else the target workflow starts with
+   `input.message` (the event, with chat/chatType/kind/replyTo/media/mentions/
+   fromOwner/reaction) and `input.subscription` (name, instructions,
+   responsePolicy, mode, memory, skills, owner). `(subscription, message id)`
+   is unique in `subscription_deliveries`, so a repeat starts nothing. A
+   matched event with a `chat` starts through its conversation lane
+   `(channel, chat)`: one run per chat at a time, messages within 3 s batched
+   into one run (`input.messages`). A subscription that lists
+   `workflow.completed` in `events` also receives the completion events of
+   `start: … continue: event` children from runs in that chat
+   (`input.event`), once per child run. A
+   channel with an active subscription is read even when not `inbound`, at the
+   shortest of its subscriptions' intervals (`30s`, `1m`, `2m`).
 
 ## Adapter author rules
 

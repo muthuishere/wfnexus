@@ -75,7 +75,11 @@ function gatesOf(s) {
 
 function triggers(on) {
 	if (!on) return 'manual only (`wfx run`)';
+	// `on:` may be a string or a list of event names, as in Actions.
+	if (typeof on === 'string') on = { [on]: null };
+	else if (Array.isArray(on)) on = Object.fromEntries(on.map((e) => [e, null]));
 	const t = [];
+	if ('workflow_call' in on) t.push('called by other workflows');
 	if ('workflow_dispatch' in on || 'dispatch' in on) t.push('manual (`wfx run`)');
 	for (const s of on.schedule ?? []) t.push(`schedule ${code(s.cron)}`);
 	if (on.repository_dispatch) t.push(`repository_dispatch ${(on.repository_dispatch.types ?? []).map(code).join(', ')}`);

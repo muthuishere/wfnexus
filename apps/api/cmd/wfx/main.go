@@ -91,6 +91,8 @@ func run(args []string) error {
 		return sendCmd(rest)
 	case "messages":
 		return messagesCmd(rest)
+	case "sub", "subs", "subscription", "subscriptions":
+		return subCmd(rest)
 	case "channels", "channel":
 		return channelsCmd(rest)
 	case "registry":
@@ -125,6 +127,10 @@ func run(args []string) error {
 		return login(rest)
 	case "logout":
 		return logout(rest)
+	case "user", "users":
+		return userCmd(rest)
+	case "role", "roles":
+		return roleCmd(rest)
 	case "ui", "open":
 		return uiCmd(rest)
 	case "context", "contexts":
@@ -155,6 +161,8 @@ func run(args []string) error {
 		return stateCmd(rest)
 	case "memory":
 		return memoryCmd(rest)
+	case "expose":
+		return exposeCmd(rest)
 	case "prices":
 		return pricesCmd(rest)
 	case "templates", "template":
@@ -210,6 +218,8 @@ func usage() {
   wfx login --url <host>           sign in to a host (prints a code; no browser needed here)
   wfx login --approve <code>       approve a sign-in code shown elsewhere (e.g. the web UI)
   wfx logout [--url <host>]        revoke this host's token and forget it locally
+  wfx user ls | add NAME --role R | disable NAME | passwd [NAME] | role NAME R   users (admin)
+  wfx role ls | set NAME PERM,…    roles and their permissions (admin)
   wfx ui [--url <host>] [--print] open the web UI signed in (one-time link, 60s)
   wfx profile create <name> --url U [--via ssh://user@host [--key k] [--accept-host-key]]
                                    register a server you can already reach (kubectl-style)
@@ -248,6 +258,8 @@ func usage() {
   wfx memory forget --workflow w   delete a workflow's memory (or: wfx memory forget <id>)
   wfx memory add --workflow w "t"  write a lesson the next run's agent steps will read
   wfx memory edit <id> "text"      rewrite one entry's text
+  wfx expose hook|mcp <wf>         a token-protected hook URL / MCP endpoint for one workflow (--rotate, --revoke)
+  wfx expose mcp --project p       one MCP token for every opted-in workflow of a project
   wfx prices                       what each model costs per 1M tokens (approx until set)
   wfx prices set MODEL IN OUT      set it, e.g. claude-sonnet 3 15; MODEL * is the fallback
   wfx prices rm MODEL              drop it; a built-in family returns to its default
@@ -268,6 +280,7 @@ func usage() {
   wfx messages [--channel c] [--run id]  messages received on channels, newest first, with what each did
   wfx channels                     channels, which is the default, inbound or not, allow-list size, last receive error
   wfx channels receive <name>      poll an inbound channel now instead of waiting for its interval
+  wfx sub ls|show|add|update|pause|resume|rm|validate   subscriptions: which chat messages start which workflow (ADR 0026)
   wfx dryrun <workflow> [-i k=v]   would it run here? no model, no repo, no writes
   wfx eval <workflow> --corpus f.yaml --providers a,b [--json]  the portability matrix: same workflow, N backends, pass/tokens/$
   wfx judge -q q.yaml --items f.jsonl  calibrated typed questions per item (JEV); bands no|uncertain|yes

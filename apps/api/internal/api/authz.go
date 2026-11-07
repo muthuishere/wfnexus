@@ -69,7 +69,12 @@ var resourcePerms = map[string][2]string{
 	// Sending on a channel is what a `send:` step does; reading one is
 	// reading what runs were told (ADR 0023).
 	"channels": {PermRunsRead, PermRunsWrite},
-	"skills":   {PermRegistryRead, PermRegistryWrite},
+	// Subscriptions (ADR 0026) are registry entries: they decide which
+	// workflow a chat can start, so changing one is a registry write.
+	"subscriptions": {PermRegistryRead, PermRegistryWrite},
+	// A conversation is the runs of one chat (ADR 0026).
+	"conversations": {PermRunsRead, PermRunsWrite},
+	"skills":        {PermRegistryRead, PermRegistryWrite},
 	// Git repositories of skills: importing one changes the registry.
 	"skill-sources": {PermRegistryRead, PermRegistryWrite},
 	"tools":         {PermRegistryRead, PermRegistryWrite},
@@ -191,6 +196,10 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			// table test exists so this never fires in practice; if it does,
 			// the fail-closed direction is the only defensible one.
 			writeErr(w, http.StatusForbidden, errors.New("forbidden"))
+			return
+		}
+		if passwordChangeRequired(r) {
+			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return
 		}
 		if !s.can(r, perm) {

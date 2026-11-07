@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { api, onUnauthenticated, type SignInStart, type WhoAmI } from '../api'
 
 // WHO the browser is talking to the server as — and, when it is nobody, how to
-// fix that. Sign-in is approved from a TERMINAL (ADR 0017, 0022), so this
-// component never collects a credential. It gives the browser a session in one
-// of two ways, both ending in an HttpOnly cookie the page never sees:
+// fix that. Off loopback the card offers a username and password (ADR 0025);
+// beside it, the terminal ways in (ADR 0017, 0022). All of them end in the same
+// HttpOnly cookie the page never sees:
+//   - the password form posts to /api/auth/password;
 //   - `wfx ui` in a signed-in terminal opens a one-time link that signs this
 //     browser in directly (what a person on the server's own machine uses);
 //   - this card starts a device grant and shows its code; the person runs
@@ -35,11 +36,15 @@ export default function Identity() {
 
   if (!needsLogin) {
     if (!who?.authenticated) return null   // the solo install: no chrome at all
+    // A first sign-in (or an admin reset) must set a new password before
+    // anything else; the server refuses every other call until it is done.
+    if (who.mustChange) return <ChangePasswordCard forced onDone={() => location.reload()} />
     const signOut = () => { api.signOut().catch(() => {}).finally(() => location.reload()) }
     return (
       <span className="muted" style={{ fontSize: 'var(--fs-2xs)', display: 'inline-flex', gap: 8, alignItems: 'center' }}
         title={who.role ? `${who.kind} · ${who.role}` : who.kind}>
         {who.name}
+        {who.kind === 'user' && who.authRequired ? <a className="ghost small" href="#/password">Password</a> : null}
         {who.kind === 'user' ? <button className="ghost small" onClick={signOut}>Sign out</button> : null}
       </span>
     )
@@ -116,10 +121,12 @@ function SignInCard({ locked }: { locked: string }) {
       }}
     >
       <div className="card" style={{ maxWidth: 480, width: '100%' }}>
-        <h2>Sign in from your terminal</h2>
+        <h2>Sign in</h2>
+        <PasswordForm />
+
+        <h3 style={{ marginTop: 18 }}>Or sign in from your terminal</h3>
         <p className="muted" style={{ marginBottom: 10 }}>
-          This server needs a credential. The browser never takes a password or token —
-          a terminal that is already signed in lets it in.
+          A terminal that is already signed in can let this browser in without a password.
         </p>
 
         <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600 }}>On the machine running wfx, open the UI signed in:</div>
@@ -151,3 +158,96 @@ function SignInCard({ locked }: { locked: string }) {
     </div>
   )
 }
+
+/** Username and password (ADR 0025). An unknown user and a wrong password get
+ *  the same message from the server, and this shows it as given. */
+function PasswordForm() {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    setBusy(true); setError('')
+    api.passwordSignIn(username, password).then(r => {
+      if (r.ok) { location.reload(); return }
+      setPassword(''); setError(r.error || 'Sign-in failed'); setBusy(false)
+    }, () => { setError('Could not reach the server'); setBusy(false) })
+  }
+  return (
+    <form onSubmit={submit} aria-label="Sign in with a password" style={{ display: 'grid', gap: 8, margin: '8px 0 4px' }}>
+      <label>Username
+        <input name="username" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required />
+      </label>
+      <label>Password
+        <input name="password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required />
+      </label>
+      {error ? <div role="status" className="danger-text" style={{ fontSize: 'var(--fs-sm)' }}>{error}</div> : null}
+      <div><button type="submit" disabled={busy || !username || !password}>{busy ? 'Signing in…' : 'Sign in'}</button></div>
+    </form>
+  )
+}
+
+/** Set a new password, proving the current one. `forced` is the must-change
+ *  screen after a first sign-in or an admin reset: nothing else is reachable
+ *  until it is done, so it is a full-screen card with only a sign-out beside it. */
+export function ChangePasswordCard({ forced, onDone }: { forced?: boolean; onDone?: () => void }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [again, setAgain] = useState('')
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+  const tooShort = next.length > 0 && [...next].length < MIN_PASSWORD
+  const mismatch = again.length > 0 && again !== next
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    setError('')
+    api.changePassword(current, next).then(() => {
+      setDone(true); setCurrent(''); setNext(''); setAgain('')
+      onDone?.()
+    }, err => setError(err instanceof Error ? err.message : String(err)))
+  }
+  const form = (
+    <form onSubmit={submit} aria-label="Change password" style={{ display: 'grid', gap: 8, maxWidth: 420 }}>
+      {forced ? (
+        <p className="muted">This is a one-time password. Choose your own before you continue.</p>
+      ) : null}
+      <label>Current password
+        <input name="current" type="password" autoComplete="current-password" value={current} onChange={e => setCurrent(e.target.value)} required />
+      </label>
+      <label>New password ({MIN_PASSWORD}+ characters)
+        <input name="new" type="password" autoComplete="new-password" value={next} onChange={e => setNext(e.target.value)} required />
+      </label>
+      <label>New password again
+        <input name="again" type="password" autoComplete="new-password" value={again} onChange={e => setAgain(e.target.value)} required />
+      </label>
+      {tooShort ? <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>At least {MIN_PASSWORD} characters.</div> : null}
+      {mismatch ? <div className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>The two new passwords differ.</div> : null}
+      {error ? <div role="status" className="danger-text" style={{ fontSize: 'var(--fs-sm)' }}>{error}</div> : null}
+      {done && !forced ? <div role="status" className="muted">Password changed.</div> : null}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button type="submit" disabled={!current || !next || tooShort || mismatch || again !== next}>Change password</button>
+        {forced ? (
+          <button type="button" className="ghost" onClick={() => { api.signOut().catch(() => {}).finally(() => location.reload()) }}>Sign out</button>
+        ) : null}
+      </div>
+    </form>
+  )
+  if (!forced) return form
+  return (
+    <div role="alert" style={{
+      position: 'fixed', inset: 0, zIndex: 100, display: 'flex',
+      alignItems: 'center', justifyContent: 'center', padding: 16,
+      background: 'rgba(20, 32, 58, .45)',
+    }}>
+      <div className="card" style={{ maxWidth: 480, width: '100%' }}>
+        <h2>Set a new password</h2>
+        {form}
+      </div>
+    </div>
+  )
+}
+
+/** The server's rule (auth.MinPasswordLen); the server enforces it, this only
+ *  says so before the round trip. */
+const MIN_PASSWORD = 12

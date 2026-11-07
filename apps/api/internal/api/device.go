@@ -73,6 +73,22 @@ func (l *verifyLimiter) allow(source string, now time.Time) bool {
 	return len(l.hits[source]) <= verifyPerMinute
 }
 
+// full reports, WITHOUT recording anything, whether source has already used
+// its window. Password sign-in uses it for the per-username key, which counts
+// failures only (password.go).
+func (l *verifyLimiter) full(source string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := now.Add(-time.Minute)
+	n := 0
+	for _, t := range l.hits[source] {
+		if t.After(cutoff) {
+			n++
+		}
+	}
+	return n >= verifyPerMinute
+}
+
 func sourceOf(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

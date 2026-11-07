@@ -67,6 +67,15 @@ func fakeAdapterMain() {
 			}
 		}
 		json.NewEncoder(os.Stdout).Encode(res)
+	case "self":
+		// Answers only when $FAKE_DIR/self holds an id; otherwise it is an
+		// adapter without the optional verb.
+		id, err := os.ReadFile(filepath.Join(dir, "self"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake adapter: unknown verb self")
+			os.Exit(2)
+		}
+		fmt.Printf(`{"self":[%q]}`, strings.TrimSpace(string(id)))
 	default:
 		fmt.Fprintln(os.Stderr, "fake adapter: unknown verb "+verb)
 		os.Exit(2)

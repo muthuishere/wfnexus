@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -102,5 +103,17 @@ func TestDeriveOutcome(t *testing.T) {
 	}
 	if got := DeriveOutcome("done", "", nil); got != "ok" {
 		t.Fatalf("empty: %q", got)
+	}
+}
+
+// A cut through a multi-byte character used to produce invalid UTF-8, which
+// Postgres refuses when the outcome is stored.
+func TestTruncationKeepsValidUTF8(t *testing.T) {
+	long := strings.Repeat("é", maxOutcomeLen)
+	if oc := NormalizeOutcome("ok: " + long); !utf8.ValidString(oc) {
+		t.Fatalf("outcome is not valid UTF-8")
+	}
+	if s := trim(strings.Repeat("€", 10), 7); !utf8.ValidString(s) {
+		t.Fatalf("trim is not valid UTF-8: %q", s)
 	}
 }

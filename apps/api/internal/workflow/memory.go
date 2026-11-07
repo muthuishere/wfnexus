@@ -19,6 +19,12 @@ import (
 //	  include: [workflow:triage, workflow:other-repo/deploy, project, global]
 //	  budget: 2000   # tokens of memory one step may be given
 //	  retain: 30     # raw run records kept before folding into the digest
+//	  scope: workflow  # one memory for every chat (default: per conversation)
+//
+// A run that came from a chat (its input has message.channel and
+// message.chat) remembers per CONVERSATION by default: its run records and
+// digest are that chat's, while lessons stay workflow-wide (ADR 0026).
+// `scope: workflow` opts out.
 //
 // A step's `memory:` narrows the workflow's — it may switch memory off or take
 // a smaller include list or budget — and never switches on what the workflow
@@ -28,12 +34,20 @@ type Memory struct {
 	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
 	Budget  int      `yaml:"budget,omitempty" json:"budget,omitempty"`
 	Retain  int      `yaml:"retain,omitempty" json:"retain,omitempty"`
+	Scope   string   `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
+
+// Memory scopes.
+const (
+	MemoryScopeConversation = "conversation"
+	MemoryScopeWorkflow     = "workflow"
+)
 
 type memoryFields struct {
 	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
 	Budget  int      `yaml:"budget,omitempty" json:"budget,omitempty"`
 	Retain  int      `yaml:"retain,omitempty" json:"retain,omitempty"`
+	Scope   string   `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 func (m *Memory) UnmarshalYAML(n *yaml.Node) error {
@@ -49,7 +63,7 @@ func (m *Memory) UnmarshalYAML(n *yaml.Node) error {
 	if err := n.Decode(&f); err != nil {
 		return fmt.Errorf("memory: %w", err)
 	}
-	*m = Memory{Include: f.Include, Budget: f.Budget, Retain: f.Retain}
+	*m = Memory{Include: f.Include, Budget: f.Budget, Retain: f.Retain, Scope: f.Scope}
 	return nil
 }
 
@@ -57,7 +71,7 @@ func (m Memory) MarshalYAML() (any, error) {
 	if m.Off {
 		return false, nil
 	}
-	return memoryFields{Include: m.Include, Budget: m.Budget, Retain: m.Retain}, nil
+	return memoryFields{Include: m.Include, Budget: m.Budget, Retain: m.Retain, Scope: m.Scope}, nil
 }
 
 func (m *Memory) UnmarshalJSON(b []byte) error {
@@ -70,7 +84,7 @@ func (m *Memory) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return fmt.Errorf("memory: %w", err)
 	}
-	*m = Memory{Include: f.Include, Budget: f.Budget, Retain: f.Retain}
+	*m = Memory{Include: f.Include, Budget: f.Budget, Retain: f.Retain, Scope: f.Scope}
 	return nil
 }
 
@@ -78,7 +92,7 @@ func (m Memory) MarshalJSON() ([]byte, error) {
 	if m.Off {
 		return []byte("false"), nil
 	}
-	return json.Marshal(memoryFields{Include: m.Include, Budget: m.Budget, Retain: m.Retain})
+	return json.Marshal(memoryFields{Include: m.Include, Budget: m.Budget, Retain: m.Retain, Scope: m.Scope})
 }
 
 // MemorySource is one parsed `include:` entry.
@@ -117,6 +131,9 @@ func (m *Memory) validate(where string) error {
 	if m.Budget < 0 || m.Retain < 0 {
 		return fmt.Errorf("%s: memory budget and retain must not be negative", where)
 	}
+	if m.Scope != "" && m.Scope != MemoryScopeConversation && m.Scope != MemoryScopeWorkflow {
+		return fmt.Errorf("%s: memory scope: want conversation or workflow, got %q", where, m.Scope)
+	}
 	for _, inc := range m.Include {
 		if _, err := ParseMemorySource(inc); err != nil {
 			return fmt.Errorf("%s: %w", where, err)
@@ -137,6 +154,8 @@ type MemoryPlan struct {
 	Include []string
 	Budget  int // tokens
 	Retain  int
+	// Scope is conversation (the default) or workflow.
+	Scope string
 }
 
 // EffectiveMemory resolves the workflow's and the step's `memory:` into one
@@ -154,6 +173,9 @@ func EffectiveMemory(def *Definition, step *Step) MemoryPlan {
 		}
 		if w.Retain > 0 {
 			p.Retain = w.Retain
+		}
+		if w.Scope != "" {
+			p.Scope = w.Scope
 		}
 	}
 	if step != nil && step.Memory != nil {
@@ -179,6 +201,10 @@ func EffectiveMemory(def *Definition, step *Step) MemoryPlan {
 		}
 		if s.Budget > 0 && s.Budget < p.Budget {
 			p.Budget = s.Budget
+		}
+		// A step may narrow conversation memory to the workflow-wide one.
+		if s.Scope == MemoryScopeWorkflow {
+			p.Scope = s.Scope
 		}
 	}
 	return p

@@ -49,6 +49,14 @@ type Store interface {
 	SetRunOutcome(ctx context.Context, id uuid.UUID, outcome string) error
 	ProjectRunActivity(ctx context.Context) (map[string]model.ProjectActivity, error)
 	RunsInStatus(ctx context.Context, statuses ...string) ([]*model.Run, error)
+	SetRunLinks(ctx context.Context, id uuid.UUID, parentRunID, parentStepID, parentMode, conversation string) error
+	ChildRuns(ctx context.Context, parent uuid.UUID) ([]*model.Run, error)
+
+	// conversations (conversation.go)
+	TouchConversation(ctx context.Context, c model.Conversation) error
+	SetConversationState(ctx context.Context, channel, chat, state string) error
+	GetConversation(ctx context.Context, channel, chat string) (model.Conversation, error)
+	ListConversations(ctx context.Context, limit int) ([]model.Conversation, error)
 
 	// steps
 	EnsureStep(ctx context.Context, runID uuid.UUID, stepID string, position int) error

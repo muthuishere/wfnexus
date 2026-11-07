@@ -103,6 +103,32 @@ func TestCommandSendsTheEnvelopeOnStdinAndReportsStderr(t *testing.T) {
 	}
 }
 
+// send and receive get the SAME WFX_CHANNEL_STATE_DIR, so the echo ledger a
+// send appends to is the file the next receive reads (ADR 0026).
+func TestSendAndReceiveShareTheStateDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell fixture")
+	}
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	log := filepath.Join(dir, "log")
+	c := Command{EntryName: "c", StateDir: state,
+		Run: `echo "$WFX_CHANNEL_VERB=$WFX_CHANNEL_STATE_DIR" >> ` + log + `; echo '{"cursor":"","messages":[]}'; true`}
+	if _, err := c.Send(context.Background(), Envelope{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Receive(context.Background(), ReceiveRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(log)
+	if want := "send=" + state + "\nreceive=" + state + "\n"; string(raw) != want {
+		t.Fatalf("env seen:\n%s\nwant:\n%s", raw, want)
+	}
+	if fi, err := os.Stat(state); err != nil || !fi.IsDir() {
+		t.Fatalf("state dir not created: %v", err)
+	}
+}
+
 // An attachment URL that would make the adapter fetch from inside the network
 // is refused before it reaches the adapter.
 func TestAttachmentURLRefusesInternalTargets(t *testing.T) {

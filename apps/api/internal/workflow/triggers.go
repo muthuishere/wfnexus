@@ -174,6 +174,11 @@ const (
 	TriggerRepositoryDispatch TriggerKind = "repository_dispatch"
 	TriggerWorkflowCall       TriggerKind = "workflow_call"
 	TriggerMessage            TriggerKind = "message"
+	// TriggerSubscription is a run the router started for a subscription
+	// (ADR 0026). An operator chose the target workflow, the way a person
+	// chooses what to dispatch, so any workflow a person may dispatch — or
+	// that takes messages — may be a subscription's target.
+	TriggerSubscription TriggerKind = "subscription"
 )
 
 // Allows reports whether this workflow may be started by that trigger.
@@ -187,9 +192,11 @@ func (t Triggers) Allows(k TriggerKind) bool {
 	// path — would otherwise be startable by nothing at all, and the failure
 	// reads as "it declares `on: `", which explains nothing.
 	if t.none() {
-		return k == TriggerDispatch
+		return k == TriggerDispatch || k == TriggerSubscription
 	}
 	switch k {
+	case TriggerSubscription:
+		return t.Dispatch || len(t.Message) > 0
 	case TriggerDispatch:
 		return t.Dispatch
 	case TriggerSchedule:

@@ -114,7 +114,7 @@ export type Decision = {
   answers?: Record<string, DecisionAnswer>; calibrated?: boolean; model?: string
 }
 
-export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; /** headline verdict `ok|incident|waiting|failed: text` (engine/story.go) */ outcome?: string; createdAt: string; updatedAt: string }
+export type Run = { id: string; project: string; workflow: string; status: string; input: any; currentStep: string; error: string; startedAt?: string | null; /** who started it (ADR 0021): a user, a claimed actor, or trigger:<kind> */ triggeredBy?: string; /** headline verdict `ok|incident|waiting|failed: text` (engine/story.go) */ outcome?: string; /** the run whose `start:` step started this one (ADR 0026) */ parentRunId?: string; parentStepId?: string; parentMode?: string; /** conversation key `<channel>:<chat>` */ conversation?: string; createdAt: string; updatedAt: string }
 export type StepRun = {
   id: string; runId: string; stepId: string; position: number; status: string; attempts: number; turns: number
   prompt: string; output: any; rawText: string; error: string; usage: any; startedAt?: string; finishedAt?: string
@@ -126,7 +126,7 @@ export type StepRun = {
   skipReason?: string
 }
 export type Artifact = { id: string; runId: string; stepId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }
-export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow }
+export type RunDetail = { run: Run; steps: StepRun[]; artifacts: Artifact[]; definition: Workflow; /** runs this run's `start:` steps started */ children?: Run[] }
 export type Event = { id: number; runId: string; stepId: string; kind: string; payload: any; createdAt: string }
 
 // ── the registries a step draws from ────────────────────────────────────────
@@ -245,7 +245,23 @@ export type WhoAmI = {
   authenticated: boolean
   loopback?: boolean
   kind?: string; name?: string; role?: string; project?: string
+  /** true off loopback: the password form and the admin pages apply (ADR 0025) */
+  authRequired?: boolean
+  /** the signed-in person must set a new password before anything else */
+  mustChange?: boolean
 }
+
+/** A person (GET /api/users). The password hash never leaves the server;
+ *  only whether one is set. */
+export type User = {
+  id: string; name: string; displayName: string; role: string; project: string
+  disabled: boolean; mustChange: boolean; hasPassword: boolean; createdAt: string
+}
+/** A role is a row: a name and its permission strings ("*" is everything). */
+export type Role = { name: string; permissions: string[] }
+
+const send = (method: string, url: string, body?: unknown) =>
+  fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 
 // A 401 is handled ONCE, here, rather than by every page: any call that comes
 // back unauthenticated notifies the listeners, and the shell explains that
@@ -321,6 +337,22 @@ export type ChannelMessage = {
   attachments?: Array<{ url?: string; filename?: string; mime?: string }>
   at?: string; runId?: string; outcome?: string; receivedAt: string; handled?: boolean
 }
+/** A subscription (ADR 0026): which messages on a channel start which workflow. */
+export type Subscription = {
+  name: string; channel: string; chat: string; events?: string[]; interval?: string
+  workflow: string; version?: string; skills?: string[]; instructions?: string
+  responsePolicy?: string; memory?: string; mode?: string; activation?: string; allow?: string[]
+  owner?: string; status?: string; error?: string; startedAt?: string; createdAt?: string; updatedAt?: string
+  /** the mode actually applied (exclusive when it replies, else fanout) */
+  effectiveMode?: string
+  /** why it cannot route right now, even though it is stored active */
+  problem?: string
+  /** routes, but will surprise (e.g. a group subscription on a channel with no self ids) */
+  warning?: string
+}
+export type SubscriptionDelivery = {
+  subscription: string; msgId: string; channel: string; chat?: string; runId?: string; outcome: string; createdAt: string
+}
 export type ModelPrice = { model: string; in: number; out: number; seeded: boolean; updatedAt?: string }
 
 /** One entry of the platform's env store. A secret arrives with NO value: the
@@ -386,6 +418,27 @@ export const api = {
   },
   /** Revoke this browser's token and clear its cookie. */
   signOut: () => j(fetch('/api/tokens/self', { method: 'DELETE' })),
+  /** Username and password (ADR 0025). Answered with the same session cookie
+   *  as the device grant. A failure is NOT a 401 broadcast: the form shows it. */
+  passwordSignIn: async (username: string, password: string): Promise<{ ok: boolean; mustChange?: boolean; error?: string }> => {
+    const res = await post('/api/auth/password', { username, password })
+    const body = await res.json().catch(() => ({}))
+    return res.ok ? { ok: true, mustChange: !!body.mustChange } : { ok: false, error: body.error || res.statusText }
+  },
+  changePassword: (current: string, next: string) =>
+    j<{ changed: boolean }>(post('/api/auth/password/change', { current, new: next })),
+  users: () => j<User[]>(fetch('/api/users')),
+  createUser: (u: { name: string; role: string; project?: string; displayName?: string }) =>
+    j<{ user: User }>(post('/api/users', u)),
+  updateUser: (u: User) =>
+    j<User>(send('PUT', `/api/users/${encodeURIComponent(u.name)}`,
+      { displayName: u.displayName, role: u.role, project: u.project, disabled: u.disabled })),
+  /** An admin reset. With no password the server generates one, returned once. */
+  resetPassword: (name: string, password?: string) =>
+    j<{ password?: string; mustChange: boolean }>(post(`/api/users/${encodeURIComponent(name)}/password`, password ? { password } : {})),
+  roles: () => j<Role[]>(fetch('/api/roles')),
+  saveRole: (name: string, permissions: string[]) =>
+    j<Role>(send('PUT', `/api/roles/${encodeURIComponent(name)}`, { permissions })),
   workflows: () => j<Workflow[]>(fetch('/api/workflows')),
   workflow: (name: string) => j<Workflow>(fetch(`/api/workflows/${name}`)),
   reload: () => j<Workflow[]>(post('/api/workflows/reload')),
@@ -442,6 +495,18 @@ export const api = {
     if (q.limit) p.set('limit', String(q.limit))
     return j<ChannelMessage[]>(fetch('/api/channels/messages?' + p.toString()))
   },
+  subscriptions: (project?: string) =>
+    j<Subscription[]>(fetch('/api/subscriptions' + (project ? `?project=${encodeURIComponent(project)}` : ''))),
+  subscription: (name: string) =>
+    j<{ subscription: Subscription; deliveries: SubscriptionDelivery[] }>(fetch(`/api/subscriptions/${encodeURIComponent(name)}`)),
+  saveSubscription: (s: Subscription) =>
+    j<Subscription>(fetch(`/api/subscriptions/${encodeURIComponent(s.name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s),
+    })),
+  subscriptionAction: (name: string, action: 'pause' | 'resume' | 'validate') =>
+    j<Subscription>(post(`/api/subscriptions/${encodeURIComponent(name)}/${action}`)),
+  deleteSubscription: (name: string) =>
+    j(fetch(`/api/subscriptions/${encodeURIComponent(name)}`, { method: 'DELETE' })),
   setPrice: (p: { model: string; in: number; out: number }) =>
     j<{ ok: boolean }>(fetch('/api/prices', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
@@ -469,6 +534,14 @@ export const api = {
     j<MemoryEntry>(fetch(`/api/memory/${encodeURIComponent(id)}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
     })),
+  /** Inbound exposure (ADR 0027): the hook URL and MCP endpoint, never a token. */
+  workflowExpose: (name: string) =>
+    j<ExposeView>(fetch(`/api/workflows/${encodeURIComponent(name)}/expose`)),
+  /** Issue (or rotate) a token. The answer is the ONLY time the token is shown. */
+  issueExpose: (name: string, kind: ExposeKind, rotate = false) =>
+    j<ExposeIssued>(post(`/api/workflows/${encodeURIComponent(name)}/expose/${kind}`, { rotate })),
+  revokeExpose: (name: string, kind: ExposeKind) =>
+    j<{ ok: boolean; revoked: number }>(fetch(`/api/workflows/${encodeURIComponent(name)}/expose/${kind}`, { method: 'DELETE' })),
   /** When the workflow's cron fires next (UTC instant), or null when unscheduled. */
   workflowSchedule: (name: string) =>
     j<{ nextRunAt: string | null; crons: string[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/schedule`)),
@@ -588,4 +661,29 @@ export type Metrics = {
     models: Array<{ provider: string; model: string; calls: number; errors: number; promptTokens: number; completionTokens: number; costUsd: number; costKnown: boolean }> | null }
   workers: { total: number; online: number; workers: Array<{ name: string; labels: string[]; status: string; lastSeen: string; version: string }> }
   queue: { runsQueued: number; runsRunning: number; jobsQueued: number; jobsLeased: number; oldestQueued: string | null }
+}
+
+export type ExposeKind = 'hook' | 'mcp'
+export interface ExposeKindView {
+  enabled: boolean
+  path: string
+  url: string
+  prefix?: string
+  createdAt?: string
+  lastUsedAt?: string
+}
+export interface ExposeView {
+  workflow: string
+  project: string
+  tool: string
+  hook: ExposeKindView
+  mcp: ExposeKindView
+  projectMcp: { path: string; url: string }
+}
+export interface ExposeIssued extends ExposeView {
+  token: string
+  snippet: unknown
+  /** hook only: the HMAC signing secret, shown once */
+  signingSecret?: string
+  signingNote?: string
 }

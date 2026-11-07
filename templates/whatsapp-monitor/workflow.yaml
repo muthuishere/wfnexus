@@ -1,0 +1,120 @@
+# whatsapp-monitor — is WhatsApp HEARING, not just connected? (ADR 0026)
+#
+# OpenClaw's most-reported WhatsApp failure is a listener that is connected
+# but deaf (#34741, #45171, #45387): the socket is up, nothing arrives, and
+# nothing says so. This checks what actually matters, every 5 minutes:
+#
+#   - live-vs-store lag: the transport's own store (STORE_PROBE, read-only) has
+#     a newer message than wfnexus has seen → deaf
+#   - the last successful receive, and the last receive error
+#   - subscriptions on the channel in error, unable to route, or stuck validating
+#   - unknown `self`: group mentions can never start a run
+#
+# Unhealthy → one alert to the owner's chat through whatsapp-sender, deduped
+# per ALERT_EVERY_H window (same findings, same window = one message).
+#
+# The 7-point bar:
+#   trigger        schedule (every 5 min) + manual
+#   system of record  the channel's receive health, channel_messages, subscriptions, the WhatsApp store
+#   typed output   report.json {healthy, channel, lastReceive, lastEvent, storeLatest, lagSec, findings[]}
+#   verification   lag is measured against the transport's store, not inferred from silence
+#   human gate     none — it only alerts; the owner decides
+#   no silent failure  a broken check fails the run (exit 2), never reports healthy; a failed alert fails the run
+#   success number    minutes deaf before the alert (lagSec at alert time), and alerts per week
+name: whatsapp-monitor
+template:
+  title: WhatsApp monitor — catch a connected-but-deaf channel
+  category: debugging-ops
+  summary: >-
+    Every 5 minutes: compares the WhatsApp store with what wfnexus has heard,
+    checks the last receive, failing or stuck subscriptions and unknown self
+    ids, and alerts the owner's chat through whatsapp-sender when it is deaf.
+  fill:
+    - "input owner_chat default: the owner's WhatsApp JID (the alert goes there)"
+    - "env WA_CHANNEL: the channel name from registries.json"
+    - "env STORE_PROBE: a read-only command printing {\"latest\": \"<iso time>\"} for the newest message in the WhatsApp store (without it, lag is not measured)"
+    - "copy whatsapp-sender too — the alert goes through it"
+
+description: >-
+  Checks that the WhatsApp channel is actually receiving: store-vs-wfnexus
+  lag, last receive time and error, failing or stuck subscriptions and
+  unknown self ids. Alerts the owner's chat through whatsapp-sender when
+  something is wrong.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+memory:
+  scope: workflow
+
+input_schema:
+  type: object
+  properties:
+    owner_chat: { type: string, title: "Owner's WhatsApp JID — where alerts go", default: "" }
+    dry_run:    { type: boolean, title: "Dry run — report, do not alert", default: false }
+
+env:
+  WA_CHANNEL: "whatsapp"   # FILL
+  STORE_PROBE: ""          # FILL: read-only, prints {"latest": "<iso>"}
+  LAG_MAX_SEC: "600"
+  RECEIVE_MAX_SEC: "600"
+  ALERT_EVERY_H: "6"
+
+steps:
+  - id: check
+    name: Check that WhatsApp is hearing
+    description: Exit 0 healthy · 3 findings (stdout is the alert) · 2 the check itself broke.
+    continue-on-error: true
+    run: python3 ./check.py
+    timeout_sec: 120
+    state:
+      workflow:
+        last_check: "{{ .Output.stdout }}"
+    gates:
+      - field: exitCode
+        equals: 2
+        action: fail
+        message: "The WhatsApp health check itself broke — not reporting healthy. See stdout."
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string, description: "a one-line summary, or the alert text" }
+        stderr:   { type: string }
+
+  - id: alertkey
+    name: Dedup key for the alert
+    needs: [check]
+    when:
+      - path: check.exitCode
+        equals: 3
+    run: python3 ./check.py key
+    timeout_sec: 10
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: alert
+    name: Alert the owner through whatsapp-sender
+    description: Once per ALERT_EVERY_H for the same findings; a failed alert fails this run.
+    needs: [alertkey]
+    when:
+      - path: check.exitCode
+        equals: 3
+      - path: input.dry_run
+        equals: false
+    start:
+      workflow: whatsapp-sender
+      wait: true
+      input:
+        chat: "{{ .Input.owner_chat }}"
+        text: "{{ .Steps.check.stdout }}"
+        responsePolicy: auto
+        key: "{{ .Steps.alertkey.stdout }}"
