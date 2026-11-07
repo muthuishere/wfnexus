@@ -148,7 +148,6 @@ steps:
     when:
       - path: collect.exitCode
         equals: 3
-    provider: claude-cli
     # FILL: add your product's production-map skill.
     skills: [prod-signal-triage]
     tools: [read, grep, glob, bash]
@@ -280,7 +279,6 @@ steps:
     when:
       - path: file.exitCode
         equals: 3
-    provider: claude-cli
     skills: [approval-desk]
     tools: [read, bash, ask_human]
     max_turns: 20

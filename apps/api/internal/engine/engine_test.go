@@ -37,6 +37,7 @@ func TestMain(m *testing.M) {
 func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 	t.Helper()
 	cfg := config.Load()
+	cfg.AutoProvider = false // the tests point LLMBaseURL at their own fake model
 	// These are the POSTGRES path, on a database this package created for
 	// itself (pgtest) — never the shared development database, and never
 	// whatever the local config happens to point at.

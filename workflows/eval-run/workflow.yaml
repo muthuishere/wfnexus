@@ -7,7 +7,7 @@ description: >-
   a dossier. Four judges read the same dossier independently and in parallel —
   JEV (a calibrated classifier: did it do the job, is it evidence-backed, would
   a senior engineer accept it, how bad is its worst problem) and three model
-  judges on different providers (gpt-oss, gpt5, haiku — all over HTTP APIs),
+  judges on the auto-detected agent CLI (claude, else codex, …), each giving the
   same typed verdict. A judge that cannot run is probed first and recorded as
   UNAVAILABLE with the reason, never dropped. A final command builds the
   scorecard: agreement between judges, disagreements named, and an overall
@@ -123,7 +123,6 @@ steps:
     when:
       - path: probe_gptoss.ok
         equals: true
-    provider: gpt-oss
     skills: []
     tools: []
     max_turns: 6
@@ -187,7 +186,6 @@ steps:
     when:
       - path: probe_codex.ok
         equals: true
-    provider: gpt5
     skills: []
     tools: []
     max_turns: 6
@@ -204,7 +202,6 @@ steps:
     when:
       - path: probe_grok.ok
         equals: true
-    provider: haiku
     skills: []
     tools: []
     max_turns: 6

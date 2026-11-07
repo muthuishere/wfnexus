@@ -1331,6 +1331,7 @@ func doctor() error {
 		Default struct {
 			Model, BaseURL, Style, APIKeyEnv, Provider string
 			KeySet                                     bool
+			Auto                                       bool `json:"auto"`
 		} `json:"default"`
 		Providers   []doctorEntry `json:"providers"`
 		Classifiers []doctorEntry `json:"classifiers"`
@@ -1363,7 +1364,11 @@ func doctor() error {
 		}
 	}
 
-	if d.Default.Provider != "" {
+	if d.Default.Provider != "" && d.Default.Auto {
+		fmt.Printf("default provider %s  (auto-detected agent CLI: claude, then codex, then any other on PATH)\n", d.Default.Provider)
+	} else if d.Default.Auto {
+		fmt.Printf("default provider NOT READY — no agent CLI (claude, codex, …) on PATH; never falls back to an API\n")
+	} else if d.Default.Provider != "" {
 		// The endpoint below is not used by anything then, so it is not shown.
 		fmt.Printf("default provider %s  (WFX_DEFAULT_PROVIDER: steps without their own provider run here)\n", d.Default.Provider)
 	} else {

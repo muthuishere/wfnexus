@@ -358,7 +358,6 @@ steps:
   - id: review
     name: Adversarial review on a different model (change-reviewer)
     description: A different model reviews the diff it did not write, against the decisions and the proof.
-    provider: gemini
     skills: [change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40

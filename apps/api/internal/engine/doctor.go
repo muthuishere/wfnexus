@@ -90,6 +90,9 @@ type DoctorModel struct {
 	// Provider is the registry provider steps without their own run on
 	// (WFX_DEFAULT_PROVIDER); when set, the endpoint fields above are unused.
 	Provider string `json:"provider,omitempty"`
+	// Auto is true when no default was configured and the provider above was
+	// auto-detected from the agent CLIs on PATH (empty: none was found).
+	Auto bool `json:"auto,omitempty"`
 }
 
 // DoctorProvider is one registry entry and whether it could actually run.
@@ -134,7 +137,7 @@ func (e *Engine) Doctor() Doctor {
 		Default: DoctorModel{
 			Model: e.cfg.Model, BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			APIKeyEnv: e.cfg.LLMAPIKeyEnv, KeySet: os.Getenv(e.cfg.LLMAPIKeyEnv) != "" || sysEnv[e.cfg.LLMAPIKeyEnv] != "",
-			Provider: e.cfg.DefaultProvider,
+			Provider: e.cfg.DefaultProvider, Auto: e.cfg.AutoProvider,
 		},
 		Models: e.Models(),
 	}
@@ -150,6 +153,8 @@ func (e *Engine) Doctor() Doctor {
 		// binary is installed and its login could not be checked. It used to be
 		// a problem with an empty reason, "not ready ()", for the one state
 		// the list itself says does not block a run.
+	} else if e.cfg.AutoProvider {
+		d.Problems = append(d.Problems, errNoAgentCLI().Error())
 	} else if !d.Default.KeySet {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
