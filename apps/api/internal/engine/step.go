@@ -173,6 +173,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		// Which provider answered, so the metrics page can split spend by it
 		// (the model id alone does not say: two providers serve the same one).
 		usage.provider, _, _ = strings.Cut(prov.Label, "/")
+		usage.reported = prov.Reported
 		onMetric := func(m tn.MetricEvent) {
 			e.emit(ctx, runID, step.ID, "metric", m)
 			usage.record(m)

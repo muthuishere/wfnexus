@@ -154,10 +154,14 @@ func (e *Engine) Doctor() Doctor {
 		// a problem with an empty reason, "not ready ()", for the one state
 		// the list itself says does not block a run.
 	} else if e.cfg.AutoProvider {
-		d.Problems = append(d.Problems, errNoAgentCLI().Error())
+		d.Problems = append(d.Problems, e.errNoAgentCLI().Error())
 	} else if !d.Default.KeySet {
 		d.Problems = append(d.Problems,
 			"the default model's key variable "+e.cfg.LLMAPIKeyEnv+" is not set, so any step that names no provider will fail")
+	}
+
+	for _, sk := range e.autoSkipped {
+		d.Problems = append(d.Problems, "agent CLI "+sk)
 	}
 
 	d.Storage = DoctorStorage{Driver: e.cfg.StorageDriver, Artifacts: e.cfg.ArtifactDriver}

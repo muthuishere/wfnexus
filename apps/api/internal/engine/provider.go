@@ -29,6 +29,9 @@ type resolved struct {
 	// Price is the registry entry's per-million token price, and whether one
 	// is known at all (ADR 0020). The zero value means unknown.
 	Price pricing
+	// Reported is what a local CLI itself counted (claude stream-json), nil
+	// for a provider that reports nothing.
+	Reported *cliUsage
 }
 
 func noClose() {}
@@ -86,7 +89,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 	// of the model id only. This is the path every workflow used before
 	// providers existed and it keeps working unchanged.
 	if step.Provider == "" && e.cfg.AutoProvider {
-		return resolved{}, errNoAgentCLI()
+		return resolved{}, e.errNoAgentCLI()
 	}
 	if step.Provider == "" {
 		model := step.Model
@@ -209,6 +212,11 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 	if err != nil {
 		return resolved{}, err
 	}
+	var reported *cliUsage
+	if cs, ok := agent.(*agentadapter.ClaudeStream); ok {
+		reported = &cliUsage{source: p.Name}
+		cs.OnUsage = reported.add
+	}
 	ad := agentadapter.New(agentadapter.Options{
 		Agent:          agent,
 		Model:          model,
@@ -229,6 +237,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Label:     p.Name + "/" + label,
 		Close:     closeAgent,
 		Price:     priceOf(p, model, nil), // cli/acp: always a known $0.00
+		Reported:  reported,
 	}, nil
 }
 

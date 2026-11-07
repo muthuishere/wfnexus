@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"sync"
 	"time"
 
@@ -68,6 +69,8 @@ type usageAccum struct {
 	mu    sync.Mutex
 	start time.Time
 	price pricing
+	// reported, when set, is the CLI's own token and cost count.
+	reported *cliUsage
 	// provider is the registry name the step ran on; set once, before any
 	// event arrives.
 	provider string
@@ -183,6 +186,12 @@ func (u *usageAccum) snapshotLocked() (map[string]any, int) {
 		}
 		out["models"] = models
 	}
+	if r := u.reported; r != nil && r.turns() > 0 {
+		// The CLI's own count beats the transcript estimate: it is what the
+		// vendor metered, cache included, with the price it states.
+		r.into(out)
+		return out, u.llmCalls
+	}
 	if c, ok := u.price.cost(u.prompt, u.completion); ok {
 		out["costUsd"] = round6(c)
 		out["pricePerMIn"] = u.price.InPerM
@@ -209,4 +218,46 @@ func (u *usageAccum) answered() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.llmCalls > u.llmErrors || u.toolCalls > 0
+}
+
+// cliUsage sums what a local CLI reports per turn (agentadapter.Usage).
+type cliUsage struct {
+	mu     sync.Mutex
+	source string
+	n      int
+	sum    agentadapter.Usage
+}
+
+func (c *cliUsage) add(u agentadapter.Usage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	c.sum.InputTokens += u.InputTokens
+	c.sum.OutputTokens += u.OutputTokens
+	c.sum.CacheReadTokens += u.CacheReadTokens
+	c.sum.CacheWriteTokens += u.CacheWriteTokens
+	c.sum.CostUSD += u.CostUSD
+}
+
+func (c *cliUsage) turns() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// into overwrites the token and cost fields of a usage snapshot with the
+// CLI's own numbers. On a subscription seat the cost is the notional API
+// price the CLI states, labelled as such.
+func (c *cliUsage) into(out map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prompt := c.sum.InputTokens + c.sum.CacheReadTokens + c.sum.CacheWriteTokens
+	out["promptTokens"] = prompt
+	out["completionTokens"] = c.sum.OutputTokens
+	out["totalTokens"] = prompt + c.sum.OutputTokens
+	out["cacheReadTokens"] = c.sum.CacheReadTokens
+	out["cacheWriteTokens"] = c.sum.CacheWriteTokens
+	out["costUsd"] = round6(c.sum.CostUSD)
+	out["priceSource"] = c.source + " (reported by the CLI; notional on a subscription)"
+	delete(out, "costUnknown")
 }
