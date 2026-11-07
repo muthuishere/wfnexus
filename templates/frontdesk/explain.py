@@ -14,6 +14,9 @@ import sys
 def main():
     try:
         d = json.load(open("diagnosis.json"))
+        # A `start:` step with wait: true wraps the child's result as {"output": …}.
+        if isinstance(d, dict) and isinstance(d.get("output"), dict):
+            d = d["output"]
         r = json.loads(d.get("stdout") or "{}") if isinstance(d, dict) and "stdout" in d else d
         findings, summary = r.get("findings") or [], (r.get("summary") or "").strip()
     except Exception as e:

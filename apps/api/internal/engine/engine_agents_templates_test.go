@@ -161,7 +161,7 @@ func TestRetrospectiveCollectsTracksAndChecks(t *testing.T) {
 			{"stepId": "build", "status": "done", "attempts": 3, "usage": map[string]any{"totalTokens": 1200, "costUsd": 0.02}},
 			{"stepId": "push", "status": "failed", "attempts": 1, "error": "DEPLOY_TOKEN missing"},
 		},
-		"r-appr": {{"stepId": "gate", "status": "awaiting_approval", "startedAt": at(5)}},
+		"r-appr":  {{"stepId": "gate", "status": "awaiting_approval", "startedAt": at(5)}},
 		"r-night": {{"stepId": "check", "status": "done", "resolution": "approved", "startedAt": at(3), "resolvedAt": at(1)}},
 	}
 	url, methods := fakeEngineAPI(t, runs, steps)
@@ -450,18 +450,18 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 		"proposals": []map[string]any{
 			{"kind": "edit-step", "target": map[string]any{"workflow": "deploy", "step": "push"}, "rationale": "push failed",
 				"evidence": map[string]any{"runIds": []string{"r-dep"}, "stepIds": []string{"push"}, "memoryKeys": []string{"m-step"}},
-				"change": map[string]any{"definition": newDeploy}},
+				"change":   map[string]any{"definition": newDeploy}},
 			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "stale lesson",
 				"evidence": map[string]any{"memoryKeys": []string{"m-wf", "state:workflow:deploy:last_tag"}},
-				"change": map[string]any{"memory": map[string]any{"op": "edit", "id": "m-wf", "body": "DEPLOY_TOKEN is a project secret"}}},
+				"change":   map[string]any{"memory": map[string]any{"op": "edit", "id": "m-wf", "body": "DEPLOY_TOKEN is a project secret"}}},
 			// dreaming: the note every run relies on becomes a state page
 			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "every push run needs it",
 				"evidence": map[string]any{"memoryKeys": []string{"m-step"}, "runIds": []string{"r-dep"}},
-				"change": map[string]any{"memory": map[string]any{"op": "promote", "id": "m-step", "key": "push-rule"}}},
+				"change":   map[string]any{"memory": map[string]any{"op": "promote", "id": "m-step", "key": "push-rule"}}},
 			// dropped: a promote without a key
 			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "x",
 				"evidence": map[string]any{"memoryKeys": []string{"m-wf"}},
-				"change": map[string]any{"memory": map[string]any{"op": "promote", "id": "m-wf"}}},
+				"change":   map[string]any{"memory": map[string]any{"op": "promote", "id": "m-wf"}}},
 			// dropped: no evidence
 			{"kind": "new-workflow", "target": map[string]any{"workflow": "token-check"}, "rationale": "x",
 				"evidence": map[string]any{}, "change": map[string]any{"definition": map[string]any{"name": "token-check", "steps": []any{map[string]any{"id": "a"}}}}},
@@ -474,7 +474,7 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 			// dropped: already pending
 			{"kind": "add-step", "target": map[string]any{"workflow": "deploy", "step": "notify"}, "rationale": "x",
 				"evidence": map[string]any{"runIds": []string{"r-dep"}},
-				"change": map[string]any{"definition": map[string]any{"name": "deploy", "steps": []any{map[string]any{"id": "notify"}}}}},
+				"change":   map[string]any{"definition": map[string]any{"name": "deploy", "steps": []any{map[string]any{"id": "notify"}}}}},
 			// dropped: unknown kind
 			{"kind": "rewrite-everything", "target": map[string]any{"workflow": "deploy"}, "rationale": "x",
 				"evidence": map[string]any{"runIds": []string{"r-dep"}}, "change": map[string]any{}},
@@ -510,13 +510,18 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 		t.Fatalf("propose: exit %d (%d chars) %s", code, len(pout), pout)
 	}
 	// propose is retrospective's last step: frontdesk's explain reads ITS stdout.
+	// The diagnose step is a `start:` with wait: true, which wraps the child's
+	// result as {"output": …} — the live shape. Cover both.
+	inner := map[string]any{"ok": true, "exitCode": 0, "stdout": pout}
 	for chat, want := range map[string]int{"": 20, "g@g.us": 0} {
-		edir := t.TempDir()
-		writeJSON(t, filepath.Join(edir, "diagnosis.json"), map[string]any{"ok": true, "exitCode": 0, "stdout": pout})
-		writeJSON(t, filepath.Join(edir, "context.json"), map[string]any{"chat": chat})
-		code, ex := runScript(t, "templates/frontdesk/explain.py", edir)
-		if code != want || !strings.Contains(ex, "deploy push fails on a missing token") || !strings.Contains(ex, "3 proposed change(s) wait for approval") {
-			t.Fatalf("explain over propose's stdout: exit %d %q", code, ex)
+		for _, diag := range []map[string]any{inner, {"output": inner}} {
+			edir := t.TempDir()
+			writeJSON(t, filepath.Join(edir, "diagnosis.json"), diag)
+			writeJSON(t, filepath.Join(edir, "context.json"), map[string]any{"chat": chat})
+			code, ex := runScript(t, "templates/frontdesk/explain.py", edir)
+			if code != want || !strings.Contains(ex, "deploy push fails on a missing token") || !strings.Contains(ex, "3 proposed change(s) wait for approval") {
+				t.Fatalf("explain over propose's stdout: exit %d %q", code, ex)
+			}
 		}
 	}
 	if len(*writes) != 3 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
