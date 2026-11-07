@@ -122,11 +122,16 @@ def check_proposals(facts, raw):
             why = f"step {step!r} is not a step of {wf}"
         elif kind == "add-step" and (step in step_ids(defs.get(wf)) or step not in step_ids(d)):
             why = f"step {step!r} already exists in {wf}, or the new definition does not add it"
-        elif kind == "memory-fix" and (m is None or m.get("op") not in ("add", "edit", "delete")):
-            why = "change.memory needs op add, edit or delete"
+        elif kind == "memory-fix" and (m is None or m.get("op") not in ("add", "edit", "delete", "promote")):
+            why = "change.memory needs op add, edit, delete or promote"
+        elif kind == "memory-fix" and m.get("op") == "promote" and not str(m.get("key") or "").strip():
+            why = "a promote needs the state key it becomes"
         elif kind == "memory-fix" and m.get("op") != "add" and (m.get("id") not in entries or entries[m["id"]].get("workflow") != wf):
             why = f"memory entry {m.get('id')!r} is not an entry of {wf}"
-        elif kind == "memory-fix" and m.get("op") != "delete" and not str(m.get("body") or "").strip():
+        elif kind == "memory-fix" and m.get("op") == "promote" and not str(m.get("body") or "").strip():
+            m["body"] = entries[m["id"]].get("body") or ""
+            why = "" if m["body"] else "the promoted note is empty"
+        elif kind == "memory-fix" and m.get("op") not in ("delete", "promote") and not str(m.get("body") or "").strip():
             why = "a memory add or edit needs a body"
         if not why:
             fp = fingerprint(kind, t, ch)

@@ -454,6 +454,14 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "stale lesson",
 				"evidence": map[string]any{"memoryKeys": []string{"m-wf", "state:workflow:deploy:last_tag"}},
 				"change": map[string]any{"memory": map[string]any{"op": "edit", "id": "m-wf", "body": "DEPLOY_TOKEN is a project secret"}}},
+			// dreaming: the note every run relies on becomes a state page
+			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "every push run needs it",
+				"evidence": map[string]any{"memoryKeys": []string{"m-step"}, "runIds": []string{"r-dep"}},
+				"change": map[string]any{"memory": map[string]any{"op": "promote", "id": "m-step", "key": "push-rule"}}},
+			// dropped: a promote without a key
+			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "x",
+				"evidence": map[string]any{"memoryKeys": []string{"m-wf"}},
+				"change": map[string]any{"memory": map[string]any{"op": "promote", "id": "m-wf"}}},
 			// dropped: no evidence
 			{"kind": "new-workflow", "target": map[string]any{"workflow": "token-check"}, "rationale": "x",
 				"evidence": map[string]any{}, "change": map[string]any{"definition": map[string]any{"name": "token-check", "steps": []any{map[string]any{"id": "a"}}}}},
@@ -481,7 +489,7 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 		t.Fatalf("check output %q: %v", out, err)
 	}
 	props := res["proposals"].([]any)
-	if len(props) != 2 || len(res["dropped"].([]any)) != 5 {
+	if len(props) != 3 || len(res["dropped"].([]any)) != 6 {
 		t.Fatalf("kept %v dropped %v", props, res["dropped"])
 	}
 	for _, d := range res["dropped"].([]any) {
@@ -500,7 +508,7 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 	if code, out := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url); code != 0 {
 		t.Fatalf("propose: exit %d %s", code, out)
 	}
-	if len(*writes) != 2 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
+	if len(*writes) != 3 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
 		t.Fatalf("propose writes %v", *writes)
 	}
 	var sent struct {
@@ -537,6 +545,8 @@ func TestRetrospectiveApproveApplies(t *testing.T) {
 			`PATCH /api/memory/m-wf {"body": "new"}`},
 		{map[string]any{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "change": map[string]any{"memory": map[string]any{"op": "add", "body": "lesson"}}},
 			"POST /api/workflows/deploy/memory"},
+		{map[string]any{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "change": map[string]any{"memory": map[string]any{"op": "promote", "id": "m-step", "key": "push-rule", "body": "push needs DEPLOY_TOKEN"}}},
+			`PUT /api/state {"scope": "workflow", "name": "deploy", "key": "push-rule"`},
 	}
 	for _, c := range cases {
 		*writes = nil

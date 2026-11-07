@@ -9,7 +9,8 @@ same API a person's `wfx` would use. Runs only after its approval gate.
       — the normal save: a new version, or a git proposal on a git-backed project
   retire-workflow                      DELETE /workflows/<name>
   memory-fix                           POST /workflows/<name>/memory (add),
-                                       PATCH or DELETE /memory/<id>
+                                       PATCH or DELETE /memory/<id>,
+                                       promote: PUT /state (workflow scope, key)
 Then `applied-proposal <fingerprint>` is remembered in this workflow's memory.
 """
 import json
@@ -53,6 +54,10 @@ def main():
             m = ch["memory"]
             if m["op"] == "add":
                 res = api(f"/workflows/{q}/memory{proj}", "POST", {"body": m["body"]})
+            elif m["op"] == "promote":
+                # A note becomes a page: one state key of this workflow, written
+                # by this path only (one writer per page).
+                res = api("/state", "PUT", {"scope": "workflow", "name": wf, "key": m["key"], "value": m["body"]})
             elif m["op"] == "edit":
                 res = api(f"/memory/{urllib.parse.quote(m['id'], safe='')}", "PATCH", {"body": m["body"]})
             else:

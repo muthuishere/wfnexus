@@ -17,6 +17,12 @@ the whole new definition, saved via `PUT /workflows/<name>`: a new version, or
 a git proposal on a git-backed project), `memory-fix` (`{op: add|edit|delete,
 id, body}`), `retire-workflow` (`DELETE /workflows/<name>`).
 
+**Dreaming** (every run, issue #99): each memory note is checked against the
+runs. Notes the runs contradict, stale notes with dangling references, and
+duplicates get `memory-fix` edit/delete proposals. The few notes every run
+relies on get `promote`, which writes them to a workflow state key (a page
+with one writer). All of these go through the same approval path.
+
 **Reject = never again.** The next review sees the cancelled apply run and
 writes `rejected-proposal <fingerprint>` into this workflow's memory; the
 fingerprint is kind + target, so a reworded proposal is still suppressed.

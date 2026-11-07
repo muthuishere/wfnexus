@@ -125,12 +125,25 @@ steps:
           change: the EXACT change —
             add-step/edit-step/new-workflow: {definition: <the whole new
               workflow as JSON>} (start from facts.workflows.<name>)
-            memory-fix: {memory: {op: add|edit|delete, id, body}} (a wrong,
-              stale or missing lesson in that workflow's memory)
+            memory-fix: {memory: {op: add|edit|delete|promote, id, body, key}}
+              — a wrong, stale, duplicate or missing note; `promote` copies
+              note `id` into the workflow's STATE under `key` (a page a
+              future run reads by name: strategy, a tested rule, the plan)
             retire-workflow: {} (a workflow nobody needs: it only fails or never runs)
         Read memory at every scope (facts.memory: step, workflow, project,
         global) and state (facts.state). facts.suppressed lists what a person
         already rejected or is still deciding — do not propose those again.
+        DREAMING (every run): check EVERY note in facts.memory.entries
+        (kind note) against the runs. Memory is for what a future run cannot
+        see itself — strategy, tested rules, discovered facts, plans — so:
+          - a note the runs CONTRADICT (it says X works; runs since show X
+            failing) or that is STALE (names a step, workflow or key that no
+            longer exists — a dangling reference) → memory-fix edit or delete,
+            citing the note id and the run that contradicts it
+          - two notes saying the same thing → edit one to the merged text and
+            delete the other (two proposals, both citing both ids)
+          - the FEW notes every run relies on → memory-fix promote (at most 2)
+          - a plain log of one run is not a note worth keeping → delete
         RULE: every finding whose `fix` is a change to a workflow (a step,
         retry, timeout, model, schedule, a missing step) or to memory MUST
         have a matching proposal. Only findings a person fixes outside
