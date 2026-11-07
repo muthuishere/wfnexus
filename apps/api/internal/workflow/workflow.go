@@ -402,6 +402,13 @@ type Definition struct {
 	// Only authored edges conflict with a derived plan; a job's internal
 	// chaining is an implementation detail of the job.
 	authoredNeeds bool
+	// Version, Inputs and Outputs make a `workflow_call` workflow a typed
+	// module (inputs.go): a caller pins `name@<major>` and passes values.
+	Version string                `yaml:"version,omitempty" json:"version,omitempty"`
+	Inputs  map[string]InputSpec  `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Outputs map[string]OutputSpec `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	// useLabel names the job a scratch definition expands for, for errors.
+	useLabel string
 	// Goal is the fact the workflow must establish. Declaring it turns execution
 	// over to the planner: the order is derived from what each step consumes and
 	// produces, and re-derived after every step.
@@ -454,6 +461,9 @@ type Catalog interface {
 }
 
 func (d *Definition) validate(cat Catalog) error {
+	if err := checkSpecs(d.Name, d.Inputs); err != nil {
+		return err
+	}
 	if d.Name == "" {
 		return fmt.Errorf("workflow name is required")
 	}
@@ -853,6 +863,7 @@ func LoadDirWithTasks(dir, tasksDir string, cat Catalog, opts ...LoadOption) (ma
 // normalize converts yaml's map[string]any (already string-keyed in yaml.v3) and
 // fills defaults.
 func normalize(d *Definition) {
+	selfInputDefaults(d)
 	if d.InputSchema == nil {
 		d.InputSchema = map[string]any{"type": "object"}
 	}
