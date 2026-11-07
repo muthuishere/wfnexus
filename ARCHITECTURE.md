@@ -1,241 +1,71 @@
 # Architecture
 
-## The one-line version
+wfnexus runs YAML workflows. Each step is an agent with scoped skills and a typed output.
 
-**toolnexus is the core.** Every agent primitive — the loop, tools, skills, MCP,
-sub-agent teams, guardrails, budgets, suspension, the classifier — is toolnexus.
-This platform adds exactly three things toolnexus deliberately does not have:
-**durable state**, **a workflow above the agent**, and **a UI**.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  apps/ui (React)      build workflows · run them · watch the loop    │
-│                       read judge decisions · approve · answer        │
-└───────────────────────────────┬──────────────────────────────────────┘
-                     REST + SSE │
-┌───────────────────────────────▼──────────────────────────────────────┐
-│  apps/api (Go)                                                        │
-│                                                                       │
-│   workflow   ordered steps, typed hand-off, gates, approvals          │
-│   engine     runs one step at a time, durably, resumable              │
-│   store      Postgres: runs · steps · events · artifacts              │
-│   blob       S3/MinIO: transcripts · diffs                            │
-│   skills     the registry a step picks its skills from                │
-│                                                                       │
-│   ── everything below this line is toolnexus, not ours ──             │
-│   agents.Agent · Spec{Soul,Tools,Team,Budget,Guardrails,Completion}   │
-│   agents.Runtime (spawn/wake/wait/interrupt/close/resume)             │
-│   tn.Toolkit (skills · builtins · MCP · native) · tn.Client (loop)    │
-│   tn.Classifier (typed decisions on a small model)                    │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  P[Person or agent<br/>UI, wfx CLI, skills] --> API[wfx-server API<br/>REST + SSE, password sign-in]
+  EXT[Outside callers<br/>hook + MCP per workflow] --> API
+  CH[Channels<br/>WhatsApp adapter, router, subscriptions] --> API
+  API --> ENG[Engine<br/>steps, gates, start:, uses:]
+  ENG --> AG[toolnexus agent<br/>one per step]
+  AG --> PROV[Providers<br/>http, cli, acp]
+  ENG --> JEV[Classifier<br/>typesafe/jev-1.13]
+  ENG --> W[Workers<br/>wfx-runner via runs-on]
+  ENG --> DB[(Store + memory<br/>SQLite or Postgres)]
+  ENG --> H[Human gate<br/>approve, reject, answer]
+  ENG --> GIT[Git<br/>PRs, proposals, bundles]
 ```
 
-**The rule:** if toolnexus has a primitive, we configure it — we never reimplement
-it. A pull request that hand-rolls retries, a tool loop, schema coercion, a
-sub-agent, or an approval mechanism is wrong by construction.
+## What lives where
 
-## What a workflow is
+- `apps/api` builds `wfx-server`: API, engine and the embedded UI from `apps/ui`.
+- `apps/api/cmd/wfx` is the CLI. `apps/api/cmd/wfx-runner` is an outbound-only worker.
+- `internal/workflow` loads YAML: steps, jobs, `runs-on`, `start:`, `uses:`.
+- `internal/engine` runs steps, gates, schedules, channels, subscriptions and memory.
+- `internal/catalog` lists what a step can name: providers, classifiers, MCP servers, channels.
+- `agentadapter/` turns ACP or CLI agents (claude, codex, devin, opencode) into models.
+- `internal/judge` sends typed questions to the classifier and maps verdicts to bands.
+- `internal/store` persists runs, steps and memory in SQLite (local) or Postgres (server).
+- `adapters/` holds channel adapters, such as `apl-whatsapp.js`.
+- `templates/` holds shipped workflows, including the WhatsApp sender, monitor, router and frontdesk.
 
-A workflow is an ordered list of **steps** in YAML. A step is **not a prompt** —
-it is a whole agent, with its own loop:
+## How a run flows
 
-```
-step = soul                      (identity / system prompt)
-     + prompt                    (the task, templated from prior steps)
-     + skills[]                  (allowlist from the skill registry)
-     + tools[]                   (allowlist of toolnexus built-ins)
-     + mcp[]                     (allowlist of mcp.json servers)
-     + team[]                    (sub-agents it may delegate to via `task`)
-     + guardrails[]              (policy: may it call this tool?)
-     + budget{}                  (turns · tokens · tool calls · wall clock)
-     + decide{}                  (classifier questions, before the agent runs)
-     + output_schema             (the contract it must satisfy to finish)
-     + gates[]                   (what the workflow does with that output)
-```
+1. A run starts from the UI, `wfx run`, a cron, a channel message, a hook or an MCP call.
+2. The engine checks the input schema and the concurrency group, then orders the steps.
+3. Each agent step runs as one toolnexus agent on its provider, here or on a worker (`runs-on`).
+4. The step must return output that validates against its schema; the classifier answers `decide:` / `judge:`.
+5. A gate pauses the run until a person approves, rejects or answers (UI, CLI or channel).
+6. The run writes memory (per workflow, and per chat for conversations) and its result lands in git.
 
-The step runs until its agent **submits an output that validates**, or a limit
-stops it loudly. Then the workflow advances.
+## Where to change X
 
-## The five mechanisms that carry the design
+| X | Change here |
+|---|---|
+| Workflow YAML shape | `apps/api/internal/workflow/` |
+| Step execution, gates, retries | `apps/api/internal/engine/step.go`, `engine.go` |
+| Starting child workflows (`start:`) | `apps/api/internal/engine/start.go` |
+| Workers and `runs-on` | `apps/api/internal/engine/workers.go`, `apps/api/cmd/wfx-runner/` |
+| Memory | `apps/api/internal/engine/memory.go` |
+| Channels, subscriptions, WhatsApp | `apps/api/internal/engine/channels.go`, `subscriptions.go`, `adapters/` |
+| Hooks and MCP door | `apps/api/internal/api/expose.go` |
+| Sign-in and roles | `apps/api/internal/api/password.go`, `apps/api/internal/auth/` |
+| Default classifier and config | `apps/api/internal/config/config.go` |
+| Providers and agent CLIs | `apps/api/internal/catalog/`, `agentadapter/` |
 
-### 1. The typed hand-off — why steps compose
+## Sources
 
-Each step's `output_schema` becomes the input schema of a native `submit_output`
-tool. The model must call it. Validation happens **inside the agent loop**:
-failures return as the tool result, so the model self-corrects on the next turn
-instead of the step dying. A toolnexus `Completion` gate then refuses `done`
-until a submission was accepted — bounded by `max_attempts`.
-
-The accepted object is stored as `jsonb` and is what the next step's prompt
-interpolates (`{{ .Steps.reproduce-bug.test_command }}`). **Steps hand each other
-typed objects, never prose.** This is the wedge — every comparable product passes
-free text or a branch name between "plan" and "implement".
-
-### 2. Scoping is the security model
-
-A step sees exactly the skills, built-ins and MCP servers its YAML lists.
-
-> **Non-obvious and load-bearing:** `tn.SelectBuiltins` only *removes* a built-in
-> whose entry is explicitly `false`. A map containing just the allowed names
-> leaves every other tool **on**. `skills.BuiltinAllowlist` therefore writes
-> `false` for every name outside the allowlist. Getting this wrong silently hands
-> a read-only step `write`, `edit` and `apply_patch`. There is a test that fails
-> if it regresses.
-
-Sub-agents are scoped the same way, which is the point of using them: the
-explorer gets `read`/`grep`/`glob`, the author gets `write`/`edit`/`bash`.
-
-### 3. The loop is per step, and it is toolnexus'
-
-`agents.Agent` + the runtime give us, for free: the tool-calling loop, per-agent
-souls, team delegation through the built-in `task` tool (fresh transcript per
-child, one result back, usage rolled up), hierarchical budgets enforced live, and
-a closed status vocabulary — `done · pending · incomplete · interrupted ·
-closed · timeout · error`.
-
-A limit stop is never silent: `incomplete` always carries `stoppedBy` in words
-and `limit` as a value to branch on. The engine copies that verbatim into the
-step's `error`; it never invents a status.
-
-### 3a. Measured: a team is advisory, not structural
-
-Declaring a `team` gives the step's agent a `task` tool. It does **not** make it
-delegate. Measured on a live run of `reproduce-bug` (Sonnet 4.5), with an
-`explorer` sub-agent declared, the `task` tool offered, and the prompt saying
-*"delegate code lookups to your explorer rather than reading widely yourself"*:
-
-```
-task calls : 0
-bash calls : 19      read: 2   edit: 1
-```
-
-The step still succeeded — it committed a failing test — but it ignored the
-explorer entirely. The reason is not disobedience: a parent holding `bash` can
-already `grep` and `cat`, so delegation is strictly more expensive for it than
-doing the work itself, and no prompt reliably beats that gradient.
-
-The consequence is worth stating plainly, because it constrains every workflow
-we write: **delegation is only structurally enforced when the parent lacks the
-capability.** A parent with a shell will always be able to route around its own
-team. In the unit tests, a parent granted *no* tools delegates on the first turn,
-every time — that is the configuration where a team means something.
-
-So teams are kept where the sub-agent holds a capability the parent does not,
-and treated as advisory otherwise. They cost nothing when unused, but a workflow
-must not be described as "using sub-agents" on the strength of declaring one.
-
-### 3b. Measured: a pinned workdir is not containment
-
-The engine pins every `bash` call to the run's workspace. That is advisory, and
-a live run proved it. A `draft-pr` agent ran:
-
-```
-cd /Users/…/wfnexus && git log --all --grep=reorder
-```
-
-then `git checkout -b`, `git stash` and `git reset` — **in the platform's own
-repository**, not the run's worktree. `workdir` was set correctly; it sets only
-the *initial* directory, and a `cd` in the command string leaves it. Nothing
-errored, and the tool reported success.
-
-It knew that path because the skills it loads live under the platform repo, so
-their absolute paths were already in its context. An agent does not need to
-guess its way out; we hand it the map.
-
-So containment is now a guardrail applied to **every step and every sub-agent**,
-ahead of the rules the YAML declares and regardless of what that YAML says: a
-shell command whose `cd`/`pushd`/`git -C`/`--git-dir`/`--work-tree` target
-resolves outside the workspace is denied, and `cd -`, `cd ~` and unexpanded
-`$VARS` are refused because none can be shown to stay inside.
-
-It is a guardrail, not a sandbox. A determined agent with a shell has other
-exits (`env`, a symlink it creates, an interpreter one-liner), and the honest
-ceiling here is *"blocks the accident and the obvious"*. Real isolation needs a
-container or a chroot, and that is the next thing this file will be edited to
-describe.
-
-### 4. Human-in-the-loop is suspension, not a side channel
-
-Two different pauses, deliberately kept distinct:
-
-| pause | trigger | mechanism | run status |
-|---|---|---|---|
-| **approval** | `requires_approval: true` on a step | the engine halts *before* the step runs — the model is never called | `awaiting_approval` |
-| **question** | the agent itself suspends mid-run (`question` built-in, or an MCP elicitation) | toolnexus `pending(Request)`; we supply **no** `WaitFor`, so the run returns a durable halt | `needs_input` |
-| **gate** | a step's validated output trips a `needs_input` gate | the workflow, not the agent, asks | `needs_input` |
-
-The durable halt is the important one: the `Request` is plain serializable data,
-so the HTTP request that started the run returns immediately, the question is
-persisted, and the answer can arrive hours later in another process. That is the
-same contract whether the human is present or not — we chose the "later" posture
-everywhere, because a web UI has no thread to block.
-
-### 5. The judge tier — decide cheaply before spending
-
-Not every decision deserves a frontier model. `tn.Classifier` asks pre-declared,
-typed questions (`noul` 0..1 · `choice` over described options · `score` on an
-ordered rubric) and returns calibrated numbers with nothing to parse.
-
-A step's `decide:` block runs **before** its agent, so a workflow can route or
-halt for a fraction of a cent instead of a full agent run — "is this report
-actionable", "which component owns this", "how risky is this diff".
-
-Four rules we inherit and must not forget:
-
-1. **Describe every option by consequence.** Options named only by their id rank
-   at chance. This is the whole feature.
-2. **A decision is advisory and never authorises anything.** Thresholds and
-   allowlists stay in Go `if` statements.
-3. **Read `calibrated` before thresholding.** A threshold tuned on one backend
-   does not transfer to another.
-4. **Tests use the `static` backend.** Live answers move run to run; no test may
-   assert a live number.
-
-## Durability — what the platform actually adds
-
-toolnexus' runtime is in-process. The platform's job is to make a multi-hour,
-multi-step, human-gated run survive a restart.
-
-```
-workflow_runs   id · workflow · status · input(jsonb) · current_step · base_ref
-step_runs       run_id · step_id · position · status · attempts · turns
-                · prompt · output(jsonb, VALIDATED) · usage · error
-run_events      append-only activity log — every tool call, result, LLM turn
-artifacts       S3 keys: per-step transcript + workspace diff
-```
-
-Resume is a pure function of that table: the engine replays the step list,
-skips `done`/`skipped`, and restarts at the first one that is not. A step is the
-unit of durability — an interrupted step re-runs from its prompt, which is why
-steps must be **idempotent in effect** (branch names derived, not incremented).
-
-Each run gets its own **git worktree** of the target repo, so concurrent runs
-never fight over the index or HEAD.
-
-## UI
-
-The admin UI is the product surface, not a debug view:
-
-- **Workflows** — the registry of workflow YAML, each step showing its skills,
-  tools, team, budget and output contract.
-- **Skills** — the skill registry across roots (project, `~/.claude/skills`,
-  `~/.agents/skills`), including what was *skipped* and why, so a bad frontmatter
-  is visible instead of a skill silently missing.
-- **Run** — the step timeline, the live agent activity over SSE (every tool call
-  and result), the judge's decision for the step, the validated output next to
-  its schema, and the artifacts.
-- **The human's two buttons** — approve/reject an outward-facing step, and answer
-  a `needs_input` question as a form generated from the question itself.
-
-## Method: spike, then implement
-
-Capabilities are proven against the **real OpenRouter wire** in `spikes/` before
-the platform depends on them — teams, guardrails, suspension, the classifier, and
-fail-fast/retry behaviour each get a throwaway program whose output is recorded
-in `docs/spikes/`. Findings drive the implementation; the docs are not the wire.
-
-## Non-goals
-
-- Not a general workflow engine. Steps are coding agents; the schema is opinionated.
-- No orchestration server, queue broker or Redis. One Go binary, Postgres, S3.
-- No reimplementation of anything toolnexus ships.
+- toolnexus is the core: `docs/adr/0001-toolnexus-is-the-core.md`, `docs/adr/0002-a-step-is-an-agent-not-a-prompt.md`, `apps/api/go.mod`, `apps/api/internal/engine/agent.go`
+- Typed output: `docs/adr/0003-typed-handoff-via-submit-output.md`
+- `runs-on`: `apps/api/internal/workflow/workflow.go`, `apps/api/internal/engine/workers.go`, `docs/adr/0015-a-step-runs-where-it-says-it-runs.md`
+- `start:`: `apps/api/internal/workflow/workflow.go`, `apps/api/internal/engine/start.go`
+- `uses:`: `apps/api/internal/workflow/jobs.go`, `apps/api/internal/workflow/task.go`
+- Memory per workflow and per conversation: `apps/api/internal/engine/memory.go` (`consolidateMemoryIn`), `apps/api/internal/engine/conversation.go`
+- Classifier default `typesafe/jev-1.13`: `apps/api/internal/config/config.go`
+- Channels and WhatsApp: `apps/api/internal/engine/channels.go`, `adapters/apl-whatsapp.js`, `docs/adr/0023-channels-are-commands-and-replies-need-an-allow-list.md`, `docs/adr/0026-whatsapp-only-subscriptions-conversations-and-default-workflows.md`
+- Subscriptions and router: `apps/api/internal/engine/subscriptions.go`, `templates/router`, `docs/adr/0024-messaging-is-subscriptions-on-one-inbox-per-account.md`
+- Hooks and MCP per workflow: `apps/api/internal/api/expose.go`, `docs/adr/0027-every-workflow-is-a-hook-and-an-mcp-tool-behind-its-own-token.md`
+- Password sign-in: `apps/api/internal/api/password.go`, `docs/adr/0025-username-and-password-sign-in-with-roles.md`
+- carry for tools: `apps/api/cmd/wfx/carry.go`, `apps/api/internal/carryops/carryops.go`
+- Human gates: `docs/adr/0021-a-pause-names-who-may-answer.md`, `apps/api/internal/notify/`
