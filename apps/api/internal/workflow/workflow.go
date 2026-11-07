@@ -1248,6 +1248,13 @@ var funcs = template.FuncMap{
 		}
 		return cur
 	},
+	// fromJson decodes a step's JSON stdout so a later field can pick from it;
+	// anything that is not JSON decodes to an empty map, not an error.
+	"fromJson": func(v any) map[string]any {
+		m := map[string]any{}
+		_ = json.Unmarshal([]byte(strings.TrimSpace(fmt.Sprint(v))), &m)
+		return m
+	},
 	"default": func(fallback, v any) any {
 		if v == nil || v == "" {
 			return fallback

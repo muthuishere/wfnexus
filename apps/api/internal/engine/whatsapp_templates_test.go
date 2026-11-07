@@ -52,6 +52,15 @@ else:
 	return "python3 " + script, dir
 }
 
+// useWAChannel registers the fake adapter as the server's default channel —
+// whatsapp-sender sends through the channel contract (issue #86), so the
+// channel's sendGap and the server's dedup apply to every op.
+func useWAChannel(t *testing.T, h *harness, cmd, gap string) {
+	t.Helper()
+	h.eng.catalog.Channels.Add(catalog.Channel{Name: "wa", Kind: "command", Run: cmd, SendGap: gap}, "test")
+	h.eng.cfg.DefaultChannel = "wa"
+}
+
 func waSent(t *testing.T, dir string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -128,9 +137,9 @@ func asStr(v any) string { s, _ := v.(string); return s }
 
 func TestWhatsAppSenderPolicies(t *testing.T) {
 	cmd, dir := fakeWA(t, "sent")
-	ledger := filepath.Join(t.TempDir(), "ledger.jsonl")
-	defs := loadWATemplates(t, map[string]string{"WA_ADAPTER": cmd, "WA_SENDER_LEDGER": ledger}, "whatsapp-sender")
+	defs := loadWATemplates(t, nil, "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-sender")
+	useWAChannel(t, h, cmd, "")
 	chat := "120363000000000001@g.us"
 
 	// auto: sent once, with the quote-reply on the envelope.
@@ -190,14 +199,75 @@ func TestWhatsAppSenderPolicies(t *testing.T) {
 	}
 }
 
+// Every op — reply, reaction, edit, delete — goes through the channel
+// contract, so the channel's sendGap paces them all (issue #86).
+func TestWhatsAppSenderEveryOpGoesThroughTheChannelGap(t *testing.T) {
+	cmd, dir := fakeWA(t, "sent")
+	defs := loadWATemplates(t, nil, "whatsapp-sender")
+	h := waHarness(t, defs, "whatsapp-sender")
+	useWAChannel(t, h, cmd, "300ms")
+	chat := uniq("gap") + "@g.us"
+	ins := []map[string]any{
+		{"chat": chat, "text": "hello", "replyTo": "Q1", "replyToSender": "1555@s.whatsapp.net", "mentions": "1555@s.whatsapp.net"},
+		{"chat": chat, "reactTo": "Q1", "reaction": "", "replyToSender": "1555@s.whatsapp.net"},
+		{"chat": chat, "edit": "wamid-1", "text": "hello, edited"},
+		{"chat": chat, "delete": "wamid-1"},
+	}
+	ids := make([]uuid.UUID, len(ins))
+	start := time.Now()
+	for i, in := range ins {
+		ids[i] = h.start("whatsapp-sender", in)
+	}
+	for i, id := range ids {
+		if run := h.waitEnded(id); run.Status != "done" {
+			t.Fatalf("op %d: %s %s", i, run.Status, run.Error)
+		}
+	}
+	if el := time.Since(start); el < 900*time.Millisecond {
+		t.Fatalf("4 sends 300ms apart took %s — the gap was bypassed", el)
+	}
+	envs := waSent(t, dir)
+	if len(envs) != 4 {
+		t.Fatalf("sent %d", len(envs))
+	}
+	by := map[string]map[string]any{}
+	for _, e := range envs {
+		switch {
+		case e["reaction"] != nil:
+			by["reaction"] = e
+		case e["edit"] != nil:
+			by["edit"] = e
+		case e["delete"] != nil:
+			by["delete"] = e
+		default:
+			by["reply"] = e
+		}
+		if e["target"] != chat || e["channel"] != "wa" || e["dedupKey"] == "" {
+			t.Fatalf("envelope %v", e)
+		}
+	}
+	if r := by["reply"]; r == nil || r["replyTo"].(map[string]any)["sender"] != "1555@s.whatsapp.net" || len(r["mentions"].([]any)) != 1 {
+		t.Fatalf("reply %v", r)
+	}
+	if r := by["reaction"]; r == nil || r["reaction"].(map[string]any)["targetId"] != "Q1" || r["reaction"].(map[string]any)["emoji"] != "" {
+		t.Fatalf("reaction removal %v", r)
+	}
+	if r := by["edit"]; r == nil || r["edit"].(map[string]any)["id"] != "wamid-1" || r["text"] != "hello, edited" {
+		t.Fatalf("edit %v", r)
+	}
+	if r := by["delete"]; r == nil || r["delete"].(map[string]any)["id"] != "wamid-1" || r["replyTo"] != nil {
+		t.Fatalf("delete %v", r)
+	}
+}
+
 func TestWhatsAppSenderNeverResendsUncertain(t *testing.T) {
 	cmd, dir := fakeWA(t, "uncertain")
-	ledger := filepath.Join(t.TempDir(), "ledger.jsonl")
-	defs := loadWATemplates(t, map[string]string{"WA_ADAPTER": cmd, "WA_SENDER_LEDGER": ledger}, "whatsapp-sender")
+	defs := loadWATemplates(t, nil, "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-sender")
+	useWAChannel(t, h, cmd, "")
 	in := map[string]any{"chat": "1555@s.whatsapp.net", "text": "maybe"}
 	id := h.start("whatsapp-sender", in)
-	if run := h.waitEnded(id); run.Status != "failed" || !strings.Contains(run.Error, "UNCERTAIN") {
+	if run := h.waitEnded(id); run.Status != "failed" || !strings.Contains(run.Error, "may have been delivered") {
 		t.Fatalf("uncertain: %s %s", run.Status, run.Error)
 	}
 	id = h.start("whatsapp-sender", in)
@@ -217,6 +287,7 @@ func TestPingpongRepliesThroughTheSenderAndRemembers(t *testing.T) {
 	env := map[string]string{"WA_ADAPTER": cmd, "WA_SENDER_LEDGER": filepath.Join(t.TempDir(), "l.jsonl")}
 	defs := loadWATemplates(t, env, "pingpong", "whatsapp-sender")
 	h := waHarness(t, defs, "pingpong")
+	useWAChannel(t, h, cmd, "")
 	chat := uniq("group") + "@g.us"
 	msg := func(id, text string) map[string]any {
 		return map[string]any{
@@ -254,6 +325,7 @@ func TestRouterStartsTheMatchedWorkflow(t *testing.T) {
 	env := map[string]string{"WA_ADAPTER": cmd, "WA_SENDER_LEDGER": filepath.Join(t.TempDir(), "l.jsonl")}
 	defs := loadWATemplates(t, env, "router", "pingpong", "whatsapp-sender")
 	h := waHarness(t, defs, "router")
+	useWAChannel(t, h, cmd, "")
 	chat := uniq("g") + "@g.us"
 	id := h.start("router", map[string]any{
 		"event":        map[string]any{"channel": "wa", "chat": chat, "id": "R1", "from": "1555@s.whatsapp.net", "text": "ping please", "kind": "message"},
@@ -415,6 +487,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 	}
 	defs := loadWATemplates(t, env, "whatsapp-monitor", "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-monitor")
+	useWAChannel(t, h, cmd, "")
 	for i := 0; i < 2; i++ {
 		id := h.start("whatsapp-monitor", map[string]any{"owner_chat": "owner@s.whatsapp.net", "dry_run": false})
 		if run := h.waitEnded(id); run.Status != "done" {
@@ -454,6 +527,7 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 		t.Fatalf("frontdesk must embed load-context first, got %v", fd.Steps[0].ID)
 	}
 	h := waHarness(t, defs, "frontdesk")
+	useWAChannel(t, h, "true", "") // the sender sends on the default channel
 	msg := map[string]any{"channel": "wa", "chat": "g@g.us", "id": "M1", "from": "1555@s.whatsapp.net", "text": "hi", "kind": "message"}
 	inputs := map[string]map[string]any{
 		"whatsapp-sender":               {"chat": "g@g.us", "text": "hi"},

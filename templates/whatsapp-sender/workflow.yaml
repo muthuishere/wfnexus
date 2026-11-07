@@ -3,17 +3,21 @@
 # The mirror of whatsapp-monitor: text, quote-reply, attachment/voice/sticker,
 # reaction, and edit/delete of our own message. Every other default workflow
 # (pingpong, frontdesk, whatsapp-monitor's alert) sends through this one with
-# `start: {workflow: whatsapp-sender, wait: true}`, so the policy, the ledger
+# `start: {workflow: whatsapp-sender, wait: true}`, so the policy, the dedup
 # and the "never resend uncertain" rule live in one place.
 #
 # The 7-point bar:
 #   trigger        `start:` from a handler, a hook, an MCP tool call, or a person
-#   system of record  the channel adapter's echo ledger + this workflow's send ledger
-#   typed output   {status: sent|failed|uncertain|drafted|skipped|already, id, action, chat, key, error}
+#   system of record  the server's send dedup (key claimed before the adapter runs) + the adapter's echo ledger
+#   typed output   {status: sent|drafted|skipped|already, id, action, chat, key}; failed/uncertain fail the run
 #   verification   `sent` only on the adapter's confirmation; anything else is failed or uncertain
+#
+# Every op (text, reply, attachment, reaction, edit, delete) is ONE `send:`
+# step on the channel contract, so the channel's sendGap paces every op and
+# the adapter's echo ledger sees every message we post (issue #86).
 #   human gate     responsePolicy approval pauses before the send; draft never sends
 #   no silent failure  failed/uncertain fail the run with the reason; uncertain is NEVER resent
-#   success number    sent / (sent + failed + uncertain) per week, from the ledger
+#   success number    sent / (sent + failed + uncertain) per week, from the run history
 name: whatsapp-sender
 template:
   title: WhatsApp sender — one send, policy-checked, never duplicated
@@ -24,9 +28,8 @@ template:
     (draft, approval, auto, none). Reports sent, failed or uncertain, and never
     resends an uncertain send.
   fill:
-    - "env WA_ADAPTER: the channel adapter command (verb appended), e.g. `node adapters/apl-whatsapp.js`, with APL_WA_LABEL set in the project env"
-    - "env WA_CHANNEL: the channel name from registries.json (recorded on the envelope)"
-    - "optional WA_SENDER_LEDGER: where the send ledger lives (default: the channel state dir)"
+    - "the server's default channel (channels.default / WFX_DEFAULT_CHANNEL) must be the WhatsApp channel — every op goes through it, so its sendGap and echo ledger apply"
+    - "an attachment path must be inside this run's workspace (the send step refuses anything else)"
 
 description: >-
   Sends one WhatsApp message (text, reply, attachment, reaction, edit or delete)
@@ -57,15 +60,10 @@ input_schema:
     responsePolicy: { type: string, enum: [draft, approval, auto, none], default: auto }
     key:            { type: string, title: "Idempotency key (default: hash of the request)" }
 
-env:
-  WA_ADAPTER: "node adapters/apl-whatsapp.js"   # FILL
-  WA_CHANNEL: "whatsapp"                         # FILL
-  WA_TIMEOUT_SEC: "60"
-
 steps:
   - id: plan
     name: Apply the response policy
-    description: Validates the request, picks the action, and checks the ledger so a sent or uncertain key is never sent again.
+    description: Validates the request, picks the one op, and derives the idempotency key.
     continue-on-error: true
     run: |
       cat > input.json <<'WFX_INPUT_EOF'
@@ -83,18 +81,18 @@ steps:
       properties:
         ok:       { type: boolean }
         exitCode: { type: integer }
-        stdout:   { type: string }
+        stdout:   { type: string, description: "the planned op as JSON" }
         stderr:   { type: string }
 
-  - id: approve
-    name: A person approves this send
-    description: Only for responsePolicy approval. The run pauses here; the approval card shows what will be sent.
+  - id: policy
+    name: Does a person approve first?
+    description: Exits 10 when the responsePolicy is approval.
     needs: [plan]
     when:
       - path: plan.exitCode
-        equals: 10
-    requires_approval: true
-    run: python3 -c "import json; p=json.load(open('plan.json')); print(p['action'], 'to', p['chat']); print(p['input'].get('text',''))"
+        equals: 0
+    continue-on-error: true
+    run: python3 ./sender.py policy
     timeout_sec: 30
     output_schema:
       type: object
@@ -104,29 +102,65 @@ steps:
         stdout:   { type: string }
         stderr:   { type: string }
 
-  - id: deliver
-    name: Send, draft or skip
-    description: Runs the adapter once, records the result in the ledger, and prints the typed result.
-    needs: [plan, approve]
-    continue-on-error: true
-    run: python3 ./sender.py deliver
-    timeout_sec: 120
-    state:
-      workflow:
-        last_send: "{{ .Output.stdout }}"
-    gates:
-      - field: exitCode
-        equals: 5
-        action: fail
-        message: "WhatsApp send FAILED — the transport said no. See stdout for the reason."
-      - field: exitCode
-        equals: 6
-        action: fail
-        message: "WhatsApp send is UNCERTAIN — it may have gone out, so it will not be resent. Check the chat."
+  - id: approve
+    name: A person approves this send
+    description: Only for responsePolicy approval. The run pauses here; the approval card shows what will be sent.
+    needs: [policy]
+    when:
+      - path: policy.exitCode
+        equals: 10
+    requires_approval: true
+    run: python3 -c "import json; p=json.load(open('plan.json')); print(p['action'], 'to', p['chat']); print(p.get('text',''))"
+    timeout_sec: 30
     output_schema:
       type: object
       properties:
         ok:       { type: boolean }
         exitCode: { type: integer }
-        stdout:   { type: string, description: "the typed result: {status, id, action, chat, key, error}" }
+        stdout:   { type: string }
+        stderr:   { type: string }
+
+  - id: send
+    name: Send on the channel
+    description: One op through the channel contract — paced by the channel's sendGap, claimed once by key, never retried; a refused send fails the run, an unconfirmed one fails it and keeps the key.
+    needs: [plan, approve]
+    when:
+      - path: plan.exitCode
+        equals: 0
+    send:
+      target: "{{ (fromJson .Steps.plan.stdout).chat }}"
+      text: "{{ (fromJson .Steps.plan.stdout).text }}"
+      attachment: "{{ (fromJson .Steps.plan.stdout).media }}"
+      attachment_kind: "{{ (fromJson .Steps.plan.stdout).mediaKind }}"
+      reply_to: "{{ (fromJson .Steps.plan.stdout).replyTo }}"
+      reply_to_sender: "{{ (fromJson .Steps.plan.stdout).replyToSender }}"
+      mentions: "{{ (fromJson .Steps.plan.stdout).mentions }}"
+      reaction:
+        target: "{{ (fromJson .Steps.plan.stdout).reactTo }}"
+        emoji: "{{ (fromJson .Steps.plan.stdout).reaction }}"
+        sender: "{{ (fromJson .Steps.plan.stdout).replyToSender }}"
+      edit: "{{ (fromJson .Steps.plan.stdout).edit }}"
+      delete: "{{ (fromJson .Steps.plan.stdout).delete }}"
+      dedup:
+        key: "{{ (fromJson .Steps.plan.stdout).key }}"
+
+  - id: deliver
+    name: Report the result
+    description: Prints the typed result — sent, drafted, skipped, or already (this key was sent or may have been).
+    needs: [plan, send]
+    run: |
+      cat > sent.json <<'WFX_SENT_EOF'
+      {{ json .Steps.send }}
+      WFX_SENT_EOF
+      python3 ./sender.py deliver
+    timeout_sec: 30
+    state:
+      workflow:
+        last_send: "{{ .Output.stdout }}"
+    output_schema:
+      type: object
+      properties:
+        ok:       { type: boolean }
+        exitCode: { type: integer }
+        stdout:   { type: string, description: "the typed result: {status, id, action, chat, key}" }
         stderr:   { type: string }

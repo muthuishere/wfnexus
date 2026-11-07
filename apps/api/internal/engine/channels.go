@@ -394,9 +394,17 @@ func (e *Engine) runSend(ctx context.Context, runID uuid.UUID, step *workflow.St
 		if err != nil {
 			return nil, err
 		}
+		if a.Kind, err = render("attachment_kind", s.AttachmentKind); err != nil {
+			return nil, err
+		}
 		env.Attachment = a
 	}
-	e.emit(ctx, runID, step.ID, "tool_call", map[string]any{"name": "send", "args": map[string]any{"channel": c.Name, "text": text}})
+	op, err := sendOps(s, render, &env)
+	if err != nil {
+		return nil, err
+	}
+	out["action"] = op
+	e.emit(ctx, runID, step.ID, "tool_call", map[string]any{"name": "send", "args": map[string]any{"channel": c.Name, "action": op, "text": text}})
 
 	if s.DryRun {
 		e.emit(ctx, runID, step.ID, "log", map[string]any{"text": "dry run: would send on channel " + c.Name + ": " + text})
@@ -445,6 +453,75 @@ func (e *Engine) runSend(ctx context.Context, runID uuid.UUID, step *workflow.St
 	}
 	e.emit(ctx, runID, step.ID, "tool_result", map[string]any{"name": "send", "isError": false, "output": "sent on " + c.Name})
 	return out, nil
+}
+
+// sendOps renders a send step's reply-to, mentions, reaction, edit and delete
+// onto the envelope — every op rides the one envelope so the channel's send
+// gap and the adapter's echo ledger apply to all of them (ADR 0026) — and
+// names the op. A field that renders empty is absent: one template can serve
+// every op.
+func sendOps(s *workflow.SendStep, render func(field, t string) (string, error), env *notify.Envelope) (string, error) {
+	r := map[string]string{}
+	for field, t := range map[string]string{"reply_to": s.ReplyTo, "reply_to_sender": s.ReplyToSender, "mentions": s.Mentions, "edit": s.Edit, "delete": s.Delete} {
+		v, err := render(field, t)
+		if err != nil {
+			return "", err
+		}
+		r[field] = strings.TrimSpace(v)
+	}
+	if s.Reaction != nil {
+		for field, t := range map[string]string{"reaction.target": s.Reaction.Target, "reaction.emoji": s.Reaction.Emoji, "reaction.sender": s.Reaction.Sender} {
+			v, err := render(field, t)
+			if err != nil {
+				return "", err
+			}
+			r[field] = strings.TrimSpace(v)
+		}
+	}
+	for _, m := range strings.Split(r["mentions"], ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			env.Mentions = append(env.Mentions, m)
+		}
+	}
+	set := 0
+	op := "text"
+	if r["reaction.target"] != "" {
+		env.Reaction = &notify.SendReaction{TargetID: r["reaction.target"], Emoji: r["reaction.emoji"], Sender: r["reaction.sender"]}
+		op = "reaction"
+		set++
+	}
+	if r["edit"] != "" {
+		env.Edit = &notify.MessageRef{ID: r["edit"]}
+		op = "edit"
+		set++
+	}
+	if r["delete"] != "" {
+		env.Delete = &notify.MessageRef{ID: r["delete"]}
+		op = "delete"
+		set++
+	}
+	if set > 1 {
+		return "", fmt.Errorf("send: reaction, edit and delete are different messages; this step rendered %d of them", set)
+	}
+	if set == 1 && env.Attachment != nil {
+		return "", fmt.Errorf("send: an attachment cannot ride a %s", op)
+	}
+	if op == "edit" && strings.TrimSpace(env.Text) == "" {
+		return "", fmt.Errorf("send: an edit needs the new text")
+	}
+	if set == 0 {
+		if r["reply_to"] != "" {
+			env.ReplyTo = &notify.ReplyRef{ID: r["reply_to"], Sender: r["reply_to_sender"]}
+			op = "reply"
+		}
+		if env.Attachment != nil {
+			op = "media"
+		}
+		if strings.TrimSpace(env.Text) == "" && env.Attachment == nil {
+			return "", fmt.Errorf("send: nothing to send — text rendered empty and there is no attachment")
+		}
+	}
+	return op, nil
 }
 
 // sendAttachment turns a send step's rendered attachment into the envelope's.
