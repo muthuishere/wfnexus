@@ -85,7 +85,7 @@ uses:
 steps:
   - id: engine
     name: Read the engine (GET only)
-    description: engine.json — workflows, recent runs, failures, runs waiting on a person. Never writes.
+    description: engine.json — workflows, runs, failures, waits, plus every view wfx has (memory, workers, schedules, members, cost, subscriptions, hooks). Never writes.
     needs: [ctx.gather]
     run: |
       cat > input.json <<'WFX_INPUT_EOF'
@@ -119,7 +119,12 @@ steps:
       Read ./engine.json: `question` (what was asked), `workflows`, `runs`
       (counts by status), `recent`, `failed`, `waiting` (runs waiting on a
       person: approvals and questions), `howto`, and `error` if the engine
-      could not be read (then say so; do not guess).
+      could not be read (then say so; do not guess). Also everything `wfx`
+      can show: `projects`, `members`, `workers`, `metrics` (tokens, cost),
+      `prices`, `subscriptions`, `channels`, `conversations`, `proposals`,
+      `globalState`, and `perWorkflow.<name>` with its `schedule` (crons,
+      nextRunAt), `hooks` (expose), `memory` and `state`. A section named in
+      `unreadable` is one you cannot see — say so.
       Read ./context.json: who asked (`name`/`from`), the chat, and the
       subscription's `instructions`, `skills` and `responsePolicy`.
       The section about previous runs (if any) is this chat's memory.

@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,13 +22,50 @@ import (
 // fakeEngineAPI serves /api/workflows, /api/runs and /api/runs/{id} from fixed
 // data, and records every method it saw (both agents must only GET).
 func fakeEngineAPI(t *testing.T, runs []map[string]any, steps map[string][]map[string]any) (string, *[]string) {
+	url, methods, _ := fakeEngineAPIWith(t, runs, steps, nil)
+	return url, methods
+}
+
+// fakeEngineAPIWith also serves memory, state, definitions and the writes a
+// retrospective may make (start a run, write memory, save a workflow), and
+// records each as "METHOD path body".
+func fakeEngineAPIWith(t *testing.T, runs []map[string]any, steps map[string][]map[string]any,
+	memory []map[string]any) (string, *[]string, *[]string) {
 	t.Helper()
-	var methods []string
+	var methods, writes []string
+	defs := map[string]any{
+		"deploy":  map[string]any{"name": "deploy", "steps": []any{map[string]any{"id": "build"}, map[string]any{"id": "push"}}},
+		"nightly": map[string]any{"name": "nightly", "steps": []any{map[string]any{"id": "check"}}},
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		p := strings.TrimPrefix(r.URL.Path, "/api")
+		if r.Method != http.MethodGet {
+			b, _ := io.ReadAll(r.Body)
+			writes = append(writes, r.Method+" "+r.URL.RequestURI()+" "+string(b))
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "id": "new-run"})
+			return
+		}
 		switch {
+		case strings.HasSuffix(p, "/memory") && strings.HasPrefix(p, "/workflows/"):
+			name := strings.TrimSuffix(strings.TrimPrefix(p, "/workflows/"), "/memory")
+			out := []map[string]any{}
+			for _, m := range memory {
+				if m["workflow"] == name {
+					out = append(out, m)
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"workflow": name, "entries": out})
+		case strings.HasSuffix(p, "/state"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"vars": []map[string]any{
+				{"scope": "workflow", "scopeName": "deploy", "key": "last_tag", "value": "v1"}}})
+		case p == "/state":
+			_ = json.NewEncoder(w).Encode(map[string]any{"vars": []map[string]any{{"scope": "global", "key": "region", "value": "eu"}}})
+		case p == "/projects":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"name": "local"}})
+		case strings.HasPrefix(p, "/workflows/") && defs[strings.TrimPrefix(p, "/workflows/")] != nil:
+			_ = json.NewEncoder(w).Encode(map[string]any{"definition": defs[strings.TrimPrefix(p, "/workflows/")]})
 		case p == "/workflows":
 			_ = json.NewEncoder(w).Encode([]map[string]any{
 				{"name": "deploy", "description": "ships the app", "on": map[string]any{"workflow_dispatch": map[string]any{}}},
@@ -57,7 +97,7 @@ func fakeEngineAPI(t *testing.T, runs []map[string]any, steps map[string][]map[s
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv.URL, &methods
+	return srv.URL, &methods, &writes
 }
 
 // runScript runs a template's python script in dir with env, and returns its
@@ -219,6 +259,17 @@ func TestFrontdeskEngineSnapshot(t *testing.T) {
 	if w := s["waiting"].([]any); len(w) != 1 || w[0].(map[string]any)["step"] != "gate" {
 		t.Fatalf("waiting %v", w)
 	}
+	// Everything wfx can show: memory, state, schedules, hooks, workers, members…
+	pw, _ := s["perWorkflow"].(map[string]any)
+	if d, _ := pw["deploy"].(map[string]any); d == nil || d["state"] == nil || d["memory"] == nil {
+		t.Fatalf("perWorkflow %v", s["perWorkflow"])
+	}
+	if s["globalState"] == nil || s["projects"] == nil {
+		t.Fatalf("global state / projects missing: %v", s)
+	}
+	if bad, _ := s["unreadable"].(map[string]any); bad["workers"] == nil {
+		t.Fatalf("a refused section must be named, got %v", s["unreadable"])
+	}
 	if recent := s["recent"].([]any); recent[0].(map[string]any)["id"] != "b" {
 		t.Fatalf("recent not newest first: %v", recent)
 	}
@@ -319,6 +370,211 @@ func TestEngineFrontdeskDryRunFromAQuestion(t *testing.T) {
 	for _, s := range defs["retrospective"].Steps {
 		if s.ID == "analyze" && (len(s.Tools) != 1 || s.Tools[0] != "read") {
 			t.Errorf("retrospective's agent must be read-only, has %v", s.Tools)
+		}
+	}
+}
+
+// retroFingerprint mirrors check.py's fingerprint: kind + target (+ memory op/id).
+func retroFingerprint(kind, project, wf, step, op, id string) string {
+	h := sha256.Sum256([]byte(strings.Join([]string{kind, project, wf, step, op, id}, "|")))
+	return hex.EncodeToString(h[:])[:12]
+}
+
+func hasWrite(writes []string, prefix, contains string) bool {
+	for _, w := range writes {
+		if strings.HasPrefix(w, prefix) && strings.Contains(w, contains) {
+			return true
+		}
+	}
+	return false
+}
+
+// retrospective reads memory at every scope, emits TYPED proposals that cite
+// evidence (uncited ones dropped), remembers a rejected proposal and never
+// proposes it again, and does not propose what is already pending.
+func TestRetrospectiveTypedProposals(t *testing.T) {
+	now := time.Now().UTC()
+	at := func(h float64) string { return now.Add(time.Duration(-h * float64(time.Hour))).Format(time.RFC3339) }
+	rejectedFP := retroFingerprint("retire-workflow", "", "nightly", "", "", "")
+	pendingFP := retroFingerprint("add-step", "", "deploy", "notify", "", "")
+	runs := []map[string]any{
+		{"id": "r-dep", "workflow": "deploy", "status": "failed", "error": "DEPLOY_TOKEN missing", "currentStep": "push", "createdAt": at(2)},
+		{"id": "ap-rej", "workflow": "retrospective", "status": "cancelled", "createdAt": at(30),
+			"input": map[string]any{"mode": "apply", "fingerprint": rejectedFP,
+				"proposal": map[string]any{"kind": "retire-workflow", "target": map[string]any{"workflow": "nightly"}}}},
+		{"id": "ap-pend", "workflow": "retrospective", "status": "awaiting_approval", "createdAt": at(1),
+			"input": map[string]any{"mode": "apply", "fingerprint": pendingFP}},
+	}
+	steps := map[string][]map[string]any{"r-dep": {
+		{"stepId": "build", "status": "done"},
+		{"stepId": "push", "status": "failed", "attempts": 1, "error": "DEPLOY_TOKEN missing"},
+	}}
+	memory := []map[string]any{
+		{"id": "m-wf", "project": "local", "workflow": "deploy", "kind": "note", "body": "tokens live in env"},
+		{"id": "m-step", "project": "local", "workflow": "deploy", "stepId": "push", "kind": "note", "body": "push needs DEPLOY_TOKEN"},
+		{"id": "m-other", "project": "team", "workflow": "nightly", "kind": "run", "body": "ok"},
+	}
+	url, _, writes := fakeEngineAPIWith(t, runs, steps, memory)
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "input.json"), map[string]any{})
+	if code, out := runScript(t, "templates/retrospective/collect.py", dir, "WFX_API="+url, "WFX_RUN_ID=retro-9"); code != 0 {
+		t.Fatalf("collect: exit %d %s", code, out)
+	}
+	facts := readJSON(t, filepath.Join(dir, "facts.json"))
+	mem := facts["memory"].(map[string]any)
+	scopes := map[string]int{}
+	for _, e := range mem["entries"].([]any) {
+		scopes[e.(map[string]any)["scope"].(string)]++
+	}
+	if scopes["step"] != 1 || scopes["workflow"] != 2 || len(mem["byProject"].(map[string]any)) != 2 {
+		t.Fatalf("memory scopes %v byProject %v", scopes, mem["byProject"])
+	}
+	if st := facts["state"].(map[string]any); len(st["global"].([]any)) != 1 || st["project"].(map[string]any)["local"] == nil {
+		t.Fatalf("state %v", st)
+	}
+	sup := facts["suppressed"].(map[string]any)
+	if r, p := sup["rejected"].([]any), sup["pending"].([]any); len(r) != 1 || r[0] != rejectedFP || len(p) != 1 || p[0] != pendingFP {
+		t.Fatalf("suppressed %v", sup)
+	}
+	if !hasWrite(*writes, "POST /api/workflows/retrospective/memory", "rejected-proposal "+rejectedFP) || len(*writes) != 1 {
+		t.Fatalf("the rejection must be remembered once in retro memory: %v", *writes)
+	}
+
+	newDeploy := map[string]any{"name": "deploy", "steps": []any{
+		map[string]any{"id": "build"}, map[string]any{"id": "push", "retry": map[string]any{"max_attempts": 2}}}}
+	writeJSON(t, filepath.Join(dir, "analysis.json"), map[string]any{
+		"summary": "deploy push fails on a missing token", "findings": []any{},
+		"proposals": []map[string]any{
+			{"kind": "edit-step", "target": map[string]any{"workflow": "deploy", "step": "push"}, "rationale": "push failed",
+				"evidence": map[string]any{"runIds": []string{"r-dep"}, "stepIds": []string{"push"}, "memoryKeys": []string{"m-step"}},
+				"change": map[string]any{"definition": newDeploy}},
+			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "stale lesson",
+				"evidence": map[string]any{"memoryKeys": []string{"m-wf", "state:workflow:deploy:last_tag"}},
+				"change": map[string]any{"memory": map[string]any{"op": "edit", "id": "m-wf", "body": "DEPLOY_TOKEN is a project secret"}}},
+			// dropped: no evidence
+			{"kind": "new-workflow", "target": map[string]any{"workflow": "token-check"}, "rationale": "x",
+				"evidence": map[string]any{}, "change": map[string]any{"definition": map[string]any{"name": "token-check", "steps": []any{map[string]any{"id": "a"}}}}},
+			// dropped: invented memory key
+			{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "rationale": "x",
+				"evidence": map[string]any{"memoryKeys": []string{"m-made-up"}}, "change": map[string]any{"memory": map[string]any{"op": "add", "body": "x"}}},
+			// dropped: rejected before (reworded)
+			{"kind": "retire-workflow", "target": map[string]any{"workflow": "nightly"}, "rationale": "still useless",
+				"evidence": map[string]any{"memoryKeys": []string{"m-other"}}, "change": map[string]any{}},
+			// dropped: already pending
+			{"kind": "add-step", "target": map[string]any{"workflow": "deploy", "step": "notify"}, "rationale": "x",
+				"evidence": map[string]any{"runIds": []string{"r-dep"}},
+				"change": map[string]any{"definition": map[string]any{"name": "deploy", "steps": []any{map[string]any{"id": "notify"}}}}},
+			// dropped: unknown kind
+			{"kind": "rewrite-everything", "target": map[string]any{"workflow": "deploy"}, "rationale": "x",
+				"evidence": map[string]any{"runIds": []string{"r-dep"}}, "change": map[string]any{}},
+		},
+	})
+	code, out := runScript(t, "templates/retrospective/check.py", dir)
+	if code != 0 {
+		t.Fatalf("check: exit %d %s", code, out)
+	}
+	var res map[string]any
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("check output %q: %v", out, err)
+	}
+	props := res["proposals"].([]any)
+	if len(props) != 2 || len(res["dropped"].([]any)) != 5 {
+		t.Fatalf("kept %v dropped %v", props, res["dropped"])
+	}
+	for _, d := range res["dropped"].([]any) {
+		t.Logf("dropped: %v", d.(map[string]any)["why"])
+	}
+	if fp := props[0].(map[string]any)["fingerprint"]; fp != retroFingerprint("edit-step", "", "deploy", "push", "", "") {
+		t.Fatalf("fingerprint %v", fp)
+	}
+
+	// propose: one apply-mode run per proposal — one pending approval each.
+	writeJSON(t, filepath.Join(dir, "checked.json"), map[string]any{"ok": true, "stdout": out})
+	*writes = nil
+	if code, out := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url); code != 0 {
+		t.Fatalf("propose: exit %d %s", code, out)
+	}
+	if len(*writes) != 2 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
+		t.Fatalf("propose writes %v", *writes)
+	}
+}
+
+// Approve → apply.py makes the change through the normal API path and
+// remembers it; every kind maps to its endpoint.
+func TestRetrospectiveApproveApplies(t *testing.T) {
+	url, _, writes := fakeEngineAPIWith(t, nil, nil, nil)
+	def := map[string]any{"name": "deploy", "steps": []any{map[string]any{"id": "push"}}}
+	cases := []struct {
+		proposal map[string]any
+		want     string
+	}{
+		{map[string]any{"kind": "edit-step", "target": map[string]any{"workflow": "deploy", "step": "push"}, "change": map[string]any{"definition": def}},
+			`PUT /api/workflows/deploy {"definition"`},
+		{map[string]any{"kind": "new-workflow", "target": map[string]any{"project": "team", "workflow": "token-check"}, "change": map[string]any{"definition": def}},
+			"PUT /api/workflows/token-check?project=team"},
+		{map[string]any{"kind": "retire-workflow", "target": map[string]any{"workflow": "nightly"}}, "DELETE /api/workflows/nightly"},
+		{map[string]any{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "change": map[string]any{"memory": map[string]any{"op": "edit", "id": "m-wf", "body": "new"}}},
+			`PATCH /api/memory/m-wf {"body": "new"}`},
+		{map[string]any{"kind": "memory-fix", "target": map[string]any{"workflow": "deploy"}, "change": map[string]any{"memory": map[string]any{"op": "add", "body": "lesson"}}},
+			"POST /api/workflows/deploy/memory"},
+	}
+	for _, c := range cases {
+		*writes = nil
+		dir := t.TempDir()
+		writeJSON(t, filepath.Join(dir, "input.json"), map[string]any{"mode": "apply", "proposal": c.proposal, "fingerprint": "fp1"})
+		if code, out := runScript(t, "templates/retrospective/apply.py", dir, "WFX_API="+url); code != 0 {
+			t.Fatalf("%v: exit %d %s", c.proposal["kind"], code, out)
+		}
+		if !hasWrite(*writes, c.want, "") || !hasWrite(*writes, "POST /api/workflows/retrospective/memory", "applied-proposal fp1") {
+			t.Errorf("%v: writes %v, want %q", c.proposal["kind"], *writes, c.want)
+		}
+	}
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "input.json"), map[string]any{"mode": "apply", "proposal": cases[0].proposal, "fingerprint": "x"})
+	if code, _ := runScript(t, "templates/retrospective/apply.py", dir, "WFX_API=http://127.0.0.1:1"); code != 2 {
+		t.Fatalf("a refused apply must fail the run, got %d", code)
+	}
+}
+
+// The shape that makes "one pending item per proposal" true: every step is
+// guarded on input.mode, apply is approval-gated (a guard is evaluated before
+// the approval is asked, so review runs never park), and both modes dry-run.
+// Reject cancels the run (Engine.Reject), which collect.py turns into the
+// suppression note tested above.
+func TestRetrospectiveApplyModeIsGated(t *testing.T) {
+	defs := loadWATemplates(t, nil, "retrospective")
+	def := defs["retrospective"]
+	var apply, show *int
+	for i := range def.Steps {
+		i := i
+		switch def.Steps[i].ID {
+		case "apply":
+			apply = &i
+		case "show":
+			show = &i
+		}
+	}
+	if apply == nil || show == nil || !def.Steps[*apply].RequiresApproval {
+		t.Fatal("retrospective needs a show step and an approval-gated apply step")
+	}
+	for _, s := range def.Steps {
+		if len(s.When) != 1 || s.When[0].Path != "input.mode" {
+			t.Errorf("step %s must be guarded on input.mode", s.ID)
+		}
+	}
+	h := waHarness(t, defs, "retrospective")
+	for _, in := range []map[string]any{
+		{"mode": "apply", "fingerprint": "fp", "proposal": map[string]any{"kind": "retire-workflow", "target": map[string]any{"workflow": "x"}}},
+		{"workflow": "deploy"},
+	} {
+		rep, err := h.eng.DryRunWorkflow("retrospective", in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range rep.Problems {
+			if p.Fatal {
+				t.Errorf("%v: %s", in["mode"], p.Message)
+			}
 		}
 	}
 }
