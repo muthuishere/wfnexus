@@ -188,8 +188,17 @@ def main():
     dropped += pdropped
 
     tracking = [{"workflow": p.get("workflow"), "what": p.get("what"), "status": p.get("status")} for p in previous]
-    print(json.dumps({"findings": keep, "proposals": proposals, "summary": summary,
-                      "dropped": dropped, "fixTracking": tracking}, indent=2))
+    result = {"findings": keep, "proposals": proposals, "summary": summary,
+              "dropped": dropped, "fixTracking": tracking}
+    # The next step (propose) reads the FILE: a proposal carries a whole
+    # workflow, and its text must not travel through a template into a heredoc.
+    with open("checked.json", "w") as f:
+        json.dump(result, f)
+    # stdout is what a caller (frontdesk, the next retrospective) reads, and
+    # the engine clips it (4000 chars): compact, without the full changes.
+    slim = dict(result, proposals=[{k: p[k] for k in ("kind", "target", "rationale", "fingerprint")} for p in proposals],
+                dropped=[{"why": d["why"]} for d in dropped])
+    print(json.dumps(slim, separators=(",", ":")))
     recurred = sum(1 for t in tracking if t["status"] == "recurred")
     outcome(f"{'incident' if keep else 'ok'}: {len(keep)} findings, {len(dropped)} dropped, "
             f"{recurred} earlier fixes did not hold")

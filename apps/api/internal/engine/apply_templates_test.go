@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
@@ -93,6 +94,12 @@ func TestCopyingATemplateUnderItsOwnName(t *testing.T) {
 		if _, err := eng.Template(n); err != nil {
 			t.Fatalf("the template %s is gone after the copy: %v", n, err)
 		}
+	}
+	for _, sk := range eng.SourceSkips() {
+		if !strings.Contains(sk.Reason, "already used") {
+			continue
+		}
+		t.Errorf("a template shadowed by its copy is reported: %+v", sk)
 	}
 	// A real workflow still holds its name.
 	if _, err := eng.CopyTemplate(context.Background(), "frontdesk", "frontdesk"); err == nil {

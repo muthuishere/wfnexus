@@ -190,11 +190,7 @@ steps:
     description: Starts one apply-mode run of this workflow per checked proposal; each waits at its approval gate.
     needs: [check]
     when: [{ path: input.mode, equals: review }]
-    run: |
-      cat > checked.json <<'WFX_CHECKED_EOF'
-      {{ json .Steps.check }}
-      WFX_CHECKED_EOF
-      python3 ./propose.py
+    run: python3 ./propose.py   # reads checked.json, written by check.py
     timeout_sec: 60
     output_schema:
       type: object

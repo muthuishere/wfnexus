@@ -440,8 +440,11 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 		t.Fatalf("the rejection must be remembered once in retro memory: %v", *writes)
 	}
 
+	// A real change carries a multiline `run:` with quotes, heredocs and a
+	// long body: it must reach propose intact (it travels as a file).
+	longRun := "set -e\ncat > x.json <<'EOF'\n{\"a\": \"b\"}\nEOF\n" + strings.Repeat("echo \"line\"\t$HOME\n", 300)
 	newDeploy := map[string]any{"name": "deploy", "steps": []any{
-		map[string]any{"id": "build"}, map[string]any{"id": "push", "retry": map[string]any{"max_attempts": 2}}}}
+		map[string]any{"id": "build"}, map[string]any{"id": "push", "run": longRun, "retry": map[string]any{"max_attempts": 2}}}}
 	writeJSON(t, filepath.Join(dir, "analysis.json"), map[string]any{
 		"summary": "deploy push fails on a missing token", "findings": []any{},
 		"proposals": []map[string]any{
@@ -488,14 +491,31 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 		t.Fatalf("fingerprint %v", fp)
 	}
 
-	// propose: one apply-mode run per proposal — one pending approval each.
-	writeJSON(t, filepath.Join(dir, "checked.json"), map[string]any{"ok": true, "stdout": out})
+	if len(out) > 4000 {
+		t.Fatalf("check's stdout is %d chars; the engine clips at 4000", len(out))
+	}
+	// propose: one apply-mode run per proposal — one pending approval each,
+	// carrying the change byte for byte.
 	*writes = nil
 	if code, out := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url); code != 0 {
 		t.Fatalf("propose: exit %d %s", code, out)
 	}
 	if len(*writes) != 2 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
 		t.Fatalf("propose writes %v", *writes)
+	}
+	var sent struct {
+		Proposal struct {
+			Change struct {
+				Definition struct {
+					Steps []map[string]any `json:"steps"`
+				} `json:"definition"`
+			} `json:"change"`
+		} `json:"proposal"`
+	}
+	body := (*writes)[0][strings.Index((*writes)[0], "{"):]
+	if err := json.Unmarshal([]byte(body), &sent); err != nil || len(sent.Proposal.Change.Definition.Steps) != 2 ||
+		sent.Proposal.Change.Definition.Steps[1]["run"] != longRun {
+		t.Fatalf("the multiline run: did not survive check → propose: %v", err)
 	}
 }
 

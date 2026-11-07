@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """retrospective: put each checked proposal in front of a person.
 
-    propose.py   reads checked.json (the check step's output); for EACH
+    propose.py   reads checked.json (written by check.py); for EACH
                  proposal starts one apply-mode run of this workflow, which
                  stops at its approval gate — one pending item per proposal in
                  `wfx approvals` / the approval desk. Exit 0, or 2 when a run
@@ -34,7 +34,7 @@ def api(path, method="GET", body=None):
 
 def main():
     try:
-        checked = json.loads(json.load(open("checked.json")).get("stdout") or "{}")
+        checked = json.load(open("checked.json"))
     except Exception as e:
         print(f"the checked result is unreadable: {e!r}")
         return 2
