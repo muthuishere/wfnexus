@@ -42,7 +42,7 @@ func (m *machine) publish(t *testing.T, yaml, version, token string) string {
 func TestARefusedPullInstallsNothing(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "fix the author")
-	tok := user(t, m.st, "ana", "publisher", "")
+	tok := user(t, m.st, "ana", "editor", "")
 	digest := m.publish(t, labelledWorkflow, "1.0.0", tok)
 
 	w := do(m.h, "POST", "/api/bundles/"+digest+"/install", tok, nil)
@@ -73,7 +73,7 @@ func TestARefusedPullInstallsNothing(t *testing.T) {
 func TestABundleWithNoRequirementsPullsUnchanged(t *testing.T) {
 	m := newMachine(t, ":8090")
 	m.installSkill(t, "fix-author", "fix the author")
-	tok := user(t, m.st, "ana", "publisher", "")
+	tok := user(t, m.st, "ana", "editor", "")
 	b, digest, tar := m.buildBundle(t, sampleWorkflow, "1.0.0")
 	if b.Manifest.Requires != nil {
 		t.Fatalf("a workflow with no provider, label or mcp recorded %+v", b.Manifest.Requires)

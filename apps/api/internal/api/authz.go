@@ -25,36 +25,50 @@ const (
 	PermWorkflowsWrite = "workflows:write"
 	PermRunsRead       = "runs:read"
 	PermRunsWrite      = "runs:write"
-	PermRegistryRead   = "registry:read"
-	PermRegistryWrite  = "registry:write"
-	PermProjectsRead   = "projects:read"
-	PermProjectsWrite  = "projects:write"
-	PermEnvRead        = "env:read"
-	PermEnvWrite       = "env:write"
-	PermStateRead      = "state:read"
-	PermStateWrite     = "state:write"
-	PermWorkersRead    = "workers:read"
-	PermWorkersWrite   = "workers:write"
-	PermBundlesRead    = "bundles:read"
-	PermPublish        = "publish"
-	PermAdminRead      = "admin:read"
-	PermAdminWrite     = "admin:write"
+	// PermRunsAll sees every run; without it a caller sees its own (ADR 0028).
+	PermRunsAll       = "runs:all"
+	PermRegistryRead  = "registry:read"
+	PermRegistryWrite = "registry:write"
+	PermProjectsRead  = "projects:read"
+	PermProjectsWrite = "projects:write"
+	PermEnvRead       = "env:read"
+	PermEnvWrite      = "env:write"
+	PermStateRead     = "state:read"
+	PermStateWrite    = "state:write"
+	PermWorkersRead   = "workers:read"
+	PermWorkersWrite  = "workers:write"
+	PermBundlesRead   = "bundles:read"
+	PermPublish       = "publish"
+	PermAdminRead     = "admin:read"
+	PermAdminWrite    = "admin:write"
 )
 
 // DefaultRoles is what first boot SEEDS — as rows, editable afterwards. It is
 // a seed, not the authority: the authority is whatever the table holds when a
 // request arrives.
+//
+// ADR 0028: three global roles. `superadmin` does everything; `editor` edits,
+// runs and publishes every workflow and sees every run; `user` reads, runs
+// what it can see, and sees only its own runs. Per-workflow `owner` and
+// `editor` grants live in workflow_members, not here.
 func DefaultRoles() map[string][]string {
-	viewer := []string{PermWorkflowsRead, PermRunsRead, PermRegistryRead, PermProjectsRead,
+	user := []string{PermWorkflowsRead, PermRunsRead, PermRunsWrite, PermRegistryRead, PermProjectsRead,
 		PermEnvRead, PermStateRead, PermWorkersRead, PermBundlesRead}
-	publisher := append(append([]string{}, viewer...),
-		PermWorkflowsWrite, PermRunsWrite, PermStateWrite, PermPublish)
+	editor := append(append([]string{}, user...),
+		PermWorkflowsWrite, PermRunsAll, PermStateWrite, PermPublish)
 	return map[string][]string{
-		"admin":     {"*"},
-		"publisher": publisher,
-		"viewer":    viewer,
+		RoleSuperadmin: {"*"},
+		RoleEditor:     editor,
+		RoleUser:       user,
 	}
 }
+
+// The seeded global role names (ADR 0028).
+const (
+	RoleSuperadmin = "superadmin"
+	RoleEditor     = "editor"
+	RoleUser       = "user"
+)
 
 // resourcePerms maps the first path segment under /api to its read and write
 // permission. Two permissions per resource, read on GET and write on anything
@@ -141,6 +155,12 @@ func PermissionFor(method, path string) string {
 		(strings.HasPrefix(path, "/api/skills/installed") || strings.HasPrefix(path, "/api/mcp/")) {
 		return PermAdminWrite
 	}
+	// Starting a run of a workflow is a run, not an edit of it (ADR 0028):
+	// a `user` may run what it can see.
+	if method == http.MethodPost && strings.HasPrefix(path, "/api/workflows/") &&
+		(strings.HasSuffix(path, "/runs") || strings.HasSuffix(path, "/dispatches")) {
+		return PermRunsWrite
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]
@@ -202,7 +222,9 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return
 		}
-		if !s.can(r, perm) {
+		// A grant on the addressed workflow (ADR 0028) can allow what the
+		// global role does not; it never refuses what the role allows.
+		if !s.can(r, perm) && !s.memberAllows(r) {
 			writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden: this subject does not hold %s", perm))
 			return
 		}

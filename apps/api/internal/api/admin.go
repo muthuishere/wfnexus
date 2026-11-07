@@ -75,7 +75,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	losingAdmin := cur.Role == "admin" && !cur.Disabled && (b.Role != "admin" || b.Disabled)
+	losingAdmin := cur.Role == RoleSuperadmin && !cur.Disabled && (b.Role != RoleSuperadmin || b.Disabled)
 	if losingAdmin {
 		if ok, err := s.anotherAdminRemains(r, name); err != nil {
 			writeErr(w, 500, err)
@@ -100,7 +100,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	if cur.Role == "admin" && !cur.Disabled {
+	if cur.Role == RoleSuperadmin && !cur.Disabled {
 		if ok, err := s.anotherAdminRemains(r, name); err != nil {
 			writeErr(w, 500, err)
 			return

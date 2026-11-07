@@ -63,6 +63,10 @@ type Server struct {
 
 	// exposeLimit rate-limits the public hook and MCP endpoints (expose.go).
 	exposeLimit *rateLimiter
+
+	// jwtKey signs and verifies access tokens (ADR 0028), derived from the
+	// env-store key.
+	jwtKey []byte
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -96,7 +100,8 @@ func isLoopback(addr string) bool {
 // setting, so there is nothing to switch off.
 func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string, uiFS fs.FS) http.Handler {
 	s := &Server{eng: eng, store: st, blob: bl, addr: addr, loopbackOnly: isLoopback(addr), uiDir: uiDir, uiFS: uiFS, verify: newVerifyLimiter(), pwLimit: newPasswordLimiter(),
-		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst)}
+		authn: auth.Local{Store: st}, exposeLimit: newRateLimiter(exposeRatePerMin, exposeRateBurst),
+		jwtKey: jwtKeyFor(eng.Secrets())}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -146,6 +151,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// Username and password (ADR 0025): the same session cookie.
 		r.Post("/auth/password", s.passwordSignIn)
 		r.Post("/auth/password/change", s.changeOwnPassword)
+		r.Post("/auth/refresh", s.refresh)
 
 		// Administration: users and roles are ROWS, created, edited and
 		// deleted here rather than fixed in the binary (ADR 0017).
@@ -255,6 +261,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.proposalRoutes(r)
 		r.Post("/workflows/{name}/runs", s.createRun)
 		// Inbound exposure (ADR 0027): issue, rotate and revoke the tokens.
+		r.Get("/workflows/{name}/members", s.listMembers)
+		r.Put("/workflows/{name}/members/{user}", s.setMember)
+		r.Delete("/workflows/{name}/members/{user}", s.removeMember)
 		r.Get("/workflows/{name}/expose", s.getExpose)
 		r.Post("/workflows/{name}/expose/{kind}", s.issueExpose)
 		r.Delete("/workflows/{name}/expose/{kind}", s.revokeExpose)
@@ -920,12 +929,20 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 			status = append(status, st)
 		}
 	}
-	runs, err := s.store.FindRuns(r.Context(), store.RunFilter{
+	f := store.RunFilter{
 		Project:  project,
 		Workflow: r.URL.Query().Get("workflow"),
 		Status:   status,
 		Limit:    100,
-	})
+	}
+	// ADR 0028: without runs:all a caller sees the runs it started — or every
+	// run of one workflow it holds a grant on, when it asks for that workflow.
+	if sub, ok := SubjectFrom(r.Context()); ok && !s.can(r, PermRunsAll) {
+		if f.Workflow == "" || s.memberRole(r, f.Workflow) == "" {
+			f.TriggeredBy = sub.Name
+		}
+	}
+	runs, err := s.store.FindRuns(r.Context(), f)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
@@ -949,6 +966,15 @@ func (s *Server) runID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool)
 	if scope := s.scopeOf(r); scope != "" {
 		run, err := s.store.GetRun(r.Context(), id)
 		if err != nil || run.Project != scope {
+			notFound(w)
+			return id, false
+		}
+	}
+	// ADR 0028: a caller without runs:all reaches only its own runs and the
+	// runs of workflows it holds a grant on — to read, approve or cancel.
+	if !s.can(r, PermRunsAll) {
+		run, err := s.store.GetRun(r.Context(), id)
+		if err != nil || !s.runVisible(r, run) {
 			notFound(w)
 			return id, false
 		}

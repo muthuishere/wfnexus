@@ -43,7 +43,7 @@ func TestFirstBootSeedsOneAdminAndTheRolesAsRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(users) != 1 || users[0].Role != "admin" {
+	if len(users) != 1 || users[0].Role != "superadmin" {
 		t.Fatalf("first boot created %+v", users)
 	}
 	roles, err := st.ListRoles(ctx)

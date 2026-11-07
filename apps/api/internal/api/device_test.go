@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -85,7 +86,7 @@ func TestDeviceGrantWalksPendingApprovedIssued(t *testing.T) {
 	}
 	issued := poll()
 	value, _ := issued["access_token"].(string)
-	if !strings.HasPrefix(value, "wfx_") || issued["token_type"] != "Bearer" {
+	if strings.Count(value, ".") != 2 || !strings.HasPrefix(fmt.Sprint(issued["refresh_token"]), "wfx_") || issued["token_type"] != "Bearer" {
 		t.Fatalf("no token issued: %v", issued)
 	}
 	// It authenticates.

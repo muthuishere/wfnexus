@@ -39,13 +39,13 @@ func (l Local) UserByToken(ctx context.Context, tok string) (*store.User, *store
 	return l.Store.UserByTokenHash(ctx, HashToken(tok))
 }
 
-// ApprovingUser gives a first local user the admin role: on loopback the
+// ApprovingUser gives a first local user the superadmin role: on loopback the
 // machine is the trust boundary, and the person at it owns the install.
 func (l Local) ApprovingUser(ctx context.Context, name string) (*store.User, error) {
 	if u, err := l.Store.UserByName(ctx, name); err == nil {
 		return u, nil
 	}
-	u := &store.User{Name: name, DisplayName: name, Role: "admin"}
+	u := &store.User{Name: name, DisplayName: name, Role: "superadmin"}
 	if err := l.Store.CreateUser(ctx, u); err != nil {
 		return nil, err
 	}

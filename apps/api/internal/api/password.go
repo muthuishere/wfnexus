@@ -55,6 +55,10 @@ func (l *passwordLimiter) fail(user string, now time.Time) {
 type passwordBody struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// Client "cli" asks for the tokens in the body (`wfx login --user`)
+	// instead of cookies (ADR 0028). A browser never sets it, so its refresh
+	// value never reaches page script.
+	Client string `json:"client"`
 }
 
 // passwordSignIn is POST /api/auth/password.
@@ -83,6 +87,17 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	if !auth.VerifyPassword(hash, b.Password) || u == nil {
 		s.pwLimit.fail(b.Username, time.Now())
 		writeErr(w, http.StatusUnauthorized, errBadCredentials)
+		return
+	}
+	if b.Client == "cli" {
+		sess, err := s.issueSession(ctx, u.ID, "password")
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		out := tokenResponse(sess)
+		out["status"], out["mustChange"] = "signed_in", u.MustChange
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	if err := s.startSession(ctx, w, r, u.ID); err != nil {

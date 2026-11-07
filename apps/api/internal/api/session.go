@@ -57,6 +57,22 @@ func sessionCookie(r *http.Request) string {
 	return c.Value
 }
 
+func refreshCookie(r *http.Request) string {
+	c, err := r.Cookie(refreshCookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: value, Path: "/api/",
+		MaxAge: int(sessionMaxAge / time.Second), HttpOnly: true,
+		SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+	})
+}
+
 func secureRequest(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
@@ -72,6 +88,10 @@ func setSessionCookie(w http.ResponseWriter, r *http.Request, value string) {
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name: refreshCookieName, Value: "", Path: "/api/", MaxAge: -1,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
 	})
 }
@@ -103,14 +123,16 @@ func sameOrigin(r *http.Request) bool {
 	return r.Header.Get("Sec-Fetch-Site") == "same-origin"
 }
 
-// startSession mints a user token for a browser and hands it over as a cookie.
-// The value exists only in the Set-Cookie header; the row holds its hash.
+// startSession signs a browser in (ADR 0028): the access JWT in wfx_session,
+// the refresh value in wfx_refresh. The values exist only in the Set-Cookie
+// headers; the refresh row holds a hash.
 func (s *Server) startSession(ctx context.Context, w http.ResponseWriter, r *http.Request, userID uuid.UUID) error {
-	value := auth.NewToken()
-	if _, err := s.store.IssueUserToken(ctx, userID, auth.HashToken(value), "browser", ""); err != nil {
+	sess, err := s.issueSession(ctx, userID, "browser")
+	if err != nil {
 		return err
 	}
-	setSessionCookie(w, r, value)
+	setSessionCookie(w, r, sess.Access)
+	setRefreshCookie(w, r, sess.Refresh)
 	return nil
 }
 

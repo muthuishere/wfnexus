@@ -79,7 +79,7 @@ function AddUser({ roles, onAdded, onError }: {
   roles: Role[]; onAdded: (name: string, password?: string) => void; onError: (e: string) => void
 }) {
   const [name, setName] = useState('')
-  const [role, setRole] = useState('viewer')
+  const [role, setRole] = useState('user')
   const [project, setProject] = useState('')
   const submit = (e: FormEvent) => {
     e.preventDefault()

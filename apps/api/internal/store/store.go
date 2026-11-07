@@ -241,7 +241,10 @@ type RunFilter struct {
 	ParentRunID string
 	// Conversation narrows to the runs of one conversation key.
 	Conversation string
-	Limit        int
+	// TriggeredBy narrows to the runs one person started (ADR 0028: a
+	// `user` sees only its own runs).
+	TriggeredBy string
+	Limit       int
 }
 
 // RunsInStatus lists runs currently in any of these states, oldest first.
@@ -276,6 +279,10 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 	if f.Conversation != "" {
 		args = append(args, f.Conversation)
 		where = append(where, fmt.Sprintf("conversation=$%d", len(args)))
+	}
+	if f.TriggeredBy != "" {
+		args = append(args, f.TriggeredBy)
+		where = append(where, fmt.Sprintf("triggered_by=$%d", len(args)))
 	}
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))

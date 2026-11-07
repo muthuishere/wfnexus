@@ -59,11 +59,11 @@ func TestEveryApiRouteHasANamedPermission(t *testing.T) {
 // task 7.3 — a role edit takes effect on the NEXT authorization decision.
 func TestARoleEditFlipsTheNextRequest(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "viewer", "")
+	tok := user(t, st, "ana", "user", "")
 	if got := do(h, "GET", "/api/workflows", tok, nil).Code; got != 200 {
 		t.Fatalf("viewer could not read workflows: %d", got)
 	}
-	if err := st.UpsertRole(context.Background(), "viewer", []string{"runs:read"}); err != nil {
+	if err := st.UpsertRole(context.Background(), "user", []string{"runs:read"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := do(h, "GET", "/api/workflows", tok, nil).Code; got != 403 {
@@ -74,19 +74,19 @@ func TestARoleEditFlipsTheNextRequest(t *testing.T) {
 // [SEC-TEST] task 7.4 — the last administrator cannot be deleted or demoted.
 func TestTheLastAdministratorCannotBeRemoved(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	admin := user(t, st, "root", "admin", "")
+	admin := user(t, st, "root", "superadmin", "")
 
-	if w := do(h, "PUT", "/api/users/root", admin, map[string]any{"role": "viewer"}); w.Code != 409 {
+	if w := do(h, "PUT", "/api/users/root", admin, map[string]any{"role": "user"}); w.Code != 409 {
 		t.Fatalf("demoting the last admin answered %d: %s", w.Code, w.Body.String())
 	}
 	if w := do(h, "DELETE", "/api/users/root", admin, nil); w.Code != 409 {
 		t.Fatalf("deleting the last admin answered %d: %s", w.Code, w.Body.String())
 	}
-	if u, err := st.UserByName(context.Background(), "root"); err != nil || u.Role != "admin" {
+	if u, err := st.UserByName(context.Background(), "root"); err != nil || u.Role != "superadmin" {
 		t.Fatalf("the host lost its administrator: %+v %v", u, err)
 	}
 	// With a second admin, the first may go.
-	user(t, st, "second", "admin", "")
+	user(t, st, "second", "superadmin", "")
 	if w := do(h, "DELETE", "/api/users/root", admin, nil); w.Code != 200 {
 		t.Fatalf("deleting one of two admins answered %d: %s", w.Code, w.Body.String())
 	}
@@ -96,7 +96,7 @@ func TestTheLastAdministratorCannotBeRemoved(t *testing.T) {
 // and the refusal is INDISTINGUISHABLE from not-found.
 func TestProjectScopeIsIndistinguishableFromNotFound(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "publisher", "acme")
+	tok := user(t, st, "ana", "editor", "acme")
 
 	// The fixture's engine holds no workflows, so every workflow is "local":
 	// a subject scoped to acme is out of scope for all of them.
@@ -130,8 +130,8 @@ func TestListingIsFilteredByProject(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	scoped := user(t, st, "ana", "viewer", "acme")
-	unscoped := user(t, st, "root", "admin", "")
+	scoped := user(t, st, "ana", "editor", "acme")
+	unscoped := user(t, st, "root", "superadmin", "")
 
 	var runs []*store.Run
 	w := do(h, "GET", "/api/runs", scoped, nil)
@@ -158,9 +158,9 @@ func TestListingIsFilteredByProject(t *testing.T) {
 // carrying role claims has no effect; the local table decides.
 func TestProviderAssertedRolesHaveNoEffect(t *testing.T) {
 	h, st := testServer(t, ":8090")
-	tok := user(t, st, "ana", "viewer", "")
+	tok := user(t, st, "ana", "user", "")
 	req := func(hdrs map[string]string) int {
-		w := doWithHeaders(h, "POST", "/api/users", tok, map[string]any{"name": "x", "role": "admin"}, hdrs)
+		w := doWithHeaders(h, "POST", "/api/users", tok, map[string]any{"name": "x", "role": "superadmin"}, hdrs)
 		return w.Code
 	}
 	if got := req(nil); got != 403 {
@@ -168,10 +168,10 @@ func TestProviderAssertedRolesHaveNoEffect(t *testing.T) {
 	}
 	// Every shape an external provider might assert a role in.
 	claims := []map[string]string{
-		{"X-Auth-Role": "admin"},
+		{"X-Auth-Role": "superadmin"},
 		{"X-Forwarded-Groups": "admin,publisher"},
-		{"X-Auth-Request-Groups": "admin"},
-		{"X-Wfx-Role": "admin"},
+		{"X-Auth-Request-Groups": "superadmin"},
+		{"X-Wfx-Role": "superadmin"},
 	}
 	for _, c := range claims {
 		if got := req(c); got != 403 {
@@ -179,7 +179,7 @@ func TestProviderAssertedRolesHaveNoEffect(t *testing.T) {
 		}
 	}
 	// ...and a role granted LOCALLY does, immediately.
-	if err := st.UpsertRole(context.Background(), "viewer", []string{"admin:write", "admin:read"}); err != nil {
+	if err := st.UpsertRole(context.Background(), "user", []string{"admin:write", "admin:read"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := req(nil); got != 201 {

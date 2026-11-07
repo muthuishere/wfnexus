@@ -241,8 +241,9 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 			deviceError(w, http.StatusBadRequest, "access_denied", "the approval named no user")
 			return
 		}
-		value := auth.NewToken()
-		if _, err := s.store.IssueUserToken(ctx, *dc.ApprovedBy, auth.HashToken(value), "wfx-cli", ""); err != nil {
+		// ADR 0028: the grant ends in the same session every login does.
+		sess, err := s.issueSession(ctx, *dc.ApprovedBy, "cli")
+		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -252,10 +253,7 @@ func (s *Server) deviceToken(w http.ResponseWriter, r *http.Request) {
 
 		// The ONLY time the value exists outside the client. It is not logged
 		// here and there is no route that can read it back.
-		writeJSON(w, http.StatusOK, map[string]any{
-			"access_token": value,
-			"token_type":   "Bearer",
-		})
+		writeJSON(w, http.StatusOK, tokenResponse(sess))
 		return
 	}
 

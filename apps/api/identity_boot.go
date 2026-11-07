@@ -58,7 +58,7 @@ func refuseAndBootstrap(ctx context.Context, addr string, st *store.Store) error
 			return fmt.Errorf("identity: seeding role %s: %w", name, err)
 		}
 	}
-	admin := &store.User{Name: "admin", DisplayName: "admin", Role: "admin"}
+	admin := &store.User{Name: "admin", DisplayName: "admin", Role: api.RoleSuperadmin}
 	if err := st.CreateUser(ctx, admin); err != nil {
 		return fmt.Errorf("identity: creating the first admin: %w", err)
 	}
