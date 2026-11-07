@@ -28,8 +28,12 @@ func Check(d *Definition, cat Catalog) error {
 		return err
 	}
 	normalize(d)
-	if err := d.validate(cat); err != nil {
-		return err
+	// A workflow that `uses:` others is validated EXPANDED, by the round trip
+	// below; its raw steps name steps (`ctx.gather`) only expansion creates.
+	if len(d.Uses) == 0 {
+		if err := d.validate(cat); err != nil {
+			return err
+		}
 	}
 	// A credential written as a literal is refused here, where it is still only
 	// in memory — the next line marshals this to YAML and writes it.
@@ -53,7 +57,7 @@ func Check(d *Definition, cat Catalog) error {
 	if _, err := writeForm(tmp, d, raw, nil); err != nil {
 		return err
 	}
-	loaded, err := LoadDir(tmp, cat)
+	loaded, err := LoadDir(tmp, cat, callableOpts(cat)...)
 	if err != nil {
 		return fmt.Errorf("the definition does not survive a round trip: %w", err)
 	}
@@ -71,8 +75,10 @@ func Save(dir string, d *Definition, cat Catalog) (string, error) {
 		return "", err
 	}
 	normalize(d)
-	if err := d.validate(cat); err != nil {
-		return "", err
+	if len(d.Uses) == 0 { // see Check
+		if err := d.validate(cat); err != nil {
+			return "", err
+		}
 	}
 
 	raw, err := yaml.Marshal(d)
@@ -90,7 +96,7 @@ func Save(dir string, d *Definition, cat Catalog) (string, error) {
 	if _, err := writeForm(tmp, d, raw, nil); err != nil {
 		return "", err
 	}
-	loaded, err := LoadDir(tmp, cat)
+	loaded, err := LoadDir(tmp, cat, callableOpts(cat)...)
 	if err != nil {
 		return "", fmt.Errorf("the definition does not survive a round trip: %w", err)
 	}
