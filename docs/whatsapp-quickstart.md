@@ -2,7 +2,7 @@
 
 From nothing to a bot that answers in a test group and is watched, in five
 steps. The background is in ADR 0027 (hooks and MCP) and ADR 0028 (service
-modules: the whatsapp-group-monitor). The adapter contract is in
+modules: the preinstalled `apl` module). The adapter contract is in
 [channels.md](channels.md).
 
 ## 1. Create the channel
@@ -40,10 +40,11 @@ wfx env set PINGPONG_HOOK_TOKEN   # paste the token (stored sealed)
 ## 3. Run the monitor and register a watch
 
 ```sh
-wfx module install https://github.com/muthuishere/wfnexus --ref main   # or your fork
-wfx module config whatsapp-group-monitor
-wfx module start whatsapp-group-monitor --account biz   # [--runs-on <worker label>]
-wfx module watch add whatsapp-group-monitor --account biz \
+# apl is preinstalled. Once, globally: which account is "business".
+wfx module config apl
+wfx module profile set apl business --account biz --default
+wfx module start apl.whatsapp   # the default profile's account [--runs-on <worker label>]
+wfx module watch add apl.whatsapp --account biz \
   '{"name":"pingpong-test","chat":"<test-group-jid>@g.us","hook":"<hook url>","tokenEnv":"PINGPONG_HOOK_TOKEN"}'
 ```
 
@@ -76,6 +77,21 @@ wfx new whatsapp-monitor   # set owner_chat, WA_CHANNEL, STORE_PROBE
 Every 5 minutes it compares the WhatsApp store with what wfnexus has heard,
 and checks the monitor service. If the channel is connected but deaf, or the
 service is silent or crashed, it alerts your chat once per window.
+
+To send from anywhere — a script, an agent, a workflow — use the command; it
+goes out through the running service, so the number has one writer:
+
+```sh
+wfx module call apl.whatsapp-send --input chat=<jid> --input text=hi --input responsePolicy=auto --wait
+```
+
+```yaml
+- id: tell
+  uses: apl.whatsapp-send@0
+  with: { chat: "{{ .Input.chat }}", text: deployed, responsePolicy: approval }
+```
+
+A missing `responsePolicy` drafts: nothing is sent without one.
 
 ## 5. Expose frontdesk over MCP
 

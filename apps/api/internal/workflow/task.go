@@ -28,6 +28,9 @@ type Task struct {
 	Version string                `yaml:"version,omitempty" json:"version,omitempty"`
 	Inputs  map[string]InputSpec  `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Outputs map[string]OutputSpec `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	// Module is set when the task is an installed module's command: its
+	// expanded steps carry it, so they run with that module's token.
+	Module string `yaml:"-" json:"module,omitempty"`
 }
 
 func (t Task) EntryName() string { return t.Name }
@@ -206,6 +209,9 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			applyOverride(&step, u.With[s.ID])
 			if len(t.Inputs) > 0 {
 				applyInputs(&step, vals)
+			}
+			if t.Module != "" {
+				step.Module = t.Module
 			}
 			expanded = append(expanded, step)
 		}

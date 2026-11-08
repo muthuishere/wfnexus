@@ -12,7 +12,7 @@ Findings (report.json `findings[]`, each {kind, severity, subject, detail}):
                      (OpenClaw's most-reported failure: connected but deaf)
     receive-stale    the last successful receive is older than RECEIVE_MAX_SEC
     receive-error    the last receive failed
-    service          a whatsapp-group-monitor service is silent or crashed (ADR 0028):
+    service          a apl.whatsapp service is silent or crashed (ADR 0028):
                      the watches it delivers to their workflows are not being served
 """
 import hashlib
@@ -94,7 +94,8 @@ def check():
                 f"{iso(last_event) or 'never'} ({lag}s behind; limit {lag_max}s) — connected but not hearing")
 
     mods = (api("/modules") or {}).get("modules") or []
-    svcs = [s for m in mods if m.get("name") == "whatsapp-group-monitor" for s in (m.get("services") or [])]
+    svcs = [s for m in mods if m.get("name") == "apl"
+            for s in (m.get("instances") or []) if s.get("module") == "apl.whatsapp"]
     for s in svcs:
         st = s.get("state", "")
         if st in ("silent", "crashed"):

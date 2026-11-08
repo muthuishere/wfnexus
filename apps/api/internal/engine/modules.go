@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -22,7 +23,7 @@ type ModuleView struct {
 	Ready   bool     `json:"ready"`
 	// Services are this module's supervised instances, one per account
 	// (services.go). Empty for a command module.
-	Services []ServiceView `json:"services"`
+	Services []ServiceView `json:"instances"`
 }
 
 // Modules scans every skill source checkout. Broken manifests are returned as
@@ -36,6 +37,15 @@ func (e *Engine) Modules() ([]*workflow.Module, []error) {
 	var mods []*workflow.Module
 	var errs []error
 	seen := map[string]bool{}
+	// The modules the platform ships (apl) are preinstalled and win a name.
+	if e.cfg.ModulesDir != "" {
+		ms, es := workflow.FindModules("builtin", e.cfg.ModulesDir)
+		errs = append(errs, es...)
+		for _, m := range ms {
+			seen[m.Name] = true
+			mods = append(mods, m)
+		}
+	}
 	for _, s := range list {
 		ms, es := workflow.FindModules(s.Name, e.skillSourceDir(s.Name))
 		errs = append(errs, es...)
@@ -64,7 +74,7 @@ func (e *Engine) ModuleViews(ctx context.Context) ([]ModuleView, []string) {
 	for _, m := range mods {
 		v := ModuleView{Module: m, Missing: []string{}, Services: []ServiceView{}}
 		for _, sv := range svcs {
-			if sv.Module == m.Name {
+			if strings.HasPrefix(sv.Module, m.Name+".") {
 				v.Services = append(v.Services, sv)
 			}
 		}

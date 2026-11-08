@@ -18,7 +18,7 @@ import (
 )
 
 // The handler templates are driven here the way production drives them: a
-// whatsapp-group-monitor (the real wamonitor over the real apl-whatsapp.js
+// apl.whatsapp (the real wamonitor over the real apl-whatsapp.js
 // adapter, with a fake apl underneath) reads a chat, and its watch POSTs the
 // delivery {message, messages, watch, chat} to the workflow's hook. The hook
 // here starts the run with that body as its input.

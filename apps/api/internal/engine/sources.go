@@ -50,11 +50,19 @@ func (e *Engine) Sources() []workflow.Source {
 	if e.cfg.TemplatesDir != "" {
 		out = append(out, workflow.Source{Name: templatesSource, Dir: e.cfg.TemplatesDir})
 	}
+	// Module commands as workflows (modulecalls.go), after everything a
+	// person wrote: a local workflow of the same name keeps it.
+	var wrappers []workflow.Source
+	if e.cfg.WorkDir != "" {
+		if _, err := os.Stat(e.wrapperDir()); err == nil {
+			wrappers = append(wrappers, workflow.Source{Name: wrapperSource, Dir: e.wrapperDir()})
+		}
+	}
 	imported, err := e.readSources()
 	if err != nil {
-		return out
+		return append(out, wrappers...)
 	}
-	return append(out, imported...)
+	return append(append(out, imported...), wrappers...)
 }
 
 func (e *Engine) sourcesPath() string { return filepath.Join(e.cfg.WorkDir, sourcesFile) }

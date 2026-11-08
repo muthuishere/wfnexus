@@ -72,6 +72,8 @@ COPY workflows /app/workflows
 # The templates people copy and the skills a step (and `wfx install --skills`)
 # loads. Without them a fresh container boots with nothing in it.
 COPY templates /app/templates
+# The preinstalled modules (apl).
+COPY modules /app/modules
 COPY skills /app/skills
 COPY registries.json /app/registries.json
 # `server` is STATED, not inherited: the no-config default is `local` (sqlite
@@ -86,6 +88,7 @@ ENV WFX_MODE=server \
     WFX_UI_DIR=/app/ui \
     WFX_WORKFLOWS_DIR=/app/workflows \
     WFX_TEMPLATES_DIR=/app/templates \
+    WFX_MODULES_DIR=/app/modules \
     WFX_SKILLS_DIR=/app/skills \
     WFX_REGISTRIES=/app/registries.json \
     WFX_WORKDIR=/data/runs \

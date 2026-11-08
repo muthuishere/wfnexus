@@ -128,6 +128,9 @@ type Decide struct {
 }
 
 type Step struct {
+	// Module is the installed module whose command this step came from
+	// (task.go); the engine gives such a step that module's token.
+	Module string `yaml:"-" json:"module,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`

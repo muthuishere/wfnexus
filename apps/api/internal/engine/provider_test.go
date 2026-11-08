@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
-	"github.com/muthuishere/wfnexus/agentadapter"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 

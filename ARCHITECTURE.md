@@ -64,7 +64,7 @@ flowchart LR
 - Memory per workflow and per conversation: `apps/api/internal/engine/memory.go` (`consolidateMemoryIn`), `apps/api/internal/engine/conversation.go`
 - Classifier default `typesafe/jev-1.13`: `apps/api/internal/config/config.go`
 - Channels and WhatsApp: `apps/api/internal/engine/channels.go`, `adapters/apl-whatsapp.js`, `docs/adr/0023-channels-are-commands-and-replies-need-an-allow-list.md`, `docs/adr/0026-whatsapp-only-subscriptions-conversations-and-default-workflows.md`
-- Service modules (watching chats): `apps/api/internal/engine/services.go`, `apps/api/internal/supervisor/`, `modules/whatsapp-group-monitor`, `docs/adr/0028-modules-are-tasks-with-a-manifest-installed-from-the-registry.md`
+- Service modules (watching chats): `apps/api/internal/engine/services.go`, `apps/api/internal/supervisor/`, `modules/apl`, `docs/adr/0028-modules-are-tasks-with-a-manifest-installed-from-the-registry.md`
 - Hooks and MCP per workflow: `apps/api/internal/api/expose.go`, `docs/adr/0027-every-workflow-is-a-hook-and-an-mcp-tool-behind-its-own-token.md`
 - Password sign-in: `apps/api/internal/api/password.go`, `docs/adr/0025-username-and-password-sign-in-with-roles.md`
 - carry for tools: `apps/api/cmd/wfx/carry.go`, `apps/api/internal/carryops/carryops.go`

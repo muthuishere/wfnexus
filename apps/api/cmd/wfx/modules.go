@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,17 +16,22 @@ import (
 //	wfx module install <git-url> [--ref tag|sha|branch] [--name n]   (= wfx skills import --path .)
 //	wfx module sync <source>                                          (= wfx skills refresh)
 //	wfx module config <module>      prompts once for each missing env var / secret
-//	wfx module start <module> [--account a] [--runs-on label] [--input k=v ...]
-//	                                one supervised instance per module+account (#103)
-//	wfx module stop <module> --account a
+//	wfx module start <module>.<service> [--profile p | --account a] [--runs-on label] [--input k=v ...]
+//	                                one supervised instance per service+account (#103)
+//	wfx module stop <module>.<service> --account a
+//	wfx module call <module>.<command> [--input k=v ...] [--wait]     run a command now (#109)
+//	wfx module profile ls <module>
+//	wfx module profile set <module> <name> --account <handle> [--input k=v ...] [--default]
 //	wfx module watch ls|add|rm <module> --account a ['<json>' | <name>]
 //	                                watches the running service reads every tick
 
 type moduleRow struct {
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Kind     string `json:"kind"`
-	Source   string `json:"source"`
+	Name     string                     `json:"name"`
+	Version  string                     `json:"version"`
+	Source   string                     `json:"source"`
+	Steps    []json.RawMessage          `json:"steps"`
+	Commands map[string]json.RawMessage `json:"commands"`
+	Svcs     map[string]json.RawMessage `json:"services"`
 	Requires struct {
 		Env     []string `json:"env"`
 		Secrets []string `json:"secrets"`
@@ -35,10 +41,11 @@ type moduleRow struct {
 	} `json:"binary"`
 	Missing  []string     `json:"missing"`
 	Ready    bool         `json:"ready"`
-	Services []serviceRow `json:"services"`
+	Services []serviceRow `json:"instances"`
 }
 
 type serviceRow struct {
+	Module        string     `json:"module"`
 	Account       string     `json:"account"`
 	RunsOn        string     `json:"runsOn"`
 	State         string     `json:"state"`
@@ -54,7 +61,8 @@ type moduleList struct {
 
 func moduleCmd(args []string) error {
 	const use = "usage: wfx module ls | install <git-url> [--ref r] [--name n] | sync <source> | config <module>" +
-		" | start <module> [--account a] [--runs-on label] [--input k=v] | stop <module> --account a"
+		" | start <module>.<service> [--profile p] [--account a] [--runs-on label] [--input k=v] | stop <module>.<service> --account a" +
+		" | call <module>.<command> [--input k=v] [--wait] | profile ls <module> | profile set <module> <name> --account a [--input k=v] [--default]"
 	if len(args) == 0 || args[0] == "ls" || args[0] == "list" {
 		return moduleLs()
 	}
@@ -87,6 +95,13 @@ func moduleCmd(args []string) error {
 			return fmt.Errorf("%s", use)
 		}
 		return moduleStart(args[1], args[2:])
+	case "call", "run":
+		if len(args) < 2 {
+			return fmt.Errorf("%s", use)
+		}
+		return moduleCall(args[1], args[2:])
+	case "profile", "profiles":
+		return moduleProfile(args[1:])
 	case "watch", "watches":
 		return moduleWatch(args[1:])
 	case "stop":
@@ -111,13 +126,31 @@ func moduleLs() error {
 	if len(out.Modules) == 0 {
 		fmt.Println("no modules — wfx module install <git-url>")
 	} else {
-		fmt.Printf("%-28s %-10s %-8s %-16s %s\n", "MODULE", "VERSION", "KIND", "SOURCE", "STATUS")
+		fmt.Printf("%-24s %-10s %-16s %s\n", "MODULE", "VERSION", "SOURCE", "STATUS")
 		for _, m := range out.Modules {
 			st := "ready"
 			if !m.Ready {
 				st = "needs " + strings.Join(m.Missing, ", ")
 			}
-			fmt.Printf("%-28s %-10s %-8s %-16s %s\n", m.Name, m.Version, m.Kind, m.Source, st)
+			fmt.Printf("%-24s %-10s %-16s %s\n", m.Name, m.Version, m.Source, st)
+			var cmds, svcs []string
+			if len(m.Steps) > 0 {
+				cmds = append(cmds, m.Name)
+			}
+			for c := range m.Commands {
+				cmds = append(cmds, m.Name+"."+c)
+			}
+			for s := range m.Svcs {
+				svcs = append(svcs, m.Name+"."+s)
+			}
+			sort.Strings(cmds)
+			sort.Strings(svcs)
+			if len(cmds) > 0 {
+				fmt.Printf("  commands: %s\n", strings.Join(cmds, ", "))
+			}
+			if len(svcs) > 0 {
+				fmt.Printf("  services: %s\n", strings.Join(svcs, ", "))
+			}
 			for _, sv := range m.Services {
 				fmt.Println(serviceLine(sv))
 			}
@@ -173,7 +206,8 @@ func moduleStart(name string, args []string) error {
 		}
 		in[k] = v
 	}
-	body := map[string]any{"account": flagOf(args, "--account", ""), "runsOn": flagOf(args, "--runs-on", ""), "inputs": in}
+	body := map[string]any{"account": flagOf(args, "--account", ""), "profile": flagOf(args, "--profile", ""),
+		"runsOn": flagOf(args, "--runs-on", ""), "inputs": in}
 	var got struct {
 		Account string `json:"account"`
 		RunsOn  string `json:"runsOn"`
@@ -256,9 +290,119 @@ func serviceLine(sv serviceRow) string {
 	if where == "" {
 		where = "server"
 	}
-	line := fmt.Sprintf("  └ %-20s %-8s on %-12s heartbeat %-10s restarts %d", sv.Account, sv.State, where, beat, sv.Restarts)
+	line := fmt.Sprintf("  └ %-14s %-20s %-8s on %-12s heartbeat %-10s restarts %d", sv.Module, sv.Account, sv.State, where, beat, sv.Restarts)
 	if sv.LastError != "" && sv.State != "running" {
 		line += "  last error: " + sv.LastError
 	}
 	return line
+}
+
+func inputsOf(args []string) (map[string]string, error) {
+	in := map[string]string{}
+	for _, kv := range flagsOf(args, "--input") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("--input wants k=v, got %q", kv)
+		}
+		in[k] = v
+	}
+	return in, nil
+}
+
+// moduleCall runs <module>.<command> now, as a run of its own (#109).
+func moduleCall(name string, args []string) error {
+	in, err := inputsOf(args)
+	if err != nil {
+		return err
+	}
+	wait := false
+	for _, a := range args {
+		if a == "--wait" {
+			wait = true
+		}
+	}
+	var out struct {
+		Run struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"run"`
+		Output json.RawMessage `json:"output"`
+	}
+	if err := call("POST", "/api/modules/"+url.PathEscape(name)+"/call", map[string]any{"inputs": in, "wait": wait}, &out); err != nil {
+		return err
+	}
+	fmt.Printf("run %s %s\n", out.Run.ID, out.Run.Status)
+	if out.Run.Error != "" {
+		fmt.Println("error:", out.Run.Error)
+	}
+	if len(out.Output) > 0 && string(out.Output) != "null" {
+		fmt.Println(string(out.Output))
+	}
+	if !wait {
+		fmt.Println("follow it: wfx runs show " + out.Run.ID)
+	}
+	return nil
+}
+
+// moduleProfile lists or sets a module's profiles: a handle (the account) plus
+// input defaults, one of them the default — set once, globally.
+func moduleProfile(args []string) error {
+	const use = "usage: wfx module profile ls <module> | set <module> <name> --account <handle> [--input k=v] [--default]"
+	if len(args) < 2 {
+		return fmt.Errorf("%s", use)
+	}
+	switch args[0] {
+	case "ls", "list":
+		var out struct {
+			Profiles []struct {
+				Name    string            `json:"name"`
+				Account string            `json:"account"`
+				Inputs  map[string]string `json:"inputs"`
+				Default bool              `json:"default"`
+			} `json:"profiles"`
+		}
+		if err := call("GET", "/api/modules/"+url.PathEscape(args[1])+"/profiles", nil, &out); err != nil {
+			return err
+		}
+		if len(out.Profiles) == 0 {
+			fmt.Printf("no profiles — wfx module profile set %s <name> --account <handle> --default\n", args[1])
+		}
+		for _, p := range out.Profiles {
+			mark := " "
+			if p.Default {
+				mark = "*"
+			}
+			fmt.Printf("%s %-16s account %-16s %v\n", mark, p.Name, p.Account, p.Inputs)
+		}
+		return nil
+	case "set", "add":
+		if len(args) < 3 {
+			return fmt.Errorf("%s", use)
+		}
+		in, err := inputsOf(args)
+		if err != nil {
+			return err
+		}
+		def := false
+		for _, a := range args {
+			if a == "--default" {
+				def = true
+			}
+		}
+		var got struct {
+			Default bool `json:"default"`
+		}
+		body := map[string]any{"account": flagOf(args, "--account", ""), "inputs": in, "default": def}
+		if err := call("PUT", "/api/modules/"+url.PathEscape(args[1])+"/profiles/"+url.PathEscape(args[2]), body, &got); err != nil {
+			return err
+		}
+		extra := ""
+		if got.Default {
+			extra = " (default)"
+		}
+		fmt.Printf("profile %s/%s set%s\n", args[1], args[2], extra)
+		return nil
+	}
+	return fmt.Errorf("%s", use)
 }

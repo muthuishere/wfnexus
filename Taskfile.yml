@@ -154,7 +154,7 @@ tasks:
           cp {{.BIN}}/release/wfx-linux-$A        $P/bin/wfx-linux;
           cp {{.BIN}}/release/wfx-runner-linux-$A $P/bin/wfx-runner-linux;
           cp -R apps/ui/dist/. $P/ui/;
-          cp -R workflows templates skills registries.json $P/;
+          cp -R workflows templates modules skills registries.json $P/;
           cp -R infra/k8s/. $P/k8s/;
           cp infra/package/Dockerfile infra/package/Dockerfile.runner $P/;
           cp infra/package/docker-compose.yml infra/package/README.md infra/package/config.example.yaml $P/;

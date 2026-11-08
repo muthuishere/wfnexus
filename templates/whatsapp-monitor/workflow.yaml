@@ -7,7 +7,7 @@
 #   - live-vs-store lag: the transport's own store (STORE_PROBE, read-only) has
 #     a newer message than wfnexus has seen → deaf
 #   - the last successful receive, and the last receive error
-#   - a whatsapp-group-monitor service (ADR 0028) that is silent or crashed
+#   - a apl.whatsapp service (ADR 0028) that is silent or crashed
 #
 # Unhealthy → one alert to the owner's chat through whatsapp-sender, deduped
 # per ALERT_EVERY_H window (same findings, same window = one message).
@@ -37,7 +37,7 @@ template:
 description: >-
   Checks that the WhatsApp channel is actually receiving: store-vs-wfnexus
   lag, last receive time and error, and silent or crashed
-  whatsapp-group-monitor services. Alerts the owner's chat through whatsapp-sender when
+  apl.whatsapp services. Alerts the owner's chat through whatsapp-sender when
   something is wrong.
 
 on:

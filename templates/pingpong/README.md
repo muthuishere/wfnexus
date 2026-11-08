@@ -1,6 +1,6 @@
 # pingpong
 
-The smallest end-to-end proof: a message in a chat → a whatsapp-group-monitor
+The smallest end-to-end proof: a message in a chat → a apl.whatsapp
 watch → this workflow's hook → this run → `whatsapp-sender` → a reply in the chat, and the next message
 remembers this one.
 
@@ -19,8 +19,8 @@ Try it on a test group (see docs/whatsapp-quickstart.md):
 ```sh
 wfx new whatsapp-sender && wfx new pingpong
 wfx expose hook pingpong          # URL + token; store the token: wfx env set PINGPONG_HOOK_TOKEN
-wfx module start whatsapp-group-monitor --account biz
-wfx module watch add whatsapp-group-monitor --account biz \
+wfx module start apl.whatsapp
+wfx module watch add apl.whatsapp --account biz \
   '{"name":"pingpong-test","chat":"<test-group-jid>","hook":"<url>","tokenEnv":"PINGPONG_HOOK_TOKEN","responsePolicy":"auto"}'
 ```
 

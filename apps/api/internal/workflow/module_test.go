@@ -29,15 +29,17 @@ steps:
 	write(t, filepath.Join(reg, "svc", "module.yaml"), `
 name: watcher
 version: 1
-kind: service
-service: { command: wfx-wa-monitor }
+services:
+  watch: { command: wfx-wa-monitor }
+commands:
+  ping: { steps: [{ id: p, run: "echo ping {{ .Inputs.who }}" }], inputs: { who: { type: string, required: true } } }
 `)
 	write(t, filepath.Join(reg, "bad", "module.yaml"), "name: bad\n")
 	mods, errs := FindModules("reg", reg)
 	if len(mods) != 2 || len(errs) != 1 || !strings.Contains(errs[0].Error(), "needs a name and a version") {
 		t.Fatalf("mods=%d errs=%v", len(mods), errs)
 	}
-	if mods[0].Name != "summarise" || mods[0].Requires.Secrets[0] != "SUMMARY_TOKEN" || mods[1].Kind != "service" {
+	if mods[0].Name != "summarise" || mods[0].Requires.Secrets[0] != "SUMMARY_TOKEN" || mods[1].Services["watch"].Command != "wfx-wa-monitor" {
 		t.Fatalf("mods = %+v", mods)
 	}
 
@@ -59,14 +61,23 @@ steps:
 
 	write(t, filepath.Join(dir, "wf.yaml"), "name: wf\nsteps:\n  - id: s\n    uses: watcher@1\n")
 	if _, err := LoadDirWithTasks(dir, "", catalog(), WithModules(mods)); err == nil || !strings.Contains(err.Error(), `unknown task "watcher"`) {
-		t.Fatalf("a service module is not a step: err = %v", err)
+		t.Fatalf("a module with no steps of its own is not a step: err = %v", err)
+	}
+	// A named command is <module>.<command>, and its steps carry the module.
+	write(t, filepath.Join(dir, "wf.yaml"), "name: wf\nsteps:\n  - id: s\n    uses: watcher.ping@1\n    with: { who: ops }\n")
+	defs, err = LoadDirWithTasks(dir, "", catalog(), WithModules(mods))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := defs["wf"].Steps[0]; got.ID != "s.p" || got.Run != "echo ping ops" || got.Module != "watcher" {
+		t.Fatalf("command step = %+v", got)
 	}
 }
 
 func TestModuleManifestRejectsTypos(t *testing.T) {
 	d := t.TempDir()
-	write(t, filepath.Join(d, "module.yaml"), "name: x\nversion: 1\nkindd: service\nsteps: [{id: a, run: echo}]\n")
-	if _, err := LoadModule(d); err == nil || !strings.Contains(err.Error(), "kindd") {
+	write(t, filepath.Join(d, "module.yaml"), "name: x\nversion: 1\nservicez: {}\nsteps: [{id: a, run: echo}]\n")
+	if _, err := LoadModule(d); err == nil || !strings.Contains(err.Error(), "servicez") {
 		t.Fatalf("err = %v", err)
 	}
 }

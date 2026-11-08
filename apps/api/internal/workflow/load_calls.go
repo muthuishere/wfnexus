@@ -159,7 +159,9 @@ func label(g *loadGroup, d *Definition) string {
 
 func (x *expander) lookup(from *loadGroup, name string) *Definition {
 	find := func(g *loadGroup, n string) *Definition {
-		if g.err != nil {
+		// Generated module-command wrappers are for calls, never for `uses:`:
+		// `uses: apl.whatsapp-send` means the module's command itself.
+		if g.err != nil || g.name == ModuleCommandSource {
 			return nil
 		}
 		for _, d := range g.defs {
@@ -205,7 +207,7 @@ func (x *expander) expand(d *Definition, chain []string) error {
 		c := x.lookup(g, name)
 		if c == nil && x.opt.callable != nil {
 			// Already loaded and expanded elsewhere: use it as it stands.
-			if ext := x.opt.callable(name); ext != nil && ext.Name != d.Name {
+			if ext := x.opt.callable(name); ext != nil && ext.Name != d.Name && ext.Source != ModuleCommandSource {
 				if !ext.On.Allows(TriggerWorkflowCall) {
 					return nil, true, fmt.Errorf("%s: use %q names a workflow that does not declare `on: workflow_call` "+
 						"(it declares %v) — add workflow_call to its `on:` so it may be called", me, name, ext.On.Names())

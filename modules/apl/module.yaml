@@ -1,0 +1,150 @@
+# apl — the default module, preinstalled (#109). Everything apl can do, as
+# supervised services and one-shot commands. Today: WhatsApp.
+#
+#   wfx module profile set apl business --account biz --default   # once, globally
+#   wfx module start apl.whatsapp                  # the default profile's account
+#   wfx module watch add apl.whatsapp --account biz '{"name":"ops","chat":"…@g.us","hook":"…","tokenEnv":"OPS_HOOK_TOKEN","responsePolicy":"draft"}'
+#   wfx module call apl.whatsapp-send --input chat=…@g.us --input text=hi --input responsePolicy=auto --wait
+#
+# In a workflow:
+#   - id: tell
+#     uses: apl.whatsapp-send@0
+#     with: { chat: "{{ .Input.chat }}", text: "deployed", responsePolicy: approval }
+#
+# whatsapp (service): one process per account (an exclusive lock). Reads the
+# account ONCE per tick for every watch (cursor, echo ledger, dedupe by
+# chat|id), holds a chat until it is quiet for 3s, POSTs the batch to each
+# watch's hook: {message, messages[], watch, chat}. It is also the account's ONE
+# writer: sends queued through wfnexus (the outbox) go out from this process.
+#
+# whatsapp-send (command): applies the response policy — draft (the default)
+# and none send nothing, approval waits for a person, auto sends — and queues
+# the send on the running whatsapp service of the profile's account, then waits
+# for its answer: sent, failed, or uncertain (never resent).
+name: apl
+version: 0.2.0
+description: apl as a module — WhatsApp watch service and send command (mail, teams, calendar, drive, contacts next).
+requires:
+  env: [APL_BIN]
+binary:
+  carry: deemwar/wfx-wa-monitor@0.2.0   # follow-up: carry delivery; today build apps/api/cmd/wfx-wa-monitor
+
+services:
+  whatsapp:
+    description: Watches WhatsApp chats for many workflows with one batched read per tick, delivers to their hooks, and sends the outbox.
+    command: wfx-wa-monitor
+    args: [--label, "{{ .Inputs.label }}", --interval, "{{ .Inputs.interval }}", --debounce, "{{ .Inputs.debounce }}"]
+    inputs:
+      label:    { type: string, default: biz, description: the apl whatsapp account label (a profile's account) }
+      interval: { type: string, default: 30s }
+      debounce: { type: string, default: 3s }
+
+commands:
+  whatsapp-send:
+    description: Send one WhatsApp message through the account's running whatsapp service, after the response policy (default draft — never auto-sends).
+    inputs:
+      chat:           { type: string, required: true, description: chat JID (DM or group) }
+      text:           { type: string, required: true }
+      replyTo:        { type: string, default: "", description: message id to quote-reply to }
+      responsePolicy: { type: string, default: draft, description: "draft | approval | auto | none" }
+      profile:        { type: string, default: "", description: "apl profile (default: the module's default profile)" }
+      key:            { type: string, default: "", description: "idempotency key (default: hash of chat+text+replyTo)" }
+    outputs:
+      result: { type: object, description: "{status: sent|drafted|skipped|failed|uncertain, id, chat, key}" }
+    steps:
+      - id: plan
+        name: Apply the response policy
+        description: Exit 0 send, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        continue-on-error: true
+        run: |
+          cat > chat.txt <<'WFX_V'
+          {{ .Inputs.chat }}
+          WFX_V
+          cat > text.txt <<'WFX_V'
+          {{ .Inputs.text }}
+          WFX_V
+          cat > replyTo.txt <<'WFX_V'
+          {{ .Inputs.replyTo }}
+          WFX_V
+          cat > policy.txt <<'WFX_V'
+          {{ .Inputs.responsePolicy }}
+          WFX_V
+          cat > profile.txt <<'WFX_V'
+          {{ .Inputs.profile }}
+          WFX_V
+          cat > key.txt <<'WFX_V'
+          {{ .Inputs.key }}
+          WFX_V
+          python3 - <<'PY'
+          import hashlib, json, sys
+          v = lambda n: open(n + ".txt").read().rstrip("\n")
+          p = {"chat": v("chat").strip(), "text": v("text"), "replyTo": v("replyTo").strip(),
+               "policy": v("policy").strip() or "draft", "profile": v("profile").strip(), "key": v("key").strip()}
+          codes = {"auto": 0, "approval": 10, "draft": 11, "none": 12}
+          bad = []
+          if not p["chat"]: bad.append("chat is required")
+          if not p["text"].strip(): bad.append("text is required")
+          if p["policy"] not in codes: bad.append("responsePolicy is draft, approval, auto or none")
+          if bad:
+              print("invalid: " + "; ".join(bad)); sys.exit(2)
+          if not p["key"]:
+              basis = json.dumps([p["chat"], p["text"], p["replyTo"]])
+              p["key"] = "wa-" + hashlib.sha256(basis.encode()).hexdigest()[:24]
+          json.dump(p, open("plan.json", "w"))
+          print(json.dumps(p))
+          sys.exit(codes[p["policy"]])
+          PY
+        timeout_sec: 30
+        gates:
+          - field: exitCode
+            equals: 2
+            action: fail
+            message: "The send request is invalid — see stdout."
+      - id: approve
+        name: A person approves this send
+        needs: [plan]
+        when:
+          - path: plan.exitCode
+            equals: 10
+        requires_approval: true
+        run: python3 -c "import json; p=json.load(open('plan.json')); print('to', p['chat']); print(p['text'])"
+        timeout_sec: 30
+      - id: send
+        name: Send through the account's whatsapp service
+        description: Drafted/skipped by policy, or queued on the service's outbox and waited for. Prints the typed result.
+        needs: [plan, approve]
+        timeout_sec: 180
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, time, urllib.request, urllib.parse
+          p = json.load(open("plan.json"))
+          res = {"chat": p["chat"], "key": p["key"], "id": ""}
+          if p["policy"] in ("draft", "none"):
+              res["status"] = "drafted" if p["policy"] == "draft" else "skipped"
+              res["text"] = p["text"]
+              print(json.dumps(res)); sys.exit(0)
+          api = os.environ.get("WFX_API", "").rstrip("/")
+          mod, tok = os.environ.get("WFX_MODULE", "apl"), os.environ.get("WFX_MODULE_TOKEN", "")
+          def call(method, path, body=None):
+              req = urllib.request.Request(api + "/api/module-self/" + mod + path, method=method,
+                                           data=None if body is None else json.dumps(body).encode())
+              req.add_header("Authorization", "Bearer " + tok)
+              req.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.loads(r.read())
+              except urllib.error.HTTPError as e:
+                  print("wfnexus refused: " + e.read().decode()[:300]); sys.exit(1)
+          it = call("POST", "/outbox", {"service": "whatsapp", "profile": p["profile"], "id": p["key"],
+                                        "request": {"chat": p["chat"], "text": p["text"], "replyTo": p["replyTo"]}})
+          deadline = time.time() + 150
+          while it.get("status") == "queued" and time.time() < deadline:
+              time.sleep(0.5)
+              it = call("GET", "/outbox?" + urllib.parse.urlencode({"service": it["service"], "id": it["id"]}))
+          r = it.get("result") or {}
+          res["status"] = it.get("status") if it.get("status") != "queued" else "uncertain"
+          res["id"] = r.get("id", "")
+          if r.get("error"): res["error"] = r["error"]
+          print(json.dumps(res))
+          sys.exit(0 if res["status"] == "sent" else 1)
+          PY

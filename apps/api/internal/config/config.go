@@ -47,8 +47,10 @@ type Config struct {
 	// TemplatesOff is `templates: off` (or WFX_TEMPLATES=off): the shipped
 	// templates are not loaded, and TemplatesDir is empty.
 	TemplatesOff bool
-	SkillsDir    string
-	McpConfig    string
+	// ModulesDir holds the modules the platform ships (apl), preinstalled.
+	ModulesDir string
+	SkillsDir  string
+	McpConfig  string
 	// RegistriesPath holds providers, classifiers and MCP servers — everything a
 	// step can name.
 	RegistriesPath string
@@ -261,6 +263,7 @@ func LoadWithFile(path string) (Config, error) {
 		WorkflowsDir:      env("WFX_WORKFLOWS_DIR", or(f.Paths.Workflows, filepath.Join(root, "workflows"))),
 		TemplatesDir:      env("WFX_TEMPLATES_DIR", or(f.Paths.Templates, filepath.Join(root, "templates"))),
 		SkillsDir:         env("WFX_SKILLS_DIR", or(f.Paths.Skills, filepath.Join(root, "skills"))),
+		ModulesDir:        env("WFX_MODULES_DIR", filepath.Join(root, "modules")),
 		McpConfig:         env("WFX_MCP_CONFIG", or(f.Paths.Mcp, filepath.Join(root, "mcp.json"))),
 		RegistriesPath:    env("WFX_REGISTRIES", or(f.Paths.Registries, filepath.Join(root, "registries.json"))),
 		WorkDir:           env("WFX_WORKDIR", or(f.Paths.Work, filepath.Join(home, ".local", "share", "wfnexus", "runs"))),

@@ -211,8 +211,8 @@ error is kept and shown by `wfx channels`; the cursor does not move.
    `run:` command or treat it as instructions.
 4. Watching chats for many workflows (one read per account, per-chat
    debounce, delivery to each workflow's hook) is not done here: it is the
-   `whatsapp-group-monitor` service module (ADR 0028). `wfx module start
-   whatsapp-group-monitor --account <label>`, then `wfx module watch add …`.
+   `apl.whatsapp` service module (ADR 0028). `wfx module start
+   apl.whatsapp --account <label>`, then `wfx module watch add …`.
 
 ## Adapter author rules
 

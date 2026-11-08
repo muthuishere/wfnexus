@@ -29,6 +29,7 @@ RUN chmod +x /usr/local/bin/wfx-server /usr/local/bin/wfx
 COPY ui/          /app/ui/
 COPY workflows/   /app/workflows/
 COPY templates/   /app/templates/
+COPY modules/     /app/modules/
 COPY skills/      /app/skills/
 COPY registries.json /app/registries.json
 
@@ -40,6 +41,7 @@ ENV WFX_MODE=server \
     WFX_UI_DIR=/app/ui \
     WFX_WORKFLOWS_DIR=/app/workflows \
     WFX_TEMPLATES_DIR=/app/templates \
+    WFX_MODULES_DIR=/app/modules \
     WFX_SKILLS_DIR=/app/skills \
     WFX_REGISTRIES=/app/registries.json \
     WFX_WORKDIR=/data/runs \
