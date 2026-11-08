@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -21,12 +22,10 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
-// The preinstalled apl module end to end (#109): a default profile set once,
-// the whatsapp service started from it, and apl.whatsapp-send called three
-// ways — `wfx module call` (POST /api/modules/{name}/call) and `uses:` in a
-// workflow — with every send going out through the running service's outbox
-// (a fake adapter: nothing reaches WhatsApp).
-func TestAplWhatsappSendGoesThroughTheRunningService(t *testing.T) {
+// aplServer is a loopback server with the repo's modules preinstalled, its API
+// on a real port (steps call back into it), and the given workflow files.
+func aplServer(t *testing.T, files map[string]string) (http.Handler, *engine.Engine, string) {
+	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")
 	}
@@ -52,14 +51,9 @@ func TestAplWhatsappSendGoesThroughTheRunningService(t *testing.T) {
 	for _, d := range []string{cfg.WorkDir, cfg.WorkflowsDir, cfg.SkillsDir} {
 		_ = os.MkdirAll(d, 0o755)
 	}
-	// A workflow that sends with `uses:`.
-	_ = os.WriteFile(filepath.Join(cfg.WorkflowsDir, "notify-ops.yaml"), []byte(`name: notify-ops
-on: workflow_dispatch
-steps:
-  - id: tell
-    uses: apl.whatsapp-send@0
-    with: { chat: ops@g.us, text: deployed, responsePolicy: auto }
-`), 0o644)
+	for name, y := range files {
+		_ = os.WriteFile(filepath.Join(cfg.WorkflowsDir, name), []byte(y), 0o644)
+	}
 	eng := engine.New(cfg, st, nil, map[string]*workflow.Definition{}, skills.Load(cfg.SkillsDir), nil)
 	if err := eng.ReloadDefinitions(); err != nil {
 		t.Fatal(err)
@@ -70,6 +64,22 @@ steps:
 	srv.Listener = ln
 	srv.Start()
 	t.Cleanup(srv.Close)
+	return h, eng, tmp
+}
+
+// The preinstalled apl module end to end (#109): a default profile set once,
+// the whatsapp service started from it, and apl.whatsapp-send called three
+// ways — `wfx module call` (POST /api/modules/{name}/call) and `uses:` in a
+// workflow — with every send going out through the running service's outbox
+// (a fake adapter: nothing reaches WhatsApp).
+func TestAplWhatsappSendGoesThroughTheRunningService(t *testing.T) {
+	h, eng, tmp := aplServer(t, map[string]string{"notify-ops.yaml": `name: notify-ops
+on: workflow_dispatch
+steps:
+  - id: tell
+    uses: apl.whatsapp-send@0
+    with: { chat: ops@g.us, text: deployed, responsePolicy: auto }
+`})
 	if eng.Definitions()["notify-ops"] == nil || eng.Definitions()["apl.whatsapp-send"] == nil {
 		t.Fatalf("definitions: notify-ops=%v call wrapper=%v", eng.Definitions()["notify-ops"] != nil, eng.Definitions()["apl.whatsapp-send"] != nil)
 	}

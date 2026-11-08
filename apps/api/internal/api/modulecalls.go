@@ -27,6 +27,7 @@ func (s *Server) moduleCallRoutes(r chi.Router) {
 	r.Put("/modules/{name}/profiles/{profile}", s.putProfile)
 	r.Post("/module-self/{module}/outbox", s.moduleEnqueue)
 	r.Get("/module-self/{module}/outbox", s.moduleOutboxGet)
+	r.Get("/module-self/{module}/profile", s.moduleProfile)
 	r.Get("/service-self/{name}/{account}/outbox", s.selfOutbox)
 	r.Post("/service-self/{name}/{account}/outbox/{id}", s.selfOutboxReport)
 }
@@ -153,4 +154,18 @@ func (s *Server) selfOutboxReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// moduleProfile is a module's profile (named, else its default), for its own
+// command steps: the handle and input defaults to use.
+func (s *Server) moduleProfile(w http.ResponseWriter, r *http.Request) {
+	if !s.authModule(w, r) {
+		return
+	}
+	p, err := s.eng.ResolveProfile(r.Context(), chi.URLParam(r, "module"), r.URL.Query().Get("name"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }

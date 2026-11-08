@@ -176,7 +176,15 @@ func (e *Engine) moduleEnv(ctx context.Context, module string) map[string]string
 	if err != nil {
 		return nil
 	}
-	return map[string]string{"WFX_MODULE": module, "WFX_MODULE_TOKEN": tok}
+	env := map[string]string{"WFX_MODULE": module, "WFX_MODULE_TOKEN": tok}
+	// The module's own files (its scripts), on this machine.
+	mods, _ := e.Modules()
+	for _, m := range mods {
+		if m.Name == module {
+			env["WFX_MODULE_DIR"] = m.Dir
+		}
+	}
+	return env
 }
 
 // ---- command wrappers ----
