@@ -18,7 +18,6 @@
 package main
 
 import (
-	"path/filepath"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -27,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -579,6 +579,19 @@ func apply(args []string, install bool) error {
 		return fmt.Errorf("%s: the workflow needs a name", path)
 	}
 	if !install {
+		// The shape is checked HERE, with the same code the engine loader
+		// runs (workflow.Check), so `wfx validate` agrees with what the server
+		// will load even when the server it talks to is an older build. Only
+		// what this machine cannot know — which skills, providers, tools and
+		// classifiers the server holds — is left to the server below.
+		local, err := workflow.DecodeYAMLStrict(raw)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		local.Files = def.Files
+		if err := workflow.Check(local, localCatalog(path)); err != nil {
+			return err
+		}
 		var res struct {
 			Valid bool   `json:"valid"`
 			Error string `json:"error"`
@@ -587,7 +600,9 @@ func apply(args []string, install bool) error {
 			return err
 		}
 		if !res.Valid {
-			return fmt.Errorf("%s", res.Error)
+			// The shape already passed here, so this is the server's catalog
+			// (or an older server's rules) speaking — say whose verdict it is.
+			return fmt.Errorf("the server rejected it: %s", res.Error)
 		}
 		fmt.Printf("%s is valid\n", name)
 		return nil
@@ -1598,3 +1613,56 @@ func plural(n int, noun string) string {
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
+
+// anyCatalog holds every skill, tool, provider, classifier and MCP server: the
+// local shape check in `wfx validate` leaves those questions to the server.
+// The workflows a `uses:` may call are the ones beside the file being
+// validated — the folder a workflows repo keeps them in.
+type anyCatalog struct {
+	callables map[string]*workflow.Definition
+}
+
+func (c anyCatalog) Callable(name string) *workflow.Definition { return c.callables[name] }
+
+// localCatalog reads the workflows beside path (folder form or flat files),
+// unvalidated: the loader decides whether each is callable.
+func localCatalog(path string) anyCatalog {
+	dir := filepath.Dir(path)
+	if base := filepath.Base(path); base == workflow.DefinitionFile || base == "workflow.yml" {
+		dir = filepath.Dir(dir)
+	}
+	c := anyCatalog{callables: map[string]*workflow.Definition{}}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		candidates := []string{filepath.Join(dir, e.Name())}
+		if e.IsDir() {
+			candidates = []string{filepath.Join(dir, e.Name(), workflow.DefinitionFile), filepath.Join(dir, e.Name(), "workflow.yml")}
+		} else if ext := filepath.Ext(e.Name()); ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		for _, f := range candidates {
+			raw, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			d, err := workflow.DecodeYAMLStrict(raw)
+			if err != nil || d.Name == "" {
+				continue
+			}
+			if e.IsDir() {
+				if _, files, err := workflow.ReadWorkflowDir(filepath.Dir(f)); err == nil {
+					d.Files = files
+				}
+			}
+			c.callables[d.Name] = d
+			break
+		}
+	}
+	return c
+}
+
+func (anyCatalog) Missing([]string) []string            { return nil }
+func (anyCatalog) MissingBuiltins([]string) []string    { return nil }
+func (anyCatalog) MissingProviders([]string) []string   { return nil }
+func (anyCatalog) MissingClassifiers([]string) []string { return nil }
+func (anyCatalog) MissingMcp([]string) []string         { return nil }
