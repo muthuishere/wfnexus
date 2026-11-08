@@ -24,7 +24,7 @@ template:
   category: debugging-ops
   summary: >-
     Sends text, a quote-reply, an attachment, a reaction, or edits/deletes our
-    own message, after applying the subscription's responsePolicy
+    own message, after applying the caller's responsePolicy
     (draft, approval, auto, none). Reports sent, failed or uncertain, and never
     resends an uncertain send.
   fill:
@@ -57,7 +57,7 @@ input_schema:
     reactTo:        { type: string, title: "Message id to react to" }
     edit:           { type: string, title: "Id of OUR message to edit" }
     delete:         { type: string, title: "Id of OUR message to delete" }
-    responsePolicy: { type: string, enum: [draft, approval, auto, none], default: auto }
+    responsePolicy: { type: string, enum: [draft, approval, auto, none], default: draft }
     key:            { type: string, title: "Idempotency key (default: hash of the request)" }
 
 steps:

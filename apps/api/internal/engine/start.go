@@ -430,7 +430,7 @@ func (e *Engine) childCompleted(ctx context.Context, child *model.Run, parentID 
 	// No router took it: the parent's own workflow handles it, in the same
 	// conversation, after whatever that conversation is doing now.
 	input := map[string]any{"event": ev, "conversation": map[string]any{"channel": key.Channel, "chat": key.Chat}}
-	if err := e.enqueueConversation(key, parent.Workflow, input, false); err != nil {
+	if err := e.enqueueConversation(key, parent.Workflow, input); err != nil {
 		log.Printf("engine: workflow.completed for %s: %v", child.ID, err)
 	}
 }

@@ -143,7 +143,7 @@ func TestWhatsAppSenderPolicies(t *testing.T) {
 	chat := "120363000000000001@g.us"
 
 	// auto: sent once, with the quote-reply on the envelope.
-	id := h.start("whatsapp-sender", map[string]any{"chat": chat, "text": "pong", "replyTo": "M1", "replyToSender": "1555@s.whatsapp.net"})
+	id := h.start("whatsapp-sender", map[string]any{"chat": chat, "text": "pong", "replyTo": "M1", "replyToSender": "1555@s.whatsapp.net", "responsePolicy": "auto"})
 	if run := h.waitEnded(id); run.Status != "done" {
 		t.Fatalf("auto: %s %s %v", run.Status, run.Error, stepOut(t, h, id, "deliver"))
 	}
@@ -156,7 +156,7 @@ func TestWhatsAppSenderPolicies(t *testing.T) {
 	}
 
 	// The same request again is not sent again.
-	id = h.start("whatsapp-sender", map[string]any{"chat": chat, "text": "pong", "replyTo": "M1", "replyToSender": "1555@s.whatsapp.net"})
+	id = h.start("whatsapp-sender", map[string]any{"chat": chat, "text": "pong", "replyTo": "M1", "replyToSender": "1555@s.whatsapp.net", "responsePolicy": "auto"})
 	h.waitEnded(id)
 	if res := senderResult(t, h, id); res["status"] != "already" {
 		t.Fatalf("repeat result %v", res)
@@ -198,7 +198,7 @@ func TestWhatsAppSenderPolicies(t *testing.T) {
 	}
 
 	// A reaction is a reaction, not a text.
-	id = h.start("whatsapp-sender", map[string]any{"chat": chat, "reactTo": "M9", "reaction": "👍"})
+	id = h.start("whatsapp-sender", map[string]any{"chat": chat, "reactTo": "M9", "reaction": "👍", "responsePolicy": "auto"})
 	h.waitEnded(id)
 	envs = waSent(t, dir)
 	if last := envs[len(envs)-1]; last["reaction"] == nil || last["reaction"].(map[string]any)["emoji"] != "👍" {
@@ -215,10 +215,10 @@ func TestWhatsAppSenderEveryOpGoesThroughTheChannelGap(t *testing.T) {
 	useWAChannel(t, h, cmd, "300ms")
 	chat := uniq("gap") + "@g.us"
 	ins := []map[string]any{
-		{"chat": chat, "text": "hello", "replyTo": "Q1", "replyToSender": "1555@s.whatsapp.net", "mentions": "1555@s.whatsapp.net"},
-		{"chat": chat, "reactTo": "Q1", "reaction": "", "replyToSender": "1555@s.whatsapp.net"},
-		{"chat": chat, "edit": "wamid-1", "text": "hello, edited"},
-		{"chat": chat, "delete": "wamid-1"},
+		{"chat": chat, "text": "hello", "replyTo": "Q1", "replyToSender": "1555@s.whatsapp.net", "mentions": "1555@s.whatsapp.net", "responsePolicy": "auto"},
+		{"chat": chat, "reactTo": "Q1", "reaction": "", "replyToSender": "1555@s.whatsapp.net", "responsePolicy": "auto"},
+		{"chat": chat, "edit": "wamid-1", "text": "hello, edited", "responsePolicy": "auto"},
+		{"chat": chat, "delete": "wamid-1", "responsePolicy": "auto"},
 	}
 	ids := make([]uuid.UUID, len(ins))
 	start := time.Now()
@@ -272,7 +272,7 @@ func TestWhatsAppSenderNeverResendsUncertain(t *testing.T) {
 	defs := loadWATemplates(t, nil, "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-sender")
 	useWAChannel(t, h, cmd, "")
-	in := map[string]any{"chat": "1555@s.whatsapp.net", "text": "maybe"}
+	in := map[string]any{"chat": "1555@s.whatsapp.net", "text": "maybe", "responsePolicy": "auto"}
 	id := h.start("whatsapp-sender", in)
 	if run := h.waitEnded(id); run.Status != "failed" || !strings.Contains(run.Error, "may have been delivered") {
 		t.Fatalf("uncertain: %s %s", run.Status, run.Error)
@@ -298,8 +298,8 @@ func TestPingpongRepliesThroughTheSenderAndRemembers(t *testing.T) {
 	chat := uniq("group") + "@g.us"
 	msg := func(id, text string) map[string]any {
 		return map[string]any{
-			"message":      map[string]any{"channel": "wa", "chat": chat, "id": id, "from": "1555@s.whatsapp.net", "text": text, "kind": "message"},
-			"subscription": map[string]any{"name": "pingpong-test", "responsePolicy": "auto"},
+			"message": map[string]any{"channel": "wa", "chat": chat, "id": id, "from": "1555@s.whatsapp.net", "text": text, "kind": "message"},
+			"watch":   map[string]any{"name": "pingpong-test", "responsePolicy": "auto"},
 		}
 	}
 	for i, want := range []string{"pong #1", "pong #2"} {
@@ -416,7 +416,7 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 	// load-context's typed inputs (#82) resolve to their defaults in both forms.
 	for _, n := range []string{"frontdesk", "load-context"} {
 		run := defs[n].Steps[0].Run
-		if strings.Contains(run, ".Inputs.") || !strings.Contains(run, `open("context.json", "w")`) || !strings.Contains(run, `or "auto"`) {
+		if strings.Contains(run, ".Inputs.") || !strings.Contains(run, `open("context.json", "w")`) || !strings.Contains(run, `or "draft"`) {
 			t.Fatalf("%s: load-context inputs not substituted:\n%s", n, run)
 		}
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""whatsapp-sender: one send, applied through the subscription's responsePolicy.
+"""whatsapp-sender: one send, applied through the caller's responsePolicy (missing = draft: never auto-send).
 
     sender.py plan      reads input.json, writes plan.json, prints the planned op as JSON
     sender.py policy    exits 10 when a person approves first
@@ -45,7 +45,7 @@ def action_of(i):
 def plan():
     i = json.load(open("input.json"))
     chat = (i.get("chat") or "").strip()
-    policy = (i.get("responsePolicy") or "auto").strip()
+    policy = (i.get("responsePolicy") or "draft").strip()
     act = action_of(i)
     problems = []
     if not chat:

@@ -29,7 +29,9 @@ lists its modules.
 `modules/whatsapp-group-monitor` (`cmd/wfx-wa-monitor`): an exclusive lock per
 account; ONE inbox read per tick for all watches via the existing
 `apl-whatsapp.js receive` (cursor, echo ledger); dedupe by `chat|id`
-persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}`
+persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}` (`watch` = its name,
+responsePolicy — missing means draft, never auto-send — instructions, skills;
+every message carries `channel` and `chat`)
 to each watch's hook (ADR 0027) with a bearer token read from an env var the
 watch names, and an `Idempotency-Key` so a retried batch never runs twice.
 Watches are registered through wfnexus (`wfx module watch add`, #103) and

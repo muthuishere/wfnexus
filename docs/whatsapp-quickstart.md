@@ -50,7 +50,10 @@ wfx module watch add whatsapp-group-monitor --account biz \
 One process per account reads every watched chat once per tick, holds a chat's
 messages until it is quiet for 3s, and posts the batch to the watch's hook. A
 new watch is picked up on the next tick. History from before the monitor
-started is never delivered.
+started is never delivered. The hook body is `{message, messages, watch,
+chat}`; `watch` carries the watch's `name`, `responsePolicy` (missing =
+`draft`, never auto-send), `instructions` and `skills`. For the pingpong test
+add `"responsePolicy":"auto"` to the watch, or the reply is only drafted.
 
 ## 4. Watch a run
 
@@ -85,9 +88,9 @@ Any MCP client can now call the `frontdesk` tool with
 `{"message": {"chat": "…", "id": "…", "from": "…", "text": "…"}, "subscription": {"instructions": "…"}}`.
 It answers from that chat's memory, or hands off to a workflow or a person. To
 answer real chats with it, expose it as a hook and add a watch the same way as
-pingpong. A watch's delivery carries no `subscription`, so load-context's
-default response policy applies: set it to `approval`, so every reply waits
-for you until you trust it.
+pingpong, with `"responsePolicy": "approval"` on the watch so every reply
+waits for you until you trust it. A watch with no policy drafts: nothing is
+ever sent without one.
 
 ## The default workflows
 

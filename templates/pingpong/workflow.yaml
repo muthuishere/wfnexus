@@ -14,7 +14,7 @@
 #   system of record  the chat itself + this conversation's memory
 #   typed output   {heard, said, status, id}
 #   verification   the sender's confirmed status is what is saved, not "we tried"
-#   human gate     input.subscription.responsePolicy (draft / approval) is passed to the sender
+#   human gate     input.watch.responsePolicy (draft / approval) is passed to the sender
 #   no silent failure  a failed or uncertain send fails this run (the sender's own gate)
 #   success number    pong #N keeps counting up in one chat = memory works end to end
 name: pingpong
@@ -54,7 +54,7 @@ input_schema:
         from: { type: string }
         text: { type: string }
         kind: { type: string }
-    subscription:
+    watch:
       type: object
       title: "Handling options (name, instructions, responsePolicy)"
 
@@ -95,7 +95,7 @@ steps:
         text: "{{ .Steps.reply.stdout }}"
         replyTo: "{{ .Input.message.id }}"
         replyToSender: "{{ .Input.message.from }}"
-        responsePolicy: "{{ or .Input.subscription.responsePolicy \"auto\" }}"
+        responsePolicy: "{{ with .Input.watch }}{{ or .responsePolicy \"draft\" }}{{ else }}draft{{ end }}"
         key: "pingpong-{{ .Input.message.chat }}-{{ .Input.message.id }}"
 
   - id: save

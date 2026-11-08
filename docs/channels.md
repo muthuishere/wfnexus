@@ -190,14 +190,7 @@ triggers.
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
 
-## `<run> self` (optional)
 
-Prints `{"self": ["<id>", ...]}`: who the account is, for a channel with no
-`self` list. Read-only; an adapter without it just fails the verb. The
-reference adapter answers from `wacli auth status` (the linked JID, with and
-without its device suffix).
-
-## What wfnexus does with a received message
 
 1. Stored in `channel_messages` (once), pending; marked handled once acted on.
    A message still pending at the next poll (a crash) is handled then.
