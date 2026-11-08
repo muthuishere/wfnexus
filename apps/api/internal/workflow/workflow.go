@@ -218,6 +218,12 @@ type Step struct {
 	// (a gate is the workflow saying what that exit means). Set it on a step
 	// whose exit code is an ANSWER a later step routes on, e.g. "3 = findings".
 	ContinueOnError bool `yaml:"continue-on-error,omitempty" json:"continueOnError,omitempty"`
+	// ExitCodes names the exit codes of a `run:` step that are ANSWERS, not
+	// crashes: `exit-codes: {0: ok, 3: findings}`. A declared code finishes the
+	// step as done (ok=true) and puts the name on the output as `outcome`, so a
+	// later step routes with `when: [{path: check.outcome, equals: findings}]`.
+	// An undeclared non-zero exit still fails the step.
+	ExitCodes map[int]string `yaml:"exit-codes,omitempty" json:"exitCodes,omitempty"`
 	// Soul is the agent's identity for this step (its system prompt).
 	Soul string `yaml:"soul,omitempty" json:"soul,omitempty"`
 	// Budget caps this step's agent subtree.
@@ -546,6 +552,9 @@ func (d *Definition) validate(cat Catalog) error {
 				return err
 			}
 		}
+		if len(s.ExitCodes) > 0 && s.Run == "" {
+			return fmt.Errorf("%s/%s: exit-codes only has meaning on a `run` step", d.Name, s.ID)
+		}
 		if s.Run != "" {
 			if len(s.Skills) > 0 || len(s.Team) > 0 || s.Decide != nil {
 				return fmt.Errorf("%s/%s: a `run` step calls no model, so skills, team and decide have no meaning on it", d.Name, s.ID)
@@ -554,6 +563,14 @@ func (d *Definition) validate(cat Catalog) error {
 			// is deliberately not, because a workflow is authored on one
 			// platform and run on another. Availability is reported by
 			// `wfx doctor` and enforced when the step runs.
+			for code, name := range s.ExitCodes {
+				if code < 0 || code > 255 {
+					return fmt.Errorf("%s/%s: exit-codes: %d is not an exit code (0-255)", d.Name, s.ID, code)
+				}
+				if strings.TrimSpace(name) == "" {
+					return fmt.Errorf("%s/%s: exit-codes: code %d needs a non-empty outcome name", d.Name, s.ID, code)
+				}
+			}
 			if s.Shell != "" && !isKnownShell(s.Shell) {
 				return fmt.Errorf("%s/%s: unknown shell %q — one of %s", d.Name, s.ID, s.Shell,
 					strings.Join(shell.Known(), ", "))
@@ -1151,6 +1168,7 @@ func RunOutputSchema() map[string]any {
 		"properties": map[string]any{
 			"ok":       map[string]any{"type": "boolean", "description": "exit code was zero"},
 			"exitCode": map[string]any{"type": "integer"},
+			"outcome":  map[string]any{"type": "string", "description": "the exit-codes name of this exit, when declared"},
 			"stdout":   map[string]any{"type": "string"},
 			"stderr":   map[string]any{"type": "string"},
 		},
