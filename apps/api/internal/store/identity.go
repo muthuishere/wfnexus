@@ -390,7 +390,7 @@ func (s *Store) DeleteUser(ctx context.Context, name string) error {
 // table, so the caller cannot get the arithmetic wrong.
 func (s *Store) CountAdminsExcept(ctx context.Context, name string) (int, error) {
 	var n int
-	err := s.qrow(ctx, `SELECT count(*) FROM users WHERE role='admin' AND disabled=false AND name<>$1`, name).Scan(&n)
+	err := s.qrow(ctx, `SELECT count(*) FROM users WHERE role='superadmin' AND disabled=false AND name<>$1`, name).Scan(&n)
 	return n, err
 }
 

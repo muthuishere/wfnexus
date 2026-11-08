@@ -15,7 +15,9 @@ package secrets
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -28,7 +30,10 @@ import (
 var ErrNoKey = errors.New("no encryption key: set WFX_SECRET_KEY, or let the platform write one on first boot")
 
 // Box seals and opens values with AES-256-GCM.
-type Box struct{ aead cipher.AEAD }
+type Box struct {
+	aead cipher.AEAD
+	key  []byte
+}
 
 // KeyBytes is the key length, in bytes. AES-256.
 const KeyBytes = 32
@@ -46,7 +51,7 @@ func NewBox(key []byte) (*Box, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Box{aead: aead}, nil
+	return &Box{aead: aead, key: append([]byte(nil), key...)}, nil
 }
 
 // Load resolves the key: WFX_SECRET_KEY if set, else the key file, which is
@@ -125,6 +130,16 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// Derive returns a key bound to one purpose (HMAC-SHA256 of the label under
+// the box key), so another subsystem — the session signer (ADR 0028) — can
+// have a server key without a second secret to manage, and without ever
+// holding the key that seals the env store.
+func (b *Box) Derive(label string) []byte {
+	m := hmac.New(sha256.New, b.key)
+	m.Write([]byte(label))
+	return m.Sum(nil)
 }
 
 // Seal encrypts a value. The nonce is random per call and stored in front of

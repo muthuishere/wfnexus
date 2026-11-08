@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
+	github.com/go-ldap/ldap/v3 v3.4.8
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
@@ -16,6 +17,11 @@ require (
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.59.0
+)
+
+require (
+	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
 )
 
 require (

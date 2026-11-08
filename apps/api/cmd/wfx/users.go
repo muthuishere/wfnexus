@@ -37,10 +37,10 @@ type apiRole struct {
 
 const userUsage = `usage:
   wfx user ls
-  wfx user add NAME --role ROLE [--project P] [--password-stdin]
+  wfx user add NAME [--role superadmin] [--project P] [--password-stdin]
   wfx user disable NAME [--enable]
   wfx user passwd [NAME] [--password-stdin]   NAME: an admin reset; none: your own
-  wfx user role NAME ROLE`
+  wfx user role NAME superadmin|none     (project/workflow roles: wfx member add)`
 
 func userCmd(args []string) error {
 	if len(args) == 0 {
@@ -51,7 +51,7 @@ func userCmd(args []string) error {
 	case "ls", "list":
 		return userList()
 	case "add":
-		if len(pos) != 1 || flags["role"] == "" {
+		if len(pos) != 1 {
 			return fmt.Errorf("%s", userUsage)
 		}
 		return userAdd(pos[0], flags["role"], flags["project"], flags["password-stdin"] != "")
@@ -64,7 +64,8 @@ func userCmd(args []string) error {
 		if len(pos) != 2 {
 			return fmt.Errorf("%s", userUsage)
 		}
-		return userUpdate(pos[0], func(u *apiUser) { u.Role = pos[1] })
+		// ADR 0028: superadmin or none; scoped roles are `wfx member add`.
+		return userUpdate(pos[0], func(u *apiUser) { u.Role = strings.TrimPrefix(pos[1], "none") })
 	case "passwd", "password":
 		if len(pos) == 0 {
 			return changeOwnPassword(flags["password-stdin"] != "")
@@ -138,8 +139,7 @@ func formatUsers(users []apiUser) string {
 
 func userAdd(name, role, project string, fromStdin bool) error {
 	body := map[string]any{"name": name, "role": role, "project": project}
-	// The create route also mints a token; the CLI has no use for it and
-	// does not print it — a person signs in with the password.
+	// No credential comes back: a person signs in with the password.
 	if err := call("POST", "/api/users", body, nil); err != nil {
 		return err
 	}

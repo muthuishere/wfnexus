@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"net/http"
 	"strings"
 )
@@ -41,20 +42,20 @@ const (
 	PermAdminWrite     = "admin:write"
 )
 
-// DefaultRoles is what first boot SEEDS — as rows, editable afterwards. It is
-// a seed, not the authority: the authority is whatever the table holds when a
-// request arrives.
+// DefaultRoles is the role vocabulary, written to the roles table at first
+// boot so the Roles page has rows to show (ADR 0028). It is NOT consulted for
+// authorization: the four roles are fixed and their reach is code (roles.go).
 func DefaultRoles() map[string][]string {
-	viewer := []string{PermWorkflowsRead, PermRunsRead, PermRegistryRead, PermProjectsRead,
-		PermEnvRead, PermStateRead, PermWorkersRead, PermBundlesRead}
-	publisher := append(append([]string{}, viewer...),
-		PermWorkflowsWrite, PermRunsWrite, PermStateWrite, PermPublish)
 	return map[string][]string{
-		"admin":     {"*"},
-		"publisher": publisher,
-		"viewer":    viewer,
+		RoleSuperadmin:       {"*"},
+		store.ProjectAdmin:   {"one project: its workflows, members and settings"},
+		store.WorkflowAdmin:  {"one workflow: edit, publish, expose, approve, members"},
+		store.WorkflowRunner: {"one workflow: run it, see its runs, answer its approvals"},
 	}
 }
+
+// RoleSuperadmin is the one global role; users.role is it or "".
+const RoleSuperadmin = "superadmin"
 
 // resourcePerms maps the first path segment under /api to its read and write
 // permission. Two permissions per resource, read on GET and write on anything
@@ -143,6 +144,19 @@ func PermissionFor(method, path string) string {
 		(strings.HasPrefix(path, "/api/skills/installed") || strings.HasPrefix(path, "/api/mcp/")) {
 		return PermAdminWrite
 	}
+	// Starting a run of a workflow is a run, not an edit of it (ADR 0028):
+	// a `user` may run what it can see.
+	if method == http.MethodPost && strings.HasPrefix(path, "/api/workflows/") &&
+		(strings.HasSuffix(path, "/runs") || strings.HasSuffix(path, "/dispatches")) {
+		return PermRunsWrite
+	}
+	// A project's env holds its settings and secrets: env, not project, perms.
+	if strings.HasPrefix(path, "/api/projects/") && strings.Contains(path, "/env") {
+		if method == http.MethodGet || method == http.MethodHead {
+			return PermEnvRead
+		}
+		return PermEnvWrite
+	}
 	seg := strings.Trim(strings.TrimPrefix(path, "/api"), "/")
 	if i := strings.IndexByte(seg, '/'); i >= 0 {
 		seg = seg[:i]
@@ -174,19 +188,13 @@ func (s *Server) can(r *http.Request, perm string) bool {
 	if sub.Kind == SubjectWorker {
 		return true
 	}
-	// Read from the TABLE on every decision. No cache, so an admin editing a
-	// role changes the next request's outcome — which is what "takes effect on
-	// the next authorization decision" means.
-	perms, err := s.store.Role(r.Context(), sub.Role)
-	if err != nil {
-		return false
+	if sub.Role == RoleSuperadmin {
+		return true
 	}
-	for _, p := range perms {
-		if p == "*" || p == perm {
-			return true
-		}
-	}
-	return false
+	// Everyone signed in may READ the catalogue (runs are then filtered to
+	// what they may see). Every write, and the sensitive reads, is a scoped
+	// check in roles.go.
+	return signedInReads[perm]
 }
 
 // authorize is the middleware half: it refuses before the handler runs.
@@ -204,7 +212,9 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return
 		}
-		if !s.can(r, perm) {
+		// A grant at the addressed scope (ADR 0028) allows what reading
+		// alone does not.
+		if !s.can(r, perm) && !s.scopedAllows(r) {
 			writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden: this subject does not hold %s", perm))
 			return
 		}

@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 )
 
 // `wfx login` — the OAuth 2.0 Device Authorization Grant, RFC 8628.
@@ -30,10 +32,11 @@ type deviceStart struct {
 }
 
 type deviceAnswer struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	Error       string `json:"error"`
-	Description string `json:"error_description"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	Error        string `json:"error"`
+	Description  string `json:"error_description"`
 }
 
 // postDevice talks to the grant endpoints directly rather than through call():
@@ -91,6 +94,10 @@ func login(args []string) error {
 		host = "http://" + host
 	}
 
+	if name := flagOf(args, "--user", ""); name != "" {
+		return passwordLogin(host, saveAs, name, flagOf(args, "--provider", ""))
+	}
+
 	var start deviceStart
 	if err := postDevice(host, "/api/device/code", map[string]string{
 		"client_id": "wfx-cli",
@@ -128,7 +135,7 @@ func login(args []string) error {
 			user := whoAmI(host, answer.AccessToken)
 			// The value goes straight into the 0600 contexts file. It is not
 			// printed, not logged, and not passed to any process.
-			if err := putContext(or(saveAs, host), answer.AccessToken, user); err != nil {
+			if err := putSession(or(saveAs, host), answer.AccessToken, answer.RefreshToken, user); err != nil {
 				return err
 			}
 			fmt.Printf("Logged in to %s as %s.\n", or(saveAs, hostKey(host)), or(user, "?"))
@@ -196,4 +203,78 @@ func logout(args []string) error {
 	}
 	fmt.Printf("Logged out of %s.\n", target.name)
 	return nil
+}
+
+// passwordLogin is `wfx login --url H --user NAME` (ADR 0028): the same JWT
+// and refresh token the device grant ends in, from a username and password.
+// The password comes from WFX_PASSWORD, a hidden prompt, or one line of stdin;
+// it is never an argument, so it never lands in shell history or `ps`.
+func passwordLogin(host, saveAs, name, provider string) error {
+	pw := os.Getenv("WFX_PASSWORD")
+	if pw == "" {
+		var err error
+		if pw, err = promptHidden("password for " + name + ": "); err != nil {
+			if pw, err = readPasswordLine(os.Stdin); err != nil {
+				return err
+			}
+		}
+	}
+	var answer struct {
+		deviceAnswer
+		MustChange bool `json:"mustChange"`
+	}
+	raw, _ := json.Marshal(map[string]string{"username": name, "password": pw, "client": "cli", "provider": provider})
+	res, err := http.Post(host+"/api/auth/password", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("%s — is %s reachable?", err, host)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &answer)
+	_ = json.Unmarshal(body, &refusal)
+	if res.StatusCode != http.StatusOK || answer.AccessToken == "" {
+		return fmt.Errorf("sign-in refused: %s", or(refusal.Error, res.Status))
+	}
+	if err := putSession(or(saveAs, host), answer.AccessToken, answer.RefreshToken, name); err != nil {
+		return err
+	}
+	fmt.Printf("Logged in to %s as %s.\n", or(saveAs, hostKey(host)), name)
+	if answer.MustChange {
+		fmt.Println("This password must be changed before anything else works: wfx user passwd")
+	}
+	return nil
+}
+
+// freshen swaps an expired (or about to expire) access JWT for a new one using
+// the context's refresh token, and saves it. Any failure leaves the token as
+// it was: the request then answers 401 and the person signs in again.
+func freshen(r resolved, ctx *wfxContext) resolved {
+	if ctx.Refresh == "" || r.token == "" {
+		return r
+	}
+	if exp, ok := auth.UnverifiedExpiry(r.token); ok && time.Until(exp) > 30*time.Second {
+		return r
+	}
+	raw, _ := json.Marshal(map[string]string{"refresh_token": ctx.Refresh})
+	res, err := http.Post(r.url+"/api/auth/refresh", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		return r
+	}
+	defer res.Body.Close()
+	var out deviceAnswer
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK || json.Unmarshal(body, &out) != nil || out.AccessToken == "" {
+		return r
+	}
+	r.token = out.AccessToken
+	if c, err := loadContexts(); err == nil {
+		if cc, ok := c.Contexts[r.name]; ok {
+			cc.Token = out.AccessToken
+			_ = saveContexts(c)
+		}
+	}
+	return r
 }
