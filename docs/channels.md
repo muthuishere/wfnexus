@@ -114,6 +114,13 @@ fall back to plain text):
 | `edit` `{id}` | edit one of OUR sent messages; `text` is the new text |
 | `delete` `{id}` | delete one of OUR sent messages for everyone |
 
+A `send:` step sets them with `reply_to`, `reply_to_sender`, `mentions`
+(comma separated), `attachment_kind`, `reaction: {target, emoji, sender}`,
+`edit` and `delete` — all templates; one that renders empty is left off, and a
+step that renders more than one of reaction/edit/delete fails. Every op goes
+through the same send path, so the channel's `sendGap` and the dedup key apply
+to all of them. Its output carries `action` (text|reply|media|reaction|edit|delete).
+
 **stdout** — optional: `{"id": "<transport message id>", "status": "sent"}`.
 On a non-zero exit an adapter may print `{"status": "failed" | "uncertain",
 "error": "…"}`: `failed` = the transport said no; `uncertain` = it may have gone

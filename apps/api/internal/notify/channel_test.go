@@ -161,3 +161,17 @@ func TestAdapterEnvIsMinimal(t *testing.T) {
 		t.Fatalf("env %s", env)
 	}
 }
+
+// An adapter that exits non-zero but says {"status":"uncertain"} may have
+// delivered: the error is ErrMaybeDelivered so the dedup key is kept.
+func TestSendUncertainStdoutIsMaybeDelivered(t *testing.T) {
+	c := Command{EntryName: "u", Run: `echo '{"status":"uncertain","error":"lost answer"}'; exit 1; true`}
+	_, err := c.Send(context.Background(), Envelope{Text: "x", Reaction: &SendReaction{TargetID: "M1"}})
+	if !errors.Is(err, ErrMaybeDelivered) || !strings.Contains(err.Error(), "lost answer") {
+		t.Fatalf("err %v", err)
+	}
+	f := Command{EntryName: "f", Run: `echo '{"status":"failed","error":"not on WhatsApp"}'; exit 1; true`}
+	if _, err := f.Send(context.Background(), Envelope{Text: "x"}); err == nil || errors.Is(err, ErrMaybeDelivered) {
+		t.Fatalf("a refused send is not maybe-delivered: %v", err)
+	}
+}

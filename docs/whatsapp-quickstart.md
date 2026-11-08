@@ -43,7 +43,8 @@ reports the same thing as `unknown-self`.
 ```sh
 wfx new whatsapp-sender      # copies keep the template's name; the others start it by name
 wfx new pingpong
-# in your copy of whatsapp-sender: WA_ADAPTER, WA_CHANNEL
+# whatsapp-sender sends on the DEFAULT channel (channels.default: whatsapp),
+# so the channel's sendGap paces every op
 
 wfx sub add pingpong-test --channel whatsapp --chat <test-group-jid>@g.us \
   --workflow pingpong --allow <your-jid>@s.whatsapp.net \

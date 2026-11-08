@@ -47,6 +47,22 @@ type Attachment struct {
 	Path     string `json:"path,omitempty"`
 	URL      string `json:"url,omitempty"`
 	Filename string `json:"filename,omitempty"`
+	// Kind is how the transport should present it: file (default), image,
+	// voice or sticker.
+	Kind string `json:"kind,omitempty"`
+}
+
+// SendReaction reacts to a message instead of posting; an empty Emoji removes
+// our reaction. Sender is the reacted message's sender (groups need it).
+type SendReaction struct {
+	TargetID string `json:"targetId"`
+	Emoji    string `json:"emoji"`
+	Sender   string `json:"sender,omitempty"`
+}
+
+// MessageRef names one of OUR sent messages, for an edit or a delete.
+type MessageRef struct {
+	ID string `json:"id"`
 }
 
 // Envelope is what `<run> send` reads on stdin.
@@ -71,6 +87,15 @@ type Envelope struct {
 	Target     string      `json:"target,omitempty"`
 	Attachment *Attachment `json:"attachment,omitempty"`
 	At         time.Time   `json:"at"`
+
+	// Richer sends (ADR 0026). They ride the same envelope so EVERY op goes
+	// through Send: one at a time per channel, at least Gap apart, and past
+	// the adapter's echo ledger. An adapter that cannot do one must fail.
+	ReplyTo  *ReplyRef     `json:"replyTo,omitempty"`
+	Mentions []string      `json:"mentions,omitempty"`
+	Reaction *SendReaction `json:"reaction,omitempty"`
+	Edit     *MessageRef   `json:"edit,omitempty"`
+	Delete   *MessageRef   `json:"delete,omitempty"`
 }
 
 // SendResult is what `<run> send` MAY print. An empty stdout is fine.
@@ -353,8 +378,21 @@ func (c Command) exec(ctx context.Context, verb string, in any) ([]byte, error) 
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
 			return nil, fmt.Errorf("%w: channel %s: %s timed out after %s (not retried): %s", ErrMaybeDelivered, c.EntryName, verb, timeout, msg)
 		}
+		// The adapter may say on stdout whether a failed send could still
+		// have gone out: {"status":"uncertain"} keeps the dedup key.
+		var said struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		_ = json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &said)
+		if msg == "" {
+			msg = said.Error
+		}
 		if msg == "" {
 			msg = err.Error()
+		}
+		if said.Status == "uncertain" {
+			return nil, fmt.Errorf("%w: channel %s: %s could not confirm (not retried): %s", ErrMaybeDelivered, c.EntryName, verb, msg)
 		}
 		return nil, fmt.Errorf("channel %s: %s failed: %s", c.EntryName, verb, msg)
 	}

@@ -8,23 +8,20 @@ through it with `start: {workflow: whatsapp-sender, wait: true}`.
 `reactTo`, `edit`, `delete`, `responsePolicy` (draft|approval|auto|none,
 default auto), `key` (idempotency; default = hash of the request).
 
-**Policy:** `auto` sends · `approval` pauses at step `approve` with the text
-shown · `draft` records the draft in the ledger, sends nothing · `none` skips.
+**Policy:** `auto` sends · `approval` pauses at step `approve` with the op
+shown · `draft` returns the draft, sends nothing · `none` skips.
+
+**Send:** one `send:` step on the server's default channel (the channel
+contract, docs/channels.md). Every op — text, reply, attachment, reaction,
+edit, delete — is paced by the channel's `sendGap`, recorded by the adapter's
+echo ledger, and claimed once by `key` before the adapter runs.
 
 **Output** (`deliver` stdout, one JSON object):
-`{status: sent|failed|uncertain|drafted|skipped|already, id, action, chat, key, error}`.
-`failed` and `uncertain` also fail the run with the reason.
+`{status: sent|drafted|skipped|already, id, action, chat, key}`. A refused send
+fails the run (the key is released, so a retry may send); an unconfirmed one
+fails it and keeps the key, so it is never resent (`already`).
 
-**Never twice:** a `pending` ledger row is written before the adapter runs; a
-key that is pending, uncertain or sent is never sent again (`already`). Only
-`failed` (the transport said no) may be retried.
-
-**Fill:** `WA_ADAPTER` (e.g. `node adapters/apl-whatsapp.js`, verb `send`
-appended, envelope per docs/channels.md), `WA_CHANNEL`, optional
-`WA_SENDER_LEDGER`.
-
-Note: it runs the adapter directly because the `send:` step's envelope does not
-yet carry `replyTo`/`reaction`/`edit`/`delete`; the channel's `sendGap` is not
-applied to these sends.
+**Fill:** the default channel must be the WhatsApp channel. An attachment path
+must be inside the run's workspace.
 
 Test: `apps/api/internal/engine/whatsapp_templates_test.go` (fake adapter).
