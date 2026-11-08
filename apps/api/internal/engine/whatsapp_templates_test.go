@@ -448,7 +448,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 
 // Every default workflow, frontdesk's agent step included, dry-runs clean.
 func TestWhatsAppTemplatesDryRun(t *testing.T) {
-	names := []string{"whatsapp-sender", "whatsapp-monitor", "whatsapp-subscription-manager", "router", "pingpong", "frontdesk", "load-context"}
+	names := []string{"whatsapp-sender", "whatsapp-monitor", "whatsapp-subscription-manager", "router", "pingpong", "frontdesk", "load-context", "retrospective"}
 	defs := loadWATemplates(t, nil, names...)
 	if fd := defs["frontdesk"]; len(fd.Steps) == 0 || fd.Steps[0].ID != "ctx.gather" {
 		t.Fatalf("frontdesk must embed load-context first, got %v", fd.Steps[0].ID)
@@ -463,6 +463,7 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 		"pingpong":                      {"message": msg},
 		"frontdesk":                     {"message": msg},
 		"load-context":                  {"message": msg},
+		"retrospective":                 {},
 	}
 	for _, n := range names {
 		rep, err := h.eng.DryRunWorkflow(n, inputs[n])

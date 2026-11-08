@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
@@ -78,6 +80,11 @@ func (e *Engine) Templates() []Template {
 // Template returns one, or an error naming what does exist.
 func (e *Engine) Template(name string) (*workflow.Definition, error) {
 	def := e.Definitions()[name]
+	// A copy that kept the template's name owns the short name (local loads
+	// first); the template is still there under its qualified name.
+	if t := e.Definitions()[templatesSource+"/"+name]; t != nil && t.Template.Is && (def == nil || !def.Template.Is) {
+		def = t
+	}
 	if def == nil {
 		return nil, fmt.Errorf("no template named %q", name)
 	}
@@ -118,10 +125,11 @@ func describeTemplate(d *workflow.Definition) Template {
 // or a skill the machine does not have is refused here rather than at the next
 // reload.
 func (e *Engine) CopyTemplate(ctx context.Context, name, as string) (*workflow.Definition, error) {
-	if _, err := e.Template(name); err != nil {
+	src, err := e.Template(name)
+	if err != nil {
 		return nil, err
 	}
-	return e.CopyWorkflow(ctx, name, as)
+	return e.copyDefinition(src, as)
 }
 
 // CopyWorkflow copies ANY loaded workflow into the platform's own directory.
@@ -142,13 +150,32 @@ func (e *Engine) CopyWorkflow(ctx context.Context, name, as string) (*workflow.D
 	if src == nil {
 		return nil, fmt.Errorf("no workflow named %q", name)
 	}
+	return e.copyDefinition(src, as)
+}
+
+// copyDefinition is the copy itself. Only a WORKFLOW holds a name: a template
+// does not, so `wfx new frontdesk --as frontdesk` works — and must, because
+// templates name each other (frontdesk starts `retrospective`). The copy lands
+// in local, which loads first and so owns the short name; the template stays
+// reachable as templates/<name>.
+func (e *Engine) copyDefinition(src *workflow.Definition, as string) (*workflow.Definition, error) {
 	if as == "" {
 		return nil, fmt.Errorf("the copy needs a name of its own")
 	}
-	if existing := e.Definitions()[as]; existing != nil {
+	if existing := e.Definitions()[as]; existing != nil && !existing.Template.Is {
 		return nil, fmt.Errorf("%q already exists — pick another name", as)
 	}
 	copy := *src
+	// A loaded definition is EXPANDED: the steps it `uses:` are already in
+	// Steps. Saving that with `uses:` still set expands them a second time, so
+	// the copy is made from the file as written.
+	if len(src.Uses) > 0 {
+		raw, err := asWritten(src)
+		if err != nil {
+			return nil, err
+		}
+		copy = *raw
+	}
 	copy.Name = as
 	// The copy is a workflow, not a template: it is meant to be run, and
 	// leaving the flag on would make it refuse for no reason anyone could see.
@@ -162,6 +189,19 @@ func (e *Engine) CopyWorkflow(ctx context.Context, name, as string) (*workflow.D
 	// Deep, so the copy and the original never share bytes.
 	copy.Files = workflow.Clone(src.Files)
 	return &copy, nil
+}
+
+// asWritten re-reads a definition's file without expanding it.
+func asWritten(d *workflow.Definition) (*workflow.Definition, error) {
+	p := d.Path
+	if st, err := os.Stat(p); err == nil && st.IsDir() {
+		p = filepath.Join(p, workflow.DefinitionFile)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return nil, fmt.Errorf("%s: cannot re-read %s to copy it: %w", d.Name, d.Path, err)
+	}
+	return workflow.DecodeYAMLStrict(raw)
 }
 
 func firstLine(s string) string {

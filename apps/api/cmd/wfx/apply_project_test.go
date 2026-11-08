@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,5 +71,39 @@ func TestApplyIntoAGitProjectReportsTheProposal(t *testing.T) {
 	}
 	if strings.Contains(out, "installed") {
 		t.Fatalf("a proposal was reported as installed:\n%s", out)
+	}
+}
+
+// `wfx apply <dir>/workflow.yaml` sends the files beside it: applying a
+// folder-form workflow used to save it without its scripts.
+func TestApplyAFolderFormWorkflowSendsItsFiles(t *testing.T) {
+	tempContexts(t)
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, `{"ok":true,"path":"/x/w/workflow.yaml"}`)
+	}))
+	defer srv.Close()
+	t.Setenv("WFX_API", srv.URL)
+	dir := filepath.Join(t.TempDir(), "w")
+	_ = os.MkdirAll(filepath.Join(dir, "lib"), 0o755)
+	for p, b := range map[string]string{workflow.DefinitionFile: plainWorkflow, "collect.py": "print(1)\n", "lib/x.py": "y = 2\n"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := captureStdout(t, func() error { return apply([]string{filepath.Join(dir, workflow.DefinitionFile)}, true) }); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Definition struct {
+			Files []workflow.File `json:"files"`
+		} `json:"definition"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Definition.Files) != 2 || got.Definition.Files[0].Path != "collect.py" || string(got.Definition.Files[1].Body) != "y = 2\n" {
+		t.Fatalf("files sent: %+v", got.Definition.Files)
 	}
 }

@@ -118,6 +118,12 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 			qualified := src.Name + "/" + name
 			out[qualified] = d
 			if owner, clash := seen[name]; clash {
+				// A template does not hold a name: a workflow copied from it
+				// under the same name is the point (`wfx new x --as x`), not a
+				// collision. It stays reachable qualified.
+				if d.Template.Is {
+					continue
+				}
 				skips = append(skips, Skip{
 					Source:   src.Name,
 					Location: d.Path,

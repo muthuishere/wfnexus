@@ -183,8 +183,17 @@ func (e *Engine) SourceSkips() []workflow.Skip {
 func (e *Engine) validator() workflow.Catalog {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return catalog.NewValidator(e.Skills(), e.Catalog())
+	return callables{catalog.NewValidator(e.Skills(), e.Catalog()), e.defs}
 }
+
+// callables is the validator plus the loaded workflows, so a save or check of
+// a workflow that `uses:` another resolves it (workflow.Callables).
+type callables struct {
+	workflow.Catalog
+	defs map[string]*workflow.Definition
+}
+
+func (c callables) Callable(name string) *workflow.Definition { return c.defs[name] }
 
 func (e *Engine) Definitions() map[string]*workflow.Definition { return e.defs }
 
@@ -403,6 +412,10 @@ func (e *Engine) SaveWorkflowIn(project string, d *workflow.Definition) (string,
 	if err := e.checkMountHosts(d.Mount); err != nil {
 		return "", err
 	}
+	// A saved workflow is one to RUN: only the templates directory makes a
+	// template. Keeping `template:` from an applied template file installed a
+	// workflow that refuses to run and is listed nowhere.
+	d.Template = workflow.TemplateInfo{}
 	path, err := workflow.Save(dir, d, e.validator())
 	if err != nil {
 		return "", err

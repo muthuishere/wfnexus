@@ -107,6 +107,14 @@ Values are strings and PLAINTEXT: this is not a secret store, `wfx env` is.
 
 `assets/examples/10-incremental-state.yaml` is the worked case.
 
+**State keys and memory notes.** A state key is a *page*: one entity (a
+watermark, a strategy, the plan), one step that writes it, read by name. A
+memory note (`remember`) is for what a future run cannot see from its own
+inputs: the strategy that worked, a rule it tested, a fact it had to discover,
+the plan. A note is not a log of the run (the engine records that) and not only
+failures. The retrospective checks the notes against runs, proposes fixes for
+wrong or duplicate ones, and promotes the few that matter to state keys.
+
 ## The one technical rule you cannot get wrong
 
 Call `wf_catalog` with `kind: "shape"` **before you write a line**, and again

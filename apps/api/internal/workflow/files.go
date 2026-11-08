@@ -121,6 +121,14 @@ const (
 	maxSidecarFiles = 200
 )
 
+// ReadWorkflowDir reads a directory-form workflow the way the loader does: its
+// definition and every file beside it. `wfx apply <dir>/workflow.yaml` sends
+// both, so saving a folder-form workflow never drops its scripts.
+func ReadWorkflowDir(dir string) (raw []byte, files []File, err error) {
+	raw, _, files, err = loadWorkflowDir(dir)
+	return raw, files, err
+}
+
 // loadWorkflowDir reads a directory-form workflow: its definition plus every
 // other file beside it.
 func loadWorkflowDir(dir string) (raw []byte, defPath string, files []File, err error) {

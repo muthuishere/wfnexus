@@ -203,6 +203,16 @@ func (x *expander) expand(d *Definition, chain []string) error {
 	o := x.opt
 	o.workflow = func(name string) (*Task, bool, error) {
 		c := x.lookup(g, name)
+		if c == nil && x.opt.callable != nil {
+			// Already loaded and expanded elsewhere: use it as it stands.
+			if ext := x.opt.callable(name); ext != nil && ext.Name != d.Name {
+				if !ext.On.Allows(TriggerWorkflowCall) {
+					return nil, true, fmt.Errorf("%s: use %q names a workflow that does not declare `on: workflow_call` "+
+						"(it declares %v) — add workflow_call to its `on:` so it may be called", me, name, ext.On.Names())
+				}
+				return workflowAsTask(ext), true, nil
+			}
+		}
 		if c == nil {
 			return nil, false, nil
 		}

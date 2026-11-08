@@ -18,6 +18,7 @@
 package main
 
 import (
+	"path/filepath"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -560,6 +561,15 @@ func apply(args []string, install bool) error {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	def := *dp
+	// A folder-form workflow is the YAML AND the files beside it: sending only
+	// the YAML saved a workflow whose scripts were gone.
+	if base := filepath.Base(path); base == workflow.DefinitionFile || base == "workflow.yml" {
+		_, files, err := workflow.ReadWorkflowDir(filepath.Dir(path))
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		def.Files = files
+	}
 	name := def.Name
 	if name == "" {
 		return fmt.Errorf("%s: the workflow needs a name", path)

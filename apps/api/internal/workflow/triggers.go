@@ -270,6 +270,10 @@ func (t *Triggers) UnmarshalYAML(unmarshal func(any) error) error {
 		Schedule           []Schedule          `yaml:"schedule"`
 		RepositoryDispatch *RepositoryDispatch `yaml:"repository_dispatch"`
 		Message            []MessageTrigger    `yaml:"message"`
+		// Presence-only keys (read below): declared so a strict decode — a
+		// saved file is loaded strictly — accepts them.
+		WorkflowCall any `yaml:"workflow_call"`
+		Inputs       any `yaml:"inputs"`
 	}
 	if err := unmarshal(&m); err != nil {
 		return fmt.Errorf("`on` must be a trigger name, a list of names, or a mapping: %w", err)

@@ -17,6 +17,26 @@ type loadOptions struct {
 	// workflow resolves a `use:` naming a sibling workflow in the same
 	// directory. found=false means no such workflow.
 	workflow func(name string) (t *Task, found bool, err error)
+	// callable resolves a `use:` against workflows loaded ELSEWHERE — what a
+	// save or check of one workflow sees (Callables) — after the directory
+	// being loaded has had its say.
+	callable func(name string) *Definition
+}
+
+// Callables is an optional Catalog extension: the workflows already loaded.
+// With it, saving or checking a workflow that `uses:` another one resolves the
+// callee there instead of failing because the temporary round-trip directory
+// holds only the one file.
+type Callables interface {
+	Callable(name string) *Definition
+}
+
+func callableOpts(cat Catalog) []LoadOption {
+	c, ok := cat.(Callables)
+	if !ok {
+		return nil
+	}
+	return []LoadOption{func(o *loadOptions) { o.callable = c.Callable }}
 }
 
 // LoadOption configures LoadDirWithTasks / LoadSources without changing the

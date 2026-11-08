@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -263,5 +265,72 @@ func TestDryRunShowsMemory(t *testing.T) {
 	dr := h.eng.DryRunDefinition(h.eng.defs[name], nil)
 	if dr.Memory == nil || !dr.Memory.On || !strings.Contains(dr.Memory.Text, "dry-lesson-7") {
 		t.Fatalf("dry run memory: %+v", dr.Memory)
+	}
+}
+
+// The injected layer has a hard cap whatever the budget says: 200 lines and
+// 25 KB, with a pointer to the rest.
+func TestMemoryInjectedHardCap(t *testing.T) {
+	name := memName("mem-cap")
+	h := newHarness(t, &workflow.Definition{Name: name, Steps: []workflow.Step{{ID: "s", Run: "true"}}}, newFakeLLM(t), "")
+	forgetAfter(t, h, name)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if _, err := h.store.AddMemory(ctx, model.MemoryEntry{
+			Project: "local", Workflow: name, Kind: model.MemoryKindRun, RunID: uuid.NewString(),
+			Body: strings.Repeat("a line of a long record\n", 100), CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := h.eng.memorySection(ctx, name, "local", false, workflow.MemoryPlan{On: true, Budget: 1_000_000})
+	if n := strings.Count(got, "\n") + 1; n > memoryInjectMaxLines {
+		t.Fatalf("%d lines injected, cap is %d", n, memoryInjectMaxLines)
+	}
+	if len(got) > memoryInjectMaxBytes+200 || !strings.Contains(got, "wfx memory show --workflow "+name) {
+		t.Fatalf("%d bytes, or no pointer to the rest", len(got))
+	}
+}
+
+// One writer per memory page: runs ending together fold their records into
+// ONE digest and no folded run is lost.
+func TestMemoryConcurrentConsolidationLosesNothing(t *testing.T) {
+	name := memName("mem-race")
+	h := newHarness(t, &workflow.Definition{Name: name, Steps: []workflow.Step{{ID: "s", Run: "true"}}}, newFakeLLM(t), "")
+	forgetAfter(t, h, name)
+	ctx := context.Background()
+	const n = 12
+	for i := 0; i < n; i++ {
+		if _, err := h.store.AddMemory(ctx, model.MemoryEntry{
+			Project: "local", Workflow: name, Kind: model.MemoryKindRun, RunID: uuid.NewString(),
+			Body: fmt.Sprintf("run r%02d · failed", i), CreatedAt: time.Now().Add(time.Duration(i) * time.Millisecond),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); h.eng.consolidateMemoryIn(ctx, "local", name, "", 2) }()
+	}
+	wg.Wait()
+	mem, _ := h.eng.WorkflowMemory(ctx, name, "local")
+	var digests []string
+	runs := 0
+	for _, m := range mem {
+		switch m.Kind {
+		case model.MemoryKindDigest:
+			digests = append(digests, m.Body)
+		case model.MemoryKindRun:
+			runs++
+		}
+	}
+	if len(digests) != 1 || runs != 2 {
+		t.Fatalf("want 1 digest and 2 records, got %d digests, %d records", len(digests), runs)
+	}
+	for i := 0; i < n-2; i++ {
+		if !strings.Contains(digests[0], fmt.Sprintf("r%02d", i)) {
+			t.Errorf("folded run r%02d was lost:\n%s", i, digests[0])
+		}
 	}
 }

@@ -80,6 +80,7 @@ func (e *Engine) CheckSave(d *workflow.Definition) error {
 // WriteWorkflow writes an already-checked definition into dir (a proposal
 // worktree), without reloading — the tracked catalog has not changed.
 func (e *Engine) WriteWorkflow(dir string, d *workflow.Definition) (string, error) {
+	d.Template = workflow.TemplateInfo{} // see SaveWorkflowIn
 	return workflow.Save(dir, d, e.validator())
 }
 
