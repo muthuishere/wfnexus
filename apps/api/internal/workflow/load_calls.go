@@ -249,6 +249,9 @@ func (x *expander) expand(d *Definition, chain []string) error {
 	if err := d.expandUses(g.tasks, o); err != nil {
 		return err
 	}
+	if err := d.expandStepUses(g.tasks, o); err != nil {
+		return err
+	}
 	if err := d.expandJobs(g.tasks, o); err != nil {
 		return err
 	}
@@ -334,7 +337,8 @@ func workflowAsTask(d *Definition) *Task {
 		s.Guardrails = append([]Guardrail(nil), s.Guardrails...)
 		steps[i] = s
 	}
-	return &Task{Name: d.Name, Description: d.Description, Steps: steps, Path: d.Path}
+	return &Task{Name: d.Name, Description: d.Description, Steps: steps, Path: d.Path,
+		Version: d.Version, Inputs: d.Inputs, Outputs: d.Outputs}
 }
 
 // DecodeYAMLStrict reads one workflow document and REFUSES a key the

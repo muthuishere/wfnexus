@@ -24,6 +24,10 @@ type Task struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 	Steps       []Step `yaml:"steps" json:"steps"`
 	Path        string `yaml:"-" json:"path"`
+	// Version, Inputs, Outputs: the task's typed interface (inputs.go).
+	Version string                `yaml:"version,omitempty" json:"version,omitempty"`
+	Inputs  map[string]InputSpec  `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Outputs map[string]OutputSpec `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 }
 
 func (t Task) EntryName() string { return t.Name }
@@ -38,6 +42,11 @@ type Use struct {
 	// With overrides fields on the expanded steps. A key of "*" applies to every
 	// step; otherwise the key is the task's own step id.
 	With map[string]Override `yaml:"with,omitempty" json:"with,omitempty"`
+	// Inputs are VALUES for the task's declared `inputs:`, checked at load
+	// time and substituted for `{{ .Inputs.<name> }}` in its steps. Kept apart
+	// from `with:` (harness overrides keyed by step id) so neither changes
+	// meaning.
+	Inputs map[string]any `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	// Consumes / Produces rename the facts at the boundary, so a task written
 	// against generic fact names plugs into a workflow's vocabulary.
 	Consumes map[string]string `yaml:"consumes,omitempty" json:"consumes,omitempty"`
@@ -93,6 +102,9 @@ func LoadTasks(dir string) (map[string]*Task, error) {
 		if len(t.Steps) == 0 {
 			return nil, fmt.Errorf("%s: task %q has no steps", p, t.Name)
 		}
+		if err := checkSpecs(p, t.Inputs); err != nil {
+			return nil, err
+		}
 		if _, dup := out[t.Name]; dup {
 			return nil, fmt.Errorf("%s: duplicate task %q", p, t.Name)
 		}
@@ -121,7 +133,11 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 	var expanded []Step
 	for _, u := range d.Uses {
 		var t *Task
-		if IsRemoteUse(u.Task) {
+		name, pin, pinned := splitLocalPin(u.Task)
+		if pinned {
+			u.Task = name
+		}
+		if !pinned && IsRemoteUse(u.Task) {
 			// A REMOTE use resolves here, at load time, and then walks the
 			// same path a local task does — the prefix, the overrides, the
 			// fact renames, the validation that follows. A remote task that
@@ -159,6 +175,24 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 		if prefix == "" {
 			prefix = t.Name
 		}
+		where := d.Name
+		if d.useLabel != "" {
+			where += " " + d.useLabel
+		}
+		where += fmt.Sprintf(": use %q (as %s)", u.Task, prefix)
+		if pinned {
+			have, ok := majorOf(t.Version)
+			if !ok || have != pin {
+				return fmt.Errorf("%s: pins major %d but task %q is version %q", where, pin, t.Name, t.Version)
+			}
+		}
+		if len(u.Inputs) > 0 && len(t.Inputs) == 0 {
+			return fmt.Errorf("%s: passes inputs %v but task %q declares none", where, keysOf(u.Inputs), t.Name)
+		}
+		vals, err := resolveInputs(where, t.Inputs, u.Inputs)
+		if err != nil {
+			return err
+		}
 		for _, s := range t.Steps {
 			step := s // copy; a task is used by many workflows
 			step.ID = prefix + "." + s.ID
@@ -167,6 +201,9 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			step.Produces = renameAll(u.Produces, s.Produces)
 			applyOverride(&step, u.With["*"])
 			applyOverride(&step, u.With[s.ID])
+			if len(t.Inputs) > 0 {
+				applyInputs(&step, vals)
+			}
 			expanded = append(expanded, step)
 		}
 	}

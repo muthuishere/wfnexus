@@ -100,7 +100,10 @@ func (d *Definition) expandJobs(tasks map[string]*Task, opt loadOptions) error {
 			job.RunsOn = d.RunsOn
 		}
 		job.Env = MergeEnv(d.Env, job.Env)
-		steps := job.Steps
+		steps, err := expandSteps(d, "job "+id, job.Steps, tasks, opt)
+		if err != nil {
+			return err
+		}
 		if len(job.Uses) > 0 {
 			expanded, err := expandInto(d, id, job.Uses, tasks, opt)
 			if err != nil {
@@ -258,7 +261,7 @@ func applyDefaults(s *Step, o Override) {
 
 // expandInto is expandUses for a job, prefixing with the job id.
 func expandInto(d *Definition, jobID string, uses []Use, tasks map[string]*Task, opt loadOptions) ([]Step, error) {
-	tmp := &Definition{Name: d.Name, Uses: uses}
+	tmp := &Definition{Name: d.Name, Uses: uses, useLabel: "job " + jobID}
 	if err := tmp.expandUses(tasks, opt); err != nil {
 		return nil, err
 	}

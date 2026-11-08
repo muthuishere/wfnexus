@@ -26,6 +26,25 @@ description: >-
 
 on: workflow_call
 
+# Typed interface (issue #82): a caller pins `use: load-context@1` and may pass
+# `inputs: { default_policy: approval }`. Checked at load time; substituted for
+# {{ .Inputs.<name> }} below before the run starts.
+version: 1
+inputs:
+  default_policy:
+    type: string
+    enum: [draft, approval, auto, none]
+    default: auto
+    description: responsePolicy used when the subscription does not set one.
+  out:
+    type: string
+    default: context.json
+    description: file the context is written to, in the caller's workspace.
+outputs:
+  context:
+    type: string
+    description: the file named by `out`, holding the conversation context.
+
 steps:
   - id: gather
     name: Write the conversation context
@@ -47,9 +66,9 @@ steps:
           "kind": m.get("kind") or "message", "text": m.get("text", ""), "replyTo": m.get("replyTo"),
           "media": m.get("media"), "fromOwner": bool(m.get("fromOwner")),
           "subscription": s.get("name", ""), "instructions": s.get("instructions", ""),
-          "skills": s.get("skills") or [], "responsePolicy": s.get("responsePolicy") or "auto",
+          "skills": s.get("skills") or [], "responsePolicy": s.get("responsePolicy") or "{{ .Inputs.default_policy }}",
       }
-      json.dump(ctx, open("context.json", "w"), indent=2)
+      json.dump(ctx, open("{{ .Inputs.out }}", "w"), indent=2)
       print(f"context for {ctx['chat'] or '?'} from {ctx['from'] or '?'} ({ctx['kind']}), policy {ctx['responsePolicy']}")
       PY
     timeout_sec: 30
