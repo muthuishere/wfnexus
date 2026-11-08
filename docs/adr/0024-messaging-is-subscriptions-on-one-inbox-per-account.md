@@ -1,6 +1,6 @@
 # ADR 0024 — Messaging is subscriptions on one inbox per account; a handler hands work to other workflows
 
-- **Status:** proposed
+- **Status:** superseded by ADR 0028 (subscriptions and the router removed in #104; conversations remain)
 - **Date:** 2026-11-05
 - **Builds on:** ADR 0023 (channels are commands; replies need an allow list)
 - **Spike:** `docs/spikes/2026-11-05-whatsapp-inbox/` (FINDINGS.md, probe.mjs)

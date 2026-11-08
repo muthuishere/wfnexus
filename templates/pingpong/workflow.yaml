@@ -1,6 +1,6 @@
 # pingpong — the reference handler: the smallest thing that proves the loop.
 #
-#   WhatsApp message → subscription → THIS run → whatsapp-sender → WhatsApp,
+#   WhatsApp message → whatsapp-group-monitor watch → hook → THIS run → whatsapp-sender → WhatsApp,
 #   and the next message in the same chat remembers this one.
 #
 # Three steps, no model: read the conversation's memory and count the pongs,
@@ -10,27 +10,27 @@
 # default: ADR 0026).
 #
 # The 7-point bar:
-#   trigger        a subscription on a WhatsApp chat (or a hook / MCP call with the same input)
+#   trigger        a whatsapp-group-monitor watch posting to this workflow's hook (or an MCP call)
 #   system of record  the chat itself + this conversation's memory
 #   typed output   {heard, said, status, id}
 #   verification   the sender's confirmed status is what is saved, not "we tried"
-#   human gate     the subscription's responsePolicy (draft / approval) is passed to the sender
+#   human gate     input.subscription.responsePolicy (draft / approval) is passed to the sender
 #   no silent failure  a failed or uncertain send fails this run (the sender's own gate)
 #   success number    pong #N keeps counting up in one chat = memory works end to end
 name: pingpong
 template:
-  title: Pingpong — prove a WhatsApp subscription end to end
+  title: Pingpong — prove a WhatsApp watch end to end
   category: debugging-ops
   summary: >-
     Answers every text in a chat with "pong #N", counting from the
-    conversation's memory, through whatsapp-sender. Point a subscription at a
+    conversation's memory, through whatsapp-sender. Point a watch at a
     test group to prove receive, route, reply and memory in one minute.
   fill:
     - "copy whatsapp-sender too — this sends through it"
-    - "subscribe it: wfx sub add pingpong-test --channel <channel> --chat <test-group-jid> --workflow pingpong --allow <your-jid> --response auto"
+    - "watch it: wfx expose hook pingpong, then wfx module watch add whatsapp-group-monitor --account <label> '{\"name\":\"pingpong-test\",\"chat\":\"<test-group-jid>\",\"hook\":\"<url>\",\"tokenEnv\":\"<VAR>\"}'"
 
 description: >-
-  Reference handler for a WhatsApp subscription: reads this chat's memory,
+  Reference handler for a watched WhatsApp chat: reads this chat's memory,
   replies "pong #N" through whatsapp-sender, and saves what was said so the
   next message in the chat continues the count.
 
@@ -46,7 +46,7 @@ input_schema:
   properties:
     message:
       type: object
-      title: "The WhatsApp event (from the subscription)"
+      title: "The WhatsApp event (from the watch)"
       required: [chat]
       properties:
         id:   { type: string }
@@ -56,7 +56,7 @@ input_schema:
         kind: { type: string }
     subscription:
       type: object
-      title: "The subscription that matched (name, instructions, responsePolicy)"
+      title: "Handling options (name, instructions, responsePolicy)"
 
 steps:
   - id: reply

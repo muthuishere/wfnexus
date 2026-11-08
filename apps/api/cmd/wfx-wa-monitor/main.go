@@ -54,16 +54,16 @@ func run() error {
 	}
 	defer release()
 	m, err := wamonitor.New(wamonitor.Config{
-		Receive:     []string{"node", *adapter, "receive"},
-		Env:         []string{"APL_WA_LABEL=" + *label},
+		Receive: []string{"node", *adapter, "receive"},
+		Env:     []string{"APL_WA_LABEL=" + *label},
 		Watches: func(ctx context.Context) ([]wamonitor.Watch, error) {
 			var ws []wamonitor.Watch
 			return ws, self.Watches(ctx, &ws)
 		},
 		Heartbeat: self.Beat,
-		StateFile:   filepath.Join(*stateDir, "wa-monitor-"+*label+".json"),
-		Interval:    *interval,
-		Debounce:    *debounce,
+		StateFile: filepath.Join(*stateDir, "wa-monitor-"+*label+".json"),
+		Interval:  *interval,
+		Debounce:  *debounce,
 	})
 	if err != nil {
 		return err

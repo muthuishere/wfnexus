@@ -7,15 +7,14 @@
 #   - live-vs-store lag: the transport's own store (STORE_PROBE, read-only) has
 #     a newer message than wfnexus has seen → deaf
 #   - the last successful receive, and the last receive error
-#   - subscriptions on the channel in error, unable to route, or stuck validating
-#   - unknown `self`: group mentions can never start a run
+#   - a whatsapp-group-monitor service (ADR 0028) that is silent or crashed
 #
 # Unhealthy → one alert to the owner's chat through whatsapp-sender, deduped
 # per ALERT_EVERY_H window (same findings, same window = one message).
 #
 # The 7-point bar:
 #   trigger        schedule (every 5 min) + manual
-#   system of record  the channel's receive health, channel_messages, subscriptions, the WhatsApp store
+#   system of record  the channel's receive health, channel_messages, the monitor services, the WhatsApp store
 #   typed output   report.json {healthy, channel, lastReceive, lastEvent, storeLatest, lagSec, findings[]}
 #   verification   lag is measured against the transport's store, not inferred from silence
 #   human gate     none — it only alerts; the owner decides
@@ -27,7 +26,7 @@ template:
   category: debugging-ops
   summary: >-
     Every 5 minutes: compares the WhatsApp store with what wfnexus has heard,
-    checks the last receive, failing or stuck subscriptions and unknown self
+    checks the last receive and silent or crashed monitor services
     ids, and alerts the owner's chat through whatsapp-sender when it is deaf.
   fill:
     - "input owner_chat default: the owner's WhatsApp JID (the alert goes there)"
@@ -37,8 +36,8 @@ template:
 
 description: >-
   Checks that the WhatsApp channel is actually receiving: store-vs-wfnexus
-  lag, last receive time and error, failing or stuck subscriptions and
-  unknown self ids. Alerts the owner's chat through whatsapp-sender when
+  lag, last receive time and error, and silent or crashed
+  whatsapp-group-monitor services. Alerts the owner's chat through whatsapp-sender when
   something is wrong.
 
 on:

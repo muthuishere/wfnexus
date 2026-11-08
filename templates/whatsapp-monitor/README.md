@@ -6,9 +6,8 @@ Catches a channel that is connected but not hearing anything. Runs every 5 minut
 |---|---|
 | `deaf` (critical) | `STORE_PROBE` (read-only) says the WhatsApp store has a message newer than the last one wfnexus saw by more than `LAG_MAX_SEC` |
 | `receive-stale` / `receive-error` | `/api/channels`: last successful receive older than `RECEIVE_MAX_SEC`, or the last error |
-| `subscription` | a subscription on the channel in `error`, or with a `problem` (cannot route) |
+| `service` | a `whatsapp-group-monitor` service is `silent` or `crashed` (`wfx module ls`) |
 | `validating` | stuck validating |
-| `unknown-self` | the channel's own ids are unknown, so group mentions never start a run |
 
 **Output:** `report.json` `{healthy, channel, lastReceive, lastEvent,
 storeLatest, lagSec, findings[]}`; `check` stdout is the summary or the alert.

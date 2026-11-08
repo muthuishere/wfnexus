@@ -39,9 +39,12 @@ read every tick, so a new watch needs no restart.
 
 - One mental model: everything reusable is a task; a module just adds a
   version, a type contract and its requirements.
-- The in-engine subscriptions + router (ADR 0026, #76) duplicate what a
-  service module + hooks now do. They are dead weight once the monitor is
-  supervised; removal is a follow-up, not done here.
+- The in-engine subscriptions + router (ADR 0026, #76) duplicated what a
+  service module + hooks now do. Removed in #104: `wfx sub`,
+  `/api/subscriptions`, the Subscriptions tab, the router and
+  whatsapp-subscription-manager templates, `subscription_deliveries`, the
+  channel `self` list and the `subscription` trigger kind. Conversations and
+  `start:` completion events stay: they stand on their own.
 - Supervision (#103): `wfx module start <m> --account a [--runs-on l]
   [--input k=v]` records one service per module+account in the state store
   (scope `service`). The server supervises those on labels it serves itself;

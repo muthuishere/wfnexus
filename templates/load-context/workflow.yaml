@@ -3,7 +3,7 @@
 # frontdesk pulls this in with `uses: [{use: load-context, as: ctx}]`: its step
 # becomes `ctx.gather` inside the caller's own run, sharing its workspace and
 # input. Embed when the steps are part of the caller's job; start (`start:`)
-# when the work is a job of its own (see router).
+# when the work is a job of its own.
 #
 # It writes ./context.json — the event, the subscription's instructions,
 # skills and responsePolicy — so the caller's agent reads one file instead of

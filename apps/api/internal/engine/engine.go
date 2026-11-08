@@ -110,9 +110,6 @@ type Engine struct {
 	// (start.go). Both are in-memory, per process, like the scheduler.
 	conv      convLanes
 	eventSink func(ctx context.Context, ev map[string]any) bool
-	// self caches what each channel adapter's `self` verb reported, for a
-	// channel whose registry entry has no `self` list (subscriptions.go).
-	self selfCache
 }
 
 func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
@@ -139,9 +136,6 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 	}
 	e.pickDefaultProvider()
 	e.loadPrices(context.Background())
-	// `workflow.completed` events go through the subscriptions router by
-	// default (ADR 0026); UseEventSink can still replace it.
-	e.eventSink = e.routeCompletedEvent
 	return e
 }
 

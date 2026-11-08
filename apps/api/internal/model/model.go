@@ -342,19 +342,6 @@ type ChannelMessage struct {
 	Event json.RawMessage `json:"event,omitempty"`
 }
 
-// SubscriptionDelivery is what the router did with one message for one
-// subscription (ADR 0026). (Subscription, MsgID) is unique: a message seen
-// twice starts no second run.
-type SubscriptionDelivery struct {
-	Subscription string    `json:"subscription"`
-	MsgID        string    `json:"msgId"`
-	Channel      string    `json:"channel"`
-	Chat         string    `json:"chat,omitempty"`
-	RunID        string    `json:"runId,omitempty"`
-	Outcome      string    `json:"outcome"`
-	CreatedAt    time.Time `json:"createdAt"`
-}
-
 // PauseCode maps the short code an outbound pause carries back to its step.
 // It is scoped to the channel it was sent on, expires, and is retired when the
 // pause resolves or the step pauses again.

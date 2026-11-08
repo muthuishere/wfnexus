@@ -325,45 +325,10 @@ func TestPingpongRepliesThroughTheSenderAndRemembers(t *testing.T) {
 	}
 }
 
-// router: classifies, starts the owner as a child run with the event passed
-// through as an OBJECT, and routes nothing it has no rule for.
-func TestRouterStartsTheMatchedWorkflow(t *testing.T) {
-	cmd, dir := fakeWA(t, "sent")
-	env := map[string]string{"WA_ADAPTER": cmd, "WA_SENDER_LEDGER": filepath.Join(t.TempDir(), "l.jsonl")}
-	defs := loadWATemplates(t, env, "router", "pingpong", "whatsapp-sender")
-	h := waHarness(t, defs, "router")
-	useWAChannel(t, h, cmd, "")
-	chat := uniq("g") + "@g.us"
-	id := h.start("router", map[string]any{
-		"event":        map[string]any{"channel": "wa", "chat": chat, "id": "R1", "from": "1555@s.whatsapp.net", "text": "ping please", "kind": "message"},
-		"subscription": map[string]any{"name": "all", "responsePolicy": "auto"},
-	})
-	if run := h.waitEnded(id); run.Status != "done" {
-		t.Fatalf("router: %s %s", run.Status, run.Error)
-	}
-	kids, _ := h.store.ChildRuns(context.Background(), id)
-	if len(kids) != 1 || kids[0].Workflow != "pingpong" {
-		t.Fatalf("children %+v", kids)
-	}
-	if child := h.waitEnded(kids[0].ID); child.Status != "done" {
-		t.Fatalf("pingpong child: %s %s", child.Status, child.Error)
-	}
-	if envs := waSent(t, dir); len(envs) != 1 || envs[0]["target"] != chat {
-		t.Fatalf("sent %v", envs)
-	}
-
-	id = h.start("router", map[string]any{"event": map[string]any{"chat": chat, "kind": "reaction"}})
-	run := h.waitEnded(id)
-	kids, _ = h.store.ChildRuns(context.Background(), id)
-	if run.Status != "done" || len(kids) != 0 || !strings.Contains(run.Outcome, "no route") {
-		t.Fatalf("no-route: %s %q %d children", run.Status, run.Outcome, len(kids))
-	}
-}
-
-// fakeWFXAPI is the slice of /api the subscription manager and the monitor read.
+// fakeWFXAPI is the slice of /api the monitor reads.
 type fakeWFXAPI struct {
 	mu       sync.Mutex
-	subs     map[string]map[string]any
+	modules  []map[string]any
 	channels []map[string]any
 	messages []map[string]any
 }
@@ -374,46 +339,14 @@ func (f *fakeWFXAPI) serve(t *testing.T) string {
 		defer f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		p := strings.TrimPrefix(r.URL.Path, "/api")
-		parts := strings.Split(strings.Trim(p, "/"), "/")
 		write := func(code int, v any) { w.WriteHeader(code); _ = json.NewEncoder(w).Encode(v) }
 		switch {
 		case p == "/channels":
 			write(200, map[string]any{"channels": f.channels})
 		case p == "/channels/messages":
 			write(200, f.messages)
-		case p == "/subscriptions":
-			list := []any{}
-			for _, s := range f.subs {
-				list = append(list, s)
-			}
-			write(200, list)
-		case parts[0] == "subscriptions" && len(parts) == 2:
-			name := parts[1]
-			switch r.Method {
-			case http.MethodGet:
-				if s, ok := f.subs[name]; ok {
-					write(200, map[string]any{"subscription": s, "deliveries": []any{}})
-				} else {
-					write(404, map[string]any{"error": "no such subscription"})
-				}
-			case http.MethodPut:
-				var s map[string]any
-				_ = json.NewDecoder(r.Body).Decode(&s)
-				s["name"], s["status"] = name, "active"
-				f.subs[name] = s
-				write(200, s)
-			case http.MethodDelete:
-				delete(f.subs, name)
-				write(200, map[string]any{"ok": true})
-			}
-		case parts[0] == "subscriptions" && len(parts) == 3:
-			s, ok := f.subs[parts[1]]
-			if !ok {
-				write(404, map[string]any{"error": "no subscription"})
-				return
-			}
-			s["status"] = map[string]string{"pause": "paused", "resume": "active", "validate": "active"}[parts[2]]
-			write(200, s)
+		case p == "/modules":
+			write(200, map[string]any{"modules": f.modules})
 		default:
 			write(404, map[string]any{"error": "not here"})
 		}
@@ -422,66 +355,13 @@ func (f *fakeWFXAPI) serve(t *testing.T) string {
 	return srv.URL
 }
 
-func TestSubscriptionManagerChangesAndReadsBack(t *testing.T) {
-	api := &fakeWFXAPI{subs: map[string]map[string]any{}}
-	defs := loadWATemplates(t, map[string]string{"WFX_API": api.serve(t)}, "whatsapp-subscription-manager")
-	h := waHarness(t, defs, "whatsapp-subscription-manager")
-	wf := "whatsapp-subscription-manager"
-	apply := func(id uuid.UUID) map[string]any {
-		var res map[string]any
-		_ = json.Unmarshal([]byte(strings.TrimSpace(asStr(stepOut(t, h, id, "apply")["stdout"]))), &res)
-		return res
-	}
-
-	id := h.start(wf, map[string]any{"action": "add", "name": "pp", "channel": "wa", "chat": "g1@g.us", "workflow": "pingpong", "allow": "1555@s.whatsapp.net", "responsePolicy": "auto"})
-	if run := h.waitEnded(id); run.Status != "done" {
-		t.Fatalf("add: %s %s", run.Status, run.Error)
-	}
-	if res := apply(id); res["verified"] != true || res["status"] != "active" {
-		t.Fatalf("add result %v", res)
-	}
-	if allow := api.subs["pp"]["allow"].([]any); len(allow) != 1 {
-		t.Fatalf("allow not sent as a list: %v", api.subs["pp"])
-	}
-
-	id = h.start(wf, map[string]any{"action": "pause", "name": "pp"})
-	h.waitEnded(id)
-	if res := apply(id); res["status"] != "paused" || res["verified"] != true {
-		t.Fatalf("pause result %v", res)
-	}
-
-	// add without allow is refused — empty means nobody, say so.
-	id = h.start(wf, map[string]any{"action": "add", "name": "x", "channel": "wa", "chat": "g@g.us", "workflow": "pingpong"})
-	if run := h.waitEnded(id); run.Status != "failed" {
-		t.Fatalf("add without allow: %s", run.Status)
-	}
-
-	// rm waits for a person.
-	id = h.start(wf, map[string]any{"action": "rm", "name": "pp"})
-	if run := h.wait(id); run.Status != "awaiting_approval" {
-		t.Fatalf("rm: %s", run.Status)
-	}
-	if _, still := api.subs["pp"]; !still {
-		t.Fatal("removed before approval")
-	}
-	if err := h.eng.Approve(context.Background(), id, "approve", Actor{ID: "owner", Via: "test"}); err != nil {
-		t.Fatal(err)
-	}
-	if run := h.waitEnded(id); run.Status != "done" {
-		t.Fatalf("rm after approval: %s %s", run.Status, run.Error)
-	}
-	if _, still := api.subs["pp"]; still {
-		t.Fatal("not removed")
-	}
-}
-
 func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 	now := time.Now().UTC()
 	api := &fakeWFXAPI{
-		subs: map[string]map[string]any{
-			"broken": {"name": "broken", "channel": "wa", "status": "error", "error": "workflow gone"},
-			"groups": {"name": "groups", "channel": "wa", "status": "active", "warning": "the channel's own ids (self) are unknown"},
-		},
+		modules: []map[string]any{{"name": "whatsapp-group-monitor", "services": []any{
+			map[string]any{"key": "whatsapp-group-monitor/biz", "account": "biz", "state": "silent",
+				"lastError": "running but the service itself has not beaten (hung?)", "restarts": 2},
+		}}},
 		channels: []map[string]any{{"name": "wa", "lastReceive": now.Format(time.RFC3339)}},
 		messages: []map[string]any{{"at": now.Add(-2 * time.Hour).Format(time.RFC3339)}},
 	}
@@ -506,7 +386,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 		t.Fatalf("want ONE alert for the same findings in the window, got %d", len(envs))
 	}
 	text := asStr(envs[0]["text"])
-	for _, want := range []string{"deaf", "subscription broken", "unknown-self groups"} {
+	for _, want := range []string{"deaf", "service whatsapp-group-monitor/biz", "hung"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("alert lacks %q:\n%s", want, text)
 		}
@@ -517,7 +397,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 
 	// Healthy: no alert.
 	api.mu.Lock()
-	api.subs = map[string]map[string]any{}
+	api.modules = nil
 	api.messages = []map[string]any{{"at": now.Format(time.RFC3339)}}
 	api.mu.Unlock()
 	id := h.start("whatsapp-monitor", map[string]any{"owner_chat": "owner@s.whatsapp.net"})
@@ -528,7 +408,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 
 // Every default workflow, frontdesk's agent step included, dry-runs clean.
 func TestWhatsAppTemplatesDryRun(t *testing.T) {
-	names := []string{"whatsapp-sender", "whatsapp-monitor", "whatsapp-subscription-manager", "router", "pingpong", "frontdesk", "load-context", "retrospective"}
+	names := []string{"whatsapp-sender", "whatsapp-monitor", "pingpong", "frontdesk", "load-context", "retrospective"}
 	defs := loadWATemplates(t, nil, names...)
 	if fd := defs["frontdesk"]; len(fd.Steps) == 0 || fd.Steps[0].ID != "ctx.gather" {
 		t.Fatalf("frontdesk must embed load-context first, got %v", fd.Steps[0].ID)
@@ -544,14 +424,12 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 	useWAChannel(t, h, "true", "") // the sender sends on the default channel
 	msg := map[string]any{"channel": "wa", "chat": "g@g.us", "id": "M1", "from": "1555@s.whatsapp.net", "text": "hi", "kind": "message"}
 	inputs := map[string]map[string]any{
-		"whatsapp-sender":               {"chat": "g@g.us", "text": "hi"},
-		"whatsapp-monitor":              {"owner_chat": "owner@s.whatsapp.net"},
-		"whatsapp-subscription-manager": {"action": "ls"},
-		"router":                        {"event": msg},
-		"pingpong":                      {"message": msg},
-		"frontdesk":                     {"message": msg},
-		"load-context":                  {"message": msg},
-		"retrospective":                 {},
+		"whatsapp-sender":  {"chat": "g@g.us", "text": "hi"},
+		"whatsapp-monitor": {"owner_chat": "owner@s.whatsapp.net"},
+		"pingpong":         {"message": msg},
+		"frontdesk":        {"message": msg},
+		"load-context":     {"message": msg},
+		"retrospective":    {},
 	}
 	for _, n := range names {
 		rep, err := h.eng.DryRunWorkflow(n, inputs[n])

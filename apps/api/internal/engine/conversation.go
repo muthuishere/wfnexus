@@ -68,8 +68,7 @@ func ParseConversationKey(s string) (ConversationKey, bool) {
 }
 
 // ConversationKeyFromInput finds the conversation a run input belongs to:
-// input.message.channel + input.message.chat (the received-event contract),
-// with input.subscription.channel as the channel's fallback.
+// input.message.channel + input.message.chat (the received-event contract).
 func ConversationKeyFromInput(input map[string]any) (ConversationKey, bool) {
 	msg, _ := input["message"].(map[string]any)
 	if msg == nil {
@@ -77,11 +76,6 @@ func ConversationKeyFromInput(input map[string]any) (ConversationKey, bool) {
 	}
 	chat, _ := msg["chat"].(string)
 	ch, _ := msg["channel"].(string)
-	if ch == "" {
-		if sub, _ := input["subscription"].(map[string]any); sub != nil {
-			ch, _ = sub["channel"].(string)
-		}
-	}
 	k := ConversationKey{Channel: strings.TrimSpace(ch), Chat: strings.TrimSpace(chat)}
 	return k, k.String() != ""
 }
@@ -173,13 +167,13 @@ func (e *Engine) SetConversationDebounce(d time.Duration) {
 	e.conv.mu.Unlock()
 }
 
-// StartForConversation is how the router hands a matched event to its target
-// workflow (ADR 0026). It returns at once; the run starts after the chat has
+// StartForConversation hands a received event to a workflow in its
+// conversation. It returns at once; the run starts after the chat has
 // been quiet for ConversationDebounce, and only when no other run of the same
 // conversation is active. Messages that arrive in the window share one run.
 //
 // key is the conversation — (channel, chat). input is the run input the
-// contract defines: {message: <received event>, subscription: {...}}. An
+// contract defines: {message: <received event>}. An
 // error means the request itself is unusable (no such workflow, no key); a
 // failure to create the run later is logged and the lane moves on.
 func (e *Engine) StartForConversation(ctx context.Context, key ConversationKey, workflowName string, input map[string]any) error {
@@ -310,9 +304,7 @@ func (e *Engine) launchBatch(key ConversationKey, b *convBatch) (uuid.UUID, erro
 	// A conversation's handler is started by a message; one that declares no
 	// `message` trigger is still startable the way a person would start it.
 	trig := workflow.TriggerMessage
-	if _, viaSub := input["subscription"]; viaSub && def.On.Allows(workflow.TriggerSubscription) {
-		trig = workflow.TriggerSubscription
-	} else if !def.On.Allows(trig) {
+	if !def.On.Allows(trig) {
 		trig = workflow.TriggerDispatch
 	}
 	raw, err := e.PrepareRun(b.workflow, trig, mustJSON(input))

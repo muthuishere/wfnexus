@@ -391,7 +391,4 @@ func TestConversationKeyFromInput(t *testing.T) {
 	if _, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"text": "no chat"}}); ok {
 		t.Fatal("a message with no chat is not a conversation")
 	}
-	if k, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"chat": "c"}, "subscription": map[string]any{"channel": "wa"}}); !ok || k.Channel != "wa" {
-		t.Fatal("subscription channel fallback")
-	}
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """whatsapp-monitor: is the WhatsApp channel actually HEARING, not just connected?
 
-    check.py          reads the channel, its messages and subscriptions from $WFX_API
+    check.py          reads the channel, its messages and the service modules from $WFX_API
                       (and, if STORE_PROBE is set, the transport's own store), writes
                       report.json and alert.txt; exit 0 healthy, 3 findings, 2 the check broke
     check.py key      prints the alert's dedup key: same findings in the same
@@ -12,9 +12,8 @@ Findings (report.json `findings[]`, each {kind, severity, subject, detail}):
                      (OpenClaw's most-reported failure: connected but deaf)
     receive-stale    the last successful receive is older than RECEIVE_MAX_SEC
     receive-error    the last receive failed
-    subscription     a subscription on this channel is in error, or cannot route (problem)
-    unknown-self     the channel's own ids are unknown, so group mentions start nothing
-    validating       a subscription has been validating for longer than one check
+    service          a whatsapp-group-monitor service is silent or crashed (ADR 0028):
+                     the watches it delivers to their workflows are not being served
 """
 import hashlib
 import json
@@ -94,28 +93,23 @@ def check():
                 f"the WhatsApp store has a message from {iso(store)} but wfnexus last saw one at "
                 f"{iso(last_event) or 'never'} ({lag}s behind; limit {lag_max}s) — connected but not hearing")
 
-    subs = [s for s in (api("/subscriptions") or []) if s.get("channel") == ch_name]
-    for s in subs:
-        st = s.get("status", "")
-        if st == "error":
-            add("subscription", "error", s["name"], s.get("error") or "status error")
-        elif s.get("problem") and st not in ("paused", "deleted"):
-            add("subscription", "error", s["name"], s["problem"])
-        if st == "validating":
-            add("validating", "warning", s["name"], "still validating")
-        w = s.get("warning") or ""
-        if "self" in w and st == "active":
-            add("unknown-self", "warning", s["name"], w)
+    mods = (api("/modules") or {}).get("modules") or []
+    svcs = [s for m in mods if m.get("name") == "whatsapp-group-monitor" for s in (m.get("services") or [])]
+    for s in svcs:
+        st = s.get("state", "")
+        if st in ("silent", "crashed"):
+            add("service", "error", s.get("key") or s.get("account", "?"),
+                f"{st}: {s.get('lastError') or 'no detail'} (restarts {s.get('restarts', 0)})")
 
     report = {"healthy": not findings, "channel": ch_name, "checkedAt": iso(now),
               "lastReceive": iso(last_recv), "lastEvent": iso(last_event), "storeLatest": iso(store),
-              "lagSec": lag, "note": note, "subscriptions": len(subs), "findings": findings}
+              "lagSec": lag, "note": note, "services": len(svcs), "findings": findings}
     json.dump(report, open("report.json", "w"), indent=2)
     with open(os.environ.get("WFX_OUTCOME", os.devnull), "w") as f:
         f.write("ok: WhatsApp healthy" if not findings
                 else f"failed: WhatsApp {', '.join(sorted({x['kind'] for x in findings}))}")
     if not findings:
-        print(f"healthy: {len(subs)} subscriptions, last event {iso(last_event) or 'none'}, lag {lag if lag is not None else 'n/a'}s")
+        print(f"healthy: {len(svcs)} monitor services, last event {iso(last_event) or 'none'}, lag {lag if lag is not None else 'n/a'}s")
         return 0
     lines = [f"wfnexus: WhatsApp channel {ch_name} needs attention"]
     for x in findings:

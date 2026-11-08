@@ -18,7 +18,7 @@
 #
 # Embed vs route: `uses: load-context` copies that workflow's steps INTO this
 # run (shared workspace, one history). `start:` in handoff starts ANOTHER run
-# (its own memory, its own failure, linked as a child). router shows routing.
+# (its own memory, its own failure, linked as a child).
 #
 # The 7-point bar:
 #   trigger        a subscription on a chat/DM, a manual run with `question`, or an MCP tool call (expose it: `wfx expose mcp frontdesk`)

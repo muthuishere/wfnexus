@@ -229,10 +229,6 @@ type Channel struct {
 	// Allow is the EXPLICIT list of sender ids whose replies may resolve a
 	// pause. Empty — the default — means nothing resolves from this channel.
 	Allow []string `json:"allow,omitempty"`
-	// Self lists the ids that are US on this channel (our WhatsApp JIDs). A
-	// group subscription with mention activation starts a run only when a
-	// message mentions one of them or replies to one of them.
-	Self []string `json:"self,omitempty"`
 	// SendGap is the minimum time between two sends on this channel; sends
 	// are always one at a time. A rate-limited transport sets it ("10s").
 	SendGap string `json:"sendGap,omitempty"`
@@ -263,9 +259,6 @@ type Catalog struct {
 	Mcp         *registry.Registry[McpServer]
 	Notifiers   *registry.Registry[Notifier]
 	Channels    *registry.Registry[Channel]
-	// Subscriptions are kept whole, even a broken one: its status says
-	// error and the router skips it, but it stays listable and fixable.
-	Subscriptions map[string]Subscription
 }
 
 // file is the on-disk shape of registries.json.
@@ -276,8 +269,6 @@ type file struct {
 	McpServers map[string]McpServer `json:"mcpServers"`
 	Notifiers  map[string]Notifier  `json:"notifiers"`
 	Channels   map[string]Channel   `json:"channels"`
-	// Subscriptions (ADR 0026) route received messages to workflows.
-	Subscriptions map[string]Subscription `json:"subscriptions"`
 }
 
 // Load reads registries.json and merges mcp.json's servers. Neither file is
@@ -290,19 +281,10 @@ func Load(registriesPath, mcpPath string) (*Catalog, error) {
 		Mcp:         registry.New[McpServer]("mcp server"),
 		Notifiers:   registry.New[Notifier]("notifier"),
 		Channels:    registry.New[Channel]("channel"),
-
-		Subscriptions: map[string]Subscription{},
 	}
 	main, err := readFile(registriesPath)
 	if err != nil {
 		return nil, err
-	}
-	for name, s := range main.Subscriptions {
-		s.Name = name
-		if err := ValidateSubscription(s); err != nil {
-			s.Status, s.Error = SubError, err.Error()
-		}
-		c.Subscriptions[name] = s
 	}
 	for name, p := range main.Providers {
 		p.Name = name

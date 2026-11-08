@@ -289,7 +289,6 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Delete("/projects/{name}/expose/{kind}", s.revokeProjectExpose)
 		r.Post("/workflows/{name}/dispatches", s.repositoryDispatch)
 		s.channelRoutes(r)
-		s.subscriptionRoutes(r)
 		s.conversationRoutes(r)
 		r.Post("/workflows/{name}/dryrun", s.dryRun)
 		r.Post("/dryrun", s.dryRunDraft)
