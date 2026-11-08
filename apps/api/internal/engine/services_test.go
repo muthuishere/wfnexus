@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -133,6 +135,88 @@ func TestAServiceRunsOnExactlyOneWorkerOfItsLabelAndGoesSilentWhenItStopsBeating
 	}
 	if err := e.ServiceBeat(ctx, "worker:b", supervisor.Beat{Key: "napper/ops"}); !errors.Is(err, ErrServiceOwned) {
 		t.Fatalf("beat after stop = %v", err)
+	}
+}
+
+func TestWatchesAreRegisteredThroughTheAPIAndAHungServiceGoesSilent(t *testing.T) {
+	e := serviceEngine(t)
+	ctx := context.Background()
+	if _, err := e.PutServiceWatch(ctx, "napper/ops", json.RawMessage(`{"name":"w"}`)); err == nil {
+		t.Fatal("a watch on a service that was never started must fail")
+	}
+	if _, err := e.EnableService(ctx, ServiceSpec{Module: "napper", Account: "ops", RunsOn: "box", Inputs: map[string]string{"secs": "30"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.PutServiceWatch(ctx, "napper/ops", json.RawMessage(`{"chat":"x"}`)); err == nil {
+		t.Fatal("a watch without a name must fail")
+	}
+	for _, w := range []string{`{"name":"ops","chat":"a@g.us","hook":"h1"}`, `{"name":"all","chat":"*","hook":"h2"}`, `{"name":"ops","chat":"b@g.us","hook":"h1"}`} {
+		if _, err := e.PutServiceWatch(ctx, "napper/ops", json.RawMessage(w)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.DeleteServiceWatch(ctx, "napper/ops", "all"); err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := e.ServiceWatches(ctx, "napper/ops")
+	if len(ws) != 1 || !strings.Contains(string(ws[0]), "b@g.us") {
+		t.Fatalf("watches = %s", ws)
+	}
+
+	// The supervisor hands the service a token scoped to it alone.
+	specs, _ := e.ServicesFor(ctx, "worker:a", []string{"box"}, false)
+	if len(specs) != 1 {
+		t.Fatalf("specs = %+v", specs)
+	}
+	tok := specs[0].Env[supervisor.EnvToken]
+	if specs[0].Env[supervisor.EnvKey] != "napper/ops" || e.AuthService(ctx, "napper/ops", tok) != nil {
+		t.Fatalf("service env = %v", specs[0].Env)
+	}
+	if e.AuthService(ctx, "napper/other", tok) == nil || e.AuthService(ctx, "napper/ops", "wfs_nope") == nil {
+		t.Fatal("a service token must not open another service")
+	}
+
+	// Alive per the supervisor, but its own loop never beats: silent.
+	old := serviceSilentAfter
+	serviceSilentAfter = 100 * time.Millisecond
+	t.Cleanup(func() { serviceSilentAfter = old })
+	beat := func() {
+		if err := e.ServiceBeat(ctx, "worker:a", supervisor.Beat{Key: "napper/ops", Status: "running", PID: 7, StartedAt: time.Now().Add(-time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beat()
+	if s, _ := e.Services(ctx); s[0].State != "silent" || !strings.Contains(s[0].LastError, "hung") {
+		t.Fatalf("hung service = %+v", s[0])
+	}
+	if said := e.alertSilentServices(ctx); len(said) != 1 {
+		t.Fatalf("alerted %v", said)
+	}
+	beat()
+	if said := e.alertSilentServices(ctx); len(said) != 0 {
+		t.Fatalf("alerted twice while still hung: %v", said)
+	}
+	// It beats from inside: running again, and the alert re-arms.
+	if err := e.ServiceSelfBeat(ctx, "napper/ops"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := e.Services(ctx)
+	if s[0].State != "running" || s[0].ServiceHeartbeat == nil {
+		t.Fatalf("after its own beat = %+v", s[0])
+	}
+	e.alertSilentServices(ctx)
+	time.Sleep(150 * time.Millisecond)
+	beat()
+	if said := e.alertSilentServices(ctx); len(said) != 1 {
+		t.Fatalf("a second hang was not announced: %v", said)
+	}
+
+	// Stop drops its watches with it.
+	if err := e.DisableService(ctx, "napper", "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if ws, _ := e.ServiceWatches(ctx, "napper/ops"); len(ws) != 0 {
+		t.Fatalf("watches survived stop: %s", ws)
 	}
 }
 

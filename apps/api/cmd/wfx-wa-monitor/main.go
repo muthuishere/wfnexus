@@ -1,10 +1,14 @@
 // wfx-wa-monitor is the whatsapp-group-monitor service module's process
 // (modules/whatsapp-group-monitor, ADR 0028): one per WhatsApp account.
 //
-//	wfx-wa-monitor --label biz --watches watches.json [--adapter adapters/apl-whatsapp.js]
+//	wfx-wa-monitor --label biz [--adapter adapters/apl-whatsapp.js]
 //	               [--state-dir ~/.local/state/wfnexus] [--interval 30s] [--debounce 3s] [--once]
 //
-// watches.json: [{"name","chat":"<jid>|*","hook":"https://…/hooks/p/wf","tokenEnv":"VAR","kinds":["message"]}]
+// Started by a wfnexus supervisor (`wfx module start whatsapp-group-monitor`),
+// which sets WFX_URL, WFX_SERVICE and WFX_SERVICE_TOKEN. Watches are read from
+// wfnexus every tick (`wfx module watch add …`), and the loop heartbeats after
+// every read, so a hung read shows as silent in `wfx module ls`.
+// A watch: {"name","chat":"<jid>|*","hook":"https://…/hooks/p/wf","tokenEnv":"VAR","kinds":["message"]}
 package main
 
 import (
@@ -17,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/supervisor"
 	"github.com/muthuishere/wfnexus/apps/api/internal/wamonitor"
 )
 
@@ -30,15 +35,15 @@ func main() {
 func run() error {
 	home, _ := os.UserHomeDir()
 	label := flag.String("label", "biz", "apl whatsapp label (the account)")
-	watches := flag.String("watches", "", "watches JSON file (re-read every tick)")
 	adapter := flag.String("adapter", "adapters/apl-whatsapp.js", "the channel adapter script")
 	stateDir := flag.String("state-dir", filepath.Join(home, ".local", "state", "wfnexus"), "cursor, seen ids and lock live here")
 	interval := flag.Duration("interval", 30*time.Second, "how often to read the account")
 	debounce := flag.Duration("debounce", 3*time.Second, "hold a chat's messages until it is quiet this long")
 	once := flag.Bool("once", false, "one read + flush, then exit")
 	flag.Parse()
-	if *watches == "" {
-		return fmt.Errorf("--watches is required")
+	self, err := supervisor.FromEnv()
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
 		return err
@@ -51,7 +56,11 @@ func run() error {
 	m, err := wamonitor.New(wamonitor.Config{
 		Receive:     []string{"node", *adapter, "receive"},
 		Env:         []string{"APL_WA_LABEL=" + *label},
-		WatchesFile: *watches,
+		Watches: func(ctx context.Context) ([]wamonitor.Watch, error) {
+			var ws []wamonitor.Watch
+			return ws, self.Watches(ctx, &ws)
+		},
+		Heartbeat: self.Beat,
 		StateFile:   filepath.Join(*stateDir, "wa-monitor-"+*label+".json"),
 		Interval:    *interval,
 		Debounce:    *debounce,

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -25,6 +26,74 @@ func (s *Server) skillSourceRoutes(r chi.Router) {
 	r.Get("/modules", s.listModules)
 	r.Post("/modules/{name}/services", s.startService)
 	r.Delete("/modules/{name}/services/{account}", s.stopService)
+	r.Get("/modules/{name}/services/{account}/watches", s.listServiceWatches)
+	r.Post("/modules/{name}/services/{account}/watches", s.putServiceWatch)
+	r.Delete("/modules/{name}/services/{account}/watches/{watch}", s.deleteServiceWatch)
+	// The running service's own door: its scoped token, checked here.
+	r.Get("/service-self/{name}/{account}/watches", s.selfWatches)
+	r.Post("/service-self/{name}/{account}/heartbeat", s.selfHeartbeat)
+}
+
+func serviceKey(r *http.Request) string {
+	return chi.URLParam(r, "name") + "/" + chi.URLParam(r, "account")
+}
+
+func (s *Server) listServiceWatches(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.eng.ServiceWatches(r.Context(), serviceKey(r))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"watches": ws})
+}
+
+// putServiceWatch registers (or replaces, by name) one watch. The running
+// service reads it on its next tick; no restart.
+func (s *Server) putServiceWatch(w http.ResponseWriter, r *http.Request) {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	name, err := s.eng.PutServiceWatch(r.Context(), serviceKey(r), raw)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"name": name})
+}
+
+func (s *Server) deleteServiceWatch(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DeleteServiceWatch(r.Context(), serviceKey(r), chi.URLParam(r, "watch")); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) authSelf(w http.ResponseWriter, r *http.Request) bool {
+	if err := s.eng.AuthService(r.Context(), serviceKey(r), bearer(r)); err != nil {
+		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
+		return false
+	}
+	return true
+}
+
+func (s *Server) selfWatches(w http.ResponseWriter, r *http.Request) {
+	if s.authSelf(w, r) {
+		s.listServiceWatches(w, r)
+	}
+}
+
+func (s *Server) selfHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if !s.authSelf(w, r) {
+		return
+	}
+	if err := s.eng.ServiceSelfBeat(r.Context(), serviceKey(r)); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // startService records one supervised instance of a service module (#103).

@@ -337,6 +337,10 @@ func serviceSupervisor(cfg *Config) *supervisor.Supervisor {
 				if out.Services[i].Dir == "" {
 					out.Services[i].Dir = cfg.WorkDir
 				}
+				// The service reaches wfnexus the way this worker does.
+				if out.Services[i].Env != nil {
+					out.Services[i].Env[supervisor.EnvURL] = cfg.URL
+				}
 			}
 			return out.Services, nil
 		},

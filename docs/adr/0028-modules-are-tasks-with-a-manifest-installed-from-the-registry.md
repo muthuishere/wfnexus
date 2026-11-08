@@ -32,7 +32,8 @@ account; ONE inbox read per tick for all watches via the existing
 persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}`
 to each watch's hook (ADR 0027) with a bearer token read from an env var the
 watch names, and an `Idempotency-Key` so a retried batch never runs twice.
-Watches are a JSON file re-read every tick.
+Watches are registered through wfnexus (`wfx module watch add`, #103) and
+read every tick, so a new watch needs no restart.
 
 ## Consequences
 
@@ -52,6 +53,14 @@ Watches are a JSON file re-read every tick.
   shows state (pending|running|crashed|silent), last heartbeat and restarts;
   no beat for 90s is `silent`, announced once on the default channel, and the
   lease is free for another worker.
-- Not yet: carry delivery of `binary:` (manifest field only), watches
-  registered through the API instead of the monitor's JSON file, trust/signing
+- The service itself beats too. The supervisor starts it with `WFX_URL`,
+  `WFX_SERVICE` and `WFX_SERVICE_TOKEN` (an HMAC of the key under the
+  registration token: scoped to that one service, nothing stored). With these
+  the service reads its watches (`GET /api/service-self/<m>/<account>/watches`)
+  and beats from inside its loop (`POST …/heartbeat`). A process that is
+  running but whose own beat is older than 90s (measured from its start) is
+  hung, and shows `silent`, the same as a dead one. Watches are stored per
+  service as `watch:<name>` (`wfx module watch ls|add|rm`); the monitor's
+  `--watches` JSON file is gone.
+- Not yet: carry delivery of `binary:` (manifest field only), trust/signing
   and permission diff on Sync (#85).

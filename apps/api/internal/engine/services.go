@@ -3,6 +3,10 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,9 +32,19 @@ import (
 // quiet past serviceSilentAfter is `silent` in `wfx module ls` and announced
 // once on the default channel.
 //
-// Both records live in the existing state store under scope "service",
-// scope_name "<module>/<account>": key "spec" (what to run) and "status" (the
-// last heartbeat). No new table.
+// Everything lives in the existing state store under scope "service",
+// scope_name "<module>/<account>": "spec" (what to run), "status" (the
+// supervisor's last beat), "beat" (the service's OWN last beat, from inside
+// its loop), "alerted" (silence already announced) and "watch:<name>" (one
+// registered watch each). No new table.
+//
+// The supervisor starts each service with WFX_URL, WFX_SERVICE and
+// WFX_SERVICE_TOKEN (supervisor/self.go). The token is an HMAC of the key under
+// the registration token: scoped to one service, nothing stored, and rotated
+// with the registration token. With it the service reads its watches
+// (GET /api/service-self/<key>/watches, every tick, so a new watch needs no
+// restart) and beats (POST .../heartbeat). A running process whose own beat is
+// older than serviceSilentAfter is hung, and shows silent like a dead one.
 
 const serviceScope = "service"
 
@@ -53,12 +67,11 @@ type ServiceSpec struct {
 // Key is <module>/<account>.
 func (s ServiceSpec) Key() string { return s.Module + "/" + s.Account }
 
-// ServiceStatus is the last heartbeat, and who sent it.
+// ServiceStatus is the supervisor's last heartbeat, and who sent it.
 type ServiceStatus struct {
 	supervisor.Beat
-	Owner   string    `json:"owner"`
-	At      time.Time `json:"at"`
-	Alerted bool      `json:"alerted,omitempty"`
+	Owner string    `json:"owner"`
+	At    time.Time `json:"at"`
 }
 
 // ServiceView is a service as `wfx module ls` shows it.
@@ -70,6 +83,10 @@ type ServiceView struct {
 	Restarts      int        `json:"restarts"`
 	LastError     string     `json:"lastError,omitempty"`
 	LastHeartbeat *time.Time `json:"lastHeartbeat,omitempty"`
+	// ServiceHeartbeat is the service's own last beat; LastHeartbeat is its
+	// supervisor's. Running with a stale own beat is a hung process.
+	ServiceHeartbeat *time.Time        `json:"serviceHeartbeat,omitempty"`
+	Watches          []json.RawMessage `json:"watches"`
 }
 
 func (e *Engine) serviceModule(name string) (*workflow.Module, error) {
@@ -117,8 +134,13 @@ func (e *Engine) EnableService(ctx context.Context, spec ServiceSpec) (ServiceSp
 	if err := e.store.PutState(ctx, serviceScope, spec.Key(), "spec", string(b)); err != nil {
 		return spec, err
 	}
-	// A new spec starts a fresh lease and a fresh count.
-	return spec, e.store.DeleteState(ctx, serviceScope, spec.Key(), "status")
+	// A new spec starts a fresh lease and a fresh count; watches are kept.
+	for _, k := range []string{"status", "beat", "alerted"} {
+		if err := e.store.DeleteState(ctx, serviceScope, spec.Key(), k); err != nil {
+			return spec, err
+		}
+	}
+	return spec, nil
 }
 
 // DisableService removes one service; its supervisor stops it on the next tick.
@@ -129,7 +151,15 @@ func (e *Engine) DisableService(ctx context.Context, module, account string) err
 	} else if !ok {
 		return fmt.Errorf("no service %s", key)
 	}
-	_ = e.store.DeleteState(ctx, serviceScope, key, "status")
+	vars, err := e.store.ListStateByPrefix(ctx, serviceScope, key)
+	if err != nil {
+		return err
+	}
+	for _, v := range vars {
+		if v.ScopeName == key && v.Key != "spec" {
+			_ = e.store.DeleteState(ctx, serviceScope, key, v.Key)
+		}
+	}
 	return e.store.DeleteState(ctx, serviceScope, key, "spec")
 }
 
@@ -177,8 +207,11 @@ func renderService(m *workflow.Module, spec ServiceSpec) (string, []string, erro
 }
 
 type serviceRec struct {
-	spec   ServiceSpec
-	status *ServiceStatus
+	spec    ServiceSpec
+	status  *ServiceStatus
+	beat    *time.Time // the service's own
+	alerted bool
+	watches []json.RawMessage
 }
 
 func (e *Engine) serviceRecs(ctx context.Context) ([]serviceRec, error) {
@@ -202,6 +235,16 @@ func (e *Engine) serviceRecs(ctx context.Context) ([]serviceRec, error) {
 			var st ServiceStatus
 			if json.Unmarshal([]byte(v.Value), &st) == nil {
 				r.status = &st
+			}
+		case "beat":
+			if t, err := time.Parse(time.RFC3339Nano, v.Value); err == nil {
+				r.beat = &t
+			}
+		case "alerted":
+			r.alerted = true
+		default:
+			if strings.HasPrefix(v.Key, "watch:") {
+				r.watches = append(r.watches, json.RawMessage(v.Value))
 			}
 		}
 	}
@@ -231,27 +274,140 @@ func (e *Engine) Services(ctx context.Context) ([]ServiceView, error) {
 	now := time.Now()
 	out := make([]ServiceView, 0, len(recs))
 	for _, r := range recs {
-		v := ServiceView{ServiceSpec: r.spec, Key: r.spec.Key(), State: "pending"}
+		v := ServiceView{ServiceSpec: r.spec, Key: r.spec.Key(), State: "pending",
+			ServiceHeartbeat: r.beat, Watches: r.watches}
+		if v.Watches == nil {
+			v.Watches = []json.RawMessage{}
+		}
 		if r.status != nil {
 			at := r.status.At
 			v.LastHeartbeat, v.Owner = &at, r.status.Owner
 			v.Restarts, v.LastError = r.status.Restarts, r.status.LastError
 			v.State = r.status.Status
 		}
-		if silent(r, now) {
-			v.State = "silent"
+		if why := silent(r, now); why != "" {
+			v.State, v.LastError = "silent", why
 		}
 		out = append(out, v)
 	}
 	return out, nil
 }
 
-// silent: beat once and then stopped, or never beat at all since enabled.
-func silent(r serviceRec, now time.Time) bool {
-	if r.status != nil {
-		return !fresh(r.status, now)
+// silent says why a service is silent, or "" when it is not: its supervisor
+// stopped beating (or never did), or the process is running but its own loop
+// has not beaten within serviceSilentAfter of starting or of its last beat.
+func silent(r serviceRec, now time.Time) string {
+	if r.status == nil {
+		if now.Sub(r.spec.EnabledAt) > serviceSilentAfter {
+			return "no supervisor has picked it up"
+		}
+		return ""
 	}
-	return now.Sub(r.spec.EnabledAt) > serviceSilentAfter
+	if !fresh(r.status, now) {
+		return "its supervisor stopped beating"
+	}
+	if r.status.Status != "running" {
+		return ""
+	}
+	last := r.status.StartedAt
+	if r.beat != nil && r.beat.After(last) {
+		last = *r.beat
+	}
+	if now.Sub(last) > serviceSilentAfter {
+		return "running but the service itself has not beaten (hung?)"
+	}
+	return ""
+}
+
+// serviceToken is the credential one service holds: HMAC(key) under the
+// registration token. Nothing to store, nothing to revoke but the key.
+func (e *Engine) serviceToken(ctx context.Context, key string) (string, error) {
+	reg, err := e.RegistrationToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	h := hmac.New(sha256.New, []byte(reg))
+	h.Write([]byte("service:" + key))
+	return "wfs_" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// AuthService checks a service's own token for its key.
+func (e *Engine) AuthService(ctx context.Context, key, token string) error {
+	want, err := e.serviceToken(ctx, key)
+	if err != nil {
+		return err
+	}
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(want)) != 1 {
+		return ErrBadToken
+	}
+	return nil
+}
+
+// ServiceSelfBeat is the service's own heartbeat, from inside its loop.
+func (e *Engine) ServiceSelfBeat(ctx context.Context, key string) error {
+	if _, ok, err := e.store.GetState(ctx, serviceScope, key, "spec"); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("no service %s", key)
+	}
+	return e.store.PutState(ctx, serviceScope, key, "beat", time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+// ServiceWatches is one service's registered watches, each a JSON object
+// whose shape is the module's (wamonitor.Watch for whatsapp-group-monitor).
+func (e *Engine) ServiceWatches(ctx context.Context, key string) ([]json.RawMessage, error) {
+	vars, err := e.store.ListState(ctx, serviceScope, key)
+	if err != nil {
+		return nil, err
+	}
+	out := []json.RawMessage{}
+	for _, v := range vars {
+		if strings.HasPrefix(v.Key, "watch:") {
+			out = append(out, json.RawMessage(v.Value))
+		}
+	}
+	return out, nil
+}
+
+// PutServiceWatch registers (or replaces) one watch by its "name".
+func (e *Engine) PutServiceWatch(ctx context.Context, key string, raw json.RawMessage) (string, error) {
+	if _, ok, err := e.store.GetState(ctx, serviceScope, key, "spec"); err != nil {
+		return "", err
+	} else if !ok {
+		return "", fmt.Errorf("no service %s — wfx module start first", key)
+	}
+	var w map[string]any
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return "", fmt.Errorf("a watch is a JSON object: %w", err)
+	}
+	name, _ := w["name"].(string)
+	if name == "" || strings.ContainsAny(name, "/ ") {
+		return "", fmt.Errorf("a watch needs a \"name\" without '/' or spaces")
+	}
+	b, _ := json.Marshal(w)
+	return name, e.store.PutState(ctx, serviceScope, key, "watch:"+name, string(b))
+}
+
+// DeleteServiceWatch removes one watch.
+func (e *Engine) DeleteServiceWatch(ctx context.Context, key, name string) error {
+	if _, ok, err := e.store.GetState(ctx, serviceScope, key, "watch:"+name); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("no watch %q on %s", name, key)
+	}
+	return e.store.DeleteState(ctx, serviceScope, key, "watch:"+name)
+}
+
+// selfURL is where a service on THIS machine reaches the API.
+func (e *Engine) selfURL() string {
+	if u := strings.TrimRight(e.cfg.PublicURL, "/"); u != "" {
+		return u
+	}
+	addr := e.cfg.Addr
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	return "http://" + addr
 }
 
 // ServicesFor is what one supervisor (owner) serving labels should run: every
@@ -291,7 +447,18 @@ func (e *Engine) ServicesFor(ctx context.Context, owner string, labels []string,
 				env = map[string]string{}
 			}
 		}
-		sp := supervisor.Spec{Key: r.spec.Key(), Command: cmd, Args: args, Env: env}
+		tok, err := e.serviceToken(ctx, r.spec.Key())
+		if err != nil {
+			return nil, err
+		}
+		senv := make(map[string]string, len(env)+3)
+		for k, v := range env {
+			senv[k] = v
+		}
+		// WFX_URL is this server's address; a worker replaces it with the
+		// URL it joined with.
+		senv[supervisor.EnvURL], senv[supervisor.EnvKey], senv[supervisor.EnvToken] = e.selfURL(), r.spec.Key(), tok
+		sp := supervisor.Spec{Key: r.spec.Key(), Command: cmd, Args: args, Env: senv}
 		if local {
 			sp.Dir = m.Dir
 		}
@@ -364,7 +531,8 @@ func (e *Engine) StartServices(ctx context.Context) {
 }
 
 // alertSilentServices announces each newly silent service once, on the default
-// channel. Without a channel it is still `silent` in ls and logged here.
+// channel, and re-arms when it recovers. Without a channel it is still
+// `silent` in ls and logged here.
 func (e *Engine) alertSilentServices(ctx context.Context) []string {
 	recs, err := e.serviceRecs(ctx)
 	if err != nil {
@@ -373,30 +541,28 @@ func (e *Engine) alertSilentServices(ctx context.Context) []string {
 	now := time.Now()
 	var said []string
 	for _, r := range recs {
-		if !silent(r, now) || (r.status != nil && r.status.Alerted) {
+		key := r.spec.Key()
+		why := silent(r, now)
+		if why == "" {
+			if r.alerted {
+				_ = e.store.DeleteState(ctx, serviceScope, key, "alerted")
+			}
 			continue
 		}
-		key := r.spec.Key()
-		last := "never"
-		st := ServiceStatus{Beat: supervisor.Beat{Key: key, Status: "silent"}, Owner: "", At: r.spec.EnabledAt}
-		if r.status != nil {
-			st = *r.status
-			last = r.status.At.Format(time.RFC3339)
+		if r.alerted {
+			continue
 		}
-		text := fmt.Sprintf("service %s is silent: no heartbeat since %s (runs-on %q). Check the worker: wfx module ls",
-			key, last, r.spec.RunsOn)
+		text := fmt.Sprintf("service %s is silent: %s (runs-on %q). Check it: wfx module ls", key, why, r.spec.RunsOn)
 		log.Printf("engine: %s", text)
 		if _, err := e.channelEntry(""); err == nil {
 			go func() {
 				sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 				defer cancel()
 				_, _, _ = e.SendOnChannel(sctx, "", notify.Envelope{Type: notify.TypeNotice, Text: text,
-					DedupKey: "service-silent:" + key + ":" + last, At: now.UTC()})
+					DedupKey: "service-silent:" + key + ":" + now.UTC().Format(time.RFC3339), At: now.UTC()})
 			}()
 		}
-		st.Alerted = true
-		raw, _ := json.Marshal(st)
-		_ = e.store.PutState(ctx, serviceScope, key, "status", string(raw))
+		_ = e.store.PutState(ctx, serviceScope, key, "alerted", now.UTC().Format(time.RFC3339))
 		said = append(said, key)
 	}
 	return said

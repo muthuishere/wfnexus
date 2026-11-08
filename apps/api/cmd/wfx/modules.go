@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -17,6 +18,8 @@ import (
 //	wfx module start <module> [--account a] [--runs-on label] [--input k=v ...]
 //	                                one supervised instance per module+account (#103)
 //	wfx module stop <module> --account a
+//	wfx module watch ls|add|rm <module> --account a ['<json>' | <name>]
+//	                                watches the running service reads every tick
 
 type moduleRow struct {
 	Name     string `json:"name"`
@@ -84,6 +87,8 @@ func moduleCmd(args []string) error {
 			return fmt.Errorf("%s", use)
 		}
 		return moduleStart(args[1], args[2:])
+	case "watch", "watches":
+		return moduleWatch(args[1:])
 	case "stop":
 		acct := flagOf(args, "--account", "")
 		if len(args) < 2 || acct == "" {
@@ -182,6 +187,64 @@ func moduleStart(name string, args []string) error {
 	}
 	fmt.Printf("%s/%s will run on %s — watch it with: wfx module ls\n", name, got.Account, where)
 	return nil
+}
+
+// moduleWatch registers watches for one running service through wfnexus; the
+// service picks them up on its next tick.
+func moduleWatch(args []string) error {
+	const use = "usage: wfx module watch ls|add|rm <module> --account a ['<watch json>' | <watch name>]"
+	acct := flagOf(args, "--account", "")
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--account" {
+			i++
+			continue
+		}
+		pos = append(pos, args[i])
+	}
+	if len(pos) < 2 || acct == "" {
+		return fmt.Errorf("%s", use)
+	}
+	base := "/api/modules/" + url.PathEscape(pos[1]) + "/services/" + url.PathEscape(acct) + "/watches"
+	switch pos[0] {
+	case "ls", "list":
+		var out struct {
+			Watches []json.RawMessage `json:"watches"`
+		}
+		if err := call("GET", base, nil, &out); err != nil {
+			return err
+		}
+		if len(out.Watches) == 0 {
+			fmt.Println("no watches")
+		}
+		for _, w := range out.Watches {
+			fmt.Println(string(w))
+		}
+		return nil
+	case "add", "set":
+		if len(pos) < 3 {
+			return fmt.Errorf("%s", use)
+		}
+		var w map[string]any
+		if err := json.Unmarshal([]byte(pos[2]), &w); err != nil {
+			return fmt.Errorf("the watch must be a JSON object: %w", err)
+		}
+		if err := call("POST", base, w, nil); err != nil {
+			return err
+		}
+		fmt.Printf("watch %v registered; the service reads it on its next tick\n", w["name"])
+		return nil
+	case "rm", "remove":
+		if len(pos) < 3 {
+			return fmt.Errorf("%s", use)
+		}
+		if err := call("DELETE", base+"/"+url.PathEscape(pos[2]), nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("watch %s removed\n", pos[2])
+		return nil
+	}
+	return fmt.Errorf("%s", use)
 }
 
 func serviceLine(sv serviceRow) string {
