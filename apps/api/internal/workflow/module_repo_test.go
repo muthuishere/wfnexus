@@ -1,18 +1,27 @@
 package workflow
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-// The repository's own modules must load: apl, with its whatsapp service and
-// whatsapp-send command.
+// The repository's own modules must load: apl, gh, aos.
 func TestRepoModulesLoad(t *testing.T) {
 	mods, errs := FindModules("repo", "../../../../modules")
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	if len(mods) == 0 || mods[0].Name != "apl" || mods[0].Services["whatsapp"].Command != "wfx-wa-monitor" {
-		t.Fatalf("mods = %+v", mods)
+	by := map[string]*Module{}
+	for _, m := range mods {
+		by[m.Name] = m
 	}
-	if _, ok := mods[0].Callable("apl.whatsapp-send"); !ok {
-		t.Fatalf("commands = %v", mods[0].CommandNames())
+	if by["apl"] == nil || by["apl"].Services["whatsapp"].Command != "wfx-wa-monitor" || by["gh"] == nil || by["aos"] == nil {
+		t.Fatalf("mods = %v", by)
+	}
+	for _, c := range []string{"apl.whatsapp-send", "apl.mail-send", "gh.pr-comment", "aos.shell"} {
+		mod, _, _ := strings.Cut(c, ".")
+		if _, ok := by[mod].Callable(c); !ok {
+			t.Fatalf("%s missing: %v", c, by[mod].CommandNames())
+		}
 	}
 }

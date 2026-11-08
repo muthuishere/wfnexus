@@ -490,7 +490,10 @@ func (d *Definition) validate(cat Catalog) error {
 		return fmt.Errorf("%s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, d.RunsOn)
 	}
 	for _, s := range d.Steps {
-		if strings.Contains(s.RunsOn, "{{") {
+		// One exception: a `run:` step's runs-on may name the label from the
+		// run input (`{{ .Input.machine }}` — a module command called with its
+		// inputs); the engine renders it when the step runs (nodes.go).
+		if strings.Contains(s.RunsOn, "{{") && !(s.Run != "" && strings.Contains(s.RunsOn, ".Input.")) {
 			return fmt.Errorf("%s: step %s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, s.ID, s.RunsOn)
 		}
 	}

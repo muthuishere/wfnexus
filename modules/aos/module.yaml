@@ -1,0 +1,109 @@
+# aos — drive a machine through the aos CLI, as module commands (#109).
+#
+# Worker-only: every command runs on the worker named by `machine` (its
+# runs-on label) and refuses to run anywhere else — the server's own screen and
+# shell are not for modules. Anything that can change the machine (shell,
+# file-write) waits for a person to approve, every time.
+#
+#   wfx module call aos.screenshot --input machine=desk-mac --wait
+#   wfx module call aos.shell --input machine=desk-mac --input script='brew upgrade' --wait   # pauses for approval
+#
+# In a workflow:
+#   - id: look
+#     uses: aos.file-read@0
+#     with: { machine: desk-mac, path: ~/notes/todo.md }
+name: aos
+version: 0.1.0
+description: A worker machine through aos — shell and file writes (approval-gated), file reads, screenshots.
+
+commands:
+  shell:
+    description: Run a shell command line on the worker (aos exec capture). Always waits for a person to approve.
+    inputs:
+      machine: { type: string, required: true, description: the worker's runs-on label }
+      script:  { type: string, required: true }
+    steps:
+      - id: act
+        name: Run it on the worker (after approval)
+        runs-on: "{{ .Inputs.machine }}"
+        requires_approval: true
+        timeout_sec: 300
+        run: |
+          [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
+          cat > in.script <<'WFX_V'
+          {{ .Inputs.script }}
+          WFX_V
+          "${AOS_BIN:-aos}" exec capture sh -c "$(cat in.script)"
+
+  file-read:
+    description: Print a file from the worker (aos file read).
+    inputs:
+      machine: { type: string, required: true, description: the worker's runs-on label }
+      path:    { type: string, required: true }
+      lines:   { type: string, default: "", description: "from:to, optional" }
+    steps:
+      - id: act
+        name: Read it on the worker
+        runs-on: "{{ .Inputs.machine }}"
+        timeout_sec: 60
+        run: |
+          [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.lines <<'WFX_V'
+          {{ .Inputs.lines }}
+          WFX_V
+          if [ -n "$(cat in.lines)" ]; then
+            "${AOS_BIN:-aos}" file read "$(cat in.path)" --lines="$(cat in.lines)"
+          else
+            "${AOS_BIN:-aos}" file read "$(cat in.path)"
+          fi
+
+  file-write:
+    description: Write content to a file on the worker (aos file write). Always waits for a person to approve.
+    inputs:
+      machine: { type: string, required: true, description: the worker's runs-on label }
+      path:    { type: string, required: true }
+      content: { type: string, required: true }
+    steps:
+      - id: act
+        name: Write it on the worker (after approval)
+        runs-on: "{{ .Inputs.machine }}"
+        requires_approval: true
+        timeout_sec: 60
+        run: |
+          [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.content <<'WFX_V'
+          {{ .Inputs.content }}
+          WFX_V
+          "${AOS_BIN:-aos}" file write "$(cat in.path)" < in.content
+
+  screenshot:
+    description: Take a screenshot on the worker (aos capture screenshot) into a file there.
+    inputs:
+      machine: { type: string, required: true, description: the worker's runs-on label }
+      out:     { type: string, default: screenshot.png, description: file to write on the worker }
+      app:     { type: string, default: "", description: only this app's window }
+    steps:
+      - id: act
+        name: Screenshot on the worker
+        runs-on: "{{ .Inputs.machine }}"
+        timeout_sec: 60
+        run: |
+          [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
+          cat > in.out <<'WFX_V'
+          {{ .Inputs.out }}
+          WFX_V
+          cat > in.app <<'WFX_V'
+          {{ .Inputs.app }}
+          WFX_V
+          if [ -n "$(cat in.app)" ]; then
+            "${AOS_BIN:-aos}" capture screenshot --app="$(cat in.app)" --out="$(cat in.out)"
+          else
+            "${AOS_BIN:-aos}" capture screenshot --out="$(cat in.out)"
+          fi
+          echo "{\"status\": \"ok\", \"out\": \"$(cat in.out)\"}"

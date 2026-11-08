@@ -47,7 +47,8 @@ func aplServer(t *testing.T, files map[string]string) (http.Handler, *engine.Eng
 	t.Cleanup(st.Close)
 	modulesDir, _ := filepath.Abs("../../../../modules")
 	cfg := config.Config{Addr: addr, WorkDir: filepath.Join(tmp, "work"), WorkflowsDir: filepath.Join(tmp, "workflows"),
-		SkillsDir: filepath.Join(tmp, "skills"), ModulesDir: modulesDir, MaxConcurrentRuns: 4}
+		SkillsDir: filepath.Join(tmp, "skills"), ModulesDir: modulesDir, MaxConcurrentRuns: 4,
+		RunnerLabels: []string{"local", "box"}} // "box" stands in for a worker label, served in process
 	for _, d := range []string{cfg.WorkDir, cfg.WorkflowsDir, cfg.SkillsDir} {
 		_ = os.MkdirAll(d, 0o755)
 	}
