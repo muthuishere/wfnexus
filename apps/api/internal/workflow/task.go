@@ -199,10 +199,24 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 		if err != nil {
 			return err
 		}
+		own := map[string]bool{}
+		for _, s := range t.Steps {
+			own[s.ID] = true
+		}
 		for _, s := range t.Steps {
 			step := s // copy; a task is used by many workflows
 			step.ID = prefix + "." + s.ID
 			step.Needs = prefixAll(prefix, s.Needs)
+			// A guard on a sibling step names it by the task's id; after
+			// expansion that step is <prefix>.<id>, exactly as in needs.
+			if len(s.When) > 0 {
+				step.When = append([]Guard(nil), s.When...)
+				for i, g := range step.When {
+					if head, _, _ := strings.Cut(g.Path, "."); own[head] {
+						step.When[i].Path = prefix + "." + g.Path
+					}
+				}
+			}
 			step.Consumes = renameAll(u.Consumes, s.Consumes)
 			step.Produces = renameAll(u.Produces, s.Produces)
 			applyOverride(&step, u.With["*"])
