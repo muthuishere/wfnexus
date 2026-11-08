@@ -166,13 +166,18 @@ StatefulSet with a persistent volume (PVC), or a move to Postgres.
 | D self-update | none | none | the server holds GitHub access | `.prev` binary | 2 d | no |
 | E helm/k8s | n/a | cluster | n/a | helm rollback | 1 d + cluster | as a driver |
 
-## Recommendation
+## Decision (owner, 2026-11-08)
 
-**Option A.** It is the most boring option, and the only one that removes the sudo pain on the real host
-without adding docker or root-equivalent access to a box that also runs the crypto desk. It also builds the
-`Driver` frame that B and E plug into later. Build order:
+**Option A, ssh only.** Docker and k8s users already have their own upgrade tools (`docker compose pull`,
+`helm upgrade`, Kamal, Argo...). Our job there is to keep publishing a versioned image
+(`ghcr.io/muthuishere/wfx-server:<v>`, `wfx-runner:<v>`) and the Helm chart. That already happens on every tag.
+We do **not** build docker, k8s or Kamal drivers. Options B, C and E are dropped. D is dropped too.
 
-1. ssh driver and `deploy`/`status`/`rollback`.
-2. One-time migration of `wfnexus-db`. This is the only step with sudo, and the owner runs it.
-3. `wfx runner deploy` on the same driver.
-4. docker and k8s drivers when a real target needs them.
+`wfx server deploy` therefore has one job: putting a release tarball on a bare host over ssh, with no sudo.
+
+Scope:
+1. `wfx server deploy|status|rollback <target>`, ssh only. The laptop pulls the GitHub release, copies it to
+   the host, backs up the DB, swaps the `current` link, restarts with `systemctl --user`, health-checks, and
+   rolls back automatically if the check fails.
+2. One-time migration of `wfnexus-db` from the system unit to a user unit with linger. This is the only sudo, and the owner runs it.
+3. `wfx runner deploy <target>`, on the same code path.
