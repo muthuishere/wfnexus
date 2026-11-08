@@ -44,8 +44,17 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	// Where it runs is the step's own `runs-on`. A label this process serves
 	// runs here; anything else is queued for a worker holding that label and
 	// comes back with the same shape, so nothing downstream can tell.
-	if !e.servesLocally(step.RunsOn) {
-		return e.runRemote(ctx, runID, step, cmd, step.RunsOn, data)
+	// A label may be templated (a module command's `runs-on: "{{ .Inputs.machine }}"`
+	// reached through `wfx module call` renders from the run input here).
+	label := step.RunsOn
+	if strings.Contains(label, "{{") {
+		if label, err = workflow.Render(label, data); err != nil {
+			return nil, fmt.Errorf("render runs-on: %w", err)
+		}
+		label = strings.TrimSpace(label)
+	}
+	if !e.servesLocally(label) {
+		return e.runRemote(ctx, runID, step, cmd, label, data)
 	}
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(cmd), StartedAt: now(), Error: str(""), ClearPending: true,
