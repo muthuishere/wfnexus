@@ -179,8 +179,15 @@ func TestWhatsAppSenderPolicies(t *testing.T) {
 	if run := h.wait(id); run.Status != "awaiting_approval" {
 		t.Fatalf("approval: %s", run.Status)
 	}
-	if n := len(waSent(t, dir)); n != 1 {
-		t.Fatalf("sent before approval")
+	// The channel also gets the "waiting for approval" notice; only the send step counts.
+	sends := 0
+	for _, e := range waSent(t, dir) {
+		if e["stepId"] == "send" {
+			sends++
+		}
+	}
+	if sends != 1 {
+		t.Fatalf("sent before approval: %v", waSent(t, dir))
 	}
 	if err := h.eng.Approve(context.Background(), id, "approve", Actor{ID: "owner", Via: "test"}); err != nil {
 		t.Fatal(err)
