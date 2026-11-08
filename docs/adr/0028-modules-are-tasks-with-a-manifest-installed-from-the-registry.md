@@ -4,17 +4,35 @@ Status: proposed · 2026-11-08 · issues #82 #83 #84 (#85 follow-up)
 
 ## Decision
 
-**A module is a task plus `module.yaml`** (`name`, `version`, `kind:
-command|service`, `inputs`, `outputs`, `requires: {env, secrets}`, optional
-`binary: {carry}`, and `service: {command, args}` for a service). Steps live in
-the manifest or in `task.yaml` beside it. Unknown keys are a load error.
+**A module is a task plus `module.yaml`** (`name`, `version`, `requires: {env,
+secrets}`, optional `binary: {carry}`, and any of: its own `inputs`/`steps`
+(or `task.yaml`), named `commands: {name: {inputs, outputs, steps}}`, and
+named `services: {name: {command, args, inputs}}` — #109). A command is called
+`<module>.<command>`, a service is `<module>.<service>`. Unknown keys are a load
+error.
 
 **Called like a GitHub Action, checked at load.** Inside `steps:` (flat or in a
 job): `uses: name@major` + `with: {typed values}`. The call is replaced in place
 by the task's steps (`<id>.<step>`); `needs: [<id>]` points at the call's last
 steps. Unknown/missing/wrong-typed inputs and a wrong major fail the load.
 Resolution order: local task → workflow (`workflow_call`) → installed module.
-A `kind: service` module is never expanded into steps.
+A service is never expanded into steps. `wfx module call <module>.<command>`
+and `POST /api/modules/{name}/call` run a command on its own: a generated
+wrapper workflow of the same name (never what `uses:` resolves to), so a call is
+an ordinary, attributed, approval-gated run.
+
+**Preinstalled `apl`, profiles, the outbox (#109).** `modules/apl` ships with
+the server (`WFX_MODULES_DIR`): service `whatsapp` (`wfx-wa-monitor`) and
+commands `whatsapp-send`, `mail-send`/`mail-draft`/`mail-list`, `teams-send`,
+`calendar-list`/`calendar-create`, `drive-get`/`drive-put`, `contacts-find`,
+`find`. A module has named **profiles** (a handle — the account — plus input
+defaults), one the default, set once globally (`wfx module profile set apl
+business --account biz --default`); `profile:` picks another. A module's
+command steps and services get `WFX_MODULE_TOKEN`; with it
+`/api/module-self/{module}/outbox` queues a send on the running service of the
+profile's account, which drains it through its adapter — one writer per
+number, a key sent once. Sends default to `draft`; `approval` waits for a
+person.
 
 **Installed from the existing registry — no second one, no new UI.** A
 `module.yaml` anywhere in an imported skill source (git import, pin to
