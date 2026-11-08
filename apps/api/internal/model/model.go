@@ -199,29 +199,6 @@ type StateVar struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// Workflow memory kinds (engine/memory.go).
-const (
-	MemoryKindRun    = "run"    // the record a finished run leaves
-	MemoryKindNote   = "note"   // a lesson an agent wrote with `remember`
-	MemoryKindDigest = "digest" // older run records, folded
-)
-
-// MemoryEntry is one remembered thing about a workflow.
-type MemoryEntry struct {
-	ID       string `json:"id"`
-	Project  string `json:"project"`
-	Workflow string `json:"workflow"`
-	RunID    string `json:"runId,omitempty"`
-	Kind     string `json:"kind"`
-	Status   string `json:"status,omitempty"`
-	StepID   string `json:"stepId,omitempty"`
-	Body     string `json:"body"`
-	// Conversation is the conversation key a run record belongs to ("" for
-	// workflow-wide memory). Lessons are written with it but read workflow-wide.
-	Conversation string    `json:"conversation,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-}
-
 // Conversation is one chat's conversation (ADR 0026 decision 4), keyed by
 // (channel, chat). State is active | waiting | resolved | closed; a new
 // message reopens it.
@@ -234,24 +211,6 @@ type Conversation struct {
 	LastRunID string    `json:"lastRunId"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-// MemoryFilter selects memory entries. Empty fields match everything.
-type MemoryFilter struct {
-	Project string
-	// AnyProject ignores Project entirely (a dry run, or `global`).
-	AnyProject bool
-	Workflow   string
-	// NotWorkflow excludes one workflow (`project`/`global` includes skip the
-	// workflow's own memory, which is loaded separately).
-	NotWorkflow string
-	Kind        string
-	RunID       string
-	// ByConversation narrows to entries whose conversation equals
-	// Conversation exactly — "" then means the workflow-wide entries only.
-	ByConversation bool
-	Conversation   string
-	Limit          int
 }
 
 // Sealer is the encryption the store writes through. It is an interface so the

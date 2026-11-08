@@ -2,88 +2,139 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
-	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
+	"github.com/muthuishere/toolnexus/golang/agents"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
-// WORKFLOW MEMORY — what previous runs of a workflow learned, on by default.
+// WORKFLOW MEMORY — toolnexus's memory hierarchy (SPEC §7E), one home per
+// (project, workflow) on the server:
 //
-// State (state.go) is EXPLICIT: a workflow remembers the keys its author chose
-// to write. Memory is the IMPLICIT complement: every finished run leaves a
-// deterministic record — what it was asked, how it ended, what each step
-// concluded, what failed and why, what a human decided — and every agent step
-// of the next run reads those records back in a bounded section of its prompt.
-// Agents can add explicit lessons with the `remember` tool.
+//	<memory root>/<project>/<workflow>/
+//	├── MEMORY.md        short index, loaded into every agent step (capped)
+//	├── DREAM.md         optional: what this workflow's dreams should focus on
+//	└── memory/
+//	    ├── <slug>.md    notes, linked from the index as [[slug]], read on demand
+//	    └── log.md       append-only: what each dream changed and why
 //
-// Three properties matter more than the feature:
-//
-//  1. It never fails a run. Every write here logs and moves on.
-//  2. It never stores a secret. Bodies are scrubbed with the run's redactions
-//     plus every env-store value before they are written.
-//  3. It is bounded. A per-step character budget on the way in; a raw-record
-//     cap, a rolling capped digest and a lesson cap on the way out.
+// Agent steps get toolnexus's `memory` tool (notes on) over the home. Writes
+// land on disk and load at the NEXT step/run — never mid-step. A daily dream
+// pass (toolnexus's Dreamer) verifies memory against the workflow's recent
+// run transcripts, demotes detail out of the index, merges notes and logs
+// every change. Everything here is toolnexus code; wfnexus only picks the dir,
+// scrubs secrets on the way in, and supplies the transcripts.
 
-const (
-	memoryCharsPerToken = 4
-	memoryRecentShown   = 5    // raw run records shown per workflow
-	memoryNotesShown    = 10   // lessons shown per workflow
-	memoryIncludeRuns   = 3    // raw records shown per included source
-	memoryDigestMax     = 3000 // characters in a workflow's rolling digest
-	memoryNoteMax       = 500  // characters in one lesson
-	memoryFieldMax      = 300  // characters of one step's output or error
-	memoryInputMax      = 400  // characters of a run's input
-	memoryStepsMax      = 20   // step lines in one record
-	memoryHeading       = "## What previous runs of this workflow learned"
-	// The injected layer's HARD cap, whatever a workflow's budget says: an
-	// index a model reads every step stays small (Anthropic, "Components of
-	// agent memory": ~200 lines / 25 KB); the rest is one command away.
-	memoryInjectMaxLines = 200
-	memoryInjectMaxBytes = 25 * 1024
-)
+// memoryHeading introduces the loaded index in a step's prompt.
+const memoryHeading = "## Workflow memory (MEMORY.md — the index; use the `memory` tool: read note:<slug> for detail, add what a future run needs)"
 
-// memoryPointer is where the part of memory that was not injected lives.
-func memoryPointer(wf string) string {
-	return "\n… (memory truncated to its budget; the rest: `wfx memory show --workflow " + wf + "`)"
+// dreamRuns is how many recent runs a dream sees as ground truth.
+const dreamRuns = 30
+
+var memSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// MemoryRoot is where every workflow's memory home lives.
+func (e *Engine) MemoryRoot() string {
+	return filepath.Join(filepath.Dir(e.cfg.SkillsDir), "memory")
 }
 
-// capInjected applies the line cap; the byte cap is applied while building.
-func capInjected(s, wf string) string {
-	lines := strings.Split(s, "\n")
-	if len(lines) <= memoryInjectMaxLines {
-		return s
+// MemoryDir is one workflow's memory home. project "" means local.
+func (e *Engine) MemoryDir(project, wf string) (string, error) {
+	if project == "" {
+		project = "local"
 	}
-	return strings.Join(lines[:memoryInjectMaxLines-2], "\n") + memoryPointer(wf)
+	if i := strings.LastIndex(wf, "/"); i >= 0 { // project/name keys
+		wf = wf[i+1:]
+	}
+	if !memSegment.MatchString(project) || !memSegment.MatchString(wf) || strings.Contains(project+wf, "..") {
+		return "", fmt.Errorf("invalid memory address %q/%q", project, wf)
+	}
+	return filepath.Join(e.MemoryRoot(), project, wf), nil
 }
 
-// memoryEnded are the statuses a run leaves memory at.
-var memoryEnded = map[string]bool{"done": true, "failed": true, "cancelled": true}
+func memoryOn(def *workflow.Definition, step *workflow.Step) bool {
+	if def != nil && def.Memory != nil && def.Memory.Off {
+		return false
+	}
+	return step == nil || step.Memory == nil || !step.Memory.Off
+}
 
-// clip shortens s to n bytes on a rune boundary, flattening newlines.
-func clip(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) <= n {
-		return s
+// memoryFor is the MEMORY.md section one step reads: toolnexus's ComposeSoul
+// with the index cap and the notes notice. Empty when off or nothing yet.
+func (e *Engine) memoryFor(def *workflow.Definition, stepID, project string) string {
+	if e.store == nil || def == nil {
+		return ""
 	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
+	_, step := def.Step(stepID)
+	if !memoryOn(def, step) {
+		return ""
 	}
-	return s[:n] + "…"
+	dir, err := e.MemoryDir(project, def.Name)
+	if err != nil {
+		return ""
+	}
+	soul, found, err := agents.ComposeSoulWith(dir, agents.ComposeSoulOptions{MemoryIndexCap: &agents.IndexCap{}, Notes: true})
+	if err != nil || len(found) == 0 {
+		return ""
+	}
+	return memoryHeading + "\n\n" + soul
+}
+
+// withMemoryInPrompt appends the memory section to an agent's rendered prompt,
+// unless the prompt places `.Memory` itself.
+func withMemoryInPrompt(prompt string, step *workflow.Step, mem string) string {
+	if mem == "" || strings.Contains(step.Prompt, ".Memory") {
+		return prompt
+	}
+	return prompt + "\n\n" + mem
+}
+
+// memoryTool is toolnexus's `memory` builtin (notes on) over this run's
+// workflow home, with every written value scrubbed of the run's secrets. The
+// address comes from the run row, never the model. Nil on a worker engine and
+// for a step whose memory is off.
+func (e *Engine) memoryTool(ctx context.Context, runID uuid.UUID, wfName string, step *workflow.Step) []tn.Tool {
+	if e.store == nil || !memoryOn(e.defs[wfName], step) {
+		return nil
+	}
+	run, err := e.store.GetRun(ctx, runID)
+	if err != nil {
+		return nil
+	}
+	dir, err := e.MemoryDir(run.Project, run.Workflow)
+	if err != nil {
+		return nil
+	}
+	t := agents.MemoryToolWith(dir, agents.MemoryToolOptions{Notes: true})
+	inner := t.Execute
+	t.Execute = func(args map[string]any, tc *tn.ToolContext) (tn.ToolResult, error) {
+		scrub := e.scrubber(context.WithoutCancel(ctx), runID, run.Project)
+		clean := map[string]any{}
+		for k, v := range args {
+			if s, ok := v.(string); ok && (k == "text" || k == "with") {
+				v = scrub(s)
+			}
+			clean[k] = v
+		}
+		return inner(clean, tc)
+	}
+	return []tn.Tool{t}
 }
 
 // scrubber returns a function that removes every sensitive value this run
-// knows about: the run's registered redactions plus every value of the env
-// store for its project — the latter so a record written after a restart, when
-// the in-memory redactions are gone, is still clean.
+// knows about: its registered redactions plus every env-store value of its
+// project.
 func (e *Engine) scrubber(ctx context.Context, runID uuid.UUID, project string) func(string) string {
 	if base, err := e.platformEnv(ctx, project); err == nil && len(base) > 0 {
 		sealed := map[string]bool{}
@@ -96,458 +147,7 @@ func (e *Engine) scrubber(ctx context.Context, runID uuid.UUID, project string) 
 	return func(s string) string { return redactText(s, secrets) }
 }
 
-// ---- the END of a run: record it ----
-
-// recordMemory writes the run's record. It is called from setRun for every
-// terminal status, before the status lands, and never returns an error: memory
-// is a side effect a run must survive without.
-func (e *Engine) recordMemory(ctx context.Context, runID uuid.UUID, status, errMsg string) {
-	if e.store == nil || !memoryEnded[status] {
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("engine: memory for run %s: %v", runID, r)
-		}
-	}()
-	ctx = context.WithoutCancel(ctx)
-	run, err := e.store.GetRun(ctx, runID)
-	if err != nil {
-		return
-	}
-	def := e.defs[run.Workflow]
-	plan := workflow.EffectiveMemory(def, nil)
-	if !plan.On {
-		return
-	}
-	existing, err := e.store.ListMemory(ctx, model.MemoryFilter{
-		Project: run.Project, Workflow: run.Workflow, Kind: model.MemoryKindRun, RunID: runID.String(),
-	})
-	if err != nil {
-		log.Printf("engine: memory for run %s: %v", runID, err)
-		return
-	}
-	// A cancel that arrives after the run already ended (or after a failure)
-	// does not rewrite what actually happened.
-	if status == "cancelled" && len(existing) > 0 {
-		return
-	}
-	steps, _ := e.store.ListSteps(ctx, runID)
-	scrub := e.scrubber(ctx, runID, run.Project)
-	body := runRecord(run, status, errMsg, steps, scrub)
-	for _, old := range existing {
-		_ = e.store.DeleteMemory(ctx, old.ID)
-	}
-	// A run from a chat remembers into ITS conversation, unless the workflow
-	// said `memory: {scope: workflow}` (conversation.go).
-	conv := ""
-	if plan.Scope != workflow.MemoryScopeWorkflow {
-		conv = conversationOfRun(run)
-	}
-	if _, err := e.store.AddMemory(ctx, model.MemoryEntry{
-		Project: run.Project, Workflow: run.Workflow, RunID: runID.String(),
-		Kind: model.MemoryKindRun, Status: status, Body: body, Conversation: conv,
-	}); err != nil {
-		log.Printf("engine: memory for run %s: %v", runID, err)
-		return
-	}
-	e.consolidateMemoryIn(ctx, run.Project, run.Workflow, conv, plan.Retain)
-}
-
-// runRecord is the deterministic record of one run. Every free-text value is
-// scrubbed BEFORE it is clipped, so a cut can never leave half a secret.
-func runRecord(run *model.Run, status, errMsg string, steps []*model.StepRun, scrub func(string) string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "run %s · %s · %s\n", shortID(run.ID.String()), status, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-	if in := strings.TrimSpace(string(run.Input)); in != "" && in != "{}" && in != "null" {
-		fmt.Fprintf(&b, "asked: %s\n", clip(scrub(in), memoryInputMax))
-	}
-	if o := strings.TrimSpace(run.Outcome); o != "" {
-		fmt.Fprintf(&b, "outcome: %s\n", clip(scrub(o), memoryFieldMax))
-	}
-	if errMsg = strings.TrimSpace(errMsg); errMsg == "" && status == "failed" {
-		errMsg = strings.TrimSpace(run.Error)
-	}
-	if errMsg != "" {
-		fmt.Fprintf(&b, "error: %s\n", clip(scrub(errMsg), memoryFieldMax))
-	}
-	n := 0
-	for _, st := range steps {
-		if st.Status == "pending" || st.Status == "" {
-			continue
-		}
-		if n == memoryStepsMax {
-			b.WriteString("- … more steps not shown\n")
-			break
-		}
-		n++
-		if n == 1 {
-			b.WriteString("steps:\n")
-		}
-		fmt.Fprintf(&b, "- %s: %s", st.StepID, st.Status)
-		if st.Resolution != "" {
-			fmt.Fprintf(&b, " · %s", st.Resolution)
-			if st.ResolvedBy != "" {
-				fmt.Fprintf(&b, " by %s", st.ResolvedBy)
-			}
-			if r := strings.TrimSpace(st.ResolutionReason); r != "" {
-				fmt.Fprintf(&b, " — %q", clip(scrub(r), memoryFieldMax))
-			}
-		}
-		if st.Error != "" {
-			fmt.Fprintf(&b, " — error: %s", clip(scrub(st.Error), memoryFieldMax))
-		} else if out := strings.TrimSpace(string(st.Output)); out != "" && out != "null" && out != "{}" {
-			fmt.Fprintf(&b, " → %s", clip(scrub(out), memoryFieldMax))
-		}
-		if st.SkipReason != "" {
-			fmt.Fprintf(&b, " (%s)", clip(st.SkipReason, 120))
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func shortID(s string) string {
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
-}
-
-// consolidateMemory keeps a workflow's memory bounded: at most `retain` raw run
-// records — older ones fold into the rolling digest, which is itself capped —
-// and at most 2×retain lessons.
-func (e *Engine) consolidateMemory(ctx context.Context, project, wf string, retain int) {
-	e.consolidateMemoryIn(ctx, project, wf, "", retain)
-}
-
-// consolidateMemoryIn is consolidateMemory for one conversation's records ("" is
-// the workflow-wide ones): each conversation keeps its own records and digest.
-func (e *Engine) consolidateMemoryIn(ctx context.Context, project, wf, conv string, retain int) {
-	// ONE WRITER PER PAGE. Folding reads the digest, writes a new one and
-	// deletes the old: two runs ending together each folded the same records
-	// and one digest's lines were lost. Per (project, workflow, conversation)
-	// it is serialised; a lesson (`remember`) is its own row and never folds.
-	unlock := memoryPages.lock(project + "\x00" + wf + "\x00" + conv)
-	defer unlock()
-	if retain <= 0 {
-		retain = workflow.DefaultMemoryRetain
-	}
-	runs, err := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindRun, ByConversation: true, Conversation: conv})
-	if err == nil && len(runs) > retain {
-		folded := runs[retain:]
-		var lines []string
-		for _, r := range folded { // newest first
-			lines = append(lines, "- "+digestLine(r))
-		}
-		digests, _ := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindDigest, ByConversation: true, Conversation: conv})
-		for _, d := range digests {
-			if d.Body != "" {
-				lines = append(lines, strings.Split(d.Body, "\n")...)
-			}
-		}
-		// Newest lines win: drop from the old end until it fits.
-		for len(lines) > 1 && len(strings.Join(lines, "\n")) > memoryDigestMax {
-			lines = lines[:len(lines)-1]
-		}
-		if _, err := e.store.AddMemory(ctx, model.MemoryEntry{
-			Project: project, Workflow: wf, Kind: model.MemoryKindDigest, Body: strings.Join(lines, "\n"), Conversation: conv,
-		}); err == nil {
-			for _, d := range digests {
-				_ = e.store.DeleteMemory(ctx, d.ID)
-			}
-			for _, r := range folded {
-				_ = e.store.DeleteMemory(ctx, r.ID)
-			}
-		}
-	}
-	notes, err := e.store.ListMemory(ctx, model.MemoryFilter{Project: project, Workflow: wf, Kind: model.MemoryKindNote})
-	if err == nil && len(notes) > 2*retain {
-		for _, n := range notes[2*retain:] {
-			_ = e.store.DeleteMemory(ctx, n.ID)
-		}
-	}
-}
-
-// pageLocks is a mutex per memory page, created on first use.
-type pageLocks struct {
-	mu    sync.Mutex
-	pages map[string]*sync.Mutex
-}
-
-var memoryPages = &pageLocks{pages: map[string]*sync.Mutex{}}
-
-func (p *pageLocks) lock(key string) func() {
-	p.mu.Lock()
-	m := p.pages[key]
-	if m == nil {
-		m = &sync.Mutex{}
-		p.pages[key] = m
-	}
-	p.mu.Unlock()
-	m.Lock()
-	return m.Unlock
-}
-
-// digestLine is a folded run record's one line: its header, plus the line that
-// says how it ended badly, if any.
-func digestLine(r model.MemoryEntry) string {
-	lines := strings.Split(r.Body, "\n")
-	line := lines[0]
-	for _, l := range lines[1:] {
-		if strings.HasPrefix(l, "error: ") || strings.HasPrefix(l, "outcome: ") {
-			line += " · " + l
-			break
-		}
-	}
-	return clip(line, 240)
-}
-
-// ---- during a run: the `remember` tool ----
-
-// rememberTool lets an agent record an explicit lesson for the next runs of
-// this workflow. The address comes from the run row, never from the model, so
-// a step can only write its own workflow's memory. Nil on a worker engine and
-// for a step whose memory is off.
-func (e *Engine) rememberTool(runID uuid.UUID, wfName string, step *workflow.Step) []tn.Tool {
-	if e.store == nil {
-		return nil
-	}
-	if !workflow.EffectiveMemory(e.defs[wfName], step).On {
-		return nil
-	}
-	schema := map[string]any{
-		"type":     "object",
-		"required": []any{"lesson"},
-		"properties": map[string]any{
-			"lesson": map[string]any{
-				"type":        "string",
-				"description": "One short, concrete note a future run needs and cannot see itself: strategy, a tested rule, a discovered fact, the plan.",
-			},
-		},
-	}
-	return []tn.Tool{tn.NativeTool("remember",
-		"Write a note for FUTURE runs of this workflow: what they cannot see from their own inputs — the strategy "+
-			"that worked, a rule you tested and confirmed, a fact you had to discover, the plan for what comes next. "+
-			"Not a log of this run (that is recorded already) and not only failures. One short, concrete note; "+
-			"never include secrets. It is shown to every agent step of the next runs.",
-		schema,
-		func(ctx context.Context, args map[string]any) (string, error) {
-			lesson, _ := args["lesson"].(string)
-			if strings.TrimSpace(lesson) == "" {
-				return "", fmt.Errorf("lesson is empty")
-			}
-			run, err := e.store.GetRun(ctx, runID)
-			if err != nil {
-				return "", err
-			}
-			body := clip(e.scrubber(ctx, runID, run.Project)(lesson), memoryNoteMax)
-			if _, err := e.store.AddMemory(context.WithoutCancel(ctx), model.MemoryEntry{
-				Project: run.Project, Workflow: run.Workflow, RunID: runID.String(),
-				Kind: model.MemoryKindNote, StepID: step.ID, Body: body,
-			}); err != nil {
-				return "", err
-			}
-			return "remembered", nil
-		})}
-}
-
-// ---- the START of a run: load it ----
-
-// memoryFor is the section one step of a run reads. Empty when memory is off
-// for the step or nothing has been remembered yet.
-func (e *Engine) memoryFor(ctx context.Context, def *workflow.Definition, stepID, project string) string {
-	return e.memoryForConv(ctx, def, stepID, project, "")
-}
-
-// memoryForConv is memoryFor inside one conversation: the run records and
-// digest are that conversation's, the lessons stay workflow-wide.
-func (e *Engine) memoryForConv(ctx context.Context, def *workflow.Definition, stepID, project, conv string) string {
-	if e.store == nil || def == nil {
-		return ""
-	}
-	var step *workflow.Step
-	if _, s := def.Step(stepID); s != nil {
-		step = s
-	}
-	plan := workflow.EffectiveMemory(def, step)
-	if !plan.On {
-		return ""
-	}
-	if plan.Scope == workflow.MemoryScopeWorkflow {
-		conv = ""
-	}
-	return e.memorySectionIn(ctx, def.Name, project, conv, false, plan)
-}
-
-// memorySection renders own memory, then every included source, newest first,
-// cut at the plan's budget.
-func (e *Engine) memorySection(ctx context.Context, wf, project string, anyProject bool, plan workflow.MemoryPlan) string {
-	return e.memorySectionIn(ctx, wf, project, "", anyProject, plan)
-}
-
-func (e *Engine) memorySectionIn(ctx context.Context, wf, project, conv string, anyProject bool, plan workflow.MemoryPlan) string {
-	own := model.MemoryFilter{Project: project, AnyProject: anyProject, Workflow: wf}
-	// Run records and the digest are per conversation; lessons are not.
-	ownRuns := own
-	ownRuns.ByConversation, ownRuns.Conversation = true, conv
-	var blocks []string
-
-	if notes := e.listMem(ctx, own, model.MemoryKindNote, memoryNotesShown); len(notes) > 0 {
-		var b strings.Builder
-		b.WriteString("### Lessons recorded by earlier runs\n")
-		for _, n := range notes {
-			step := ""
-			if n.StepID != "" {
-				step = "[" + n.StepID + "] "
-			}
-			fmt.Fprintf(&b, "- %s%s\n", step, n.Body)
-		}
-		blocks = append(blocks, b.String())
-	}
-	if runs := e.listMem(ctx, ownRuns, model.MemoryKindRun, memoryRecentShown); len(runs) > 0 {
-		var b strings.Builder
-		b.WriteString("### Recent runs (newest first)\n")
-		for _, r := range runs {
-			b.WriteString(r.Body)
-			b.WriteString("\n\n")
-		}
-		blocks = append(blocks, strings.TrimRight(b.String(), "\n")+"\n")
-	}
-	if dg := e.listMem(ctx, ownRuns, model.MemoryKindDigest, 1); len(dg) > 0 && dg[0].Body != "" {
-		blocks = append(blocks, "### Older runs (digest)\n"+dg[0].Body+"\n")
-	}
-
-	for _, inc := range plan.Include {
-		src, err := workflow.ParseMemorySource(inc)
-		if err != nil {
-			continue
-		}
-		f := model.MemoryFilter{Project: project, AnyProject: anyProject}
-		title := ""
-		switch src.Kind {
-		case "workflow":
-			f.Workflow = src.Workflow
-			if src.Project != "" {
-				f.Project, f.AnyProject = src.Project, false
-				title = "### From workflow `" + src.Project + "/" + src.Workflow + "`\n"
-			} else {
-				title = "### From workflow `" + src.Workflow + "`\n"
-			}
-			if src.Workflow == wf && src.Project == "" {
-				continue // already loaded as this workflow's own
-			}
-		case "project":
-			f.NotWorkflow = wf
-			title = "### From other workflows in this project\n"
-		case "global":
-			f.AnyProject, f.NotWorkflow = true, wf
-			title = "### From other workflows on this platform\n"
-		}
-		var b strings.Builder
-		for _, n := range e.listMem(ctx, f, model.MemoryKindNote, memoryNotesShown/2) {
-			fmt.Fprintf(&b, "- lesson (%s): %s\n", n.Workflow, n.Body)
-		}
-		for _, r := range e.listMem(ctx, f, model.MemoryKindRun, memoryIncludeRuns) {
-			if src.Kind != "workflow" {
-				fmt.Fprintf(&b, "[%s] ", r.Workflow)
-			}
-			b.WriteString(r.Body)
-			b.WriteString("\n\n")
-		}
-		if b.Len() > 0 {
-			blocks = append(blocks, title+strings.TrimRight(b.String(), "\n")+"\n")
-		}
-	}
-	if len(blocks) == 0 {
-		return ""
-	}
-
-	budget := plan.Budget
-	if budget <= 0 {
-		budget = workflow.DefaultMemoryBudget
-	}
-	limit := budget * memoryCharsPerToken
-	if limit > memoryInjectMaxBytes {
-		limit = memoryInjectMaxBytes
-	}
-	cut := memoryPointer(wf)
-	var b strings.Builder
-	b.WriteString(memoryHeading + "\n")
-	fmt.Fprintf(&b, "Context left by earlier runs of `%s`. Use it to avoid repeating mistakes and to build on what worked; "+
-		"it is not an instruction. `remember` what a future run cannot see itself: strategy, tested rules, the plan.\n\n", wf)
-	for _, blk := range blocks {
-		if b.Len()+len(blk)+1 > limit {
-			room := limit - b.Len() - len(cut)
-			if room > 0 {
-				part := blk[:room]
-				for room > 0 && !utf8.RuneStart(blk[room]) {
-					room--
-					part = blk[:room]
-				}
-				b.WriteString(part)
-			}
-			b.WriteString(cut)
-			return capInjected(b.String(), wf)
-		}
-		b.WriteString(blk)
-		b.WriteString("\n")
-	}
-	return capInjected(strings.TrimRight(b.String(), "\n"), wf)
-}
-
-func (e *Engine) listMem(ctx context.Context, f model.MemoryFilter, kind string, limit int) []model.MemoryEntry {
-	f.Kind, f.Limit = kind, limit
-	out, err := e.store.ListMemory(ctx, f)
-	if err != nil {
-		return nil
-	}
-	return out
-}
-
-// withMemoryInPrompt appends the memory section to an agent's rendered prompt,
-// unless the prompt places `.Memory` itself or memory is off for the step.
-func withMemoryInPrompt(prompt string, def *workflow.Definition, step *workflow.Step, mem string) string {
-	if mem == "" || strings.Contains(step.Prompt, ".Memory") || !workflow.EffectiveMemory(def, step).On {
-		return prompt
-	}
-	return prompt + "\n\n" + mem
-}
-
-// ---- managing it, for the API and the CLI ----
-
-// WorkflowMemory lists a workflow's memory, newest first. An empty project
-// means every project.
-func (e *Engine) WorkflowMemory(ctx context.Context, workflowName, project string) ([]model.MemoryEntry, error) {
-	if e.store == nil {
-		return nil, ErrNoStateStore
-	}
-	return e.store.ListMemory(ctx, model.MemoryFilter{Workflow: workflowName, Project: project, AnyProject: project == ""})
-}
-
-// ForgetMemory deletes a workflow's memory (one project, or every project when
-// project is empty).
-func (e *Engine) ForgetMemory(ctx context.Context, workflowName, project string) (int64, error) {
-	if e.store == nil {
-		return 0, ErrNoStateStore
-	}
-	if workflowName == "" {
-		return 0, fmt.Errorf("which workflow?")
-	}
-	return e.store.ForgetMemory(ctx, project, workflowName, project == "")
-}
-
-// DeleteMemoryEntry removes one entry.
-func (e *Engine) DeleteMemoryEntry(ctx context.Context, id string) error {
-	if e.store == nil {
-		return ErrNoStateStore
-	}
-	return e.store.DeleteMemory(ctx, id)
-}
-
-// handScrub scrubs text a person typed into a workflow's memory with every
-// sensitive value of the project's env store — the same guarantee a run's own
-// writes get, without a run to hang the redactions on.
+// handScrub scrubs text without a run to hang the redactions on.
 func (e *Engine) handScrub(ctx context.Context, project string) func(string) string {
 	tmp := uuid.New()
 	scrub := e.scrubber(ctx, tmp, project)
@@ -555,71 +155,256 @@ func (e *Engine) handScrub(ctx context.Context, project string) func(string) str
 	return scrub
 }
 
-// AddMemoryNote records a hand-written lesson for the next runs of a workflow.
-// It is a note like the ones the `remember` tool writes, so every agent step of
-// the next run reads it. An empty project means "local".
-func (e *Engine) AddMemoryNote(ctx context.Context, workflowName, project, text string) (model.MemoryEntry, error) {
-	if e.store == nil {
-		return model.MemoryEntry{}, ErrNoStateStore
+// ---- managing it, for the API, CLI and UI ----
+
+// MemoryNote is one note file.
+type MemoryNote struct {
+	Slug  string    `json:"slug"`
+	Bytes int64     `json:"bytes"`
+	MTime time.Time `json:"mtime"`
+}
+
+// MemoryView is a workflow's memory home at a glance.
+type MemoryView struct {
+	Workflow string       `json:"workflow"`
+	Project  string       `json:"project"`
+	Dir      string       `json:"dir"`
+	Enabled  bool         `json:"enabled"`
+	Index    string       `json:"index"`
+	Dream    string       `json:"dream"`
+	Log      string       `json:"log"`
+	Notes    []MemoryNote `json:"notes"`
+	// Loaded is the section an agent step reads (capped), exactly.
+	Loaded string `json:"loaded"`
+}
+
+var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// memoryFile maps a target (index | dream | note:<slug>) to its path.
+func memoryFile(dir, target string) (string, error) {
+	switch {
+	case target == "index" || target == "self":
+		return filepath.Join(dir, "MEMORY.md"), nil
+	case target == "dream":
+		return filepath.Join(dir, "DREAM.md"), nil
+	case strings.HasPrefix(target, "note:"):
+		slug := strings.TrimPrefix(target, "note:")
+		if !slugRe.MatchString(slug) || strings.Contains(slug, "..") {
+			return "", fmt.Errorf("invalid note slug %q", slug)
+		}
+		return filepath.Join(dir, "memory", slug+".md"), nil
 	}
-	if workflowName == "" {
-		return model.MemoryEntry{}, fmt.Errorf("which workflow?")
-	}
-	if strings.TrimSpace(text) == "" {
-		return model.MemoryEntry{}, fmt.Errorf("the note is empty")
-	}
+	return "", fmt.Errorf("unknown target %q: want index, dream or note:<slug>", target)
+}
+
+func readOr(p string) string {
+	b, _ := os.ReadFile(p)
+	return string(b)
+}
+
+// WorkflowMemory reads a workflow's memory home.
+func (e *Engine) WorkflowMemory(ctx context.Context, wf, project string) (MemoryView, error) {
 	if project == "" {
 		project = "local"
 	}
-	body := clip(e.handScrub(ctx, project)(text), memoryNoteMax)
-	return e.store.AddMemory(ctx, model.MemoryEntry{
-		Project: project, Workflow: workflowName, Kind: model.MemoryKindNote, Body: body,
-	})
-}
-
-// EditMemoryEntry rewrites one entry's text. A lesson is held to the same
-// limit as a written one; a run record or digest keeps its lines and is capped
-// at the digest size. The text is scrubbed like every other write.
-func (e *Engine) EditMemoryEntry(ctx context.Context, id, text string) (model.MemoryEntry, error) {
-	if e.store == nil {
-		return model.MemoryEntry{}, ErrNoStateStore
-	}
-	if strings.TrimSpace(text) == "" {
-		return model.MemoryEntry{}, fmt.Errorf("the text is empty — delete the entry instead")
-	}
-	m, err := e.store.GetMemory(ctx, id)
+	dir, err := e.MemoryDir(project, wf)
 	if err != nil {
-		return model.MemoryEntry{}, err
+		return MemoryView{}, err
 	}
-	text = e.handScrub(ctx, m.Project)(text)
-	if m.Kind == model.MemoryKindNote {
-		text = clip(text, memoryNoteMax)
-	} else {
-		text = strings.TrimSpace(text)
-		if len(text) > memoryDigestMax {
-			n := memoryDigestMax
-			for n > 0 && !utf8.RuneStart(text[n]) {
-				n--
-			}
-			text = text[:n] + "…"
+	v := MemoryView{Workflow: wf, Project: project, Dir: dir, Enabled: memoryOn(e.Definitions()[wf], nil),
+		Index: readOr(filepath.Join(dir, "MEMORY.md")), Dream: readOr(filepath.Join(dir, "DREAM.md")),
+		Log: readOr(filepath.Join(dir, "memory", "log.md")), Notes: []MemoryNote{}}
+	entries, _ := os.ReadDir(filepath.Join(dir, "memory"))
+	for _, en := range entries {
+		slug, ok := strings.CutSuffix(en.Name(), ".md")
+		if !ok || !slugRe.MatchString(slug) || !en.Type().IsRegular() {
+			continue
+		}
+		if fi, err := en.Info(); err == nil {
+			v.Notes = append(v.Notes, MemoryNote{Slug: slug, Bytes: fi.Size(), MTime: fi.ModTime()})
 		}
 	}
-	if err := e.store.UpdateMemoryBody(ctx, id, text); err != nil {
-		return model.MemoryEntry{}, err
+	sort.Slice(v.Notes, func(i, j int) bool { return v.Notes[i].Slug < v.Notes[j].Slug })
+	if def := e.Definitions()[wf]; def != nil {
+		v.Loaded = e.memoryFor(def, "", project)
 	}
-	m.Body = text
-	return m, nil
+	return v, nil
 }
 
-// PreviewMemory is what a run of this workflow would load, across projects —
-// the dry run's view.
-func (e *Engine) PreviewMemory(ctx context.Context, def *workflow.Definition) string {
-	if e.store == nil || def == nil {
-		return ""
+// ReadMemory returns one file (index, dream or note:<slug>).
+func (e *Engine) ReadMemory(wf, project, target string) (string, error) {
+	dir, err := e.MemoryDir(project, wf)
+	if err != nil {
+		return "", err
 	}
-	plan := workflow.EffectiveMemory(def, nil)
-	if !plan.On {
-		return ""
+	p, err := memoryFile(dir, target)
+	if err != nil {
+		return "", err
 	}
-	return e.memorySection(ctx, def.Name, "", true, plan)
+	b, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return "", fmt.Errorf("not found: %s", target)
+	}
+	return string(b), err
+}
+
+// WriteMemory replaces one file's whole text (scrubbed). note:log is the
+// dream's audit trail and is not hand-editable.
+func (e *Engine) WriteMemory(ctx context.Context, wf, project, target, text string) error {
+	if target == "note:log" {
+		return fmt.Errorf("memory/log.md is append-only")
+	}
+	dir, err := e.MemoryDir(project, wf)
+	if err != nil {
+		return err
+	}
+	p, err := memoryFile(dir, target)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(e.handScrub(ctx, project)(text)), 0o644)
+}
+
+// DeleteMemory removes one file, or — target "" — the whole home.
+func (e *Engine) DeleteMemory(wf, project, target string) error {
+	dir, err := e.MemoryDir(project, wf)
+	if err != nil {
+		return err
+	}
+	if target == "" {
+		return os.RemoveAll(dir)
+	}
+	p, err := memoryFile(dir, target)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// PreviewMemory is what a run in the local project would load.
+func (e *Engine) PreviewMemory(_ context.Context, def *workflow.Definition) string {
+	return e.memoryFor(def, "", "local")
+}
+
+// ---- dreaming ----
+
+// DreamResult is one dream pass.
+type DreamResult struct {
+	Workflow string `json:"workflow"`
+	Project  string `json:"project"`
+	Changed  bool   `json:"changed"`
+	Reply    string `json:"reply"`
+	Runs     int    `json:"runs"`
+}
+
+// transcripts loads the workflow's recent runs into a toolnexus conversation
+// store, one conversation per run: each step's prompt and answer, scrubbed.
+func (e *Engine) transcripts(ctx context.Context, project, wf string) (*tn.InMemoryConversationStore, int, error) {
+	st := tn.NewInMemoryConversationStore()
+	runs, err := e.store.WorkflowRuns(ctx, project, wf, dreamRuns)
+	if err != nil {
+		return nil, 0, err
+	}
+	scrub := e.handScrub(ctx, project)
+	for _, r := range runs {
+		steps, err := e.store.ListSteps(ctx, r.ID)
+		if err != nil {
+			continue
+		}
+		var msgs []any
+		if len(r.Input) > 0 {
+			msgs = append(msgs, map[string]any{"role": "user", "content": "run input: " + scrub(string(r.Input))})
+		}
+		for _, s := range steps {
+			if s.Prompt != "" {
+				msgs = append(msgs, map[string]any{"role": "user", "content": "[" + s.StepID + "] " + scrub(s.Prompt)})
+			}
+			ans := s.RawText
+			if len(s.Output) > 0 && string(s.Output) != "null" {
+				ans = strings.TrimSpace(ans + "\noutput: " + string(s.Output))
+			}
+			if s.Error != "" {
+				ans = strings.TrimSpace(ans + "\nerror: " + s.Error)
+			}
+			if ans != "" {
+				msgs = append(msgs, map[string]any{"role": "assistant", "content": "[" + s.StepID + "] " + scrub(ans)})
+			}
+		}
+		msgs = append(msgs, map[string]any{"role": "assistant", "content": "run ended " + r.Status + " " + scrub(r.Error)})
+		_ = st.Save(r.ID.String(), msgs)
+	}
+	return st, len(runs), nil
+}
+
+// Dream runs one toolnexus Dreamer pass over a workflow's memory home, with
+// its recent runs as transcript_search ground truth, on the default provider.
+func (e *Engine) Dream(ctx context.Context, wf, project string) (DreamResult, error) {
+	if project == "" {
+		project = "local"
+	}
+	out := DreamResult{Workflow: wf, Project: project}
+	if e.store == nil {
+		return out, ErrNoStateStore
+	}
+	if i := strings.LastIndex(wf, "/"); i >= 0 {
+		wf = wf[i+1:]
+	}
+	dir, err := e.MemoryDir(project, wf)
+	if err != nil {
+		return out, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return out, err
+	}
+	store, n, err := e.transcripts(ctx, project, wf)
+	if err != nil {
+		return out, err
+	}
+	out.Runs = n
+	ag, err := agents.Dreamer(dir, agents.DreamerOptions{Store: store, Name: wf + "-dreamer"})
+	if err != nil {
+		return out, err
+	}
+	prov, err := e.resolveLLMWithEnv(&workflow.Step{ID: "dream"}, dir, nil)
+	if err != nil {
+		return out, fmt.Errorf("dream provider: %w", err)
+	}
+	defer prov.Close()
+	stop := context.AfterFunc(ctx, prov.Close)
+	defer stop()
+	transport := e.transport
+	if transport == nil {
+		transport = prov.Transport
+	}
+	before := readOr(filepath.Join(dir, "memory", "log.md"))
+	res, _ := ag.Run(agents.Options{LLM: prov.LLM, Transport: transport}, agents.HeartbeatPrompt)
+	out.Reply = strings.TrimSpace(res.Text)
+	out.Changed = readOr(filepath.Join(dir, "memory", "log.md")) != before
+	if res.IsError || res.Status == "error" {
+		return out, fmt.Errorf("dream failed: %s", out.Reply)
+	}
+	return out, nil
+}
+
+// dreamAll dreams every memory home on disk, one at a time. Called daily by
+// the scheduler; a failure is logged and the next home goes on.
+func (e *Engine) dreamAll(ctx context.Context) {
+	projects, _ := os.ReadDir(e.MemoryRoot())
+	for _, p := range projects {
+		wfs, _ := os.ReadDir(filepath.Join(e.MemoryRoot(), p.Name()))
+		for _, w := range wfs {
+			if _, err := os.Stat(filepath.Join(e.MemoryRoot(), p.Name(), w.Name(), "MEMORY.md")); err != nil {
+				continue
+			}
+			r, err := e.Dream(ctx, w.Name(), p.Name())
+			b, _ := json.Marshal(r)
+			log.Printf("dream: %s/%s: %s err=%v", p.Name(), w.Name(), b, err)
+		}
+	}
 }

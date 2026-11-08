@@ -32,7 +32,9 @@ def reply():
         outcome("ok: not a text message, nothing to answer")
         sys.exit(3)
     memory = open("memory.md").read() if os.path.exists("memory.md") else ""
-    seen = [int(n) for n in re.findall(r"pong #(\d+)", memory)]
+    chat = m.get("chat") or ""
+    seen = [int(n) for line in memory.splitlines() if line.startswith(chat + " ")
+            for n in re.findall(r"pong #(\d+)", line)]
     said = f"pong #{(max(seen) if seen else 0) + 1}"
     open("reply.txt", "w").write(said)
     print(said, end="")

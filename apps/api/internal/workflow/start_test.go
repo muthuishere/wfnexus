@@ -123,18 +123,3 @@ steps:
 	}
 }
 
-func TestMemoryScope(t *testing.T) {
-	d, err := loadStart(t, "name: p\nmemory: {scope: workflow}\nsteps:\n  - id: s\n    run: echo\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := EffectiveMemory(d, nil); !p.On || p.Scope != MemoryScopeWorkflow {
-		t.Fatalf("plan %+v", p)
-	}
-	if p := EffectiveMemory(&Definition{}, nil); p.Scope != "" {
-		t.Fatalf("default scope should be per conversation (empty), got %q", p.Scope)
-	}
-	if _, err := loadStart(t, "name: p\nmemory: {scope: chat}\nsteps:\n  - id: s\n    run: echo\n"); err == nil || !strings.Contains(err.Error(), "scope") {
-		t.Fatalf("bad scope accepted: %v", err)
-	}
-}

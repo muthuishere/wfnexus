@@ -54,7 +54,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	}
 	// What previous runs of this workflow learned, unless the prompt placed
 	// `{{ .Memory }}` itself or memory is off for this step (memory.go).
-	prompt = withMemoryInPrompt(prompt, def, step, data.Memory)
+	prompt = withMemoryInPrompt(prompt, step, data.Memory)
 	// Answers to this step's earlier ask_human questions (answers.go).
 	prompt = withAnswersInPrompt(prompt, stepAnswers(data.Input, step.ID))
 	// Where it runs is the step's own `runs-on`, exactly as for a `run:` step.
@@ -111,9 +111,9 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// dry run — for a step whose job is to AUTHOR a workflow (authoring.go).
 	// Granted only when the step names them, like every other tool.
 	extra = append(extra, e.platformTools(step.Tools)...)
-	// `remember` writes only this run's own workflow memory — the address comes
-	// from the run row — so it widens no reach; `memory: false` withholds it.
-	extra = append(extra, e.rememberTool(runID, wfName, step)...)
+	// toolnexus's `memory` tool over this run's own workflow home — the
+	// address comes from the run row; `memory: false` withholds it (memory.go).
+	extra = append(extra, e.memoryTool(ctx, runID, wfName, step)...)
 
 	// The whole cascade, resolved once for this step: the agent's bash tool and
 	// its CLI provider must see the same environment a `run:` step would.

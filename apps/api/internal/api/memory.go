@@ -2,92 +2,80 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
-
-	"github.com/go-chi/chi/v5"
-
-	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
-// Workflow memory (engine/memory.go): what previous runs of a workflow left
-// behind. Reached through the workflow — there is no global list, matching the
-// project → workflow drill-down. `?project=` narrows to one project.
+// Workflow memory (engine/memory.go): the workflow's toolnexus memory home —
+// MEMORY.md index, memory/<slug>.md notes, the dream log. Reached through the
+// workflow; `?project=` picks the project (default local); `?target=` is
+// index | dream | note:<slug>.
 
 func (s *Server) workflowMemory(w http.ResponseWriter, r *http.Request) {
-	name := urlName(r, "name")
-	entries, err := s.eng.WorkflowMemory(r.Context(), name, r.URL.Query().Get("project"))
-	if err != nil {
-		writeErr(w, http.StatusServiceUnavailable, err)
-		return
-	}
-	resp := map[string]any{"workflow": name, "entries": entries}
-	if def := s.eng.Definitions()[name]; def != nil {
-		resp["preview"] = s.eng.PreviewMemory(r.Context(), def)
-		resp["enabled"] = def.Memory == nil || !def.Memory.Off
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (s *Server) forgetWorkflowMemory(w http.ResponseWriter, r *http.Request) {
-	n, err := s.eng.ForgetMemory(r.Context(), urlName(r, "name"), r.URL.Query().Get("project"))
+	v, err := s.eng.WorkflowMemory(r.Context(), urlName(r, "name"), r.URL.Query().Get("project"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n})
+	writeJSON(w, http.StatusOK, v)
 }
 
-func (s *Server) deleteMemoryEntry(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("which entry?"))
-		return
-	}
-	if err := s.eng.DeleteMemoryEntry(r.Context(), id); err != nil {
+func (s *Server) forgetWorkflowMemory(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DeleteMemory(urlName(r, "name"), r.URL.Query().Get("project"), ""); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// memoryText is the body of an add or an edit: the text the next run reads.
-type memoryText struct {
-	Body string `json:"body"`
+func (s *Server) readMemoryFile(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	body, err := s.eng.ReadMemory(urlName(r, "name"), q.Get("project"), q.Get("target"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"target": q.Get("target"), "body": body})
 }
 
-// addWorkflowMemory records a hand-written lesson: `{"body": "..."}`,
-// `?project=` (default local).
-func (s *Server) addWorkflowMemory(w http.ResponseWriter, r *http.Request) {
-	var b memoryText
+func (s *Server) writeMemoryFile(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Body string `json:"body"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	m, err := s.eng.AddMemoryNote(r.Context(), urlName(r, "name"), r.URL.Query().Get("project"), b.Body)
-	if err != nil {
+	q := r.URL.Query()
+	if err := s.eng.WriteMemory(r.Context(), urlName(r, "name"), q.Get("project"), q.Get("target"), b.Body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, m)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// editMemoryEntry rewrites one entry's text: `{"body": "..."}`.
-func (s *Server) editMemoryEntry(w http.ResponseWriter, r *http.Request) {
-	var b memoryText
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+func (s *Server) deleteMemoryFile(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("target") == "" {
+		writeErr(w, http.StatusBadRequest, errString("which file? ?target=index|dream|note:<slug>"))
+		return
+	}
+	if err := s.eng.DeleteMemory(urlName(r, "name"), q.Get("project"), q.Get("target")); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	m, err := s.eng.EditMemoryEntry(r.Context(), chi.URLParam(r, "id"), b.Body)
-	if errors.Is(err, store.ErrNotFound) {
-		notFound(w)
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, m)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// dreamWorkflowMemory runs one dream pass now (synchronously).
+func (s *Server) dreamWorkflowMemory(w http.ResponseWriter, r *http.Request) {
+	res, err := s.eng.Dream(r.Context(), urlName(r, "name"), r.URL.Query().Get("project"))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "result": res})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

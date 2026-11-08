@@ -45,8 +45,6 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-memory:
-  scope: workflow
 
 input_schema:
   type: object

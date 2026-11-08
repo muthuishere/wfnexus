@@ -37,8 +37,6 @@ description: >-
 on: [workflow_dispatch, workflow_call]
 
 # On by default; said here because remembering per chat is the point.
-memory:
-  scope: conversation
 
 input_schema:
   type: object
@@ -60,7 +58,7 @@ input_schema:
 
 steps:
   - id: reply
-    name: Count the pongs in this chat's memory
+    name: Count the pongs in this chat's state
     description: The reply is "pong #N"; N is one more than the highest pong this conversation remembers. Exit 3 = not a text, nothing to answer.
     continue-on-error: true
     run: |
@@ -68,10 +66,13 @@ steps:
       {{ json .Input }}
       WFX_INPUT_EOF
       cat > memory.md <<'WFX_MEMORY_EOF'
-      {{ .Memory }}
+      {{ .Workflow.pongs }}
       WFX_MEMORY_EOF
       python3 ./pong.py reply
     timeout_sec: 30
+    state:
+      workflow:
+        pongs: "{{ .Workflow.pongs }}\n{{ .Input.message.chat }} {{ .Output.stdout }}"
     output_schema:
       type: object
       properties:
@@ -100,7 +101,7 @@ steps:
 
   - id: save
     name: Save what was said
-    description: Writes "pong #N — answered <who>, sent <id>" as the run's outcome; the conversation's memory carries it to the next run.
+    description: Writes "pong #N — answered <who>, sent <id>" as the run's outcome; the reply step's workflow state carries the count to the next run.
     needs: [send]
     when:
       - path: reply.exitCode
