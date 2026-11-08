@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,9 +39,24 @@ func FromEnv() (*Self, error) {
 }
 
 func (s *Self) do(ctx context.Context, method, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, s.URL+"/api/service-self/"+s.Key+path, nil)
+	return s.doBody(ctx, method, path, nil, out)
+}
+
+func (s *Self) doBody(ctx context.Context, method, path string, in any, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, s.URL+"/api/service-self/"+s.Key+path, body)
 	if err != nil {
 		return err
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+s.Token)
 	c := s.HTTP
@@ -79,4 +95,23 @@ func (s *Self) Watches(ctx context.Context, out any) error {
 // Beat says the service's own loop is alive.
 func (s *Self) Beat(ctx context.Context) error {
 	return s.do(ctx, http.MethodPost, "/heartbeat", nil)
+}
+
+// OutboxItem is one op queued for this service (a send through it, #109).
+type OutboxItem struct {
+	ID      string          `json:"id"`
+	Request json.RawMessage `json:"request"`
+}
+
+// Outbox is what this service should send now, oldest first.
+func (s *Self) Outbox(ctx context.Context) ([]OutboxItem, error) {
+	var body struct {
+		Items []OutboxItem `json:"items"`
+	}
+	return body.Items, s.do(ctx, http.MethodGet, "/outbox", &body)
+}
+
+// Report says what happened to one item: sent, failed or uncertain.
+func (s *Self) Report(ctx context.Context, id, status string, result json.RawMessage) error {
+	return s.doBody(ctx, http.MethodPost, "/outbox/"+id, map[string]any{"status": status, "result": result}, nil)
 }

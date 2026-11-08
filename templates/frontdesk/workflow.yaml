@@ -21,7 +21,7 @@
 # (its own memory, its own failure, linked as a child).
 #
 # The 7-point bar:
-#   trigger        a whatsapp-group-monitor watch on a chat/DM (its hook), a manual run with `question`, or an MCP tool call (expose it: `wfx expose mcp frontdesk`)
+#   trigger        a apl.whatsapp watch on a chat/DM (its hook), a manual run with `question`, or an MCP tool call (expose it: `wfx expose mcp frontdesk`)
 #   system of record  the engine's API ($WFX_API) + the chat + this conversation's memory + the instructions
 #   typed output   answer: {reply, confidence, handoff_to, handoff_workflow, diagnose_workflow, diagnose_run, reason}; the sender's status
 #   verification   the sender confirms delivery; handoff targets are allow-listed; diagnoses cite runs (retrospective's check)

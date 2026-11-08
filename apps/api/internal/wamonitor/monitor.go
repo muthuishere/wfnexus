@@ -1,4 +1,4 @@
-// Package wamonitor is the whatsapp-group-monitor SERVICE module (ADR 0028,
+// Package wamonitor is the apl.whatsapp SERVICE module (ADR 0028,
 // issue #84): one long-running process per WhatsApp account that reads the
 // account ONCE per tick for every registered watch and delivers matching
 // messages to workflow hook URLs (ADR 0027).
@@ -36,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/supervisor"
 )
 
 // Watch is one registration: a chat (or "*") → a workflow hook.
@@ -80,6 +82,13 @@ type Config struct {
 	// Heartbeat, if set, is called after every read attempt from inside the
 	// loop: a hung read means no beat, and wfnexus shows the service silent.
 	Heartbeat func(ctx context.Context) error
+	// Outbox and Report, if set, are the sends queued through wfnexus for this
+	// account (#109): this process is the account's one writer. Send is the
+	// adapter's send command; it reads the envelope on stdin and prints
+	// {"id","status","error"}.
+	Outbox    func(ctx context.Context) ([]supervisor.OutboxItem, error)
+	Report    func(ctx context.Context, id, status string, result json.RawMessage) error
+	Send      []string
 	StateFile string
 	Interval  time.Duration
 	Debounce  time.Duration
@@ -161,6 +170,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 				m.cfg.Logf("wamonitor: read: %v", err)
 			}
 			lastRead = m.cfg.Now()
+			m.Drain(ctx)
 			if m.cfg.Heartbeat != nil {
 				if err := m.cfg.Heartbeat(ctx); err != nil {
 					m.cfg.Logf("wamonitor: heartbeat: %v", err)
@@ -386,5 +396,68 @@ func minDur(a, b time.Duration) time.Duration {
 	if a < b {
 		return a
 	}
+	return b
+}
+
+// Drain sends every queued outbox item, one at a time, and reports each. An
+// item is reported once: a send whose answer was lost is "uncertain", never
+// retried.
+func (m *Monitor) Drain(ctx context.Context) int {
+	if m.cfg.Outbox == nil || m.cfg.Report == nil || len(m.cfg.Send) == 0 {
+		return 0
+	}
+	items, err := m.cfg.Outbox(ctx)
+	if err != nil {
+		m.cfg.Logf("wamonitor: outbox: %v", err)
+		return 0
+	}
+	n := 0
+	for _, it := range items {
+		status, res := m.send(ctx, it)
+		if err := m.cfg.Report(ctx, it.ID, status, res); err != nil {
+			m.cfg.Logf("wamonitor: report %s: %v", it.ID, err)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func (m *Monitor) send(ctx context.Context, it supervisor.OutboxItem) (string, json.RawMessage) {
+	var req map[string]any
+	if err := json.Unmarshal(it.Request, &req); err != nil {
+		return "failed", mustRaw(map[string]any{"error": "unreadable request: " + err.Error()})
+	}
+	env := map[string]any{"version": "wfnexus.channel/v1", "type": "send", "channel": m.cfg.Channel,
+		"target": req["chat"], "text": req["text"], "dedupKey": it.ID}
+	if r, _ := req["replyTo"].(string); r != "" {
+		env["replyTo"] = map[string]any{"id": r, "sender": req["replyToSender"]}
+	}
+	in, _ := json.Marshal(env)
+	cmd := exec.CommandContext(ctx, m.cfg.Send[0], m.cfg.Send[1:]...)
+	cmd.Env = append(os.Environ(), m.cfg.Env...)
+	cmd.Stdin = bytes.NewReader(in)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, runErr := cmd.Output()
+	var res map[string]any
+	if json.Unmarshal(bytes.TrimSpace(out), &res) != nil {
+		res = map[string]any{"error": strings.TrimSpace(stderr.String())}
+		if runErr == nil {
+			return "uncertain", mustRaw(res)
+		}
+	}
+	switch st, _ := res["status"].(string); {
+	case runErr == nil && st == "sent":
+		return "sent", mustRaw(res)
+	case st == "failed":
+		return "failed", mustRaw(res)
+	default:
+		return "uncertain", mustRaw(res)
+	}
+}
+
+func mustRaw(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
 	return b
 }

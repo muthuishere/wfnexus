@@ -1,10 +1,10 @@
-// wfx-wa-monitor is the whatsapp-group-monitor service module's process
-// (modules/whatsapp-group-monitor, ADR 0028): one per WhatsApp account.
+// wfx-wa-monitor is the apl.whatsapp service module's process
+// (modules/apl, ADR 0028): one per WhatsApp account.
 //
 //	wfx-wa-monitor --label biz [--adapter adapters/apl-whatsapp.js]
 //	               [--state-dir ~/.local/state/wfnexus] [--interval 30s] [--debounce 3s] [--once]
 //
-// Started by a wfnexus supervisor (`wfx module start whatsapp-group-monitor`),
+// Started by a wfnexus supervisor (`wfx module start apl.whatsapp`),
 // which sets WFX_URL, WFX_SERVICE and WFX_SERVICE_TOKEN. Watches are read from
 // wfnexus every tick (`wfx module watch add …`), and the loop heartbeats after
 // every read, so a hung read shows as silent in `wfx module ls`.
@@ -61,6 +61,9 @@ func run() error {
 			return ws, self.Watches(ctx, &ws)
 		},
 		Heartbeat: self.Beat,
+		Outbox:    self.Outbox,
+		Report:    self.Report,
+		Send:      []string{"node", *adapter, "send"},
 		StateFile: filepath.Join(*stateDir, "wa-monitor-"+*label+".json"),
 		Interval:  *interval,
 		Debounce:  *debounce,

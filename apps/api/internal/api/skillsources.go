@@ -32,6 +32,7 @@ func (s *Server) skillSourceRoutes(r chi.Router) {
 	// The running service's own door: its scoped token, checked here.
 	r.Get("/service-self/{name}/{account}/watches", s.selfWatches)
 	r.Post("/service-self/{name}/{account}/heartbeat", s.selfHeartbeat)
+	s.moduleCallRoutes(r)
 }
 
 func serviceKey(r *http.Request) string {

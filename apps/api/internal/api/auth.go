@@ -115,7 +115,8 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 		// /api/service-self/ is a running service module's door: its scoped
 		// token is not a subject, and the handler checks it (Engine.AuthService).
 		if publicAPIPaths[r.URL.Path] || strings.HasPrefix(r.URL.Path, "/api/auth/oauth/") ||
-			strings.HasPrefix(r.URL.Path, "/api/service-self/") {
+			strings.HasPrefix(r.URL.Path, "/api/service-self/") ||
+			strings.HasPrefix(r.URL.Path, "/api/module-self/") {
 			next.ServeHTTP(w, r)
 			return
 		}

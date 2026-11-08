@@ -358,8 +358,8 @@ func (f *fakeWFXAPI) serve(t *testing.T) string {
 func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 	now := time.Now().UTC()
 	api := &fakeWFXAPI{
-		modules: []map[string]any{{"name": "whatsapp-group-monitor", "services": []any{
-			map[string]any{"key": "whatsapp-group-monitor/biz", "account": "biz", "state": "silent",
+		modules: []map[string]any{{"name": "apl", "instances": []any{
+			map[string]any{"key": "apl.whatsapp/biz", "module": "apl.whatsapp", "account": "biz", "state": "silent",
 				"lastError": "running but the service itself has not beaten (hung?)", "restarts": 2},
 		}}},
 		channels: []map[string]any{{"name": "wa", "lastReceive": now.Format(time.RFC3339)}},
@@ -386,7 +386,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 		t.Fatalf("want ONE alert for the same findings in the window, got %d", len(envs))
 	}
 	text := asStr(envs[0]["text"])
-	for _, want := range []string{"deaf", "service whatsapp-group-monitor/biz", "hung"} {
+	for _, want := range []string{"deaf", "service apl.whatsapp/biz", "hung"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("alert lacks %q:\n%s", want, text)
 		}

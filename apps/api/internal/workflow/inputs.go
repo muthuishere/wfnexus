@@ -217,6 +217,7 @@ func applyInputs(s *Step, vals map[string]any) {
 	s.Prompt = substInputs(s.Prompt, vals)
 	s.System = substInputs(s.System, vals)
 	s.Run = substInputs(s.Run, vals)
+	s.RunsOn = substInputs(s.RunsOn, vals)
 	if len(s.Env) > 0 {
 		env := make(map[string]string, len(s.Env))
 		for k, v := range s.Env {

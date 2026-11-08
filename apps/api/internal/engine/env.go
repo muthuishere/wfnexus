@@ -124,6 +124,16 @@ func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.St
 		}
 	}
 	env := workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env)
+	// A step from a module's command reaches that module's door (modulecalls.go).
+	if step.Module != "" && e.store != nil {
+		if me := e.moduleEnv(ctx, step.Module); me != nil {
+			env = workflow.MergeEnv(env, me)
+			if base == nil {
+				base = map[string]string{}
+			}
+			base["WFX_MODULE_TOKEN"] = me["WFX_MODULE_TOKEN"]
+		}
+	}
 	// Every sensitive value this step can see is registered BEFORE the step
 	// runs, so the first event it produces is already scrubbed (redact.go).
 	sealed := map[string]bool{}

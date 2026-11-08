@@ -27,7 +27,7 @@ import (
 //     running or waiting on a child, and released when it ends or parks on a
 //     person (a pause must not block the chat forever).
 //
-// Batching a chat's messages is the whatsapp-group-monitor's job (ADR 0028);
+// Batching a chat's messages is the apl.whatsapp's job (ADR 0028);
 // the lane here carries `workflow.completed` events back into the parent's
 // conversation (start.go). Lanes are in memory, per process — like the
 // scheduler, one engine owns the runs it starts.

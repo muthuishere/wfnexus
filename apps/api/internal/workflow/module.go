@@ -17,37 +17,77 @@ import (
 // it like any task — `uses: name@1` with typed `with:` — and the platform can
 // say, before a run, which env vars and secrets it still needs.
 //
-//	name: whatsapp-group-monitor
-//	version: 1.0.0
-//	kind: service            # command (default): steps run in a workflow
-//	                         # service: a long-running process (service: below)
+//	name: apl
+//	version: 0.2.0
 //	description: ...
-//	inputs:  { ... }         # same InputSpec as a task
-//	outputs: { ... }
 //	requires:
 //	  env:     [APL_BIN]
-//	  secrets: [WFX_HOOK_TOKEN]
 //	binary:                  # optional: the CLI it needs, delivered by carry
-//	  carry: deemwar/wa-monitor@1.0.0
-//	service:                 # kind: service only
-//	  command: wfx-wa-monitor
-//	  args: [--interval, 30s]
-//	steps: [ ... ]           # the task; or put them in task.yaml beside it
+//	  carry: deemwar/wfx-wa-monitor@0.2.0
+//	inputs: { ... }          # optional: the module's OWN command (steps: below,
+//	steps:  [ ... ]          #   or task.yaml), called as `uses: apl@0`
+//	commands:                # named commands, called as `uses: apl.whatsapp-send@0`
+//	  whatsapp-send: { description, inputs, outputs, steps }
+//	services:                # supervised processes, one per account (#103)
+//	  whatsapp:
+//	    command: wfx-wa-monitor
+//	    args: [--label, "{{ .Inputs.label }}"]
+//	    inputs: { label: { type: string, default: biz } }
+//
+// A command is reachable by `<module>.<command>`, a service by
+// `<module>.<service>`.
 //
 // A module named like a local task loses: a repository's own tasks always win,
 // so importing a registry never changes what an existing name does.
 
 const ModuleFile = "module.yaml"
 
+// ModuleCommandSource names the generated workflows that run a module command
+// on its own (`wfx module call`); `uses:` never resolves to them.
+const ModuleCommandSource = "modules"
+
 // Module is one parsed manifest.
 type Module struct {
 	Task     `yaml:",inline"`
-	Kind     string        `yaml:"kind,omitempty" json:"kind"`
-	Requires ModuleNeeds   `yaml:"requires,omitempty" json:"requires"`
-	Binary   *ModuleBinary `yaml:"binary,omitempty" json:"binary,omitempty"`
-	Service  *ModuleSvc    `yaml:"service,omitempty" json:"service,omitempty"`
-	Source   string        `yaml:"-" json:"source,omitempty"`
-	Dir      string        `yaml:"-" json:"dir"`
+	Requires ModuleNeeds          `yaml:"requires,omitempty" json:"requires"`
+	Binary   *ModuleBinary        `yaml:"binary,omitempty" json:"binary,omitempty"`
+	Commands map[string]Task      `yaml:"commands,omitempty" json:"commands,omitempty"`
+	Services map[string]ModuleSvc `yaml:"services,omitempty" json:"services,omitempty"`
+	Source   string               `yaml:"-" json:"source,omitempty"`
+	Dir      string               `yaml:"-" json:"dir"`
+}
+
+// CommandNames is every callable name the module offers: its own (when it has
+// steps) and `<module>.<command>` for each named command, sorted.
+func (m *Module) CommandNames() []string {
+	var out []string
+	if len(m.Steps) > 0 {
+		out = append(out, m.Name)
+	}
+	for c := range m.Commands {
+		out = append(out, m.Name+"."+c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Callable is the task behind a callable name, with the module's version.
+func (m *Module) Callable(name string) (*Task, bool) {
+	var t Task
+	if name == m.Name && len(m.Steps) > 0 {
+		t = m.Task
+	} else if c, ok := strings.CutPrefix(name, m.Name+"."); ok {
+		ct, found := m.Commands[c]
+		if !found {
+			return nil, false
+		}
+		t = ct
+		t.Name = name
+	} else {
+		return nil, false
+	}
+	t.Version, t.Module = m.Version, m.Name
+	return &t, true
 }
 
 // ModuleNeeds is what must be configured once before the module can run.
@@ -63,10 +103,12 @@ type ModuleBinary struct {
 	Path  string `yaml:"path,omitempty" json:"path,omitempty"`
 }
 
-// ModuleSvc is how a service module's process is started.
+// ModuleSvc is how one of a module's services is started.
 type ModuleSvc struct {
-	Command string   `yaml:"command" json:"command"`
-	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
+	Description string               `yaml:"description,omitempty" json:"description,omitempty"`
+	Command     string               `yaml:"command" json:"command"`
+	Args        []string             `yaml:"args,omitempty" json:"args,omitempty"`
+	Inputs      map[string]InputSpec `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 }
 
 // LoadModule parses one module directory.
@@ -92,16 +134,6 @@ func LoadModule(dir string) (*Module, error) {
 	if _, ok := majorOf(m.Version); !ok {
 		return nil, fmt.Errorf("%s: version %q must start with a major number (1, 1.2.0, v2)", p, m.Version)
 	}
-	switch m.Kind {
-	case "":
-		m.Kind = "command"
-	case "command", "service":
-	default:
-		return nil, fmt.Errorf("%s: kind %q is command or service", p, m.Kind)
-	}
-	if m.Kind == "service" && (m.Service == nil || m.Service.Command == "") {
-		return nil, fmt.Errorf("%s: a service module needs service.command", p)
-	}
 	if len(m.Steps) == 0 {
 		if b, err := os.ReadFile(filepath.Join(dir, "task.yaml")); err == nil {
 			var t Task
@@ -111,11 +143,33 @@ func LoadModule(dir string) (*Module, error) {
 			m.Steps = t.Steps
 		}
 	}
-	if m.Kind == "command" && len(m.Steps) == 0 {
-		return nil, fmt.Errorf("%s: a command module needs steps (in module.yaml or task.yaml)", p)
+	if len(m.Steps) == 0 && len(m.Commands) == 0 && len(m.Services) == 0 {
+		return nil, fmt.Errorf("%s: a module needs steps, commands or services", p)
 	}
 	if err := checkSpecs(p, m.Inputs); err != nil {
 		return nil, err
+	}
+	for c, t := range m.Commands {
+		if !safeModuleName(c) || strings.Contains(c, ".") {
+			return nil, fmt.Errorf("%s: command name %q: letters, digits, dash, underscore", p, c)
+		}
+		if len(t.Steps) == 0 {
+			return nil, fmt.Errorf("%s: command %s needs steps", p, c)
+		}
+		if err := checkSpecs(p+" command "+c, t.Inputs); err != nil {
+			return nil, err
+		}
+	}
+	for n, s := range m.Services {
+		if !safeModuleName(n) || strings.Contains(n, ".") {
+			return nil, fmt.Errorf("%s: service name %q: letters, digits, dash, underscore", p, n)
+		}
+		if s.Command == "" {
+			return nil, fmt.Errorf("%s: service %s needs a command", p, n)
+		}
+		if err := checkSpecs(p+" service "+n, s.Inputs); err != nil {
+			return nil, err
+		}
 	}
 	for _, n := range append(append([]string(nil), m.Requires.Env...), m.Requires.Secrets...) {
 		if !envName(n) {
@@ -166,12 +220,11 @@ func WithModules(mods []*Module) LoadOption {
 			o.modules = map[string]*Task{}
 		}
 		for _, m := range mods {
-			if m.Kind != "command" {
-				continue // a service is configured, not expanded into steps
-			}
-			if _, dup := o.modules[m.Name]; !dup {
-				t := m.Task
-				o.modules[m.Name] = &t
+			// A service is configured, not expanded into steps.
+			for _, n := range m.CommandNames() {
+				if _, dup := o.modules[n]; !dup {
+					o.modules[n], _ = m.Callable(n)
+				}
 			}
 		}
 	}

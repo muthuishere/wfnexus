@@ -57,11 +57,19 @@ func (w *World) Holds(name Fact) bool { return w.facts[name] }
 // Value resolves a dotted path — `triage.valid` reads into the object a step
 // produced, so a guard can branch on a field rather than only on existence.
 func (w *World) Value(path string) (any, bool) {
-	head, rest, _ := strings.Cut(path, ".")
-	cur, ok := w.values[head]
-	if !ok {
+	// A step id may itself hold dots (`uses:` expands a task's step `plan` to
+	// `call.plan`), so the head is the LONGEST step id the path starts with.
+	head, rest := "", ""
+	for k := range w.values {
+		if (path == k || strings.HasPrefix(path, k+".")) && len(k) > len(head) {
+			head = k
+		}
+	}
+	if head == "" {
 		return nil, false
 	}
+	rest = strings.TrimPrefix(strings.TrimPrefix(path, head), ".")
+	cur := w.values[head]
 	for rest != "" {
 		var key string
 		key, rest, _ = strings.Cut(rest, ".")

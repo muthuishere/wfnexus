@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/agentadapter"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 )
 
 // A devin registry entry carries the step's model and its permission mode to

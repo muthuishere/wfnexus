@@ -59,6 +59,7 @@ var ErrServiceOwned = supervisor.ErrNotOwner
 type ServiceSpec struct {
 	Module    string            `json:"module"`
 	Account   string            `json:"account"`
+	Profile   string            `json:"profile,omitempty"`
 	RunsOn    string            `json:"runsOn,omitempty"`
 	Inputs    map[string]string `json:"inputs,omitempty"`
 	EnabledAt time.Time         `json:"enabledAt"`
@@ -89,17 +90,23 @@ type ServiceView struct {
 	Watches          []json.RawMessage `json:"watches"`
 }
 
-func (e *Engine) serviceModule(name string) (*workflow.Module, error) {
+// serviceModule finds `<module>.<service>`.
+func (e *Engine) serviceModule(name string) (*workflow.Module, workflow.ModuleSvc, error) {
+	mod, svc, ok := strings.Cut(name, ".")
+	if !ok {
+		return nil, workflow.ModuleSvc{}, fmt.Errorf("name a service as <module>.<service>, e.g. apl.whatsapp")
+	}
 	mods, _ := e.Modules()
 	for _, m := range mods {
-		if m.Name == name {
-			if m.Kind != "service" || m.Service == nil {
-				return nil, fmt.Errorf("module %q is kind %s, not a service", name, m.Kind)
+		if m.Name == mod {
+			s, found := m.Services[svc]
+			if !found {
+				return nil, workflow.ModuleSvc{}, fmt.Errorf("module %s has no service %q", mod, svc)
 			}
-			return m, nil
+			return m, s, nil
 		}
 	}
-	return nil, fmt.Errorf("no module %q — wfx module ls", name)
+	return nil, workflow.ModuleSvc{}, fmt.Errorf("no module %q — wfx module ls", mod)
 }
 
 // EnableService records (or replaces) one service. It renders the command
@@ -108,15 +115,35 @@ func (e *Engine) EnableService(ctx context.Context, spec ServiceSpec) (ServiceSp
 	if e.store == nil {
 		return spec, errors.New("services need the platform store")
 	}
-	m, err := e.serviceModule(spec.Module)
+	m, svc, err := e.serviceModule(spec.Module)
 	if err != nil {
 		return spec, err
+	}
+	// A profile (named, else the module's default) gives the account and its
+	// input defaults; explicit inputs win.
+	if spec.Account == "" {
+		mod, _, _ := strings.Cut(spec.Module, ".")
+		if p, perr := e.ResolveProfile(ctx, mod, spec.Profile); perr == nil {
+			spec.Account, spec.Profile = p.Account, p.Name
+			merged := map[string]string{}
+			for k, v := range p.Inputs {
+				if _, ok := svc.Inputs[k]; ok {
+					merged[k] = v
+				}
+			}
+			for k, v := range spec.Inputs {
+				merged[k] = v
+			}
+			spec.Inputs = merged
+		} else if spec.Profile != "" {
+			return spec, perr
+		}
 	}
 	if spec.Account == "" {
 		spec.Account = spec.Inputs["label"]
 	}
 	if spec.Account == "" {
-		if d, ok := m.Inputs["label"]; ok && d.Default != nil {
+		if d, ok := svc.Inputs["label"]; ok && d.Default != nil {
 			spec.Account = fmt.Sprint(d.Default)
 		}
 	}
@@ -126,7 +153,7 @@ func (e *Engine) EnableService(ctx context.Context, spec ServiceSpec) (ServiceSp
 	if strings.ContainsAny(spec.Account, "/ ") {
 		return spec, fmt.Errorf("account %q may not hold '/' or spaces", spec.Account)
 	}
-	if _, _, err := renderService(m, spec); err != nil {
+	if _, _, err := renderService(m, svc, spec); err != nil {
 		return spec, err
 	}
 	spec.EnabledAt = time.Now().UTC()
@@ -165,30 +192,30 @@ func (e *Engine) DisableService(ctx context.Context, module, account string) err
 
 // renderService fills the manifest's args from the module's input defaults and
 // the spec's inputs.
-func renderService(m *workflow.Module, spec ServiceSpec) (string, []string, error) {
+func renderService(m *workflow.Module, svc workflow.ModuleSvc, spec ServiceSpec) (string, []string, error) {
 	in := map[string]any{}
-	for k, d := range m.Inputs {
+	for k, d := range svc.Inputs {
 		if d.Default != nil {
 			in[k] = fmt.Sprint(d.Default)
 		}
 	}
 	for k, v := range spec.Inputs {
-		if _, ok := m.Inputs[k]; !ok {
-			return "", nil, fmt.Errorf("module %s has no input %q", m.Name, k)
+		if _, ok := svc.Inputs[k]; !ok {
+			return "", nil, fmt.Errorf("service %s has no input %q", spec.Module, k)
 		}
 		in[k] = v
 	}
-	if _, ok := m.Inputs["label"]; ok {
+	if _, ok := svc.Inputs["label"]; ok {
 		in["label"] = spec.Account // the account IS the label input
 	}
-	for k, d := range m.Inputs {
+	for k, d := range svc.Inputs {
 		if d.Required && in[k] == nil {
 			return "", nil, fmt.Errorf("module %s needs input %q (--input %s=...)", m.Name, k, k)
 		}
 	}
 	data := map[string]any{"Inputs": in}
-	args := make([]string, 0, len(m.Service.Args))
-	for _, a := range m.Service.Args {
+	args := make([]string, 0, len(svc.Args))
+	for _, a := range svc.Args {
 		t, err := template.New("arg").Option("missingkey=error").Parse(a)
 		if err != nil {
 			return "", nil, fmt.Errorf("module %s: arg %q: %w", m.Name, a, err)
@@ -199,7 +226,7 @@ func renderService(m *workflow.Module, spec ServiceSpec) (string, []string, erro
 		}
 		args = append(args, b.String())
 	}
-	cmd := m.Service.Command
+	cmd := svc.Command
 	if m.Binary != nil && m.Binary.Path != "" {
 		cmd = m.Binary.Path
 	}
@@ -354,7 +381,7 @@ func (e *Engine) ServiceSelfBeat(ctx context.Context, key string) error {
 }
 
 // ServiceWatches is one service's registered watches, each a JSON object
-// whose shape is the module's (wamonitor.Watch for whatsapp-group-monitor).
+// whose shape is the module's (wamonitor.Watch for apl.whatsapp).
 func (e *Engine) ServiceWatches(ctx context.Context, key string) ([]json.RawMessage, error) {
 	vars, err := e.store.ListState(ctx, serviceScope, key)
 	if err != nil {
@@ -431,11 +458,11 @@ func (e *Engine) ServicesFor(ctx context.Context, owner string, labels []string,
 		if r.status != nil && r.status.Owner != owner && fresh(r.status, now) {
 			continue // someone else holds it
 		}
-		m, err := e.serviceModule(r.spec.Module)
+		m, svc, err := e.serviceModule(r.spec.Module)
 		if err != nil {
 			continue // uninstalled since; shown as silent in ls
 		}
-		cmd, args, err := renderService(m, r.spec)
+		cmd, args, err := renderService(m, svc, r.spec)
 		if err != nil {
 			continue
 		}
@@ -451,8 +478,12 @@ func (e *Engine) ServicesFor(ctx context.Context, owner string, labels []string,
 		if err != nil {
 			return nil, err
 		}
-		senv := make(map[string]string, len(env)+3)
+		senv := make(map[string]string, len(env)+5)
 		for k, v := range env {
+			senv[k] = v
+		}
+		mod, _, _ := strings.Cut(r.spec.Module, ".")
+		for k, v := range e.moduleEnv(ctx, mod) {
 			senv[k] = v
 		}
 		// WFX_URL is this server's address; a worker replaces it with the

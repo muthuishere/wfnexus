@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"sort"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/agentadapter"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 )
 
 // Adapter is one agent wfnexus can drive over ACP, and whether this machine

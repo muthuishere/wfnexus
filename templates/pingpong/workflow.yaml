@@ -1,6 +1,6 @@
 # pingpong — the reference handler: the smallest thing that proves the loop.
 #
-#   WhatsApp message → whatsapp-group-monitor watch → hook → THIS run → whatsapp-sender → WhatsApp,
+#   WhatsApp message → apl.whatsapp watch → hook → THIS run → whatsapp-sender → WhatsApp,
 #   and the next message in the same chat remembers this one.
 #
 # Three steps, no model: read the conversation's memory and count the pongs,
@@ -10,7 +10,7 @@
 # default: ADR 0026).
 #
 # The 7-point bar:
-#   trigger        a whatsapp-group-monitor watch posting to this workflow's hook (or an MCP call)
+#   trigger        a apl.whatsapp watch posting to this workflow's hook (or an MCP call)
 #   system of record  the chat itself + this conversation's memory
 #   typed output   {heard, said, status, id}
 #   verification   the sender's confirmed status is what is saved, not "we tried"
@@ -27,7 +27,7 @@ template:
     test group to prove receive, route, reply and memory in one minute.
   fill:
     - "copy whatsapp-sender too — this sends through it"
-    - "watch it: wfx expose hook pingpong, then wfx module watch add whatsapp-group-monitor --account <label> '{\"name\":\"pingpong-test\",\"chat\":\"<test-group-jid>\",\"hook\":\"<url>\",\"tokenEnv\":\"<VAR>\"}'"
+    - "watch it: wfx expose hook pingpong, then wfx module watch add apl.whatsapp --account <label> '{\"name\":\"pingpong-test\",\"chat\":\"<test-group-jid>\",\"hook\":\"<url>\",\"tokenEnv\":\"<VAR>\"}'"
 
 description: >-
   Reference handler for a watched WhatsApp chat: reads this chat's memory,
