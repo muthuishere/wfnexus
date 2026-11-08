@@ -149,6 +149,14 @@ steps:
         have a matching proposal. Only findings a person fixes outside
         wfnexus (money, a secret, an account) get no proposal. An empty list
         while such findings exist is wrong.
+        HINT — exit code as an answer: a `run` step that keeps failing with
+        the SAME non-zero exit (e.g. "command exited 3") whose script uses
+        that code to mean a result (findings, unhealthy, changes found), so
+        the steps after it (triage, alert) never ran, is not a crash. Propose
+        edit-step adding `exitCodes: {"0": "ok", "3": "findings"}` (YAML
+        `exit-codes: {0: ok, 3: findings}`) to that step, and a
+        `when: [{path: <step>.outcome, equals: findings}]` on the step that
+        should handle it. Undeclared codes still fail.
       - summary: 2-4 lines a person can read on a phone, including whether earlier fixes held
     output_schema:
       type: object

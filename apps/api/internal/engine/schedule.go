@@ -259,7 +259,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 			// The output is kept so the failure can be read, but the step and
 			// the run are failed: a run whose command exited 1 is not "done".
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Output: mustJSON(out)})
-			e.failStep(ctx, runID, step.ID, fmt.Errorf("command exited %d%s (set continue-on-error: true, or a gate on exitCode, if this exit is an answer)", code, stderrTail(out)))
+			e.failStep(ctx, runID, step.ID, fmt.Errorf("command exited %d%s (declare it in exit-codes, e.g. {3: findings}, if this exit is an answer)", code, stderrTail(out)))
 			return nil, stepHalted
 		}
 		e.setStep(ctx, runID, step.ID, model.StepPatch{
@@ -322,6 +322,9 @@ func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflo
 			out, err = e.runJudge(ctx, runID, step, data)
 		} else {
 			out, err = e.runCommand(ctx, runID, step, data)
+			if err == nil {
+				labelExit(step, out)
+			}
 		}
 		if err == nil {
 			// A failing exit is retried like any other failure; the last
@@ -409,16 +412,8 @@ func exitFailed(step *workflow.Step, out map[string]any) (int, bool) {
 	if step.Run == "" || step.ContinueOnError {
 		return 0, false
 	}
-	var code int
-	switch v := out["exitCode"].(type) {
-	case int:
-		code = v
-	case int64:
-		code = int(v)
-	case float64:
-		code = int(v)
-	}
-	if code == 0 {
+	code := outExitCode(out)
+	if _, declared := step.ExitCodes[code]; declared || code == 0 {
 		return 0, false
 	}
 	for _, g := range step.Gates {
@@ -475,4 +470,29 @@ func (e *Engine) applyDecideGatesLinear(ctx context.Context, runID uuid.UUID, st
 		}
 	}
 	return false
+}
+
+func outExitCode(out map[string]any) int {
+	switch v := out["exitCode"].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+// labelExit applies a step's `exit-codes:` declaration to its output: a
+// declared code is an answer, so the step is ok and the answer's name is the
+// output's `outcome`, which a later `when:` routes on.
+func labelExit(step *workflow.Step, out map[string]any) {
+	if out == nil || len(step.ExitCodes) == 0 {
+		return
+	}
+	if name, ok := step.ExitCodes[outExitCode(out)]; ok {
+		out["ok"] = true
+		out["outcome"] = name
+	}
 }
