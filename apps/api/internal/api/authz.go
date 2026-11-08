@@ -137,6 +137,10 @@ func PermissionFor(method, path string) string {
 	if method == http.MethodPost && path == "/api/workers/join" {
 		return PermPublic
 	}
+	// A service module's own token, checked in the handler (skillsources.go).
+	if strings.HasPrefix(path, "/api/service-self/") {
+		return PermPublic
+	}
 	// Installing a skill or an MCP server puts code the server will RUN on the
 	// machine — the same reach as carry — so it is an operator's permission,
 	// not a registry editor's.

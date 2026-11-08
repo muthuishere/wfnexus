@@ -6,8 +6,11 @@
 # until it is quiet for 3s, then POSTing the batch to each matching watch's
 # workflow hook (ADR 0027): {"message": newest, "messages": [...], "watch", "chat"}.
 #
-# Register a watch = add a line to the watches file (re-read every tick):
-#   [{"name":"ops","chat":"1203…@g.us","hook":"https://wfx.example/hooks/p/ops-bot","tokenEnv":"OPS_HOOK_TOKEN"}]
+# Run it:   wfx module start whatsapp-group-monitor --account biz [--runs-on <label>]
+# Register a watch through wfnexus (picked up on the next tick, no restart):
+#   wfx module watch add whatsapp-group-monitor --account biz \
+#     '{"name":"ops","chat":"1203…@g.us","hook":"https://wfx.example/hooks/p/ops-bot","tokenEnv":"OPS_HOOK_TOKEN"}'
+# The process heartbeats from inside its loop; a hung read shows as silent.
 # The hook token comes from `wfx expose hook <workflow>`; store it once with
 # `wfx module config whatsapp-group-monitor` / `wfx env set`, never in the file.
 name: whatsapp-group-monitor
@@ -16,7 +19,6 @@ kind: service
 description: Watches WhatsApp chats for many workflows with one batched read per tick and delivers to their hooks.
 inputs:
   label:    { type: string, default: biz, description: the apl whatsapp account label }
-  watches:  { type: string, required: true, description: path of the watches JSON file }
   interval: { type: string, default: 30s }
   debounce: { type: string, default: 3s }
 outputs:
@@ -27,4 +29,4 @@ binary:
   carry: deemwar/wfx-wa-monitor@0.1.0   # follow-up: carry delivery; today build apps/api/cmd/wfx-wa-monitor
 service:
   command: wfx-wa-monitor
-  args: [--label, "{{ .Inputs.label }}", --watches, "{{ .Inputs.watches }}", --interval, "{{ .Inputs.interval }}", --debounce, "{{ .Inputs.debounce }}"]
+  args: [--label, "{{ .Inputs.label }}", --interval, "{{ .Inputs.interval }}", --debounce, "{{ .Inputs.debounce }}"]

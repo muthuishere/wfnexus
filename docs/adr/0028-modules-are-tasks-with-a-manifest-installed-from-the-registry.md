@@ -32,7 +32,8 @@ account; ONE inbox read per tick for all watches via the existing
 persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}`
 to each watch's hook (ADR 0027) with a bearer token read from an env var the
 watch names, and an `Idempotency-Key` so a retried batch never runs twice.
-Watches are a JSON file re-read every tick.
+Watches are registered through wfnexus (`wfx module watch add`, #103) and
+read every tick, so a new watch needs no restart.
 
 ## Consequences
 
@@ -41,5 +42,25 @@ Watches are a JSON file re-read every tick.
 - The in-engine subscriptions + router (ADR 0026, #76) duplicate what a
   service module + hooks now do. They are dead weight once the monitor is
   supervised; removal is a follow-up, not done here.
-- Not yet: carry delivery of `binary:` (manifest field only), supervision +
-  heartbeat on a worker, trust/signing and permission diff on Sync (#85).
+- Supervision (#103): `wfx module start <m> --account a [--runs-on l]
+  [--input k=v]` records one service per module+account in the state store
+  (scope `service`). The server supervises those on labels it serves itself;
+  `wfx-runner run` supervises those on its labels (`GET
+  /api/workers/services`). Crashes restart with exponential backoff (1s → 5m,
+  reset after a minute up). Every 15s the supervisor beats (`POST
+  /api/workers/services/heartbeat`); the first owner holds the lease while it
+  beats, a second machine is refused (409) and stops its copy. `wfx module ls`
+  shows state (pending|running|crashed|silent), last heartbeat and restarts;
+  no beat for 90s is `silent`, announced once on the default channel, and the
+  lease is free for another worker.
+- The service itself beats too. The supervisor starts it with `WFX_URL`,
+  `WFX_SERVICE` and `WFX_SERVICE_TOKEN` (an HMAC of the key under the
+  registration token: scoped to that one service, nothing stored). With these
+  the service reads its watches (`GET /api/service-self/<m>/<account>/watches`)
+  and beats from inside its loop (`POST …/heartbeat`). A process that is
+  running but whose own beat is older than 90s (measured from its start) is
+  hung, and shows `silent`, the same as a dead one. Watches are stored per
+  service as `watch:<name>` (`wfx module watch ls|add|rm`); the monitor's
+  `--watches` JSON file is gone.
+- Not yet: carry delivery of `binary:` (manifest field only), trust/signing
+  and permission diff on Sync (#85).

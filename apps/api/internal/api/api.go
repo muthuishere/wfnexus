@@ -257,6 +257,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Post("/workers/join", s.joinWorker)
 		r.Post("/workers/claim", s.claimJob)
 		r.Post("/workers/heartbeat", s.heartbeat)
+		// Service modules this worker supervises, and their heartbeats (#103).
+		r.Get("/workers/services", s.workerServices)
+		r.Post("/workers/services/heartbeat", s.serviceHeartbeat)
 		r.Get("/workers/providers", s.workerProviders)
 		r.Post("/workers/jobs/{jobId}/events", s.workerEvents)
 		r.Post("/workers/jobs/{jobId}/result", s.finishJob)

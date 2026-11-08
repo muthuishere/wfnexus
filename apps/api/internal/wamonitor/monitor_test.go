@@ -36,6 +36,7 @@ type harness struct {
 	mu      sync.Mutex
 	hits    []hit
 	failing bool
+	ws      []Watch // what wfnexus answers for this service's watches
 }
 
 func newHarness(t *testing.T) *harness {
@@ -65,20 +66,22 @@ func newHarness(t *testing.T) *harness {
 		{Name: "ops", Chat: "ops@g.us", Hook: srv.URL + "/hooks/p/ops-bot", TokenEnv: "OPS_HOOK"},
 		{Name: "all", Chat: "*", Kinds: []string{"message", "reaction"}, Hook: srv.URL + "/hooks/p/archive", TokenEnv: "ALL_HOOK"},
 	})
-	wf := filepath.Join(dir, "watches.json")
-	if err := os.WriteFile(wf, watches, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	_ = json.Unmarshal(watches, &h.ws)
 	adapter, _ := filepath.Abs("../../../../adapters/apl-whatsapp.js")
 	fake, _ := filepath.Abs("testdata/fake-apl.js")
 	m, err := New(Config{
-		Receive:     []string{"node", adapter, "receive"},
-		Env:         []string{"APL_BIN=" + fake, "APL_WA_LEDGER=" + h.ledger, "FAKE_WA_STORE=" + h.store},
-		WatchesFile: wf, StateFile: filepath.Join(dir, "state.json"),
-		Debounce: 3 * time.Second,
-		Getenv:   envMap{"OPS_HOOK": "tok-ops", "ALL_HOOK": "tok-all"}.get,
-		Now:      func() time.Time { return h.now },
-		Logf:     t.Logf,
+		Receive: []string{"node", adapter, "receive"},
+		Env:     []string{"APL_BIN=" + fake, "APL_WA_LEDGER=" + h.ledger, "FAKE_WA_STORE=" + h.store},
+		Watches: func(context.Context) ([]Watch, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return append([]Watch(nil), h.ws...), nil
+		},
+		StateFile: filepath.Join(dir, "state.json"),
+		Debounce:  3 * time.Second,
+		Getenv:    envMap{"OPS_HOOK": "tok-ops", "ALL_HOOK": "tok-all"}.get,
+		Now:       func() time.Time { return h.now },
+		Logf:      t.Logf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,4 +221,66 @@ func TestOneMonitorPerAccount(t *testing.T) {
 func countLines(p string) int {
 	b, _ := os.ReadFile(p)
 	return strings.Count(string(b), "\n")
+}
+
+// Watches come from wfnexus on every read: one registered while the monitor
+// runs is used on the next tick, without a restart.
+func TestAWatchRegisteredWhileRunningIsUsedOnTheNextRead(t *testing.T) {
+	h := newHarness(t)
+	h.mu.Lock()
+	all := h.ws
+	h.ws = nil
+	h.mu.Unlock()
+	h.put(msg("ops@g.us", "m0", "2026-11-08T09:00:00Z", "history", false))
+	h.read()
+	h.put(msg("ops@g.us", "m1", "2026-11-08T09:01:00Z", "nobody listening", false))
+	h.read()
+	h.m.Flush(context.Background(), true)
+	if got := h.take(); len(got) != 0 {
+		t.Fatalf("delivered with no watches: %+v", got)
+	}
+	h.mu.Lock()
+	h.ws = all[:1] // `wfx module watch add … ops`
+	h.mu.Unlock()
+	h.put(msg("ops@g.us", "m1", "2026-11-08T09:01:00Z", "nobody listening", false),
+		msg("ops@g.us", "m2", "2026-11-08T09:02:00Z", "now somebody is", false))
+	h.read()
+	h.m.Flush(context.Background(), true)
+	got := h.take()
+	if len(got) != 1 || got[0].path != "/hooks/p/ops-bot" {
+		t.Fatalf("after registering: %+v", got)
+	}
+}
+
+// The heartbeat comes from inside the loop, after each read.
+func TestTheLoopHeartbeatsAfterEachRead(t *testing.T) {
+	h := newHarness(t)
+	var mu sync.Mutex
+	beats := 0
+	h.m.cfg.Heartbeat = func(context.Context) error {
+		mu.Lock()
+		beats++
+		mu.Unlock()
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		for {
+			mu.Lock()
+			n := beats
+			mu.Unlock()
+			if n > 0 || ctx.Err() != nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	_ = h.m.Run(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	if beats == 0 {
+		t.Fatal("no heartbeat from the loop")
+	}
 }

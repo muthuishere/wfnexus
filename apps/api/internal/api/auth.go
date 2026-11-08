@@ -112,7 +112,10 @@ var publicAPIPaths = map[string]bool{
 // requireSubject resolves the bearer to a user or a worker.
 func (s *Server) requireSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicAPIPaths[r.URL.Path] || strings.HasPrefix(r.URL.Path, "/api/auth/oauth/") {
+		// /api/service-self/ is a running service module's door: its scoped
+		// token is not a subject, and the handler checks it (Engine.AuthService).
+		if publicAPIPaths[r.URL.Path] || strings.HasPrefix(r.URL.Path, "/api/auth/oauth/") ||
+			strings.HasPrefix(r.URL.Path, "/api/service-self/") {
 			next.ServeHTTP(w, r)
 			return
 		}

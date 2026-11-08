@@ -65,15 +65,20 @@ type Config struct {
 	Receive []string
 	// Env is extra env for the adapter (APL_WA_GROUP=* is always set).
 	Env []string
-	// WatchesFile is re-read every tick, so registering a watch is a file edit.
-	WatchesFile string
-	StateFile   string
-	Interval    time.Duration
-	Debounce    time.Duration
-	HTTP        *http.Client
-	Getenv      func(string) string
-	Now         func() time.Time
-	Logf        func(string, ...any)
+	// Watches returns the registered watches. It is asked once per read, so
+	// a watch registered through wfnexus takes effect without a restart; on an
+	// error the last good list is kept.
+	Watches func(ctx context.Context) ([]Watch, error)
+	// Heartbeat, if set, is called after every read attempt from inside the
+	// loop: a hung read means no beat, and wfnexus shows the service silent.
+	Heartbeat func(ctx context.Context) error
+	StateFile string
+	Interval  time.Duration
+	Debounce  time.Duration
+	HTTP      *http.Client
+	Getenv    func(string) string
+	Now       func() time.Time
+	Logf      func(string, ...any)
 }
 
 type state struct {
@@ -93,13 +98,14 @@ type Monitor struct {
 	st    state
 	seen  map[string]bool
 	queue map[string]*pending // chat -> held events
+	ws    []Watch             // last good watch list
 }
 
 const maxSeen = 5000
 
 func New(cfg Config) (*Monitor, error) {
-	if len(cfg.Receive) == 0 || cfg.WatchesFile == "" || cfg.StateFile == "" {
-		return nil, fmt.Errorf("wamonitor: receive command, watches file and state file are required")
+	if len(cfg.Receive) == 0 || cfg.Watches == nil || cfg.StateFile == "" {
+		return nil, fmt.Errorf("wamonitor: receive command, watches source and state file are required")
 	}
 	if cfg.Interval == 0 {
 		cfg.Interval = 30 * time.Second
@@ -144,6 +150,11 @@ func (m *Monitor) Run(ctx context.Context) error {
 				m.cfg.Logf("wamonitor: read: %v", err)
 			}
 			lastRead = m.cfg.Now()
+			if m.cfg.Heartbeat != nil {
+				if err := m.cfg.Heartbeat(ctx); err != nil {
+					m.cfg.Logf("wamonitor: heartbeat: %v", err)
+				}
+			}
 		}
 		m.Flush(ctx, false)
 		select {
@@ -157,6 +168,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 
 // Read is the one combined read for this tick.
 func (m *Monitor) Read(ctx context.Context) error {
+	m.refreshWatches(ctx)
 	in, _ := json.Marshal(map[string]string{"after": m.st.Cursor})
 	cmd := exec.CommandContext(ctx, m.cfg.Receive[0], m.cfg.Receive[1:]...)
 	cmd.Env = append(append(os.Environ(), m.cfg.Env...), "APL_WA_GROUP=*")
@@ -214,12 +226,8 @@ func (m *Monitor) Read(ctx context.Context) error {
 
 // Flush delivers every chat that has been quiet for Debounce (all, if force).
 func (m *Monitor) Flush(ctx context.Context, force bool) {
-	watches, err := m.watches()
-	if err != nil {
-		m.cfg.Logf("wamonitor: watches: %v", err)
-		return
-	}
 	m.mu.Lock()
+	watches := m.ws
 	now := m.cfg.Now()
 	var ready []string
 	for chat, p := range m.queue {
@@ -317,24 +325,23 @@ func (m *Monitor) deliver(ctx context.Context, w Watch, chat string, evs []Event
 	return nil
 }
 
-func (m *Monitor) watches() ([]Watch, error) {
-	raw, err := os.ReadFile(m.cfg.WatchesFile)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var ws []Watch
-	if err := json.Unmarshal(raw, &ws); err != nil {
-		return nil, fmt.Errorf("%s: %w", m.cfg.WatchesFile, err)
-	}
-	for _, w := range ws {
-		if w.Name == "" || w.Chat == "" || w.Hook == "" {
-			return nil, fmt.Errorf("%s: watch %q needs name, chat and hook", m.cfg.WatchesFile, w.Name)
+func (m *Monitor) refreshWatches(ctx context.Context) {
+	ws, err := m.cfg.Watches(ctx)
+	if err == nil {
+		for _, w := range ws {
+			if w.Name == "" || w.Chat == "" || w.Hook == "" {
+				err = fmt.Errorf("watch %q needs name, chat and hook", w.Name)
+				break
+			}
 		}
 	}
-	return ws, nil
+	if err != nil {
+		m.cfg.Logf("wamonitor: watches: %v (keeping the last list)", err)
+		return
+	}
+	m.mu.Lock()
+	m.ws = ws
+	m.mu.Unlock()
 }
 
 func (m *Monitor) saveLocked() error {
