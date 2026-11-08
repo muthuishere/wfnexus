@@ -24,6 +24,9 @@ func (s *Server) skillSourceRoutes(r chi.Router) {
 	r.Post("/skill-sources/{name}/refresh", s.refreshSkillSource)
 	r.Delete("/skill-sources/{name}", s.removeSkillSource)
 	r.Get("/modules", s.listModules)
+	r.Get("/modules/{name}", s.getModule)
+	r.Post("/modules/{name}/install", s.installModuleCLI)
+	r.Put("/modules/{name}/config", s.configureModule)
 	r.Post("/modules/{name}/services", s.startService)
 	r.Delete("/modules/{name}/services/{account}", s.stopService)
 	r.Get("/modules/{name}/services/{account}/watches", s.listServiceWatches)
@@ -126,6 +129,53 @@ func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listModules(w http.ResponseWriter, r *http.Request) {
 	mods, errs := s.eng.ModuleViews(r.Context())
 	writeJSON(w, 200, map[string]any{"modules": mods, "errors": errs})
+}
+
+func (s *Server) getModule(w http.ResponseWriter, r *http.Request) {
+	mods, _ := s.eng.ModuleViews(r.Context())
+	for _, m := range mods {
+		if m.Name == chi.URLParam(r, "name") {
+			writeJSON(w, 200, m)
+			return
+		}
+	}
+	writeErr(w, 404, fmt.Errorf("no module %q", chi.URLParam(r, "name")))
+}
+
+// installModuleCLI runs the module's declared install command for {cli} on
+// the server: an operator's action (authz: admin write).
+func (s *Server) installModuleCLI(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		CLI string `json:"cli"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	log, err := s.eng.InstallModuleCLI(r.Context(), chi.URLParam(r, "name"), b.CLI)
+	res := map[string]any{"ok": err == nil, "log": log}
+	if err != nil {
+		res["error"] = err.Error()
+	}
+	writeJSON(w, 200, res)
+}
+
+// configureModule stores one declared env var / secret in the system env
+// store. The value is never echoed back.
+func (s *Server) configureModule(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.eng.ConfigureModule(r.Context(), chi.URLParam(r, "name"), b.Name, b.Value); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 func (s *Server) listSkillSources(w http.ResponseWriter, _ *http.Request) {

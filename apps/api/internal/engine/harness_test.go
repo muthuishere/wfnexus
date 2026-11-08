@@ -302,7 +302,7 @@ func TestTheAgentIsWarnedBeforeItRunsOutOfTurns(t *testing.T) {
 	var warned bool
 	llm := newFakeLLMFunc(t, func() turn {
 		if warned {
-			return turn{calls: []call{{name: "submit_output", args: map[string]any{"done": true}}}}
+			return submit(map[string]any{"done": true})
 		}
 		return turn{calls: []call{{name: "bash", args: map[string]any{"command": "true"}}}}
 	})

@@ -179,6 +179,16 @@ func (f *fakeLLM) promptOf(i int) string {
 }
 
 func submit(args map[string]any) turn {
+	// Every agent output carries confidence + why (confidence.go); a scripted
+	// submission that does not say otherwise is fully confident.
+	if args != nil {
+		if _, ok := args["confidence"]; !ok {
+			args["confidence"] = 1.0
+		}
+		if _, ok := args["why"]; !ok {
+			args["why"] = "scripted"
+		}
+	}
 	return turn{calls: []call{{name: "submit_output", args: args}}}
 }
 

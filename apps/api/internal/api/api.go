@@ -210,6 +210,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		r.Get("/doctor/wfx", s.wfxInfo)
 		// Tools, config files and env defaults on the server or a worker,
 		// through the server's own carry (carry.go).
 		s.carryRoutes(r)
@@ -408,7 +409,7 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
 	all := workflow.Sorted(s.eng.Definitions())
 	out := make([]*workflow.Definition, 0, len(all))
 	for _, d := range all {
-		if d.Template.Is {
+		if d.Template.Is || s.eng.IsModuleCommand(d) {
 			continue
 		}
 		// FILTERED, not merely checked on fetch: a scoped subject must not

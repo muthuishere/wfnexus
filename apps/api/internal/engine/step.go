@@ -73,7 +73,9 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 // same code executes a step here and on a worker, which is the only way the
 // two can be guaranteed to mean the same thing.
 func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, step *workflow.Step, prompt, workdir, baseRef string) (stepResult, error) {
-	schema, err := compileSchema(wfName+"/"+step.ID, step.OutputSchema)
+	// Every agent output reports how sure it is (confidence.go).
+	outSchema := withConfidence(step.OutputSchema)
+	schema, err := compileSchema(wfName+"/"+step.ID, outSchema)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("output_schema: %w", err)
 	}
@@ -84,7 +86,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	var submitted map[string]any
 	submit := tn.NativeTool("submit_output",
 		"Submit the FINAL result of this step as JSON matching the required schema. Call exactly once when the work is complete. If it returns validation errors, fix them and call again.",
-		step.OutputSchema,
+		outSchema,
 		func(_ context.Context, args map[string]any) (string, error) {
 			if err := validateJSON(schema, args); err != nil {
 				return "", err
@@ -290,7 +292,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		spent.Pending = res.Pending
 		return spent, nil
 	case submitted != nil:
-		spent.Output = submitted
+		spent.Output = ensureConfidence(submitted)
 		return spent, nil
 	case res.IsError || res.Status == "error":
 		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, scrub(res.Text))

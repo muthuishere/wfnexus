@@ -831,6 +831,7 @@ func showRun(id string) error {
 			Turns    int    `json:"turns"`
 			Attempts int    `json:"attempts"`
 			Error    string `json:"error"`
+			Output   any    `json:"output"`
 		} `json:"steps"`
 		Artifacts []struct {
 			StepID string `json:"stepId"`
@@ -852,6 +853,12 @@ func showRun(id string) error {
 			mark = "·"
 		}
 		fmt.Printf(" %s %-16s %-18s turns=%-3d %s\n", mark, s.StepID, s.Status, s.Turns, firstLine(s.Error))
+		if o, ok := s.Output.(map[string]any); ok {
+			if c, ok := o["confidence"].(float64); ok {
+				why, _ := o["why"].(string)
+				fmt.Printf("     confidence %.2f  %s\n", c, firstLine(why))
+			}
+		}
 	}
 	if len(d.Artifacts) > 0 {
 		fmt.Println("\nartifacts:")

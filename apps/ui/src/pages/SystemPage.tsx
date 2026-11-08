@@ -5,7 +5,6 @@ import {
 import { Field, Section } from '../components/builder/Bits'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
 import EnvStore from '../components/EnvStore'
-import PriceTable from '../components/PriceTable'
 import Channels from '../components/ChannelMessages'
 
 /** SystemPage answers one question: if a step named this right now, would it run?
@@ -17,7 +16,7 @@ import Channels from '../components/ChannelMessages'
  *
  *  It never shows a secret. A provider carries the NAME of its key variable and
  *  whether it is set; the value has no path into this page. */
-export default function SystemPage() {
+export default function SystemPage({ authRequired = false }: { authRequired?: boolean }) {
   const [doc, setDoc] = useState<Doctor>()
   const [providers, setProviders] = useState<Provider[]>([])
   const [classifiers, setClassifiers] = useState<Classifier[]>([])
@@ -57,7 +56,11 @@ export default function SystemPage() {
     <>
       <div className="head">
         <div>
-          <h1>System</h1>
+          <h1>Settings</h1>
+          <p style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <a href="#/templates">Templates</a><a href="#/skills">Skills &amp; tools</a><a href="#/workers">Workers</a>
+            {authRequired && <><a href="#/users">Users</a><a href="#/roles">Roles</a></>}
+          </p>
           <p className="muted">
             What is actually wired here, as opposed to what is declared. A ✗ means a step naming
             it fails when it runs — not when it is authored.
@@ -139,7 +142,6 @@ export default function SystemPage() {
       />
       <ProviderForm key={editing?.name || ''} initial={editing} models={doc.models}
         onSave={p => act(`Saved provider ${p.name}.`, () => api.saveProvider(p))} />
-      <PriceTable />
       <Channels />
 
       <EntryTable

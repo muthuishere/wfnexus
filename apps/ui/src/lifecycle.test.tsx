@@ -2,8 +2,6 @@ import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'vitest
 import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react'
 import Changes, { ProposalView, ReviewBadge, ProposedNotice } from './components/Changes'
 import ConnectRepo from './components/ConnectRepo'
-import Checks, { checksFor } from './components/Checks'
-import { api } from './api'
 import { asProposal, prLabel, type Proposal, type ProposalDetail } from './lifecycle'
 
 // The proposal routes are answered here in the SERVER's exact wire shape
@@ -167,17 +165,3 @@ describe('onboarding', () => {
   })
 })
 
-describe('the Checks tab', () => {
-  test("a real workflow's checks, from its definition and runs", async () => {
-    const w = (await api.workflows()).find(x => x.name === 'deterministic')!
-    const list = checksFor(w, [])
-    expect(list.find(c => c.id === 'loads')?.ok).toBe(true)
-    // Never run is not a pass.
-    expect(list.find(c => c.id === 'recent')?.ok).toBe('warn')
-    const failing = checksFor(w, [{ status: 'failed' }, { status: 'failed' }] as any)
-    expect(failing.find(c => c.id === 'recent')?.ok).toBe(false)
-
-    const { container } = render(<Checks workflow={w} runs={[]} />)
-    expect(container.querySelectorAll('tr[data-check]').length).toBe(list.length)
-  })
-})

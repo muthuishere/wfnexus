@@ -142,6 +142,14 @@ func PermissionFor(method, path string) string {
 	if method == http.MethodPost && strings.HasPrefix(path, "/api/modules/") && strings.HasSuffix(path, "/call") {
 		return PermRunsWrite
 	}
+	// Installing a module's CLI runs a command on the server; configuring it
+	// writes the system env store.
+	if method == http.MethodPost && strings.HasPrefix(path, "/api/modules/") && strings.HasSuffix(path, "/install") {
+		return PermAdminWrite
+	}
+	if method == http.MethodPut && strings.HasPrefix(path, "/api/modules/") && strings.HasSuffix(path, "/config") {
+		return PermEnvWrite
+	}
 	// Installing a skill or an MCP server puts code the server will RUN on the
 	// machine — the same reach as carry — so it is an operator's permission,
 	// not a registry editor's.

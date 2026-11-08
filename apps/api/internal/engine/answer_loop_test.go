@@ -25,7 +25,7 @@ func TestAnsweredQuestionIsDeliveredNotReAsked(t *testing.T) {
 	llm := newFakeLLM(t,
 		turn{calls: []call{{name: "ask_human", args: q}}}, // first attempt: pauses
 		turn{calls: []call{{name: "ask_human", args: q}}}, // re-run: same question
-		turn{calls: []call{{name: "submit_output", args: map[string]any{"ok": true}}}},
+		submit(map[string]any{"ok": true}),
 		turn{text: "done"},
 	)
 	h := newHarness(t, def, llm, "")

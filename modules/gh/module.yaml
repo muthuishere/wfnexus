@@ -17,6 +17,10 @@ version: 0.1.0
 description: GitHub via the gh CLI — issues, PR comments and lists, checks, releases, and the API.
 requires:
   env: []
+  cli:
+    - name: gh
+      check: gh --version
+      install: brew install gh || (command -v apt-get >/dev/null && sudo apt-get install -y gh)
 
 commands:
 

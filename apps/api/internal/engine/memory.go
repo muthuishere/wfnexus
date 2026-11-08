@@ -44,9 +44,13 @@ const dreamRuns = 30
 
 var memSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-// MemoryRoot is where every workflow's memory home lives.
+// MemoryRoot is where every workflow's memory home lives: beside the
+// artifact folder (machine data, never the checkout). WFX_MEMORY_DIR overrides.
 func (e *Engine) MemoryRoot() string {
-	return filepath.Join(filepath.Dir(e.cfg.SkillsDir), "memory")
+	if d := os.Getenv("WFX_MEMORY_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(filepath.Dir(e.cfg.ArtifactDir), "memory")
 }
 
 // MemoryDir is one workflow's memory home. project "" means local.

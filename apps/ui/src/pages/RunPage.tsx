@@ -4,6 +4,7 @@ import EventLog from '../components/EventLog'
 import { ChannelMessages } from '../components/ChannelMessages'
 import DecisionPanel from '../components/DecisionPanel'
 import ApprovalBanner from '../components/ApprovalBanner'
+import Confidence, { confidenceOf } from '../components/Confidence'
 import NeedsInputForm from '../components/NeedsInputForm'
 import OutputContract from '../components/OutputContract'
 import WorkflowCanvas from '../components/WorkflowCanvas'
@@ -220,7 +221,7 @@ export default function RunPage({ id }: { id: string }) {
       {/* A PAUSE IS AN ACTION — the control right under the verdict. */}
       {run.status === 'awaiting_approval' && (
         <ApprovalBanner
-          step={haltedDef} stepId={run.currentStep}
+          step={haltedDef} stepId={run.currentStep} output={halted?.output}
           onApprove={() => act(api.approve(run.id, run.currentStep))}
           onReject={reason => act(api.reject(run.id, run.currentStep, reason))} />)}
 
@@ -269,6 +270,7 @@ export default function RunPage({ id }: { id: string }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0 }}>{curDef?.name || current}</h2>
           <span className={`badge ${curRun?.status || 'pending'}`}>{curRun?.status || 'pending'}</span>
+          {(() => { const c = confidenceOf(curRun?.output); return c ? <Confidence value={c.confidence} why={c.why} /> : null })()}
           {curRun && curRun.status !== 'running' && <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => act(api.retry(run.id, current))}>Re-run from here</button>}
         </div>
         {curRun?.resolvedBy && <div className="banner ok" style={{ marginTop: 10 }}><Resolved s={curRun} /></div>}

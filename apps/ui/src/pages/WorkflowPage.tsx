@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import StateStore from '../components/StateStore'
 import WorkflowMemory from '../components/WorkflowMemory'
 import ExposePanel from '../components/ExposePanel'
-import Changes, { ProposedNotice } from '../components/Changes'
-import Checks from '../components/Checks'
+import { ProposedNotice } from '../components/Changes'
 import { lifecycle, type Proposal } from '../lifecycle'
 import Crumbs, { Tabs } from '../components/Crumbs'
 import { api, type Run, type Workflow } from '../api'
@@ -16,19 +15,16 @@ import { headlineOf, hhmm } from '../lib/story'
 import { href } from '../lib/routes'
 import { canDispatch, clip, sameWorkflow, shapeOf, summariseRun, triggerNames } from '../lib/workflow'
 
-type Tab = 'runs' | 'steps' | 'checks' | 'changes' | 'memory' | 'expose'
+type Tab = 'overview' | 'runs' | 'steps' | 'memory' | 'settings'
 
-/** One workflow, opened: what it has done (Runs), what it is (Steps), and what
- *  it remembers between runs (Memory). Editing opens the builder on this same
- *  workflow, and Run starts one — both from here, because this is where a
- *  person already is when they decide to do either. */
+/** One workflow, opened. The Overview answers the four questions a person
+ *  opens a workflow to ask: what does it do, how did it last go, what failed
+ *  and why, and when does it run next — then what it remembers. */
 export default function WorkflowPage({ project, name }: { project: string; name: string }) {
   const [def, setDef] = useState<Workflow>()
   const [runs, setRuns] = useState<Run[]>()
   const [err, setErr] = useState('')
-  // Chosen once the runs arrive: a workflow that has run opens on its runs, one
-  // that never has opens on its steps — there is nothing else to look at yet.
-  const [tab, setTab] = useState<Tab>()
+  const [tab, setTab] = useState<Tab>('overview')
   const [proposed, setProposed] = useState<Proposal>()
   const [nextRunAt, setNextRunAt] = useState<string | null>(null)
   useEffect(() => {
@@ -41,7 +37,6 @@ export default function WorkflowPage({ project, name }: { project: string; name:
         const d = ws.find(w => (w.source || 'local') === project && sameWorkflow(w.name, name))
         if (!d) { setErr(`No workflow named ${name} in ${project}.`); return }
         setDef(d); setRuns(r); setErr('')
-        setTab(t => t ?? (r.length ? 'runs' : 'steps'))
       })
       .catch(e => setErr(e instanceof Error ? e.message : String(e)))
   }, [project, name])
@@ -51,46 +46,32 @@ export default function WorkflowPage({ project, name }: { project: string; name:
     return () => clearInterval(t)
   }, [load])
 
+  const sorted = useMemo(() => [...(runs || [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)), [runs])
   const filters: Filter<Run>[] = useMemo(() => [
     { key: 'status', label: 'statuses', options: [...new Set((runs || []).map(r => r.status))].sort(), match: (r, v) => r.status === v },
   ], [runs])
 
-  const crumbs = <Crumbs items={[['Projects', href.projects()], [project, href.project(project)]]} />
+  const crumbs = <Crumbs items={[['Workflows', href.projects()], [project, href.project(project)]]} />
   if (err) return <>{crumbs}<div className="banner err">{err}</div></>
-  if (!def || !runs || !tab) return <>{crumbs}<div className="muted">loading…</div></>
+  if (!def || !runs) return <>{crumbs}<div className="muted">loading…</div></>
 
+  const failures = sorted.filter(r => r.status === 'failed').slice(0, 5)
   const columns: Column<Run>[] = [
     {
-      key: 'status', header: 'Status', width: 130,
-      value: r => r.status,
+      key: 'status', header: 'Status', width: 130, value: r => r.status,
       cell: r => <span className={`badge ${r.status}`}>{r.status.replace(/_/g, ' ')}</span>,
     },
     {
-      key: 'verdict', header: 'Verdict',
-      value: r => r.outcome || '',
+      key: 'verdict', header: 'Verdict', value: r => r.outcome || r.error || '',
       cell: r => { const h = headlineOf(r); return <span title={h.text}>{clip(h.text, 70)}</span> },
     },
     {
-      key: 'what', header: 'What it is about',
-      value: r => summariseRun(r),
-      cell: r => {
-        const s = summariseRun(r)
-        return s ? <span title={s}>{clip(s, 90)}</span> : <span className="muted mono">{r.id.slice(0, 8)}</span>
-      },
+      key: 'what', header: 'What it is about', value: r => summariseRun(r),
+      cell: r => { const s = summariseRun(r); return s ? <span title={s}>{clip(s, 90)}</span> : <span className="muted mono">{r.id.slice(0, 8)}</span> },
     },
     {
-      key: 'step', header: 'Step', width: 160,
-      value: r => r.currentStep || '',
-      cell: r => r.currentStep ? <span className="mono">{r.currentStep}</span> : <span className="muted">—</span>,
-    },
-    {
-      key: 'created', header: 'Started', width: 110,
-      value: r => r.createdAt,
+      key: 'created', header: 'Started', width: 110, value: r => r.createdAt,
       cell: r => <span className="muted" title={new Date(r.createdAt).toLocaleString()}>{ago(r.createdAt)}</span>,
-    },
-    {
-      key: 'id', header: 'Run', width: 100, value: r => r.id,
-      cell: r => <span className="mono muted">{r.id.slice(0, 8)}</span>,
     },
   ]
 
@@ -103,49 +84,67 @@ export default function WorkflowPage({ project, name }: { project: string; name:
           {def.description && <p>{def.description}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="ghost danger-text" onClick={() => {
-            if (!confirm(`Propose deleting ${def.name}? It stays until the change is approved and merged.`)) return
-            lifecycle.proposeDelete(project, def.name).then(p => { setProposed(p); setTab('changes') })
-              .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-          }}>Delete</button>
           <a href={href.edit(project, def.name)}><button className="ghost">Edit steps</button></a>
           {canDispatch(def)
             ? <a href={href.startRun(project, def.name)}><button>Run</button></a>
-            // Not merely disabled: saying WHY is the difference between a dead
-            // button and an explanation.
             : <button disabled title={`${def.name} is started by ${triggerNames(def).join(', ')}, not by hand`}>Run</button>}
         </div>
       </div>
 
       <Tabs<Tab> value={tab} onChange={setTab} tabs={[
-        { key: 'runs', label: 'History', count: runs.length },
+        { key: 'overview', label: 'Overview' },
+        { key: 'runs', label: 'Runs', count: runs.length },
         { key: 'steps', label: 'Steps', count: def.steps.length },
-        { key: 'checks', label: 'Checks' },
-        { key: 'changes', label: 'Changes' },
-        { key: 'memory', label: 'Memory & State' },
-        { key: 'expose', label: 'Expose' },
+        { key: 'memory', label: 'Memory' },
+        { key: 'settings', label: 'Settings' },
       ]} />
       {proposed && <ProposedNotice proposal={proposed} />}
 
+      {tab === 'overview' && (
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="subhead">
+              <h2>Last runs</h2>
+              <span className="muted">
+                {nextRunAt
+                  ? <>next run <b>{hhmm(nextRunAt)}</b> · {new Date(nextRunAt).toLocaleDateString()}</>
+                  : `starts on ${triggerNames(def).join(', ') || 'demand'}`}
+              </span>
+            </div>
+            {sorted.length === 0
+              ? <p className="muted">Never run.{canDispatch(def) && <> <a href={href.startRun(project, def.name)}>Start the first run</a>.</>}</p>
+              : <div className="history">
+                {sorted.slice(0, 8).map(r => {
+                  const h = headlineOf(r)
+                  return (
+                    <a key={r.id} className="hrow" href={href.run(project, def.name, r.id)}>
+                      <span className="t">{hhmm(r.startedAt || r.createdAt)}</span>
+                      <span><span className={`vword ${h.verdict}`}>{h.verdict === 'running' ? 'working' : h.verdict}</span></span>
+                      <span className="h" title={h.text}>{h.text}</span>
+                      <span className="muted ago">{ago(r.createdAt)}</span>
+                    </a>)
+                })}
+              </div>}
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="subhead"><h2>Failures</h2><span className="muted">{failures.length ? `latest ${failures.length}` : ''}</span></div>
+            {failures.length === 0
+              ? <p className="muted">No failed runs.</p>
+              : failures.map(r => (
+                <a key={r.id} className="hrow" href={href.run(project, def.name, r.id)}>
+                  <span className="t">{hhmm(r.startedAt || r.createdAt)}</span>
+                  <span className="mono">{r.currentStep || '—'}</span>
+                  <span className="h" title={r.error}>{clip(r.error || headlineOf(r).text, 160)}</span>
+                  <span className="muted ago">{ago(r.createdAt)}</span>
+                </a>))}
+          </div>
+
+          <WorkflowMemory workflow={def.name} project={project} />
+        </>)}
+
       {tab === 'runs' && (
         <div className="card">
-          {nextRunAt && <p className="nextrun">Next run at <b>{hhmm(nextRunAt)}</b>
-            <span className="muted"> · {new Date(nextRunAt).toLocaleDateString()}</span></p>}
-          {/* The runs as a TIMELINE of verdicts — an every-15-minutes watch
-              reads "16:15 all clear · 16:30 all clear · 16:45 incident: …". */}
-          {runs.length > 0 && (
-            <div className="history">
-              {[...runs].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 12).map(r => {
-                const h = headlineOf(r)
-                return (
-                  <a key={r.id} className="hrow" href={href.run(project, def.name, r.id)}>
-                    <span className="t">{hhmm(r.startedAt || r.createdAt)}</span>
-                    <span><span className={`vword ${h.verdict}`}>{h.verdict === 'running' ? 'working' : h.verdict}</span></span>
-                    <span className="h" title={h.text}>{h.text}</span>
-                    <span className="muted ago">{ago(r.createdAt)}</span>
-                  </a>)
-              })}
-            </div>)}
           <DataTable
             rows={runs} columns={columns} filters={filters}
             getKey={r => r.id}
@@ -158,8 +157,6 @@ export default function WorkflowPage({ project, name }: { project: string; name:
               : `Never run. It starts on ${triggerNames(def).join(', ')}.`} />
         </div>)}
 
-      {/* What the workflow IS: how it starts, its shape, every step as the
-          agent it becomes, and every file that travels with it. */}
       {tab === 'steps' && (
         <div className="card">
           <div className="subhead">
@@ -173,20 +170,27 @@ export default function WorkflowPage({ project, name }: { project: string; name:
           <div style={{ marginTop: 14 }}>
             {def.steps.map((s, i) => <StepHarness key={s.id} step={s} index={i} />)}
           </div>
-          {/* Every file, a README as much as a script: copy this workflow and
-              these are what come with it. */}
           <div style={{ marginTop: 14 }}>
             <h3>Files that travel with it</h3>
             <FileList files={def.files} empty="just the YAML" />
           </div>
         </div>)}
 
-      {/* The answer to "why does the scheduled run think it is already up to
-          date?" — on the workflow's page instead of in a database client. */}
-      {tab === 'checks' && <Checks workflow={def} runs={runs} />}
-      {tab === 'changes' && <Changes project={project} workflow={def.name} />}
-      {tab === 'memory' && <><WorkflowMemory workflow={def.name} project={project} /><StateStore workflow={def.name} /></>}
-      {tab === 'expose' && <ExposePanel workflow={def.name} />}
+      {tab === 'memory' && <WorkflowMemory workflow={def.name} project={project} />}
+
+      {tab === 'settings' && (
+        <>
+          <StateStore workflow={def.name} />
+          <ExposePanel workflow={def.name} />
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="subhead"><h2>Delete</h2></div>
+            <button className="ghost danger-text" onClick={() => {
+              if (!confirm(`Propose deleting ${def.name}? It stays until the change is approved and merged.`)) return
+              lifecycle.proposeDelete(project, def.name).then(setProposed)
+                .catch(e => setErr(e instanceof Error ? e.message : String(e)))
+            }}>Propose deleting this workflow</button>
+          </div>
+        </>)}
     </>
   )
 }

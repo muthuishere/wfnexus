@@ -158,6 +158,9 @@ type Step struct {
 	TimeoutSec   int            `yaml:"timeout_sec,omitempty" json:"timeoutSec,omitempty"`
 	// RequiresApproval pauses the run BEFORE this step until a human approves.
 	RequiresApproval bool   `yaml:"requires_approval,omitempty" json:"requiresApproval,omitempty"`
+	// MinConfidence is the confidence (0-1) an agent step's output must report
+	// to continue on its own; below it the run waits for approval. nil ⇒ 0.6.
+	MinConfidence *float64 `yaml:"min_confidence,omitempty" json:"minConfidence,omitempty"`
 	Gates            []Gate `yaml:"gates,omitempty" json:"gates,omitempty"`
 	// Approvers names who may answer ANY pause this step raises — its approval
 	// gate, a needs_input gate, an ask_human question (ADR 0021). An entry is a

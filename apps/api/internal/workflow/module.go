@@ -94,6 +94,16 @@ func (m *Module) Callable(name string) (*Task, bool) {
 type ModuleNeeds struct {
 	Env     []string `yaml:"env,omitempty" json:"env,omitempty"`
 	Secrets []string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	// CLI are the command-line tools the module wraps: how to check one is
+	// there (its stdout is the version) and how to install it on the server.
+	CLI []ModuleCLI `yaml:"cli,omitempty" json:"cli,omitempty"`
+}
+
+// ModuleCLI is one CLI a module needs.
+type ModuleCLI struct {
+	Name    string `yaml:"name" json:"name"`
+	Check   string `yaml:"check" json:"check"`
+	Install string `yaml:"install,omitempty" json:"install,omitempty"`
 }
 
 // ModuleBinary names the CLI a module runs. Delivery through carry is a
