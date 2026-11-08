@@ -204,6 +204,10 @@ func planDeploy(o deployOpts) ([]deployStep, error) {
 		if o.image {
 			return []deployStep{{"start the " + o.component + " container on " + o.to, append(ssh, o.dockerRun())}}, nil
 		}
+		if o.component == "server" {
+			// One ssh path for a bare server: backup, swap, health, rollback.
+			return nil, fmt.Errorf("a server binary over ssh is installed and upgraded with: wfx server deploy %s", o.to)
+		}
 		return []deployStep{{"download and verify " + o.bin() + " on " + o.to, append(ssh, o.installScript())}}, nil
 	}
 }

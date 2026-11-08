@@ -142,6 +142,8 @@ func run(args []string) error {
 		return statusCmd(rest)
 	case "tunnel":
 		return tunnelCmd(rest)
+	case "server":
+		return serverCmd(rest)
 	case "team":
 		return teamCmd(rest)
 	case "version", "--version", "-v":
@@ -198,6 +200,8 @@ func shortUsage() {
   wfx doctor                       what is wired on this machine
   wfx login --url <host>           sign in to a host
   wfx profile create <name> --install <where>  get a server running and switch to it
+  wfx server deploy <host> [--version vX]      install/upgrade a server over ssh (systemd --user, no sudo; auto-rollback)
+  wfx server status|rollback <host>            what runs there / go back one release
 
 wfx help all   every command
 `)
