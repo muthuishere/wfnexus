@@ -912,6 +912,18 @@ func (e *Engine) answerQuestion(ctx context.Context, runID uuid.UUID, stepID str
 	if input == nil {
 		input = map[string]any{}
 	}
+	// A step that asks, after an answer, the very question it was already
+	// answered would pause forever: every answer re-runs it and it asks again
+	// (reqsume-prod-watch, 2026-11). Fail it with the reason instead.
+	if len(st.Pending) > 0 {
+		if prev, ok := stepAnswers(input, stepID)[req.Prompt]; ok {
+			msg := fmt.Sprintf("step %s asked again a question it was already answered (%q → %q); refusing to loop", stepID, req.Prompt, prev)
+			e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("failed"), Error: str(msg)})
+			e.setRun(ctx, runID, "failed", stepID, msg)
+			return errors.New(msg)
+		}
+		recordStepAnswer(input, stepID, req.Prompt, answer)
+	}
 	prior, _ := input["answers"].(string)
 	input["answers"] = strings.TrimSpace(prior + "\n\nQ: " + req.Prompt + "\nA: " + answer)
 	if len(st.Pending) == 0 {

@@ -55,6 +55,8 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	// What previous runs of this workflow learned, unless the prompt placed
 	// `{{ .Memory }}` itself or memory is off for this step (memory.go).
 	prompt = withMemoryInPrompt(prompt, def, step, data.Memory)
+	// Answers to this step's earlier ask_human questions (answers.go).
+	prompt = withAnswersInPrompt(prompt, stepAnswers(data.Input, step.ID))
 	// Where it runs is the step's own `runs-on`, exactly as for a `run:` step.
 	// A step placed on a worker executes THERE — the same agent, the same
 	// skills, the same schema gate — against that machine's toolchain.
@@ -97,7 +99,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// it is announced as deprecated on the run's own event stream rather than
 	// in a changelog nobody reads.
 	if askHumanGranted(step) {
-		extra = append(extra, e.askHumanTool(step))
+		extra = append(extra, e.askHumanTool(ctx, runID, step))
 		if step.AskHuman && !toolNamed(step.Tools, skills.ToolAskHuman) {
 			e.emit(ctx, runID, step.ID, "log", map[string]any{
 				"text": "deprecated: `ask_human: true` on step " + step.ID +
@@ -319,7 +321,9 @@ func toolNamed(tools []string, name string) bool {
 // with no WaitFor configured the run halts durably and the engine parks the run
 // in needs_input. NativeTool cannot express this — its function never sees the
 // ToolContext — so it is a raw Tool (spikes/03).
-func (e *Engine) askHumanTool(step *workflow.Step) tn.Tool {
+func (e *Engine) askHumanTool(ctx context.Context, runID uuid.UUID, step *workflow.Step) tn.Tool {
+	answered := e.runStepAnswers(ctx, runID, step.ID)
+	delivered := map[string]bool{}
 	return tn.Tool{
 		Name:        "ask_human",
 		Description: "Ask the human operator a question and wait for their answer. Use only when you genuinely cannot proceed; the run pauses until they reply.",
@@ -344,6 +348,16 @@ func (e *Engine) askHumanTool(step *workflow.Step) tn.Tool {
 			}
 			q, _ := args["question"].(string)
 			why, _ := args["why"].(string)
+			// Already answered: deliver the answer instead of pausing again,
+			// which would loop forever (reqsume-prod-watch, 2026-11). Asked
+			// yet again after that, it is refused, never re-paused.
+			if a, ok := answered[q]; ok {
+				if delivered[q] {
+					return tn.ToolResult{Output: "error: you already asked this and were answered (" + a + "). Do not ask again; act on the answer and call submit_output.", IsError: true}, nil
+				}
+				delivered[q] = true
+				return tn.ToolResult{Output: a}, nil
+			}
 			return tn.Pending(tn.Request{
 				ID:     uuid.NewString(),
 				Kind:   "input",
