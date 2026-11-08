@@ -162,6 +162,9 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 				}
 			}
 			if !ok {
+				local, ok = opt.modules[u.Task]
+			}
+			if !ok {
 				known := make([]string, 0, len(tasks))
 				for n := range tasks {
 					known = append(known, n)

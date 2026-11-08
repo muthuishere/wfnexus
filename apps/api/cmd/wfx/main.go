@@ -100,6 +100,8 @@ func run(args []string) error {
 		return registry(first(rest))
 	case "skills":
 		return skillsCmd(rest)
+	case "module", "modules":
+		return moduleCmd(rest)
 	case "skill":
 		return skillCmd(rest)
 	case "mcp":
@@ -296,6 +298,7 @@ func usage() {
   wfx cancel <run-id>
   wfx registry [skills|tools|providers|classifiers|mcp]
   wfx skills import <git-url> [--ref r] [--path skills/] [--name n]  import a git repo of skills; r is a branch, tag or commit (--branch = --ref)
+  wfx module ls | install <git-url> [--ref r] | sync <source> | config <module>   modules: task + module.yaml from the registry (ADR 0028)
   wfx skills sources               skill sources: url, ref, commit, skill count and names
   wfx skills ref <source> <ref>    switch a source to another branch, tag or commit (alias: branch)
   wfx skills refresh <source>      pull a branch source again; a tag or commit is pinned
