@@ -23,6 +23,32 @@ func (s *Server) skillSourceRoutes(r chi.Router) {
 	r.Post("/skill-sources/{name}/refresh", s.refreshSkillSource)
 	r.Delete("/skill-sources/{name}", s.removeSkillSource)
 	r.Get("/modules", s.listModules)
+	r.Post("/modules/{name}/services", s.startService)
+	r.Delete("/modules/{name}/services/{account}", s.stopService)
+}
+
+// startService records one supervised instance of a service module (#103).
+func (s *Server) startService(w http.ResponseWriter, r *http.Request) {
+	var spec engine.ServiceSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	spec.Module = chi.URLParam(r, "name")
+	got, err := s.eng.EnableService(r.Context(), spec)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, got)
+}
+
+func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
+	if err := s.eng.DisableService(r.Context(), chi.URLParam(r, "name"), chi.URLParam(r, "account")); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // listModules is every module.yaml in the imported sources, with what each

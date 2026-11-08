@@ -13,6 +13,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/supervisor"
 )
 
 // The worker surface is small on purpose. A machine joins, asks for work,
@@ -145,6 +146,45 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if wk := s.authWorker(w, r); wk != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": wk.ID})
 	}
+}
+
+// workerServices is the service modules this worker should keep running: on
+// one of its labels, and not leased to another machine.
+func (s *Server) workerServices(w http.ResponseWriter, r *http.Request) {
+	wk := s.authWorker(w, r)
+	if wk == nil {
+		return
+	}
+	specs, err := s.eng.ServicesFor(r.Context(), "worker:"+wk.ID.String(), wk.Labels, false)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"services": specs})
+}
+
+// serviceHeartbeat is one service's report. 409 means another machine holds
+// it: the worker stops its copy.
+func (s *Server) serviceHeartbeat(w http.ResponseWriter, r *http.Request) {
+	wk := s.authWorker(w, r)
+	if wk == nil {
+		return
+	}
+	var b supervisor.Beat
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	_ = s.store.TouchWorker(r.Context(), wk.ID)
+	if err := s.eng.ServiceBeat(r.Context(), "worker:"+wk.ID.String(), b); err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, engine.ErrServiceOwned) {
+			code = http.StatusConflict
+		}
+		writeErr(w, code, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // workerProviders is what `wfx-runner setup` asks: which providers this

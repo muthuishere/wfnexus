@@ -36,6 +36,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/buildinfo"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/shell"
+	"github.com/muthuishere/wfnexus/apps/api/internal/supervisor"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -280,6 +281,11 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	fmt.Printf("%s serving %s — waiting for work from %s\n", cfg.Name, strings.Join(cfg.Labels, ", "), cfg.URL)
+	if !*once {
+		// Service modules on this worker's labels run beside the job loop and
+		// stop with it (#103).
+		go serviceSupervisor(cfg).Run(ctx)
+	}
 	backoff := time.Second
 	for ctx.Err() == nil {
 		job, err := claim(ctx, cfg)
@@ -314,6 +320,35 @@ func cmdRun(args []string) error {
 	}
 	fmt.Println("stopped")
 	return nil
+}
+
+// serviceSupervisor keeps this worker's service modules running and reports
+// their heartbeats. A 409 means another machine holds one: it is stopped here.
+func serviceSupervisor(cfg *Config) *supervisor.Supervisor {
+	return &supervisor.Supervisor{
+		Fetch: func(ctx context.Context) ([]supervisor.Spec, error) {
+			var out struct {
+				Services []supervisor.Spec `json:"services"`
+			}
+			if err := call(ctx, http.MethodGet, cfg.URL+"/api/workers/services", cfg.Token, nil, &out); err != nil {
+				return nil, err
+			}
+			for i := range out.Services {
+				if out.Services[i].Dir == "" {
+					out.Services[i].Dir = cfg.WorkDir
+				}
+			}
+			return out.Services, nil
+		},
+		Beat: func(ctx context.Context, b supervisor.Beat) error {
+			body, _ := json.Marshal(b)
+			err := call(ctx, http.MethodPost, cfg.URL+"/api/workers/services/heartbeat", cfg.Token, bytes.NewReader(body), nil)
+			if err != nil && strings.HasPrefix(err.Error(), "409") {
+				return supervisor.ErrNotOwner
+			}
+			return err
+		},
+	}
 }
 
 // job mirrors the queue row; only the payload matters here.

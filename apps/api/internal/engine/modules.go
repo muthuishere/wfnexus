@@ -20,6 +20,9 @@ type ModuleView struct {
 	// system env (`wfx env`) nor in the server's process env.
 	Missing []string `json:"missing"`
 	Ready   bool     `json:"ready"`
+	// Services are this module's supervised instances, one per account
+	// (services.go). Empty for a command module.
+	Services []ServiceView `json:"services"`
 }
 
 // Modules scans every skill source checkout. Broken manifests are returned as
@@ -56,9 +59,15 @@ func (e *Engine) ModuleViews(ctx context.Context) ([]ModuleView, []string) {
 			have[v.Key] = true
 		}
 	}
+	svcs, _ := e.Services(ctx)
 	out := make([]ModuleView, 0, len(mods))
 	for _, m := range mods {
-		v := ModuleView{Module: m, Missing: []string{}}
+		v := ModuleView{Module: m, Missing: []string{}, Services: []ServiceView{}}
+		for _, sv := range svcs {
+			if sv.Module == m.Name {
+				v.Services = append(v.Services, sv)
+			}
+		}
 		for _, n := range append(append([]string(nil), m.Requires.Env...), m.Requires.Secrets...) {
 			if !have[n] && os.Getenv(n) == "" {
 				v.Missing = append(v.Missing, n)

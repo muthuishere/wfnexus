@@ -269,6 +269,8 @@ func main() {
 	// Skills, MCP servers and providers reload when their files change.
 	eng.StartCatalogWatcher(ctx)
 	eng.StartChannelReceivers(ctx)
+	// Service modules on the labels this process serves (#103).
+	eng.StartServices(ctx)
 	for _, d := range workflow.Sorted(defs) {
 		for _, sched := range d.On.Schedule {
 			log.Printf("  schedule   %-16s %q", d.Name, sched.Cron)

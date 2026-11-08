@@ -41,5 +41,17 @@ Watches are a JSON file re-read every tick.
 - The in-engine subscriptions + router (ADR 0026, #76) duplicate what a
   service module + hooks now do. They are dead weight once the monitor is
   supervised; removal is a follow-up, not done here.
-- Not yet: carry delivery of `binary:` (manifest field only), supervision +
-  heartbeat on a worker, trust/signing and permission diff on Sync (#85).
+- Supervision (#103): `wfx module start <m> --account a [--runs-on l]
+  [--input k=v]` records one service per module+account in the state store
+  (scope `service`). The server supervises those on labels it serves itself;
+  `wfx-runner run` supervises those on its labels (`GET
+  /api/workers/services`). Crashes restart with exponential backoff (1s → 5m,
+  reset after a minute up). Every 15s the supervisor beats (`POST
+  /api/workers/services/heartbeat`); the first owner holds the lease while it
+  beats, a second machine is refused (409) and stops its copy. `wfx module ls`
+  shows state (pending|running|crashed|silent), last heartbeat and restarts;
+  no beat for 90s is `silent`, announced once on the default channel, and the
+  lease is free for another worker.
+- Not yet: carry delivery of `binary:` (manifest field only), watches
+  registered through the API instead of the monitor's JSON file, trust/signing
+  and permission diff on Sync (#85).
