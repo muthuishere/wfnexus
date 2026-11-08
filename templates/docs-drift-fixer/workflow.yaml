@@ -88,7 +88,6 @@ steps:
   - id: sync
     name: Confirm and fix each flag (doc-syncer)
     description: Reject flags that are not drift; for real drift, the smallest edit citing the code line. Working tree only.
-    provider: claude-cli
     skills: [doc-syncer, repo-navigator]
     tools: [read, edit, grep, glob, bash]
     max_turns: 80
@@ -171,7 +170,6 @@ steps:
     name: Push and open the docs PR (pr-publisher)
     description: Push this run's branch and open the PR with the verified body.
     requires_approval: true
-    provider: claude-cli
     skills: [pr-publisher]
     tools: [read, bash]
     max_turns: 15

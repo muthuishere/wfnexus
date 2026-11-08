@@ -45,7 +45,6 @@ steps:
     when:
       - path: collect.exitCode
         equals: 3
-    provider: openrouter
     skills: [prod-signal-triage, repo-navigator, workflow-author]
     tools: [read, grep, glob, bash]
     max_turns: 60
@@ -145,7 +144,6 @@ steps:
       GIT_AUTHOR_EMAIL: workflow-doctor@wfnexus.local
       GIT_COMMITTER_NAME: wfx workflow-doctor
       GIT_COMMITTER_EMAIL: workflow-doctor@wfnexus.local
-    provider: openrouter
     skills: [fix-author, test-author, workflow-author, repo-navigator]
     tools: [read, write, edit, grep, glob, bash]
     max_turns: 120
@@ -241,7 +239,6 @@ steps:
     # A different model family from the fixer, over an API key: a CLI seat hit
     # its usage limit mid-run (run 11), and automating a subscription seat is
     # what the registry's terms notes warn against.
-    provider: gpt5
     skills: [pr-reviewer, change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40
@@ -282,7 +279,6 @@ steps:
     when:
       - path: review.any_approved
         equals: true
-    provider: openrouter
     skills: [pr-publisher]
     tools: [read, bash]
     max_turns: 30

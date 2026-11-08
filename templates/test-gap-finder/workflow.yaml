@@ -379,7 +379,6 @@ steps:
   - id: review
     name: Adversarial review on a different model (change-reviewer)
     description: Are the tests meaningful — or tautological, over-mocked, asserting the implementation back at itself?
-    provider: haiku
     skills: [change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40

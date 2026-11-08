@@ -95,6 +95,8 @@ github.com/muthuishere/toolnexus/golang v0.19.0 h1:iIdXR3ZHARosRtfRgWQUjowBxYJYz
 github.com/muthuishere/toolnexus/golang v0.19.0/go.mod h1:pZkMvKsq6vVF2UjUpZTeudgLjxavoPE9QRDHNt4hJQw=
 github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261105041428-824718ad6392 h1:2fXD4PeJddsfhzr6J9TqHLORPEVOwbONYlZynKfsjbE=
 github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261105041428-824718ad6392/go.mod h1:f/qag4DCSpYCRaMiY6D4NYagPjBua0II3fcIJVmHmsM=
+github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261107205543-f1ce26c87d1b h1:vFDJ38WL4+INkQUhw7w36TuLp1ucUBvdDOySBJfOjb4=
+github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261107205543-f1ce26c87d1b/go.mod h1:f/qag4DCSpYCRaMiY6D4NYagPjBua0II3fcIJVmHmsM=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=

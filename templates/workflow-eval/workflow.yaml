@@ -9,7 +9,7 @@ template:
     and folds them into one scorecard with the disagreements called out.
   fill:
     - "a rubric input when the workflow's own description is not the bar you judge it by"
-    - "the model judges' providers, if gpt-oss, codex-cli or grok-cli are not the second opinions you trust"
+    - "a provider on a model judge, if you want a judge on a different agent CLI than the auto-detected default"
     - "the overall rule in scorecard.py, if 'JEV yes AND two model passes' is not your bar"
 
 description: >-
@@ -19,7 +19,7 @@ description: >-
   a dossier. Four judges read the same dossier independently and in parallel —
   JEV (a calibrated classifier: did it do the job, is it evidence-backed, would
   a senior engineer accept it, how bad is its worst problem) and three model
-  judges on different providers (gpt-oss, codex-cli, grok-cli), each giving the
+  judges on the auto-detected agent CLI (claude, else codex, …), each giving the
   same typed verdict. A judge that cannot run is probed first and recorded as
   UNAVAILABLE with the reason, never dropped. A final command builds the
   scorecard: agreement between judges, disagreements named, and an overall
@@ -133,7 +133,6 @@ steps:
     when:
       - path: probe_gptoss.ok
         equals: true
-    provider: gpt-oss
     skills: []
     tools: []
     max_turns: 6
@@ -197,7 +196,6 @@ steps:
     when:
       - path: probe_codex.ok
         equals: true
-    provider: codex-cli
     skills: []
     tools: []
     max_turns: 6
@@ -214,7 +212,6 @@ steps:
     when:
       - path: probe_grok.ok
         equals: true
-    provider: grok-cli
     skills: []
     tools: []
     max_turns: 6

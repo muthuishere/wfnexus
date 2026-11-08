@@ -11,8 +11,8 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 	"github.com/muthuishere/toolnexus/golang/agents"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/agentadapter"
+	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -29,6 +29,9 @@ type resolved struct {
 	// Price is the registry entry's per-million token price, and whether one
 	// is known at all (ADR 0020). The zero value means unknown.
 	Price pricing
+	// Reported is what a local CLI itself counted (claude stream-json), nil
+	// for a provider that reports nothing.
+	Reported *cliUsage
 }
 
 func noClose() {}
@@ -85,6 +88,9 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 	// No provider named: the process-wide default, with `model:` as an override
 	// of the model id only. This is the path every workflow used before
 	// providers existed and it keeps working unchanged.
+	if step.Provider == "" && e.cfg.AutoProvider {
+		return resolved{}, e.errNoAgentCLI()
+	}
 	if step.Provider == "" {
 		model := step.Model
 		if model == "" {
@@ -206,6 +212,11 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 	if err != nil {
 		return resolved{}, err
 	}
+	var reported *cliUsage
+	if cs, ok := agent.(*agentadapter.ClaudeStream); ok {
+		reported = &cliUsage{source: p.Name}
+		cs.OnUsage = reported.add
+	}
 	ad := agentadapter.New(agentadapter.Options{
 		Agent:          agent,
 		Model:          model,
@@ -226,6 +237,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Label:     p.Name + "/" + label,
 		Close:     closeAgent,
 		Price:     priceOf(p, model, nil), // cli/acp: always a known $0.00
+		Reported:  reported,
 	}, nil
 }
 
@@ -316,7 +328,16 @@ func localAgent(p catalog.Provider, model, workdir string, env []string) (agenta
 	case "devin", "":
 		return withEnv(agentadapter.Devin(cli))
 	case "claude":
-		return withEnv(agentadapter.Claude(cli))
+		// Kept-warm stream-json claude with its own tools, MCP, settings and
+		// slash commands off: toolnexus runs the loop and the tools, claude only
+		// answers. It runs in an empty scratch dir, never the step's checkout,
+		// and Close kills the process (a cancelled run cancels the turn's ctx).
+		dir, err := os.MkdirTemp("", "wfx-claude-")
+		if err != nil {
+			return nil, nil, err
+		}
+		a := &agentadapter.ClaudeStream{Model: model, Env: env, Workdir: dir}
+		return a, func() { _ = a.Close(); _ = os.RemoveAll(dir) }, nil
 	case "copilot":
 		return withEnv(agentadapter.Copilot(cli))
 	case "opencode":

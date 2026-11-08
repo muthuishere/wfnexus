@@ -102,7 +102,6 @@ steps:
 
   - id: draft
     name: Draft the meeting brief
-    provider: claude-cli
     skills: [leader-brief]
     tools: [read, write, grep, glob]
     max_turns: 40

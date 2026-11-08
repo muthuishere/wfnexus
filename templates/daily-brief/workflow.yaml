@@ -113,7 +113,6 @@ steps:
   - id: draft
     name: Draft the brief
     description: Ranked, cited lines in six sections, written to draft.json.
-    provider: claude-cli
     skills: [leader-brief]
     tools: [read, write, grep, glob]
     max_turns: 40

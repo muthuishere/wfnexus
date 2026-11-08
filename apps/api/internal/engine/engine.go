@@ -64,6 +64,12 @@ type Engine struct {
 	// providerOverride, when set, runs every agent step on this registry
 	// provider instead of the one it names (provider.go, UseProvider).
 	providerOverride string
+	// autoProvider is the agent CLI pickDefaultProvider chose ("" when the
+	// operator named a default, or when no agent CLI is on this machine).
+	autoProvider string
+	// autoSkipped says why each agent CLI ahead of the pick was passed over
+	// (not on PATH is left out; installed-but-not-logged-in is named).
+	autoSkipped []string
 	// remote resolves a REMOTE `use:` — a git repository and a ref — into the
 	// task a workflow expands. Nil ⇒ remote references are unavailable, which
 	// is the one-person path: a workflow whose every `use:` is a bare task
@@ -131,6 +137,7 @@ func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.De
 	} else {
 		log.Printf("engine: env store unavailable: %v", err)
 	}
+	e.pickDefaultProvider()
 	e.loadPrices(context.Background())
 	// `workflow.completed` events go through the subscriptions router by
 	// default (ADR 0026); UseEventSink can still replace it.

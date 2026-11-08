@@ -37,6 +37,9 @@ type ClaudeStream struct {
 	Reuse bool
 	// WarmPrompt, when set, is sent once by Warm as a throwaway turn.
 	WarmPrompt string
+	// OnUsage, when set, receives the tokens and cost claude reports in each
+	// turn's result event. It is called from Execute's goroutine.
+	OnUsage func(Usage)
 
 	turn   sync.Mutex // one turn at a time
 	mu     sync.Mutex // guards the fields below
@@ -141,7 +144,10 @@ func (a *ClaudeStream) run(ctx context.Context, model, prompt string) (string, e
 	if err != nil {
 		return "", err
 	}
-	out, err := claudeTurn(ctx, p, prompt)
+	out, u, err := claudeTurn(ctx, p, prompt)
+	if u != nil && a.OnUsage != nil {
+		a.OnUsage(*u)
+	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -166,41 +172,66 @@ func (a *ClaudeStream) run(ctx context.Context, model, prompt string) (string, e
 }
 
 // claudeTurn writes one user message and reads to its result event.
-func claudeTurn(ctx context.Context, p *proc, prompt string) (string, error) {
+func claudeTurn(ctx context.Context, p *proc, prompt string) (string, *Usage, error) {
 	msg, _ := json.Marshal(map[string]any{
 		"type":    "user",
 		"message": map[string]any{"role": "user", "content": []map[string]string{{"type": "text", "text": prompt}}},
 	})
 	if err := p.write(msg); err != nil {
-		return "", p.exitErr("claude")
+		return "", nil, p.exitErr("claude")
 	}
 	for {
 		select {
 		case line, ok := <-p.lines:
 			if !ok {
-				return "", p.exitErr("claude")
+				return "", nil, p.exitErr("claude")
 			}
 			var ev struct {
-				Type    string `json:"type"`
-				Subtype string `json:"subtype"`
-				IsError bool   `json:"is_error"`
-				Result  string `json:"result"`
+				Type    string  `json:"type"`
+				Subtype string  `json:"subtype"`
+				IsError bool    `json:"is_error"`
+				Result  string  `json:"result"`
+				Cost    float64 `json:"total_cost_usd"`
+				Usage   *struct {
+					In         int `json:"input_tokens"`
+					Out        int `json:"output_tokens"`
+					CacheRead  int `json:"cache_read_input_tokens"`
+					CacheWrite int `json:"cache_creation_input_tokens"`
+				} `json:"usage"`
 			}
 			if json.Unmarshal(line, &ev) != nil || ev.Type != "result" {
 				continue
 			}
+			var u *Usage
+			if ev.Usage != nil || ev.Cost > 0 {
+				u = &Usage{CostUSD: ev.Cost}
+				if ev.Usage != nil {
+					u.InputTokens, u.OutputTokens = ev.Usage.In, ev.Usage.Out
+					u.CacheReadTokens, u.CacheWriteTokens = ev.Usage.CacheRead, ev.Usage.CacheWrite
+				}
+			}
 			if ev.IsError || ev.Subtype != "success" {
-				return "", fmt.Errorf("claude: %s: %s", ev.Subtype, strings.TrimSpace(ev.Result))
+				return "", u, fmt.Errorf("claude: %s: %s", ev.Subtype, strings.TrimSpace(ev.Result))
 			}
 			out := strings.TrimSpace(ev.Result)
 			if out == "" {
-				return "", ErrEmptyTurn
+				return "", u, ErrEmptyTurn
 			}
-			return out, nil
+			return out, u, nil
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", nil, ctx.Err()
 		}
 	}
 }
 
 var _ WarmAgent = (*ClaudeStream)(nil)
+
+// Usage is what a CLI reports for one turn: tokens as the vendor counted them,
+// and the cost it states (on a subscription seat that is a notional API price).
+type Usage struct {
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	CostUSD          float64
+}

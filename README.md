@@ -279,8 +279,11 @@ task ui           # :5173 — Vite dev server, proxies /api
 session wants the real pair. `server`'s own defaults are exactly what `task infra:up` brings up, so
 it needs nothing else; copy `.env.example` to `.env` to point it somewhere different.
 
-Needs `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` + `LLM_BASE_URL`) in the environment. Nothing reads
-a secret into config — toolnexus picks the key up at call time.
+Needs no API key. With no model configured, a step with no `provider:` runs on the first agent CLI
+on PATH — `claude` (Sonnet), else `codex`, else any other CLI/ACP entry in `registries.json` — and
+the boot log and `wfx doctor` name the one picked. With none installed they say NOT READY and such a
+step is refused; it never falls back to an API. Setting `WFX_DEFAULT_PROVIDER`, `WFX_MODEL` or
+`LLM_BASE_URL` turns auto-detection off.
 
 ### Storage: two modes, one shorthand
 

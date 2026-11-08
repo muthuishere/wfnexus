@@ -198,7 +198,6 @@ steps:
             - git stash
             - gh pr
           reason: edits stay in the working tree; a later step verifies and commits
-      provider: openrouter
     - id: verify
       name: Verify every edit against the code (JEV) and commit
       description: Docs-only diff; evidence read from the cited line; stale AND supported both yes, else the doc is restored.
@@ -304,7 +303,6 @@ steps:
             - reset --hard
             - git commit
           reason: publish exactly what was verified
-      provider: openrouter
     - id: remember
       name: Remember the last commit checked
       description: Workflow state `last_sha` — advanced only by a real run.

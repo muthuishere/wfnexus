@@ -35,6 +35,7 @@
       "kind": "cli",
       "description": "The local `claude` CLI as the model — your own subscription seat, not an API key. Verified live 2026-09-24 (`claude -p <prompt> --model <m>`, 4.7s). READ THIS BEFORE AUTOMATING IT: Anthropic's Consumer Terms, Prohibited Uses, say \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" A pipeline exec'ing this CLI is script-driven access on a subscription seat, so on the plain reading it is the thing that clause names. The clause's own carve-out is an API key — use the `anthropic` http provider for automation. (anthropic.com/legal/consumer-terms, read 2026-09-24.) We enforce nothing; this is your call with your own account, and the entry says so rather than staying quiet.",
       "preset": "claude",
+      "model": "sonnet",
       "repairs": 2,
       "timeoutSec": 900
     },

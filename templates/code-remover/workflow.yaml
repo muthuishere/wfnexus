@@ -21,7 +21,7 @@
 #   5. One commit per removal, reverted on red, then re-proven by a separate step
 #      with the same ruler as the baseline (build, vet, counted tests), plus the
 #      finders re-run to list what became unreachable BECAUSE of this PR.
-#   6. A DIFFERENT model (codex-cli) reviews the diff; then every PR claim is checked
+#   6. A fresh agent reviews the diff; then every PR claim is checked
 #      against evidence the writer did not author, and the PR must quote the real
 #      numbers and every commit SHA.
 #   7. Two human gates: the removal plan (before anything is deleted) and the publish.
@@ -50,7 +50,7 @@ description: >-
   each one is used; a calibrated classifier scores what is left and a decision
   table decides remove / keep / bug / needs-a-human. After a person approves the
   plan, each removal is its own commit with the suite green after it, re-proven
-  independently, reviewed by a different model, and described in a PR whose every
+  independently, reviewed by a fresh agent, and described in a PR whose every
   claim is checked against the evidence. Nothing is pushed until a person approves.
 
 on:
@@ -110,7 +110,6 @@ steps:
   - id: prove
     name: Prove each candidate IS used (usage-prover)
     description: Read every hit adversarially; find indirect use, dependent text and lost callers. Reads only.
-    provider: claude-cli
     skills: [usage-prover, repo-navigator]
     tools: [read, grep, glob, bash]
     max_turns: 80
@@ -196,7 +195,6 @@ steps:
     name: Remove the approved candidates (safe-remover)
     description: One commit per removal with its evidence; orphans cleaned; build+vet+test after each; revert on red.
     requires_approval: true
-    provider: claude-cli
     skills: [safe-remover]
     tools: [read, edit, write, grep, glob, bash]
     max_turns: 120
@@ -248,11 +246,10 @@ steps:
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "The branch did not prove out — {{ .Output.stdout }}" }
 
-  # 6 ── a different model reviews the diff ──────────────────────────────────────
+  # 6 ── a fresh agent reviews the diff ──────────────────────────────────────────
   - id: review
-    name: Adversarial review on a different model (change-reviewer)
+    name: Adversarial review by a fresh agent (change-reviewer)
     description: codex-cli reviews the diff it did not write, against the plan and the proof.
-    provider: codex-cli
     skills: [change-reviewer]
     tools: [read, grep, glob, bash]
     max_turns: 40
@@ -295,7 +292,6 @@ steps:
   - id: write_pr
     name: Write the cleanup PR (cleanup-pr-writer)
     description: Removals table with evidence and commits, kept and why, bugs, needs-a-human, before/after, revert per commit.
-    provider: claude-cli
     skills: [cleanup-pr-writer]
     tools: [read, write, edit, grep, glob, bash]
     max_turns: 40
@@ -353,7 +349,6 @@ steps:
     name: Push and open the PR (pr-publisher)
     description: Push this run's branch and open the PR with the checked body.
     requires_approval: true
-    provider: claude-cli
     skills: [pr-publisher]
     tools: [read, bash]
     max_turns: 15

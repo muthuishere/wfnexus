@@ -28,9 +28,16 @@ import (
 // logDoctor writes the startup summary: the default model every step falls back
 // to, and every provider and classifier that could not run if named right now.
 func logDoctor(d engine.Doctor) {
-	log.Printf("default model: %s via %s (%s), key %s=%s",
-		d.Default.Model, d.Default.BaseURL, d.Default.Style, d.Default.APIKeyEnv,
-		map[bool]string{true: "set", false: "NOT SET"}[d.Default.KeySet])
+	if d.Default.Provider != "" {
+		log.Printf("default model: provider %s (agent CLI%s)", d.Default.Provider,
+			map[bool]string{true: ", auto-detected", false: ""}[d.Default.Auto])
+	} else if d.Default.Auto {
+		log.Printf("default model: NONE — no agent CLI on PATH")
+	} else {
+		log.Printf("default model: %s via %s (%s), key %s=%s",
+			d.Default.Model, d.Default.BaseURL, d.Default.Style, d.Default.APIKeyEnv,
+			map[bool]string{true: "set", false: "NOT SET"}[d.Default.KeySet])
+	}
 	for _, p := range d.Providers {
 		if !p.Ready {
 			continue

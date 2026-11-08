@@ -61,6 +61,11 @@ type Config struct {
 	// `provider:` runs on (its `model:` still selects within it). "" ⇒ the
 	// LLMBaseURL endpoint, as before.
 	DefaultProvider string
+	// AutoProvider is true when nothing names a default model at all — no
+	// provider, no model, no endpoint. The engine then picks the first agent
+	// CLI on this machine (claude, then codex, then any other CLI or ACP entry
+	// the registry knows) and never falls back to an API endpoint.
+	AutoProvider bool
 	// FallbackProviders are tried, in order, after a step's provider and that
 	// provider's own `fallback:` list, when none of those could be reached
 	// (WFX_FALLBACK_PROVIDERS, comma separated, or model.fallback).
@@ -279,6 +284,9 @@ func LoadWithFile(path string) (Config, error) {
 		ClassifierModel:     env("WFX_CLASSIFIER_MODEL", or(f.Classifier.Model, "typesafe/jev-1.13")),
 		ClassifierAPIKeyEnv: env("WFX_CLASSIFIER_API_KEY_ENV", or(f.Classifier.APIKeyEnv, "OPENROUTER_API_KEY")),
 		ProposalAutoApprove: envFloat("WFX_PROPOSAL_AUTO_APPROVE", 0),
+
+		AutoProvider: !stated("WFX_DEFAULT_PROVIDER", f.Model.Provider) && !stated("WFX_MODEL", f.Model.Model) &&
+			!stated("LLM_BASE_URL", f.Model.BaseURL),
 
 		Explicit: Explicit{
 			Workflows:  stated("WFX_WORKFLOWS_DIR", f.Paths.Workflows),
