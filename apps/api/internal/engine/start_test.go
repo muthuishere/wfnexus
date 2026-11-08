@@ -258,69 +258,6 @@ func msg(ch, chat, text string) map[string]any {
 	return map[string]any{"message": map[string]any{"channel": ch, "chat": chat, "text": text, "from": "u1"}}
 }
 
-func TestMessagesWithinTheWindowBatchIntoOneRun(t *testing.T) {
-	name := uniq("conv")
-	h := startHarness(t, convDef(t, name, "echo {{ len .Input.messages }}"))
-	h.eng.SetConversationDebounce(150 * time.Millisecond)
-	key := ConversationKey{Channel: "wa", Chat: uniq("chat")}
-	for _, m := range []string{"one", "two", "three"} {
-		if err := h.eng.StartForConversation(context.Background(), key, name, msg("wa", key.Chat, m)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	runs := waitRuns(t, h, store.RunFilter{Workflow: name}, 1)
-	time.Sleep(300 * time.Millisecond) // a second run, if any, would exist by now
-	runs = waitRuns(t, h, store.RunFilter{Workflow: name}, 1)
-	if len(runs) != 1 {
-		t.Fatalf("want one batched run, got %d", len(runs))
-	}
-	r := h.waitEnded(runs[0].ID)
-	if r.Conversation != key.String() || r.TriggeredBy != "u1" {
-		t.Fatalf("run conversation %q by %q", r.Conversation, r.TriggeredBy)
-	}
-	var in map[string]any
-	_ = json.Unmarshal(r.Input, &in)
-	if msgs, _ := in["messages"].([]any); len(msgs) != 3 || asString(in["message"]) != asString(msgs[2]) {
-		t.Fatalf("input %s", r.Input)
-	}
-	c, err := h.store.GetConversation(context.Background(), key.Channel, key.Chat)
-	if err != nil || c.State != "resolved" || c.LastRunID != r.ID.String() {
-		t.Fatalf("conversation %+v %v", c, err)
-	}
-}
-
-func TestOneConversationRunsOneAtATimeOthersInParallel(t *testing.T) {
-	name := uniq("lane")
-	h := startHarness(t, convDef(t, name, "sleep 0.6"))
-	h.eng.slots = make(chan struct{}, 4)
-	h.eng.SetConversationDebounce(20 * time.Millisecond)
-	ctx := context.Background()
-	a := ConversationKey{Channel: "wa", Chat: uniq("a")}
-	b := ConversationKey{Channel: "wa", Chat: uniq("b")}
-	_ = h.eng.StartForConversation(ctx, a, name, msg("wa", a.Chat, "first"))
-	time.Sleep(150 * time.Millisecond) // past the window: a separate batch
-	_ = h.eng.StartForConversation(ctx, a, name, msg("wa", a.Chat, "second"))
-	_ = h.eng.StartForConversation(ctx, b, name, msg("wa", b.Chat, "other chat"))
-
-	// While a's first run is still going, b's has started and a's second has not.
-	bRuns := waitRuns(t, h, store.RunFilter{Conversation: b.String()}, 1)
-	aRuns, _ := h.store.FindRuns(ctx, store.RunFilter{Conversation: a.String()})
-	if len(bRuns) != 1 || len(aRuns) != 1 {
-		t.Fatalf("while a's first runs: a has %d runs, b has %d", len(aRuns), len(bRuns))
-	}
-	first := h.waitEnded(aRuns[0].ID)
-	aRuns = waitRuns(t, h, store.RunFilter{Conversation: a.String()}, 2)
-	if len(aRuns) != 2 {
-		t.Fatalf("a's second message never ran: %d", len(aRuns))
-	}
-	second := aRuns[0] // newest first
-	if second.CreatedAt.Before(first.UpdatedAt.Add(-50 * time.Millisecond)) {
-		t.Fatalf("a's second run was created at %v, before the first ended at %v", second.CreatedAt, first.UpdatedAt)
-	}
-	h.waitEnded(second.ID)
-	h.waitEnded(bRuns[0].ID)
-}
-
 func TestMemoryIsPerConversationLessonsAreNot(t *testing.T) {
 	name := uniq("cmem")
 	def := convDef(t, name, "echo hi")
@@ -348,37 +285,6 @@ func TestMemoryIsPerConversationLessonsAreNot(t *testing.T) {
 	}
 }
 
-func TestAClosedConversationReopensOnANewMessage(t *testing.T) {
-	name := uniq("reopen")
-	h := startHarness(t, convDef(t, name, "echo ok"))
-	h.eng.SetConversationDebounce(10 * time.Millisecond)
-	ctx := context.Background()
-	key := ConversationKey{Channel: "wa", Chat: uniq("c")}
-	_ = h.eng.StartForConversation(ctx, key, name, msg("wa", key.Chat, "one"))
-	h.waitEnded(waitRuns(t, h, store.RunFilter{Conversation: key.String()}, 1)[0].ID)
-	if err := h.eng.SetConversationState(ctx, key, "closed"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.eng.SetConversationState(ctx, key, "gone"); err == nil {
-		t.Fatal("a made-up state was accepted")
-	}
-	_ = h.eng.StartForConversation(ctx, key, name, msg("wa", key.Chat, "two"))
-	runs := waitRuns(t, h, store.RunFilter{Conversation: key.String()}, 2)
-	if len(runs) != 2 {
-		t.Fatalf("runs %d", len(runs))
-	}
-	c, _ := h.store.GetConversation(ctx, key.Channel, key.Chat)
-	if c.State == "closed" {
-		t.Fatalf("a new message did not reopen the conversation: %+v", c)
-	}
-	if err := h.eng.StartForConversation(ctx, ConversationKey{Channel: "wa"}, name, nil); err == nil {
-		t.Fatal("a key without a chat was accepted")
-	}
-	if err := h.eng.StartForConversation(ctx, key, "no-such-workflow", nil); err == nil {
-		t.Fatal("an unknown workflow was accepted")
-	}
-}
-
 func TestConversationKeyFromInput(t *testing.T) {
 	k, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"channel": "wa", "chat": "1:2@s.whatsapp.net"}})
 	if !ok || k.String() != "wa:1:2@s.whatsapp.net" {
@@ -390,8 +296,5 @@ func TestConversationKeyFromInput(t *testing.T) {
 	}
 	if _, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"text": "no chat"}}); ok {
 		t.Fatal("a message with no chat is not a conversation")
-	}
-	if k, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"chat": "c"}, "subscription": map[string]any{"channel": "wa"}}); !ok || k.Channel != "wa" {
-		t.Fatal("subscription channel fallback")
 	}
 }

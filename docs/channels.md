@@ -52,7 +52,6 @@ older than the cursor are not seen). Test fixture: the fake adapter in
 | `target` | optional default address, passed through as `target` |
 | `inbound` | poll `receive` every `receiveEvery` (default `1m`) |
 | `allow` | sender ids whose replies may resolve a pause, and who may fire this channel's `message` triggers (unless a trigger lists its own). **Empty (default) = nobody.** |
-| `self` | the ids that are US on this channel (our WhatsApp JIDs, plain and device form). A group subscription with `activation: mention` (the default) starts a run only when a message mentions one of them or replies to one. Leave it out and wfnexus asks the adapter's optional `self` verb (cached; retried every 5 min on failure); if neither knows, such a subscription shows a **warning** and starts nothing from groups |
 | `sendGap` | minimum time between sends on this channel; sends are always one at a time |
 | `timeoutSec` | per invocation (default 60). The adapter is told it as `WFX_CHANNEL_TIMEOUT_MS` and should finish (or fail, saying so) before it |
 
@@ -191,14 +190,7 @@ triggers.
 **exit** — non-zero is a failure (e.g. the transport's syncer is down). The
 error is kept and shown by `wfx channels`; the cursor does not move.
 
-## `<run> self` (optional)
 
-Prints `{"self": ["<id>", ...]}`: who the account is, for a channel with no
-`self` list. Read-only; an adapter without it just fails the verb. The
-reference adapter answers from `wacli auth status` (the linked JID, with and
-without its device suffix).
-
-## What wfnexus does with a received message
 
 1. Stored in `channel_messages` (once), pending; marked handled once acted on.
    A message still pending at the next poll (a crash) is handled then.
@@ -217,28 +209,10 @@ without its device suffix).
    `input.message = {channel, id, from, name, text, at, attachments}` and
    `triggeredBy = <from>`. The text is **untrusted**: never template it into a
    `run:` command or treat it as instructions.
-4. Also (ADR 0026), the message is offered to every **active subscription**
-   (`subscriptions` in registries.json; `wfx sub …`, `/api/subscriptions`, or
-   a project's Subscriptions tab) whose `channel`, `chat` (`*` = any) and
-   `events` (default `message`) match. Per subscription, in order:
-   message `at` before the subscription's `startedAt` → `backlog` (stored, no
-   reply); `mode: observe` → `observed`; sender not on its `allow` (empty =
-   nobody, `*` = everyone; `fromOwner` passes) → `refused`; a `group` message
-   that neither mentions nor replies to one of the channel's `self` ids, unless
-   `activation: always` → `inactive`; an `exclusive` subscription already took
-   it → `skipped`; else the target workflow starts with
-   `input.message` (the event, with chat/chatType/kind/replyTo/media/mentions/
-   fromOwner/reaction) and `input.subscription` (name, instructions,
-   responsePolicy, mode, memory, skills, owner). `(subscription, message id)`
-   is unique in `subscription_deliveries`, so a repeat starts nothing. A
-   matched event with a `chat` starts through its conversation lane
-   `(channel, chat)`: one run per chat at a time, messages within 3 s batched
-   into one run (`input.messages`). A subscription that lists
-   `workflow.completed` in `events` also receives the completion events of
-   `start: … continue: event` children from runs in that chat
-   (`input.event`), once per child run. A
-   channel with an active subscription is read even when not `inbound`, at the
-   shortest of its subscriptions' intervals (`30s`, `1m`, `2m`).
+4. Watching chats for many workflows (one read per account, per-chat
+   debounce, delivery to each workflow's hook) is not done here: it is the
+   `whatsapp-group-monitor` service module (ADR 0028). `wfx module start
+   whatsapp-group-monitor --account <label>`, then `wfx module watch add …`.
 
 ## Adapter author rules
 

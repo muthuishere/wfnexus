@@ -1,4 +1,0 @@
-[
-  { "name": "ping in any chat", "when": { "kind": "message", "text": "(?i)^\\s*ping\\b" }, "workflow": "pingpong" },
-  { "name": "every other text gets an answer", "when": { "kind": "message" }, "workflow": "frontdesk" }
-]

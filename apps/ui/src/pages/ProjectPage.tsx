@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import EnvStore from '../components/EnvStore'
 import Changes from '../components/Changes'
 import StateStore from '../components/StateStore'
-import Subscriptions from '../components/Subscriptions'
 import Crumbs, { Tabs } from '../components/Crumbs'
 import { api, type Project, type Run, type Workflow } from '../api'
 import DataTable, { type Column, type Filter } from '../components/DataTable'
@@ -12,7 +11,7 @@ import { isWaiting } from '../lib/waiting'
 import { useCategories } from '../lib/categories'
 import { canDispatch, clip, sameWorkflow, summariseRun, triggerNames } from '../lib/workflow'
 
-type Tab = 'workflows' | 'runs' | 'subscriptions' | 'changes' | 'settings'
+type Tab = 'workflows' | 'runs' | 'changes' | 'settings'
 
 /** One project, opened. What a person came here for is almost always one of
  *  its workflows, so that is what the page leads with; the project-wide run
@@ -125,7 +124,6 @@ export default function ProjectPage({ name }: { name: string }) {
       <Tabs<Tab> value={tab} onChange={setTab} tabs={[
         { key: 'workflows', label: 'Workflows', count: mine.length },
         { key: 'runs', label: 'Runs', count: project.runs },
-        { key: 'subscriptions', label: 'Subscriptions' },
         { key: 'changes', label: 'Changes' },
         { key: 'settings', label: 'Settings' },
       ]} />
@@ -212,7 +210,6 @@ export default function ProjectPage({ name }: { name: string }) {
       {tab === 'changes' && <Changes project={name} />}
 
       {/* Which chats start this project's workflows (ADR 0026). */}
-      {tab === 'subscriptions' && <Subscriptions project={name} workflows={mine.map(w => w.name)} />}
 
       {/* This repository's own environment — a token that can push here has no
           business reaching a workflow from another project — and what the

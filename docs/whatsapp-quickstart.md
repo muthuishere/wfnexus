@@ -1,8 +1,8 @@
 # WhatsApp quickstart
 
 From nothing to a bot that answers in a test group and is watched, in five
-steps. The background is in ADR 0026 (subscriptions, conversations, default
-workflows) and ADR 0027 (hooks and MCP). The adapter contract is in
+steps. The background is in ADR 0027 (hooks and MCP) and ADR 0028 (service
+modules: the whatsapp-group-monitor). The adapter contract is in
 [channels.md](channels.md).
 
 ## 1. Create the channel
@@ -26,51 +26,46 @@ workflows) and ADR 0027 (hooks and MCP). The adapter contract is in
 Leave `APL_WA_GROUP` unset to use inbox mode, where one channel serves every
 DM and group. Check it with `wfx channels` and `wfx channels receive whatsapp`.
 
-## 2. Set `self`
-
-Group subscriptions only answer when someone mentions or replies to **us**.
-wfnexus asks the adapter's `self` verb; if that fails, list the ids yourself:
-
-```json
-"self": ["15550100000@s.whatsapp.net", "15550100000:12@s.whatsapp.net"]
-```
-
-`wfx sub show <name>` prints a warning while self is unknown. `whatsapp-monitor`
-reports the same thing as `unknown-self`.
-
-## 3. Add a subscription: pingpong on a test group
+## 2. Install pingpong and expose it as a hook
 
 ```sh
 wfx new whatsapp-sender      # copies keep the template's name; the others start it by name
 wfx new pingpong
 # whatsapp-sender sends on the DEFAULT channel (channels.default: whatsapp),
 # so the channel's sendGap paces every op
-
-wfx sub add pingpong-test --channel whatsapp --chat <test-group-jid>@g.us \
-  --workflow pingpong --allow <your-jid>@s.whatsapp.net \
-  --policy auto --activation always --interval 30s
+wfx expose hook pingpong     # prints the hook URL and its token once
+wfx env set PINGPONG_HOOK_TOKEN   # paste the token (stored sealed)
 ```
 
-`--allow` is the owner only. An empty list means nobody, and `*` means
-everyone. Messages sent before the subscription became active are treated as
-backlog and are never answered.
+## 3. Run the monitor and register a watch
 
-To do the same from a chat or an agent, use `whatsapp-subscription-manager`:
-`{"action":"add","name":"pingpong-test","channel":"whatsapp","chat":"…","workflow":"pingpong","allow":"…"}`.
+```sh
+wfx module install https://github.com/muthuishere/wfnexus --ref main   # or your fork
+wfx module config whatsapp-group-monitor
+wfx module start whatsapp-group-monitor --account biz   # [--runs-on <worker label>]
+wfx module watch add whatsapp-group-monitor --account biz \
+  '{"name":"pingpong-test","chat":"<test-group-jid>@g.us","hook":"<hook url>","tokenEnv":"PINGPONG_HOOK_TOKEN"}'
+```
+
+One process per account reads every watched chat once per tick, holds a chat's
+messages until it is quiet for 3s, and posts the batch to the watch's hook. A
+new watch is picked up on the next tick. History from before the monitor
+started is never delivered. The hook body is `{message, messages, watch,
+chat}`; `watch` carries the watch's `name`, `responsePolicy` (missing =
+`draft`, never auto-send), `instructions` and `skills`. For the pingpong test
+add `"responsePolicy":"auto"` to the watch, or the reply is only drafted.
 
 ## 4. Watch a run
 
 Send `ping` in the group. Within the interval:
 
 ```sh
-wfx sub show pingpong-test       # the delivery: started, with its run id
+wfx module ls                    # running, last heartbeat, restarts
 wfx runs --workflow pingpong     # the run; its child is the whatsapp-sender run
 ```
 
-The group gets `pong #1` as a quote-reply. Send `ping` again and the reply is
-`pong #2`, because memory is kept per conversation. In the UI, the run page shows
-the `send` step linked to its child sender run, and that run's `deliver` output
-(`{"status":"sent","id":…}`).
+The group gets `pong #1`. Send `ping` again and the reply is `pong #2`,
+because memory is kept per conversation.
 
 Then keep it watched:
 
@@ -78,9 +73,9 @@ Then keep it watched:
 wfx new whatsapp-monitor   # set owner_chat, WA_CHANNEL, STORE_PROBE
 ```
 
-Every 5 minutes it compares the WhatsApp store with what wfnexus has heard. If
-the channel is connected but deaf, or a subscription is failing, it alerts your
-chat once per window.
+Every 5 minutes it compares the WhatsApp store with what wfnexus has heard,
+and checks the monitor service. If the channel is connected but deaf, or the
+service is silent or crashed, it alerts your chat once per window.
 
 ## 5. Expose frontdesk over MCP
 
@@ -92,9 +87,10 @@ wfx expose mcp frontdesk                    # prints the token once, plus the cl
 Any MCP client can now call the `frontdesk` tool with
 `{"message": {"chat": "…", "id": "…", "from": "…", "text": "…"}, "subscription": {"instructions": "…"}}`.
 It answers from that chat's memory, or hands off to a workflow or a person. To
-answer real chats with it, subscribe it the same way as pingpong:
-`wfx sub add desk --workflow frontdesk --policy approval …`. Start with
-`approval`, so every reply waits for you until you trust it.
+answer real chats with it, expose it as a hook and add a watch the same way as
+pingpong, with `"responsePolicy": "approval"` on the watch so every reply
+waits for you until you trust it. A watch with no policy drafts: nothing is
+ever sent without one.
 
 ## The default workflows
 
@@ -103,6 +99,4 @@ answer real chats with it, subscribe it the same way as pingpong:
 | `whatsapp-sender` | one send, policy-checked; `sent`, `failed` or `uncertain`; never resends uncertain |
 | `pingpong` | the reference handler: memory → reply via the sender → save |
 | `frontdesk` | answers from memory and instructions; hands off when unsure (embeds `load-context`) |
-| `router` | classifies an event and `start:`s the workflow that owns it |
-| `whatsapp-monitor` | catches a connected-but-deaf channel, plus failing subscriptions and unknown self |
-| `whatsapp-subscription-manager` | add, update, pause, resume, rm, ls and validate through the API, reading each change back |
+| `whatsapp-monitor` | catches a connected-but-deaf channel, plus a silent or crashed monitor service |

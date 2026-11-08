@@ -193,23 +193,6 @@ func mutate(path string, apply func(*file)) error {
 		extra[k] = b
 	}
 
-	// Subscriptions are written only when there are some, or the key was
-	// already there, so a file that never had any does not grow a null.
-	if _, had := extra["subscriptions"]; had || len(f.Subscriptions) > 0 {
-		subs := f.Subscriptions
-		if subs == nil {
-			subs = map[string]Subscription{}
-		}
-		b, err := json.MarshalIndent(subs, "", "  ")
-		if err != nil {
-			return err
-		}
-		if extra == nil {
-			extra = map[string]json.RawMessage{}
-		}
-		extra["subscriptions"] = b
-	}
-
 	out, err := encodeOrdered(extra)
 	if err != nil {
 		return err

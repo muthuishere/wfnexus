@@ -7,7 +7,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -27,21 +26,11 @@ import (
 //     conversations run in parallel. The lane is held while a run is queued,
 //     running or waiting on a child, and released when it ends or parks on a
 //     person (a pause must not block the chat forever).
-//  3. Messages arriving within ConversationDebounce of each other in one chat
-//     are batched into ONE run: the run's input is the last message's input,
-//     plus `messages`, the list of every batched message.
 //
-// The entry point is StartForConversation, which the router calls for every
-// matched event. Lanes and batches are in memory, per process — like the
+// Batching a chat's messages is the whatsapp-group-monitor's job (ADR 0028);
+// the lane here carries `workflow.completed` events back into the parent's
+// conversation (start.go). Lanes are in memory, per process — like the
 // scheduler, one engine owns the runs it starts.
-
-// ConversationDebounce is how long a chat stays quiet before its batched
-// messages start a run.
-const ConversationDebounce = 3 * time.Second
-
-// conversationDebounceMax caps how long a chat that never goes quiet can hold
-// its batch back.
-const conversationDebounceMax = 15 * time.Second
 
 // ConversationKey names a conversation: the channel (account) and the chat.
 type ConversationKey struct {
@@ -68,8 +57,7 @@ func ParseConversationKey(s string) (ConversationKey, bool) {
 }
 
 // ConversationKeyFromInput finds the conversation a run input belongs to:
-// input.message.channel + input.message.chat (the received-event contract),
-// with input.subscription.channel as the channel's fallback.
+// input.message.channel + input.message.chat (the received-event contract).
 func ConversationKeyFromInput(input map[string]any) (ConversationKey, bool) {
 	msg, _ := input["message"].(map[string]any)
 	if msg == nil {
@@ -77,11 +65,6 @@ func ConversationKeyFromInput(input map[string]any) (ConversationKey, bool) {
 	}
 	chat, _ := msg["chat"].(string)
 	ch, _ := msg["channel"].(string)
-	if ch == "" {
-		if sub, _ := input["subscription"].(map[string]any); sub != nil {
-			ch, _ = sub["channel"].(string)
-		}
-	}
 	k := ConversationKey{Channel: strings.TrimSpace(ch), Chat: strings.TrimSpace(chat)}
 	return k, k.String() != ""
 }
@@ -122,8 +105,6 @@ type convLanes struct {
 	// byRun maps a lane-held run to its conversation, so a status change finds
 	// its lane without reading the run.
 	byRun map[uuid.UUID]string
-	// debounce overrides ConversationDebounce (tests).
-	debounce time.Duration
 	// completed are the children whose `workflow.completed` was delivered.
 	completed map[uuid.UUID]bool
 }
@@ -132,17 +113,12 @@ type convLane struct {
 	key     ConversationKey
 	busy    bool
 	run     uuid.UUID
-	open    map[string]*convBatch // debouncing, by workflow
-	pending []*convBatch          // ready, waiting for the lane
+	pending []*convBatch // waiting for the lane
 }
 
 type convBatch struct {
 	workflow string
-	inputs   []map[string]any
-	first    time.Time
-	timer    *time.Timer
-	// gen invalidates a superseded timer.
-	gen int
+	input    map[string]any
 }
 
 func (c *convLanes) lane(key ConversationKey) *convLane {
@@ -152,44 +128,15 @@ func (c *convLanes) lane(key ConversationKey) *convLane {
 	}
 	l := c.lanes[key.String()]
 	if l == nil {
-		l = &convLane{key: key, open: map[string]*convBatch{}}
+		l = &convLane{key: key}
 		c.lanes[key.String()] = l
 	}
 	return l
 }
 
-func (e *Engine) debounceWindow() time.Duration {
-	if e.conv.debounce > 0 {
-		return e.conv.debounce
-	}
-	return ConversationDebounce
-}
-
-// SetConversationDebounce changes the batching window (0 restores the
-// default). Tests and an operator who wants instant replies use it.
-func (e *Engine) SetConversationDebounce(d time.Duration) {
-	e.conv.mu.Lock()
-	e.conv.debounce = d
-	e.conv.mu.Unlock()
-}
-
-// StartForConversation is how the router hands a matched event to its target
-// workflow (ADR 0026). It returns at once; the run starts after the chat has
-// been quiet for ConversationDebounce, and only when no other run of the same
-// conversation is active. Messages that arrive in the window share one run.
-//
-// key is the conversation — (channel, chat). input is the run input the
-// contract defines: {message: <received event>, subscription: {...}}. An
-// error means the request itself is unusable (no such workflow, no key); a
-// failure to create the run later is logged and the lane moves on.
-func (e *Engine) StartForConversation(ctx context.Context, key ConversationKey, workflowName string, input map[string]any) error {
-	return e.enqueueConversation(key, workflowName, input, true)
-}
-
-// enqueueConversation queues input for the conversation's lane; debounce
-// false skips the batching window (a `workflow.completed` event is not a
-// message and is never merged with one).
-func (e *Engine) enqueueConversation(key ConversationKey, workflowName string, input map[string]any, debounce bool) error {
+// enqueueConversation queues input for the conversation's lane: it starts
+// when no other run of that conversation is active.
+func (e *Engine) enqueueConversation(key ConversationKey, workflowName string, input map[string]any) error {
 	if key.String() == "" {
 		return fmt.Errorf("conversation: needs a channel and a chat")
 	}
@@ -202,44 +149,9 @@ func (e *Engine) enqueueConversation(key ConversationKey, workflowName string, i
 	e.conv.mu.Lock()
 	defer e.conv.mu.Unlock()
 	l := e.conv.lane(key)
-	if !debounce {
-		l.pending = append(l.pending, &convBatch{workflow: workflowName, inputs: []map[string]any{input}})
-		go e.pump(key.String())
-		return nil
-	}
-	b := l.open[workflowName]
-	if b == nil {
-		b = &convBatch{workflow: workflowName, first: time.Now()}
-		l.open[workflowName] = b
-	}
-	b.inputs = append(b.inputs, input)
-	if b.timer != nil {
-		b.timer.Stop()
-	}
-	b.gen++
-	gen := b.gen
-	wait := e.debounceWindow()
-	if left := conversationDebounceMax - time.Since(b.first); left < wait {
-		wait = max(left, 0)
-	}
-	b.timer = time.AfterFunc(wait, func() { e.flushBatch(key, workflowName, gen) })
+	l.pending = append(l.pending, &convBatch{workflow: workflowName, input: input})
+	go e.pump(key.String())
 	return nil
-}
-
-// flushBatch moves a quiet batch to the lane's queue and starts it if the
-// lane is free.
-func (e *Engine) flushBatch(key ConversationKey, workflowName string, gen int) {
-	e.conv.mu.Lock()
-	l := e.conv.lane(key)
-	b := l.open[workflowName]
-	if b == nil || b.gen != gen {
-		e.conv.mu.Unlock()
-		return // a later message re-armed the timer
-	}
-	delete(l.open, workflowName)
-	l.pending = append(l.pending, b)
-	e.conv.mu.Unlock()
-	e.pump(key.String())
 }
 
 // pump starts the lane's next batch when the lane is free. The lane is
@@ -251,7 +163,7 @@ func (e *Engine) pump(keyStr string) {
 		e.conv.mu.Lock()
 		l := e.conv.lanes[keyStr]
 		if l == nil || l.busy || len(l.pending) == 0 {
-			if l != nil && !l.busy && len(l.pending) == 0 && len(l.open) == 0 {
+			if l != nil && !l.busy && len(l.pending) == 0 {
 				delete(e.conv.lanes, keyStr)
 			}
 			e.conv.mu.Unlock()
@@ -279,30 +191,10 @@ func (e *Engine) pump(keyStr string) {
 	}
 }
 
-// batchInput is the run input for a batch: the LAST input, plus `messages`,
-// every batched input's message in arrival order.
-func batchInput(inputs []map[string]any) map[string]any {
-	last := inputs[len(inputs)-1]
-	out := make(map[string]any, len(last)+1)
-	for k, v := range last {
-		out[k] = v
-	}
-	var msgs []any
-	for _, in := range inputs {
-		if m, ok := in["message"]; ok {
-			msgs = append(msgs, m)
-		}
-	}
-	if len(msgs) > 0 {
-		out["messages"] = msgs
-	}
-	return out
-}
-
 // launchBatch creates (but does not start) the run for a batch.
 func (e *Engine) launchBatch(key ConversationKey, b *convBatch) (uuid.UUID, error) {
 	ctx := context.Background()
-	input := batchInput(b.inputs)
+	input := b.input
 	def := e.Definitions()[b.workflow]
 	if def == nil {
 		return uuid.Nil, fmt.Errorf("workflow %q is not loaded", b.workflow)
@@ -310,9 +202,7 @@ func (e *Engine) launchBatch(key ConversationKey, b *convBatch) (uuid.UUID, erro
 	// A conversation's handler is started by a message; one that declares no
 	// `message` trigger is still startable the way a person would start it.
 	trig := workflow.TriggerMessage
-	if _, viaSub := input["subscription"]; viaSub && def.On.Allows(workflow.TriggerSubscription) {
-		trig = workflow.TriggerSubscription
-	} else if !def.On.Allows(trig) {
+	if !def.On.Allows(trig) {
 		trig = workflow.TriggerDispatch
 	}
 	raw, err := e.PrepareRun(b.workflow, trig, mustJSON(input))

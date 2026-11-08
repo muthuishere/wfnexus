@@ -50,6 +50,11 @@ type Watch struct {
 	Hook string `json:"hook"`
 	// TokenEnv names the env var holding the hook's bearer token.
 	TokenEnv string `json:"tokenEnv"`
+	// How the workflow should handle what this watch delivers. Passed through
+	// as input.watch; the workflow decides the defaults (draft: never auto-send).
+	ResponsePolicy string   `json:"responsePolicy,omitempty"` // draft | approval | auto | none
+	Instructions   string   `json:"instructions,omitempty"`
+	Skills         []string `json:"skills,omitempty"`
 }
 
 // Event is one received item (docs/channels.md); kept as raw JSON so every
@@ -65,6 +70,9 @@ type Config struct {
 	Receive []string
 	// Env is extra env for the adapter (APL_WA_GROUP=* is always set).
 	Env []string
+	// Channel names the channel on every delivered message (message.channel),
+	// so a workflow keys its conversation on (channel, chat). Default whatsapp.
+	Channel string
 	// Watches returns the registered watches. It is asked once per read, so
 	// a watch registered through wfnexus takes effect without a restart; on an
 	// error the last good list is kept.
@@ -112,6 +120,9 @@ func New(cfg Config) (*Monitor, error) {
 	}
 	if cfg.Debounce == 0 {
 		cfg.Debounce = 3 * time.Second
+	}
+	if cfg.Channel == "" {
+		cfg.Channel = "whatsapp"
 	}
 	if cfg.HTTP == nil {
 		cfg.HTTP = &http.Client{Timeout: 30 * time.Second}
@@ -301,11 +312,26 @@ func (m *Monitor) deliver(ctx context.Context, w Watch, chat string, evs []Event
 	if w.TokenEnv == "" || token == "" {
 		return fmt.Errorf("no hook token: set the env var named by tokenEnv (%q)", w.TokenEnv)
 	}
+	stamped := make([]Event, len(evs))
+	for i, e := range evs {
+		c := Event{}
+		for k, v := range e {
+			c[k] = v
+		}
+		if c.str("channel") == "" {
+			c["channel"] = m.cfg.Channel
+		}
+		if c.str("chat") == "" {
+			c["chat"] = chat
+		}
+		stamped[i] = c
+	}
 	body, _ := json.Marshal(map[string]any{
-		"message":  evs[len(evs)-1], // the newest: what a one-message workflow reads
-		"messages": evs,             // the whole debounced batch, oldest first
-		"watch":    w.Name,
-		"chat":     chat,
+		"message":  stamped[len(stamped)-1], // the newest: what a one-message workflow reads
+		"messages": stamped,                 // the whole debounced batch, oldest first
+		"watch": map[string]any{"name": w.Name, "responsePolicy": w.ResponsePolicy,
+			"instructions": w.Instructions, "skills": w.Skills},
+		"chat": chat,
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", w.Hook, bytes.NewReader(body))
 	if err != nil {

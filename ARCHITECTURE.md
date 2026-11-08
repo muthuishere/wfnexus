@@ -6,7 +6,7 @@ wfnexus runs YAML workflows. Each step is an agent with scoped skills and a type
 flowchart LR
   P[Person or agent<br/>UI, wfx CLI, skills] --> API[wfx-server API<br/>REST + SSE, password sign-in]
   EXT[Outside callers<br/>hook + MCP per workflow] --> API
-  CH[Channels<br/>WhatsApp adapter, router, subscriptions] --> API
+  CH[Channels<br/>WhatsApp adapter, service modules] --> API
   API --> ENG[Engine<br/>steps, gates, start:, uses:]
   ENG --> AG[toolnexus agent<br/>one per step]
   AG --> PROV[Providers<br/>http, cli, acp]
@@ -22,13 +22,13 @@ flowchart LR
 - `apps/api` builds `wfx-server`: API, engine and the embedded UI from `apps/ui`.
 - `apps/api/cmd/wfx` is the CLI. `apps/api/cmd/wfx-runner` is an outbound-only worker.
 - `internal/workflow` loads YAML: steps, jobs, `runs-on`, `start:`, `uses:`.
-- `internal/engine` runs steps, gates, schedules, channels, subscriptions and memory.
+- `internal/engine` runs steps, gates, schedules, channels, supervised service modules and memory.
 - `internal/catalog` lists what a step can name: providers, classifiers, MCP servers, channels.
 - `agentadapter/` turns ACP or CLI agents (claude, codex, devin, opencode) into models.
 - `internal/judge` sends typed questions to the classifier and maps verdicts to bands.
 - `internal/store` persists runs, steps and memory in SQLite (local) or Postgres (server).
 - `adapters/` holds channel adapters, such as `apl-whatsapp.js`.
-- `templates/` holds shipped workflows, including the WhatsApp sender, monitor, router and frontdesk.
+- `templates/` holds shipped workflows, including the WhatsApp sender, monitor and frontdesk.
 
 ## How a run flows
 
@@ -48,7 +48,7 @@ flowchart LR
 | Starting child workflows (`start:`) | `apps/api/internal/engine/start.go` |
 | Workers and `runs-on` | `apps/api/internal/engine/workers.go`, `apps/api/cmd/wfx-runner/` |
 | Memory | `apps/api/internal/engine/memory.go` |
-| Channels, subscriptions, WhatsApp | `apps/api/internal/engine/channels.go`, `subscriptions.go`, `adapters/` |
+| Channels, WhatsApp, service modules | `apps/api/internal/engine/channels.go`, `services.go`, `internal/wamonitor/`, `adapters/` |
 | Hooks and MCP door | `apps/api/internal/api/expose.go` |
 | Sign-in and roles | `apps/api/internal/api/password.go`, `apps/api/internal/auth/` |
 | Default classifier and config | `apps/api/internal/config/config.go` |
@@ -64,7 +64,7 @@ flowchart LR
 - Memory per workflow and per conversation: `apps/api/internal/engine/memory.go` (`consolidateMemoryIn`), `apps/api/internal/engine/conversation.go`
 - Classifier default `typesafe/jev-1.13`: `apps/api/internal/config/config.go`
 - Channels and WhatsApp: `apps/api/internal/engine/channels.go`, `adapters/apl-whatsapp.js`, `docs/adr/0023-channels-are-commands-and-replies-need-an-allow-list.md`, `docs/adr/0026-whatsapp-only-subscriptions-conversations-and-default-workflows.md`
-- Subscriptions and router: `apps/api/internal/engine/subscriptions.go`, `templates/router`, `docs/adr/0024-messaging-is-subscriptions-on-one-inbox-per-account.md`
+- Service modules (watching chats): `apps/api/internal/engine/services.go`, `apps/api/internal/supervisor/`, `modules/whatsapp-group-monitor`, `docs/adr/0028-modules-are-tasks-with-a-manifest-installed-from-the-registry.md`
 - Hooks and MCP per workflow: `apps/api/internal/api/expose.go`, `docs/adr/0027-every-workflow-is-a-hook-and-an-mcp-tool-behind-its-own-token.md`
 - Password sign-in: `apps/api/internal/api/password.go`, `docs/adr/0025-username-and-password-sign-in-with-roles.md`
 - carry for tools: `apps/api/cmd/wfx/carry.go`, `apps/api/internal/carryops/carryops.go`

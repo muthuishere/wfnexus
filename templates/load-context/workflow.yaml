@@ -3,9 +3,9 @@
 # frontdesk pulls this in with `uses: [{use: load-context, as: ctx}]`: its step
 # becomes `ctx.gather` inside the caller's own run, sharing its workspace and
 # input. Embed when the steps are part of the caller's job; start (`start:`)
-# when the work is a job of its own (see router).
+# when the work is a job of its own.
 #
-# It writes ./context.json — the event, the subscription's instructions,
+# It writes ./context.json — the event, the watch's instructions,
 # skills and responsePolicy — so the caller's agent reads one file instead of
 # a prompt full of templated, untrusted chat text.
 name: load-context
@@ -13,7 +13,7 @@ template:
   title: Load context — the shared "what is this conversation" step
   category: debugging-ops
   summary: >-
-    Writes context.json (event, chat, sender, the subscription's instructions,
+    Writes context.json (event, chat, sender, the watch's instructions,
     skills and response policy) into the caller's workspace. Meant to be
     embedded with `uses:`, not run on its own.
   fill:
@@ -21,7 +21,7 @@ template:
 
 description: >-
   Embedded building block: writes the conversation context (event, sender,
-  subscription instructions, skills, response policy) to context.json in the
+  watch instructions, skills, response policy) to context.json in the
   calling run's workspace.
 
 on: workflow_call
@@ -34,8 +34,8 @@ inputs:
   default_policy:
     type: string
     enum: [draft, approval, auto, none]
-    default: auto
-    description: responsePolicy used when the subscription does not set one.
+    default: draft
+    description: "responsePolicy used when the watch does not set one (draft — never auto-send)."
   out:
     type: string
     default: context.json
@@ -59,13 +59,13 @@ steps:
       m = i.get("message") or {}
       if not m and i.get("messages"):
           m = i["messages"][-1]
-      s = i.get("subscription") or {}
+      s = i.get("watch") or {}
       ctx = {
           "chat": m.get("chat", ""), "chatName": m.get("chatName", ""), "chatType": m.get("chatType", ""),
           "from": m.get("from", ""), "name": m.get("name", ""), "messageId": m.get("id", ""),
           "kind": m.get("kind") or "message", "text": m.get("text", ""), "replyTo": m.get("replyTo"),
           "media": m.get("media"), "fromOwner": bool(m.get("fromOwner")),
-          "subscription": s.get("name", ""), "instructions": s.get("instructions", ""),
+          "watch": s.get("name", ""), "instructions": s.get("instructions", ""),
           "skills": s.get("skills") or [], "responsePolicy": s.get("responsePolicy") or "{{ .Inputs.default_policy }}",
       }
       json.dump(ctx, open("{{ .Inputs.out }}", "w"), indent=2)

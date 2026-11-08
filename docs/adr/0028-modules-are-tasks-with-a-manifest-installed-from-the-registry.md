@@ -29,7 +29,9 @@ lists its modules.
 `modules/whatsapp-group-monitor` (`cmd/wfx-wa-monitor`): an exclusive lock per
 account; ONE inbox read per tick for all watches via the existing
 `apl-whatsapp.js receive` (cursor, echo ledger); dedupe by `chat|id`
-persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}`
+persisted; per-chat 3 s debounce; POST `{message, messages[], watch, chat}` (`watch` = its name,
+responsePolicy — missing means draft, never auto-send — instructions, skills;
+every message carries `channel` and `chat`)
 to each watch's hook (ADR 0027) with a bearer token read from an env var the
 watch names, and an `Idempotency-Key` so a retried batch never runs twice.
 Watches are registered through wfnexus (`wfx module watch add`, #103) and
@@ -39,9 +41,12 @@ read every tick, so a new watch needs no restart.
 
 - One mental model: everything reusable is a task; a module just adds a
   version, a type contract and its requirements.
-- The in-engine subscriptions + router (ADR 0026, #76) duplicate what a
-  service module + hooks now do. They are dead weight once the monitor is
-  supervised; removal is a follow-up, not done here.
+- The in-engine subscriptions + router (ADR 0026, #76) duplicated what a
+  service module + hooks now do. Removed in #104: `wfx sub`,
+  `/api/subscriptions`, the Subscriptions tab, the router and
+  whatsapp-subscription-manager templates, `subscription_deliveries`, the
+  channel `self` list and the `subscription` trigger kind. Conversations and
+  `start:` completion events stay: they stand on their own.
 - Supervision (#103): `wfx module start <m> --account a [--runs-on l]
   [--input k=v]` records one service per module+account in the state store
   (scope `service`). The server supervises those on labels it serves itself;

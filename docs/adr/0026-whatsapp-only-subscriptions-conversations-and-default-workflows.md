@@ -1,6 +1,6 @@
 # ADR 0026 — WhatsApp only: subscriptions, conversations and the default workflows
 
-- **Status:** proposed
+- **Status:** superseded by ADR 0028 (subscriptions and the router removed in #104; conversations remain)
 - **Date:** 2026-11-05
 - **Amends:** ADR 0024. Teams, Slack and email are **out of scope**. The owner's call on 2026-11-05 was "we will do only whatsapp".
 

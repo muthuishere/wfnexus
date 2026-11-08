@@ -458,29 +458,11 @@ function receive() {
   }
 }
 
-// self prints the ids that are US on this account, {"self": [jid, ...]}, so
-// wfnexus can tell a group message that mentions or replies to us (optional
-// verb; read-only: `wacli auth status`).
-function self() {
-  try {
-    const d = wacli(["auth", "status"], { readOnly: true }) || {};
-    const ids = [d.linked_jid, d.lid].filter((x) => typeof x === "string" && x);
-    if (d.phone && !ids.length) ids.push(String(d.phone) + "@s.whatsapp.net");
-    // A device JID ("123:4@s.whatsapp.net") is mentioned as "123@s.whatsapp.net".
-    const plain = ids.map((j) => j.replace(/:\d+@/, "@"));
-    process.stdout.write(JSON.stringify({ self: [...new Set([...plain, ...ids])] }) + "\n");
-  } catch (err) {
-    fail(`self failed: ${err.message}`);
-  }
-}
-
 const verb = process.argv[2];
 if (verb === "send") {
   send().catch((err) => sendFail("uncertain", err.message));
 } else if (verb === "receive") {
   receive();
-} else if (verb === "self") {
-  self();
 } else {
-  fail(`unknown verb ${JSON.stringify(verb)} — ${VERSION} adapters take send | receive | self`);
+  fail(`unknown verb ${JSON.stringify(verb)} — ${VERSION} adapters take send | receive`);
 }

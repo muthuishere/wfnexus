@@ -17,7 +17,7 @@ engine.json:
   -- everything `wfx` can show, from the same GET endpoints the CLI calls --
   projects      /projects                   members  /users (name, role)
   workers       /workers                    metrics  /metrics?window=24h (tokens, cost)
-  prices        /prices                     subscriptions /subscriptions
+  prices        /prices
   channels      /channels                   conversations /conversations
   proposals     /proposals (git-backed workflow changes waiting on a person)
   globalState   /state?scope=global
@@ -80,7 +80,6 @@ def sections(snap, wfs):
     snap["workers"] = get("workers", "/workers")
     snap["metrics"] = get("metrics", "/metrics?window=24h")
     snap["prices"] = get("prices", "/prices")
-    snap["subscriptions"] = get("subscriptions", "/subscriptions")
     snap["channels"] = get("channels", "/channels")
     snap["conversations"] = get("conversations", "/conversations")
     snap["proposals"] = get("proposals", "/proposals")

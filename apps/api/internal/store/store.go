@@ -31,20 +31,19 @@ import (
 // driver behind them; these aliases keep every existing `store.Run`,
 // `store.StepRun`, `store.StepPatch` … reading exactly as it did.
 type (
-	Run                  = model.Run
-	StepRun              = model.StepRun
-	StepPatch            = model.StepPatch
-	Event                = model.Event
-	Artifact             = model.Artifact
-	ProjectActivity      = model.ProjectActivity
-	EnvVar               = model.EnvVar
-	Sealer               = model.Sealer
-	Worker               = model.Worker
-	StateVar             = model.StateVar
-	Job                  = model.Job
-	ChannelMessage       = model.ChannelMessage
-	PauseCode            = model.PauseCode
-	SubscriptionDelivery = model.SubscriptionDelivery
+	Run             = model.Run
+	StepRun         = model.StepRun
+	StepPatch       = model.StepPatch
+	Event           = model.Event
+	Artifact        = model.Artifact
+	ProjectActivity = model.ProjectActivity
+	EnvVar          = model.EnvVar
+	Sealer          = model.Sealer
+	Worker          = model.Worker
+	StateVar        = model.StateVar
+	Job             = model.Job
+	ChannelMessage  = model.ChannelMessage
+	PauseCode       = model.PauseCode
 )
 
 const (
