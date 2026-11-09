@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -67,6 +68,24 @@ func workers(args []string) error {
 	// so is what stops someone adding a worker to fix a run that was never
 	// waiting for one.
 	fmt.Printf("\nServed by the platform itself: %s\n", strings.Join(pool.LocalLabels, ", "))
+	// Built-in tools per runner (aos, ctx-optimize, jevx); best effort.
+	var bt struct {
+		Tools []struct {
+			Name, Desired string
+			Runners       map[string]string
+		} `json:"tools"`
+	}
+	if call("GET", "/api/builtins", nil, &bt) == nil && len(bt.Tools) > 0 {
+		fmt.Println("\nBuilt-in tools (wfx module update <tool> to change):")
+		for _, t := range bt.Tools {
+			var per []string
+			for who, v := range t.Runners {
+				per = append(per, who+"="+v)
+			}
+			sort.Strings(per)
+			fmt.Printf("  %-13s %-9s %s\n", t.Name, t.Desired, strings.Join(per, "  "))
+		}
+	}
 	fmt.Printf("\nTo add a machine, run this on it:\n\n  %s\n", pool.JoinCommand)
 	return nil
 }

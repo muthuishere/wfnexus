@@ -263,6 +263,11 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/workers/services", s.workerServices)
 		r.Post("/workers/services/heartbeat", s.serviceHeartbeat)
 		r.Get("/workers/providers", s.workerProviders)
+		// Built-in tools (aos, ctx-optimize, jevx): desired versions and reports.
+		r.Get("/workers/builtins", s.workerBuiltins)
+		r.Post("/workers/builtins", s.workerBuiltinsReport)
+		r.Get("/builtins", s.listBuiltins)
+		r.Post("/builtins/{name}/update", s.updateBuiltin)
 		r.Post("/workers/jobs/{jobId}/events", s.workerEvents)
 		r.Post("/workers/jobs/{jobId}/result", s.finishJob)
 		r.Post("/sources", s.importSource)

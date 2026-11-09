@@ -29,7 +29,7 @@ requires:
   cli:
     - name: apl
       check: apl --version
-      install: go install github.com/muthuishere/apl@latest
+      install: curl -fsSL https://raw.githubusercontent.com/muthuishere/wfnexus/main/apps/api/cmd/wfx/core-clis.sh | sh -s -- apl
 binary:
   carry: deemwar/wfx-wa-monitor@0.2.0   # follow-up: carry delivery; today build apps/api/cmd/wfx-wa-monitor
 

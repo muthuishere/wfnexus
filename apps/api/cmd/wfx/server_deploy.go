@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -306,13 +307,19 @@ Then re-run: wfx server deploy %s   (wfx never runs root commands itself)`, host
 
 type serverDeployOpts struct {
 	host, version, binary, repo string
-	skipModel                   bool
+	skipModel, skipCLIs         bool
 }
+
+// coreCLIs installs the CLIs the core modules wrap (apl, gh, aos,
+// ctx-optimize) into ~/.local/bin on the host — idempotent, no sudo.
+//
+//go:embed core-clis.sh
+var coreCLIs string
 
 func serverCmd(args []string) error {
 	verb := first(args)
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
-		return fmt.Errorf("usage: wfx server deploy|status|rollback <host> [--version vX | --binary ./wfx-server] [--skip-model]")
+		return fmt.Errorf("usage: wfx server deploy|status|rollback <host> [--version vX | --binary ./wfx-server] [--skip-model] [--skip-clis]")
 	}
 	r, err := sshFor(args[1])
 	if err != nil {
@@ -325,6 +332,7 @@ func serverCmd(args []string) error {
 		binary:    flagOf(rest, "--binary", ""),
 		repo:      flagOf(rest, "--repo", envOr("WFX_REPO", "muthuishere/wfnexus")),
 		skipModel: hasFlag(rest, "--skip-model"),
+		skipCLIs:  hasFlag(rest, "--skip-clis"),
 	}
 	switch verb {
 	case "deploy":
@@ -368,6 +376,20 @@ func serverDeploy(r remoteRunner, o serverDeployOpts) error {
 		fmt.Printf("%s already runs %s — re-deploying it\n", o.host, version)
 	}
 
+	if !o.skipCLIs && os.Getenv("WFX_DEPLOY_SKIP_CLIS") != "1" {
+		// Core module CLIs are part of every server. A failure is reported,
+		// never fatal: the server runs without them, the Modules page says so.
+		fmt.Println("→ external module CLIs (gh, apl); aos, ctx-optimize, jevx are built in")
+		out, err := r.run("sh -s --", strings.NewReader(coreCLIs))
+		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+			if l != "" {
+				fmt.Println("  " + l)
+			}
+		}
+		if err != nil {
+			fmt.Printf("  ! not all installed (%v) — install from the Modules page\n", err)
+		}
+	}
 	fmt.Printf("→ upload %s to %s (%d MB)\n", version, o.host, len(bin)>>20)
 	if _, err := remote(r, bytes.NewReader(bin), "receive", version); err != nil {
 		return err

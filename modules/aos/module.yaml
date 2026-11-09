@@ -19,7 +19,6 @@ requires:
   cli:
     - name: aos
       check: aos --version
-      install: curl -fsSL https://raw.githubusercontent.com/muthuishere/aos/main/install.sh | sh
 
 commands:
   shell:

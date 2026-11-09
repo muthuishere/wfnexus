@@ -1,0 +1,120 @@
+# ctx-optimize — a knowledge graph of any repo, as module commands (core).
+#
+#   wfx module call ctx-optimize.up --input path=/srv/repos/app --wait
+#   wfx module call ctx-optimize.change-plan --input path=/srv/repos/app --input symbol=ParseCron --wait
+#
+# `up` builds or refreshes the graph (.ctxoptimize/ in the repo); every other
+# command answers from it with file:line citations. Read-only except `up`,
+# which writes only the repo's own .ctxoptimize/ store.
+name: ctx-optimize
+version: 0.1.0
+description: Knowledge graph of a repo via ctx-optimize — build it, then query, symbol cards, change plans, blast radius, paths.
+requires:
+  env: []
+  cli:
+    - name: ctx-optimize
+      check: ctx-optimize --version
+
+commands:
+  up:
+    description: "Build or refresh the repo's knowledge graph (safe to re-run)."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 900
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" up
+  query:
+    description: "Answer a question about the code from the graph, with file:line citations."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+      question: { type: string, required: true, description: "what to find" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.a <<'WFX_V'
+          {{ .Inputs.question }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" query
+  card:
+    description: "Symbol card: signature, doc, location, callers, callees."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+      symbol: { type: string, required: true, description: "the symbol" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.a <<'WFX_V'
+          {{ .Inputs.symbol }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" card
+  change-plan:
+    description: "Everything needed before editing a symbol: callers, impact, tests."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+      symbol: { type: string, required: true, description: "the symbol about to change" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.a <<'WFX_V'
+          {{ .Inputs.symbol }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" change-plan
+  affected:
+    description: "Blast radius: what breaks if this symbol changes."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+      symbol: { type: string, required: true, description: "the symbol" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.a <<'WFX_V'
+          {{ .Inputs.symbol }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" affected
+  path:
+    description: "Shortest path between two nodes of the graph."
+    inputs:
+      path: { type: string, required: true, description: "absolute path of the repo on the machine that runs it" }
+      from: { type: string, required: true, description: "start node" }
+      to: { type: string, required: true, description: "end node" }
+    steps:
+      - id: act
+        name: "Through ctx-optimize"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.a <<'WFX_V'
+          {{ .Inputs.from }}
+          WFX_V
+          cat > in.b <<'WFX_V'
+          {{ .Inputs.to }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/cx.sh" path

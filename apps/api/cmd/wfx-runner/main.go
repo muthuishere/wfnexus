@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/muthuishere/wfnexus/apps/api/internal/builtins"
 	"io"
 	"net/http"
 	"os"
@@ -281,6 +282,17 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	fmt.Printf("%s serving %s — waiting for work from %s\n", cfg.Name, strings.Join(cfg.Labels, ", "), cfg.URL)
+	// Built-in tools (aos, ctx-optimize, jevx) before the first job, then kept
+	// at the server's desired versions on every heartbeat (internal/builtins).
+	syncBuiltins(ctx, cfg)
+	if !*once {
+		go func() {
+			for ctx.Err() == nil {
+				sleep(ctx, time.Minute)
+				syncBuiltins(ctx, cfg)
+			}
+		}()
+	}
 	if !*once {
 		// Service modules on this worker's labels run beside the job loop and
 		// stop with it (#103).
@@ -745,3 +757,21 @@ func sleep(ctx context.Context, d time.Duration) {
 	case <-time.After(d):
 	}
 }
+
+// syncBuiltins converges this runner's built-in tools on the server's desired
+// versions and reports what it has. A failure is printed, never fatal.
+func syncBuiltins(ctx context.Context, cfg *Config) {
+	var d struct {
+		Desired map[string]string `json:"desired"`
+	}
+	_ = call(ctx, http.MethodGet, cfg.URL+"/api/workers/builtins", cfg.Token, nil, &d)
+	st := builtins.Ensure(builtins.DefaultDir(), d.Desired)
+	if summary := builtins.Summary(st); summary != lastBuiltins {
+		fmt.Println("built-in tools:", summary)
+		lastBuiltins = summary
+	}
+	body, _ := json.Marshal(st)
+	_ = call(ctx, http.MethodPost, cfg.URL+"/api/workers/builtins", cfg.Token, bytes.NewReader(body), nil)
+}
+
+var lastBuiltins string

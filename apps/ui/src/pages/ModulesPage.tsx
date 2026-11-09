@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { modulesApi, type Module, type Profile, type WfxInfo } from '../modulesApi'
+import { modulesApi, type BuiltinTool, type Module, type Profile, type WfxInfo } from '../modulesApi'
 import DataTable, { type Column } from '../components/DataTable'
 import { ago } from '../lib/time'
 
@@ -68,6 +68,7 @@ function ModuleList() {
     <div>
       <div className="subhead"><h1>Modules</h1></div>
       <WfxCard />
+      <BuiltinsCard />
       {err && <p className="error">{err}</p>}
       {errs.map(e => <p key={e} className="error">{e}</p>)}
       {mods && <DataTable rows={mods} columns={columns} getKey={m => m.name}
@@ -170,6 +171,53 @@ function ModuleDetail({ name }: { name: string }) {
           <p key={cn}><span className="mono" style={{ fontWeight: 550 }}>{m.name}.{cn}</span> <span className="muted">{c.description}</span>
             {c.inputs && <span className="muted mono" style={{ fontSize: 12 }}> ({Object.keys(c.inputs).join(', ')})</span>}</p>))}
       </div>
+    </div>
+  )
+}
+
+/** aos, ctx-optimize and jevx ship with every runner (server, wfx-runner,
+ *  Docker). Update fetches and checksum-verifies on the server first; every
+ *  runner switches at its next heartbeat. An older version is a rollback. */
+function BuiltinsCard() {
+  const [tools, setTools] = useState<BuiltinTool[]>()
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const load = useCallback(() => { modulesApi.builtins(true).then(r => setTools(r.tools)).catch(e => setMsg(String(e.message || e))) }, [])
+  useEffect(load, [load])
+  const update = (t: BuiltinTool, version = '') => {
+    setBusy(t.name); setMsg('')
+    modulesApi.updateBuiltin(t.name, version)
+      .then(r => { setMsg(`${r.name} → ${r.version}; runners switch at their next heartbeat.`); load() })
+      .catch(e => setMsg(String(e.message || e))).finally(() => setBusy(''))
+  }
+  if (!tools) return null
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="subhead"><h2>Built-in tools</h2><span className="muted">on every runner</span></div>
+      {msg && <p className="muted">{msg}</p>}
+      <table className="rows">
+        <thead><tr><th>Tool</th><th>Running</th><th>Latest</th><th>Runners</th><th /></tr></thead>
+        <tbody>
+          {tools.map(t => {
+            const behind = !!t.latest && t.latest !== t.desired
+            return (
+              <tr key={t.name}>
+                <td className="mono">{t.name}</td>
+                <td className="mono">{t.desired}{t.desired !== t.pinned && <span className="muted"> (pinned {t.pinned})</span>}</td>
+                <td className="mono">{t.latest || '—'}</td>
+                <td>{Object.entries(t.runners).map(([who, v]) => (
+                  <span key={who} className={`badge ${v.startsWith('✗') ? 'failed' : v === t.desired ? 'done' : 'pending'}`} title={v} style={{ marginRight: 4 }}>{who} {v.startsWith('✗') ? '✗' : v}</span>))}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {behind && <button className="small" disabled={!!busy} onClick={() => update(t)}>{busy === t.name ? 'Updating…' : `Update to ${t.latest}`}</button>}
+                  {' '}<button className="ghost small" disabled={!!busy} onClick={() => {
+                    const v = prompt(`${t.name}: version to run (an older one rolls back)`, t.pinned)
+                    if (v) update(t, v)
+                  }}>Set version</button>
+                </td>
+              </tr>)
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

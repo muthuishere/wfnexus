@@ -138,6 +138,14 @@ func PermissionFor(method, path string) string {
 	if strings.HasPrefix(path, "/api/service-self/") || strings.HasPrefix(path, "/api/module-self/") {
 		return PermPublic
 	}
+	// Built-in tools: reading is a workers read; updating installs binaries
+	// on every runner — an operator's permission.
+	if strings.HasPrefix(path, "/api/builtins") {
+		if method == http.MethodGet {
+			return PermWorkersRead
+		}
+		return PermAdminWrite
+	}
 	// Calling a module command starts a run (#109).
 	if method == http.MethodPost && strings.HasPrefix(path, "/api/modules/") && strings.HasSuffix(path, "/call") {
 		return PermRunsWrite
