@@ -17,7 +17,7 @@ import (
 // the step: in its prompt, and as the tool result if it asks the same again.
 func TestAnsweredQuestionIsDeliveredNotReAsked(t *testing.T) {
 	def := &workflow.Definition{Name: "escalate", Steps: []workflow.Step{{
-		ID: "escalate", Prompt: "ask which to file", Tools: []string{"bash", "ask_human"},
+		ID: "escalate", Prompt: "ask which to file", Tools: []string{"write", "ask_human"},
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)

@@ -20,7 +20,7 @@ import (
 // SAME per-step allowlist as every other tool (ADR 0004), with no boolean.
 func TestAskHumanIsGrantedByNamingItInTools(t *testing.T) {
 	def := &workflow.Definition{Name: "askviatools", Steps: []workflow.Step{{
-		ID: "gather", Prompt: "gather facts", Tools: []string{"bash", "ask_human"},
+		ID: "gather", Prompt: "gather facts", Tools: []string{"write", "ask_human"},
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)
@@ -64,7 +64,7 @@ func TestDeclineIsDistinguishableFromExpiry(t *testing.T) {
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			def := &workflow.Definition{Name: "decl" + tc.reason, Steps: []workflow.Step{{
-				ID: "gather", Prompt: "gather", Tools: []string{"bash", "ask_human"},
+				ID: "gather", Prompt: "gather", Tools: []string{"write", "ask_human"},
 				OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 			}}}
 			normalizeForTest(def)
@@ -107,7 +107,7 @@ func TestNotifierReceivesThePauseAndCarriesNoCapability(t *testing.T) {
 	defer sink.Close()
 
 	def := &workflow.Definition{Name: "notifyme", Steps: []workflow.Step{{
-		ID: "gather", Prompt: "gather", Tools: []string{"bash", "ask_human"},
+		ID: "gather", Prompt: "gather", Tools: []string{"write", "ask_human"},
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)
@@ -149,7 +149,7 @@ func TestNotifierReceivesThePauseAndCarriesNoCapability(t *testing.T) {
 // A missing notifier is not an error: zero config must stay zero config.
 func TestNoNotifierIsNotAnError(t *testing.T) {
 	def := &workflow.Definition{Name: "nonotifier", Steps: []workflow.Step{{
-		ID: "gather", Prompt: "gather", Tools: []string{"bash", "ask_human"},
+		ID: "gather", Prompt: "gather", Tools: []string{"write", "ask_human"},
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)

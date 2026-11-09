@@ -22,6 +22,7 @@ requires:
 
 commands:
   shell:
+    effect: write
     description: Run a shell command line on the worker (aos exec capture). Always waits for a person to approve.
     inputs:
       machine: { type: string, required: true, description: the worker's runs-on label }
@@ -65,6 +66,7 @@ commands:
           fi
 
   file-write:
+    effect: write
     description: Write content to a file on the worker (aos file write). Always waits for a person to approve.
     inputs:
       machine: { type: string, required: true, description: the worker's runs-on label }

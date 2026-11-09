@@ -31,6 +31,11 @@ type Task struct {
 	// Module is set when the task is an installed module's command: its
 	// expanded steps carry it, so they run with that module's token.
 	Module string `yaml:"-" json:"module,omitempty"`
+	// Effect is "write" for a module command with side effects (sends,
+	// creates, deletes, runs a shell on a worker). Only such a command — or a
+	// file-writing tool, or requires_approval — makes an agent step an ACTION
+	// step: the only kind that pauses on low confidence or on ask_human.
+	Effect string `yaml:"effect,omitempty" json:"effect,omitempty"`
 }
 
 func (t Task) EntryName() string { return t.Name }

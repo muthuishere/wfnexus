@@ -45,6 +45,7 @@ services:
 
 commands:
   whatsapp-send:
+    effect: write
     description: Send one WhatsApp message through the account's running whatsapp service, after the response policy (default draft — never auto-sends).
     inputs:
       chat:           { type: string, required: true, description: chat JID (DM or group) }
@@ -154,6 +155,7 @@ commands:
           PY
 
   mail-send:
+    effect: write
     description: "Send an email (Gmail or Outlook, by the handle) after the response policy \u2014 default draft does nothing."
     inputs:
       to: { type: string, required: true, description: "recipients, comma separated" }
@@ -258,6 +260,7 @@ commands:
           WFX_V
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act mail-list
   teams-send:
+    effect: write
     description: "Send a Teams chat message after the response policy \u2014 default draft does nothing."
     inputs:
       chat: { type: string, required: true, description: "Teams chat id" }
@@ -325,6 +328,7 @@ commands:
           WFX_V
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act calendar-list
   calendar-create:
+    effect: write
     description: "Create a calendar event after the response policy \u2014 default draft does nothing."
     inputs:
       subject: { type: string, required: true }
@@ -404,6 +408,7 @@ commands:
           WFX_V
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act drive-get
   drive-put:
+    effect: write
     description: "Upload a local file to Drive/OneDrive after the response policy \u2014 default draft does nothing."
     inputs:
       path: { type: string, required: true, description: "OneDrive path (Google: the file name)" }
