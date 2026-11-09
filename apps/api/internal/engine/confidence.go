@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"encoding/json"
 	"fmt"
 
@@ -103,7 +104,7 @@ func minConfidence(step *workflow.Step) float64 {
 // person, and the reason shown to them. A step already behind an approval
 // gate is not gated twice.
 func lowConfidence(step *workflow.Step, out map[string]any) (string, bool) {
-	if out == nil || step.RequiresApproval {
+	if out == nil || step.RequiresApproval || !takesAction(step) {
 		return "", false
 	}
 	c, _ := confidenceOf(out)
@@ -129,4 +130,32 @@ func approvedLowConfidence(step *workflow.Step, st *model.StepRun) (map[string]a
 		return nil, false
 	}
 	return out, true
+}
+
+// actionTools are tools that change something outside the agent's head.
+var actionTools = map[string]bool{"bash": true, "shell": true, "write": true, "edit": true, "multi_edit": true, "apply_patch": true}
+
+// actionWords mark a tool or module command with side effects by its name.
+var actionWords = []string{"send", "create", "deploy", "publish", "post", "delete", "write", "merge", "push", "comment", "reply", "upload", "put"}
+
+// takesAction reports whether an agent step can change the world: a shell or
+// file-writing tool, or a command whose name says it sends, creates, deploys.
+// Only such a step is worth a person's attention when it is unsure or stuck;
+// an analysis step records its confidence/question and the run goes on.
+func takesAction(step *workflow.Step) bool {
+	if step.RequiresApproval {
+		return true
+	}
+	for _, t := range step.Tools {
+		n := strings.ToLower(t)
+		if actionTools[n] {
+			return true
+		}
+		for _, w := range actionWords {
+			if strings.Contains(n, w) {
+				return true
+			}
+		}
+	}
+	return false
 }

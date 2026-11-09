@@ -101,7 +101,13 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// it is announced as deprecated on the run's own event stream rather than
 	// in a changelog nobody reads.
 	if askHumanGranted(step) {
-		extra = append(extra, e.askHumanTool(ctx, runID, step))
+		if takesAction(step) {
+			extra = append(extra, e.askHumanTool(ctx, runID, step))
+		} else {
+			// An analysis step never blocks on a person: the question is
+			// recorded on the run and the agent proceeds on its best judgement.
+			extra = append(extra, e.noteQuestionTool(ctx, runID, step))
+		}
 		if step.AskHuman && !toolNamed(step.Tools, skills.ToolAskHuman) {
 			e.emit(ctx, runID, step.ID, "log", map[string]any{
 				"text": "deprecated: `ask_human: true` on step " + step.ID +
@@ -594,4 +600,18 @@ func workspaceDiff(ctx context.Context, workdir, baseRef string) []byte {
 		return nil
 	}
 	return diff
+}
+
+// noteQuestionTool is ask_human for a step that takes no action: it records the
+// question as an event on the run and tells the agent to go on, stating its
+// assumption in `why` and lowering `confidence`; downstream steps decide.
+func (e *Engine) noteQuestionTool(ctx context.Context, runID uuid.UUID, step *workflow.Step) tn.Tool {
+	return tn.NativeTool(skills.ToolAskHuman,
+		"Record a question for the operator. Nobody will answer during this run: continue with your best judgement, state the assumption in `why`, and lower `confidence`.",
+		map[string]any{"type": "object", "required": []any{"question"}, "properties": map[string]any{"question": map[string]any{"type": "string"}}},
+		func(_ context.Context, args map[string]any) (string, error) {
+			q, _ := args["question"].(string)
+			e.emit(ctx, runID, step.ID, "question", map[string]any{"text": q, "blocking": false})
+			return "recorded; no human will answer during this run. Proceed on your best judgement and say what you assumed in `why`", nil
+		})
 }
