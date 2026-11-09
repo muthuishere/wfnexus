@@ -302,7 +302,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.notifyPause(ctx, runID, step.ID, res.Pending.Kind, res.Pending.Prompt, res.Pending)
 		return nil, stepHalted
 	}
-	if msg, low := lowConfidence(step, res.Output); low {
+	if msg, low := e.lowConfidence(step, res.Output); low {
 		// Not sure enough to act alone: the output is kept and the run waits
 		// for a person, exactly like an approval gate.
 		e.setStep(ctx, runID, step.ID, model.StepPatch{

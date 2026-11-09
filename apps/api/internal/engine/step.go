@@ -101,7 +101,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// it is announced as deprecated on the run's own event stream rather than
 	// in a changelog nobody reads.
 	if askHumanGranted(step) {
-		if takesAction(step) {
+		if e.takesAction(step) {
 			extra = append(extra, e.askHumanTool(ctx, runID, step))
 		} else {
 			// An analysis step never blocks on a person: the question is

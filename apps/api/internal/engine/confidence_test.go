@@ -12,7 +12,7 @@ import (
 // records the score and the run goes on.
 func TestLowConfidenceAnalysisStepContinues(t *testing.T) {
 	def := &workflow.Definition{Name: "unsure-read", Steps: []workflow.Step{{
-		ID: "look", Prompt: "look",
+		ID: "look", Prompt: "look", Tools: []string{"read", "grep", "glob", "bash"}, // reqsume-sentinel explain: bash is not an action
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)
@@ -32,7 +32,7 @@ func TestLowConfidenceAnalysisStepContinues(t *testing.T) {
 // kept; approving accepts that output without re-running the agent.
 func TestLowConfidenceWaitsForApprovalThenAccepts(t *testing.T) {
 	def := &workflow.Definition{Name: "unsure", Steps: []workflow.Step{{
-		ID: "guess", Prompt: "guess", Tools: []string{"bash"},
+		ID: "guess", Prompt: "guess", Tools: []string{"write"},
 		OutputSchema: objSchema([]any{"ok"}, map[string]any{"ok": boolProp()}),
 	}}}
 	normalizeForTest(def)

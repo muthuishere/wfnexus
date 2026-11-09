@@ -25,6 +25,7 @@ requires:
 commands:
 
   issue-create:
+    effect: write
     description: "Open an issue after the response policy \u2014 default draft writes nothing."
     inputs:
       title: { type: string, required: true }
@@ -71,6 +72,7 @@ commands:
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act issue-create
   issue-comment:
+    effect: write
     description: "Comment on an issue after the response policy \u2014 default draft writes nothing."
     inputs:
       number: { type: string, required: true }
@@ -117,6 +119,7 @@ commands:
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act issue-comment
   pr-comment:
+    effect: write
     description: "Comment on a pull request after the response policy \u2014 default draft writes nothing."
     inputs:
       number: { type: string, required: true }

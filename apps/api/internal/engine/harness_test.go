@@ -168,7 +168,7 @@ func TestNoTeamMeansNoTaskTool(t *testing.T) {
 // persisted, and answering re-runs the step with the answer in scope.
 func TestAskHumanParksTheRunAndTheAnswerResumesIt(t *testing.T) {
 	def := &workflow.Definition{Name: "ask", Steps: []workflow.Step{{
-		ID: "gather", Prompt: "gather facts", Tools: []string{"bash"}, AskHuman: true,
+		ID: "gather", Prompt: "gather facts", Tools: []string{"write"}, AskHuman: true,
 		OutputSchema: objSchema([]any{"version"}, map[string]any{"version": strProp()}),
 	}}}
 	normalizeForTest(def)

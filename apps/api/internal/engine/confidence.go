@@ -103,8 +103,8 @@ func minConfidence(step *workflow.Step) float64 {
 // lowConfidence reports whether an accepted agent output must wait for a
 // person, and the reason shown to them. A step already behind an approval
 // gate is not gated twice.
-func lowConfidence(step *workflow.Step, out map[string]any) (string, bool) {
-	if out == nil || step.RequiresApproval || !takesAction(step) {
+func (e *Engine) lowConfidence(step *workflow.Step, out map[string]any) (string, bool) {
+	if out == nil || step.RequiresApproval || !e.takesAction(step) {
 		return "", false
 	}
 	c, _ := confidenceOf(out)
@@ -132,27 +132,34 @@ func approvedLowConfidence(step *workflow.Step, st *model.StepRun) (map[string]a
 	return out, true
 }
 
-// actionTools are tools that change something outside the agent's head.
-var actionTools = map[string]bool{"bash": true, "shell": true, "write": true, "edit": true, "multi_edit": true, "apply_patch": true}
+// fileWriteTools change files on the machine. Plain bash/shell does NOT make a
+// step an action: analysis agents read with it all the time.
+var fileWriteTools = map[string]bool{"write": true, "edit": true, "multi_edit": true, "apply_patch": true}
 
-// actionWords mark a tool or module command with side effects by its name.
-var actionWords = []string{"send", "create", "deploy", "publish", "post", "delete", "write", "merge", "push", "comment", "reply", "upload", "put"}
-
-// takesAction reports whether an agent step can change the world: a shell or
-// file-writing tool, or a command whose name says it sends, creates, deploys.
-// Only such a step is worth a person's attention when it is unsure or stuck;
-// an analysis step records its confidence/question and the run goes on.
-func takesAction(step *workflow.Step) bool {
+// takesAction reports whether an agent step can change the world: it says
+// `requires_approval`, it has a file-writing tool, or it names a module command
+// whose module.yaml marks `effect: write`. Only such a step is worth a
+// person's attention when it is unsure or stuck; an analysis step records its
+// confidence/question and the run goes on.
+func (e *Engine) takesAction(step *workflow.Step) bool {
 	if step.RequiresApproval {
 		return true
 	}
+	var mods []*workflow.Module
 	for _, t := range step.Tools {
 		n := strings.ToLower(t)
-		if actionTools[n] {
+		if fileWriteTools[n] {
 			return true
 		}
-		for _, w := range actionWords {
-			if strings.Contains(n, w) {
+		mod, cmd, ok := strings.Cut(t, ".")
+		if !ok {
+			continue
+		}
+		if mods == nil {
+			mods, _ = e.Modules()
+		}
+		for _, m := range mods {
+			if c, found := m.Commands[cmd]; m.Name == mod && found && c.Effect == "write" {
 				return true
 			}
 		}
