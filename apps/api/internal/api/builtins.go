@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 
@@ -39,12 +38,14 @@ func (s *Server) listBuiltins(w http.ResponseWriter, r *http.Request) {
 	dir := builtins.DefaultDir()
 	want := builtins.Desired(dir)
 	var rows []builtinRow
-	for _, t := range builtins.Pinned {
-		row := builtinRow{Name: t.Name, Repo: t.Repo, Pinned: t.Version, Desired: t.Version, Runners: map[string]string{}}
+	// node runs the tools (bundled when missing); python is reported only.
+	all := append(append([]builtins.Tool{}, builtins.Pinned...), builtins.Tool{Name: "node"}, builtins.Tool{Name: "python"})
+	for _, t := range all {
+		row := builtinRow{Name: t.Name, Repo: t.Package, Pinned: t.Version, Desired: t.Version, Runners: map[string]string{}}
 		if v := want[t.Name]; v != "" {
 			row.Desired = v
 		}
-		if r.URL.Query().Get("latest") == "1" {
+		if r.URL.Query().Get("latest") == "1" && t.Package != "" {
 			row.Latest, _ = builtins.Latest(t)
 		}
 		put := func(who string, st []builtins.Status) {
@@ -62,7 +63,6 @@ func (s *Server) listBuiltins(w http.ResponseWriter, r *http.Request) {
 		reported.Range(func(k, v any) bool { put(k.(string), v.(runnerBuiltins).Tools); return true })
 		rows = append(rows, row)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{"tools": rows})
 }
 

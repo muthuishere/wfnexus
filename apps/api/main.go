@@ -269,6 +269,9 @@ func main() {
 	eng.StartScheduler(ctx)
 	// The server's local runner carries the built-in tools too (internal/builtins).
 	go func() {
+		if os.Getenv("WFX_BUILTINS") == "off" { // tests that boot the binary
+			return
+		}
 		st := builtins.Ensure(builtins.DefaultDir(), builtins.Desired(builtins.DefaultDir()))
 		log.Printf("built-in tools: %s", builtins.Summary(st))
 	}()
