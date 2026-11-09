@@ -210,6 +210,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/registries", s.listRegistries)
 		r.Get("/models", s.listModels)
 		r.Get("/doctor", s.doctor)
+		r.Get("/doctor/wfx", s.wfxInfo)
 		// Tools, config files and env defaults on the server or a worker,
 		// through the server's own carry (carry.go).
 		s.carryRoutes(r)
@@ -235,12 +236,13 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Delete("/state/{key}", s.deleteState)
 		r.Get("/workflows/{name}/state", s.workflowState)
 		r.Get("/workflows/{name}/schedule", s.workflowSchedule)
-		// Workflow memory: what previous runs learned (memory.go).
+		// Workflow memory: toolnexus memory homes (engine/memory.go).
 		r.Get("/workflows/{name}/memory", s.workflowMemory)
 		r.Delete("/workflows/{name}/memory", s.forgetWorkflowMemory)
-		r.Post("/workflows/{name}/memory", s.addWorkflowMemory)
-		r.Delete("/memory/{id}", s.deleteMemoryEntry)
-		r.Patch("/memory/{id}", s.editMemoryEntry)
+		r.Get("/workflows/{name}/memory/file", s.readMemoryFile)
+		r.Put("/workflows/{name}/memory/file", s.writeMemoryFile)
+		r.Delete("/workflows/{name}/memory/file", s.deleteMemoryFile)
+		r.Post("/workflows/{name}/memory/dream", s.dreamWorkflowMemory)
 		// The price table: what each model family costs (ADR 0020).
 		r.Get("/prices", s.listPrices)
 		// The server's own operational picture (metrics.go).
@@ -261,6 +263,11 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/workers/services", s.workerServices)
 		r.Post("/workers/services/heartbeat", s.serviceHeartbeat)
 		r.Get("/workers/providers", s.workerProviders)
+		// Built-in tools (aos, ctx-optimize, jevx): desired versions and reports.
+		r.Get("/workers/builtins", s.workerBuiltins)
+		r.Post("/workers/builtins", s.workerBuiltinsReport)
+		r.Get("/builtins", s.listBuiltins)
+		r.Post("/builtins/{name}/update", s.updateBuiltin)
 		r.Post("/workers/jobs/{jobId}/events", s.workerEvents)
 		r.Post("/workers/jobs/{jobId}/result", s.finishJob)
 		r.Post("/sources", s.importSource)
@@ -407,7 +414,7 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
 	all := workflow.Sorted(s.eng.Definitions())
 	out := make([]*workflow.Definition, 0, len(all))
 	for _, d := range all {
-		if d.Template.Is {
+		if d.Template.Is || s.eng.IsModuleCommand(d) {
 			continue
 		}
 		// FILTERED, not merely checked on fetch: a scoped subject must not

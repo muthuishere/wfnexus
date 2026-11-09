@@ -15,6 +15,10 @@
 name: aos
 version: 0.1.0
 description: A worker machine through aos — shell and file writes (approval-gated), file reads, screenshots.
+requires:
+  cli:
+    - name: aos
+      check: aos --version
 
 commands:
   shell:

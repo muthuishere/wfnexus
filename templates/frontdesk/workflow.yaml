@@ -54,8 +54,6 @@ description: >-
 
 on: [workflow_dispatch, workflow_call]
 
-memory:
-  scope: conversation
 
 input_schema:
   type: object

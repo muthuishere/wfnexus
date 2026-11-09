@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/muthuishere/wfnexus/apps/api/internal/builtins"
 	"io/fs"
 	"log"
 	"net/http"
@@ -266,6 +267,14 @@ func main() {
 
 	// `on: schedule:` only means something if something ticks.
 	eng.StartScheduler(ctx)
+	// The server's local runner carries the built-in tools too (internal/builtins).
+	go func() {
+		if os.Getenv("WFX_BUILTINS") == "off" { // tests that boot the binary
+			return
+		}
+		st := builtins.Ensure(builtins.DefaultDir(), builtins.Desired(builtins.DefaultDir()))
+		log.Printf("built-in tools: %s", builtins.Summary(st))
+	}()
 	// Skills, MCP servers and providers reload when their files change.
 	eng.StartCatalogWatcher(ctx)
 	eng.StartChannelReceivers(ctx)

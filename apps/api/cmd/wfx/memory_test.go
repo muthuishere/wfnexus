@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// `wfx memory add` and `wfx memory edit` reach the memory API with the text in
-// the body, and refuse an incomplete command before the server is asked.
-func TestMemoryAddAndEditCallTheAPI(t *testing.T) {
+// `wfx memory write|rm|dream` reach the memory-home API, and an incomplete
+// command is refused before the server is asked.
+func TestMemoryCommandsCallTheAPI(t *testing.T) {
 	tempContexts(t)
 	var hit string
 	var body map[string]any
@@ -18,26 +18,26 @@ func TestMemoryAddAndEditCallTheAPI(t *testing.T) {
 		body = nil
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"id":"m-1","kind":"note","body":"x"}`))
+		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
 	t.Setenv("WFX_API", srv.URL)
 	t.Setenv("WFX_API_TOKEN", "")
 
-	if err := memoryCmd([]string{"add", "--workflow", "triage", "--project", "demo", "check", "staging", "first"}); err != nil {
+	if err := memoryCmd([]string{"write", "triage", "note:deploy", "check", "staging", "--project", "demo"}); err != nil {
 		t.Fatal(err)
 	}
-	if hit != "POST /api/workflows/triage/memory?project=demo" || body["body"] != "check staging first" {
-		t.Fatalf("add hit %s with %v", hit, body)
+	if hit != "PUT /api/workflows/triage/memory/file?project=demo&target=note%3Adeploy" || body["body"] != "check staging" {
+		t.Fatalf("write hit %s with %v", hit, body)
 	}
-	if err := memoryCmd([]string{"edit", "m-1", "check prod first"}); err != nil {
-		t.Fatal(err)
+	if err := memoryCmd([]string{"rm", "triage", "note:deploy"}); err != nil || hit != "DELETE /api/workflows/triage/memory/file?target=note%3Adeploy" {
+		t.Fatalf("rm hit %s (%v)", hit, err)
 	}
-	if hit != "PATCH /api/memory/m-1" || body["body"] != "check prod first" {
-		t.Fatalf("edit hit %s with %v", hit, body)
+	if err := memoryCmd([]string{"dream", "triage"}); err != nil || hit != "POST /api/workflows/triage/memory/dream?" {
+		t.Fatalf("dream hit %s (%v)", hit, err)
 	}
 	hit = ""
-	for _, args := range [][]string{{"add", "text-without-workflow"}, {"add", "--workflow", "w"}, {"edit", "m-1"}, {"edit"}} {
+	for _, args := range [][]string{{"write", "triage", "note:x"}, {"read", "triage"}, {"show"}} {
 		if err := memoryCmd(args); err == nil {
 			t.Fatalf("%v was accepted", args)
 		}

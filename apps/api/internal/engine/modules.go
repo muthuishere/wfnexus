@@ -24,6 +24,8 @@ type ModuleView struct {
 	// Services are this module's supervised instances, one per account
 	// (services.go). Empty for a command module.
 	Services []ServiceView `json:"instances"`
+	// CLIs are the required CLIs as checked on this server just now.
+	CLIs []CLIStatus `json:"clis"`
 }
 
 // Modules scans every skill source checkout. Broken manifests are returned as
@@ -83,7 +85,11 @@ func (e *Engine) ModuleViews(ctx context.Context) ([]ModuleView, []string) {
 				v.Missing = append(v.Missing, n)
 			}
 		}
+		v.CLIs = e.ModuleCLIs(ctx, v)
 		v.Ready = len(v.Missing) == 0
+		for _, c := range v.CLIs {
+			v.Ready = v.Ready && c.Installed
+		}
 		out = append(out, v)
 	}
 	msgs := make([]string, 0, len(errs))

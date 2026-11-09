@@ -216,7 +216,7 @@ func TestBootRefusesNonLoopbackWithNoUsers(t *testing.T) {
 	home := t.TempDir()
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+		"HOME="+home, "WFX_BUILTINS=off",
 		"WFX_ADDR=0.0.0.0:0",
 		"WFX_STORAGE_DRIVER=sqlite",
 		"DATABASE_URL="+filepath.Join(home, "wfnexus.db"),

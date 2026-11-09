@@ -262,11 +262,7 @@ func usage() {
   wfx state list --workflow        what this workflow remembers between runs
   wfx state set --workflow k v     remember it (also --step, --project, --global)
   wfx state get --step k           one value; empty when never written
-  wfx memory ls --workflow w       what previous runs of a workflow left behind (on by default)
-  wfx memory show --workflow w     the section the next run's agent steps will read, then every entry
-  wfx memory forget --workflow w   delete a workflow's memory (or: wfx memory forget <id>)
-  wfx memory add --workflow w "t"  write a lesson the next run's agent steps will read
-  wfx memory edit <id> "text"      rewrite one entry's text
+  wfx memory show W               memory: MEMORY.md index, notes, dream log (read|write|rm|forget|dream)
   wfx expose hook|mcp <wf>         a token-protected hook URL / MCP endpoint for one workflow (--rotate, --revoke)
   wfx expose mcp --project p       one MCP token for every opted-in workflow of a project
   wfx prices                       what each model costs per 1M tokens (approx until set)
@@ -835,6 +831,7 @@ func showRun(id string) error {
 			Turns    int    `json:"turns"`
 			Attempts int    `json:"attempts"`
 			Error    string `json:"error"`
+			Output   any    `json:"output"`
 		} `json:"steps"`
 		Artifacts []struct {
 			StepID string `json:"stepId"`
@@ -856,6 +853,12 @@ func showRun(id string) error {
 			mark = "·"
 		}
 		fmt.Printf(" %s %-16s %-18s turns=%-3d %s\n", mark, s.StepID, s.Status, s.Turns, firstLine(s.Error))
+		if o, ok := s.Output.(map[string]any); ok {
+			if c, ok := o["confidence"].(float64); ok {
+				why, _ := o["why"].(string)
+				fmt.Printf("     confidence %.2f  %s\n", c, firstLine(why))
+			}
+		}
 	}
 	if len(d.Artifacts) > 0 {
 		fmt.Println("\nartifacts:")

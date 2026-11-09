@@ -38,7 +38,8 @@ describe('the UI a person actually downloads', () => {
     const nav = document.querySelector('.side nav') as HTMLElement
     expect(within(nav).queryByText('All runs')).toBeNull()
     expect(within(nav).queryByText('Builder')).toBeNull()
-    expect(within(nav).queryByText('Workflows')).toBeNull()
+    // Four places: Workflows, Waiting on you, Modules, Settings.
+    for (const t of ['Workflows', 'Waiting on you', 'Modules', 'Settings']) expect(within(nav).getByText(t)).toBeTruthy()
     // Making a workflow starts from the project it goes into.
     expect(screen.getByText('New workflow').closest('a')?.getAttribute('href')).toBe('#/projects/local/+new')
   })
@@ -127,9 +128,10 @@ describe('the UI a person actually downloads', () => {
     }, { timeout: 20_000, interval: 250 })
 
     go('#/projects/local/deterministic')
-    // A workflow that has run opens on its runs, named by what they are about.
+    // The workflow opens on its Overview; Runs lists them by what they are about.
+    expect((await screen.findByRole('tab', { name: /Overview/ })).getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(screen.getByRole('tab', { name: /Runs/ }))
     await screen.findByText('drill-down placement')
-    expect(screen.getByRole('tab', { name: /History/ }).getAttribute('aria-selected')).toBe('true')
     cleanup()
 
     go(`#/projects/local/deterministic/runs/${run.id}`)
@@ -223,9 +225,7 @@ describe('the UI a person actually downloads', () => {
     await api.setState({ scope: 'global', key: 'tier', value: 'pro' })
 
     go('#/projects/local/deterministic')
-    fireEvent.click(await screen.findByRole('tab', { name: /State/ }))
-    // Workflow memory sits above state on the same tab.
-    await screen.findByRole('heading', { name: 'Memory' })
+    fireEvent.click(await screen.findByRole('tab', { name: /Settings/ }))
     await screen.findByText('last_id')
     await screen.findByText('4120')
     // The global namespace is shared, so it shows here too — labelled, because

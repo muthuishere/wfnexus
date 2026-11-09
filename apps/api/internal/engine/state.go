@@ -98,7 +98,7 @@ func (e *Engine) withState(ctx context.Context, data workflow.TemplateData, def 
 	project := e.projectOfRun(ctx, runID)
 	data.Step, data.Workflow, data.Project, data.Global = e.stateData(ctx, name, project, stepID)
 	// Workflow memory rides along: on by default, read fresh per step (memory.go).
-	data.Memory = e.memoryForConv(ctx, def, stepID, project, e.conversationOfRunID(ctx, runID))
+	data.Memory = e.memoryFor(def, stepID, project)
 	return data
 }
 

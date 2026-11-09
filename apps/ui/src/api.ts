@@ -284,6 +284,8 @@ async function j<T>(r: Promise<Response>): Promise<T> {
   }
   return res.json()
 }
+const memFile = (name: string, target: string, project: string) =>
+  `/api/workflows/${encodeURIComponent(name)}/memory/file?target=${encodeURIComponent(target)}${project ? `&project=${encodeURIComponent(project)}` : ''}`
 const post = (url: string, body?: any) =>
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
 
@@ -365,14 +367,15 @@ export type StateVar = {
 }
 export type StateList = { scope: string; scopeName: string; vars: StateVar[] }
 
-/** One thing a workflow remembers from previous runs (engine/memory.go):
- *  a run's record, a lesson an agent wrote with `remember`, or the digest
- *  older records fold into. */
-export type MemoryEntry = {
-  id: string; project: string; workflow: string; runId?: string
-  kind: 'run' | 'note' | 'digest'; status?: string; stepId?: string; body: string; createdAt: string
+/** A workflow's toolnexus memory home (engine/memory.go): MEMORY.md is the
+ *  index every agent step loads; notes are memory/<slug>.md, read on demand;
+ *  log is memory/log.md, what each dream changed. */
+export type MemoryNote = { slug: string; bytes: number; mtime: string }
+export type MemoryView = {
+  workflow: string; project: string; dir: string; enabled: boolean
+  index: string; dream: string; log: string; notes: MemoryNote[]; loaded: string
 }
-export type MemoryList = { workflow: string; entries: MemoryEntry[]; preview?: string; enabled?: boolean }
+export type DreamResult = { workflow: string; project: string; changed: boolean; reply: string; runs: number }
 
 // actor is WHO is resolving a pause (ADR 0021). There is no sign-in yet, so
 // the browser asks once and remembers the claim; when ADR 0017's identity lands
@@ -490,22 +493,17 @@ export const api = {
    *  workflow's memory, each of its steps', and the global namespace. */
   workflowState: (name: string) =>
     j<{ vars: StateVar[] }>(fetch(`/api/workflows/${encodeURIComponent(name)}/state`)),
-  /** Workflow memory: what previous runs left behind, and what the next run will read. */
+  /** Workflow memory home: index, notes, dream log. target = index | dream | note:<slug>. */
   workflowMemory: (name: string, project = '') =>
-    j<MemoryList>(fetch(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`)),
-  forgetWorkflowMemory: (name: string, project = '') =>
-    j<{ ok: boolean; deleted: number }>(fetch(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`,
-      { method: 'DELETE' })),
-  deleteMemory: (id: string) =>
-    j(fetch(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })),
-  /** A hand-written lesson every agent step of the next run reads. */
-  addMemoryNote: (name: string, body: string, project = '') =>
-    j<MemoryEntry>(post(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`, { body })),
-  /** Rewrite one entry's text. */
-  editMemory: (id: string, body: string) =>
-    j<MemoryEntry>(fetch(`/api/memory/${encodeURIComponent(id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
-    })),
+    j<MemoryView>(fetch(`/api/workflows/${encodeURIComponent(name)}/memory${project ? `?project=${encodeURIComponent(project)}` : ''}`)),
+  readMemory: (name: string, target: string, project = '') =>
+    j<{ body: string }>(fetch(memFile(name, target, project))),
+  writeMemory: (name: string, target: string, body: string, project = '') =>
+    j(fetch(memFile(name, target, project), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) })),
+  deleteMemory: (name: string, target: string, project = '') =>
+    j(fetch(memFile(name, target, project), { method: 'DELETE' })),
+  dreamMemory: (name: string, project = '') =>
+    j<DreamResult>(post(`/api/workflows/${encodeURIComponent(name)}/memory/dream${project ? `?project=${encodeURIComponent(project)}` : ''}`)),
   /** Inbound exposure (ADR 0027): the hook URL and MCP endpoint, never a token. */
   workflowExpose: (name: string) =>
     j<ExposeView>(fetch(`/api/workflows/${encodeURIComponent(name)}/expose`)),

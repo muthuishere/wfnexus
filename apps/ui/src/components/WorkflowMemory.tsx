@@ -1,119 +1,113 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type MemoryEntry, type MemoryList } from '../api'
+import { api, type MemoryView } from '../api'
+import Markdown from './Markdown'
 
-/** What previous runs of this workflow learned — workflow memory.
- *
- *  On by default: every finished run leaves a record (inputs, outcome, each
- *  step's verdict or error, human decisions) and agents add lessons with the
- *  `remember` tool. Every agent step of the next run reads the section shown
- *  under "What the next run reads". `memory: false` in the YAML turns it off. */
+/** A workflow's memory — toolnexus's memory hierarchy, one home per workflow:
+ *  MEMORY.md (a short index every agent step loads, capped), notes linked
+ *  from it as [[slug]] and read on demand, and the dream log (memory/log.md,
+ *  append-only: what each nightly dream changed and why). Agents write it
+ *  with the `memory` tool; a person edits it here. */
 export default function WorkflowMemory({ workflow, project }: { workflow: string; project?: string }) {
-  const [mem, setMem] = useState<MemoryList>()
+  const p = project || ''
+  const [mem, setMem] = useState<MemoryView>()
   const [err, setErr] = useState('')
-  const [preview, setPreview] = useState(false)
-  const [editing, setEditing] = useState<string>()
+  const [open, setOpen] = useState<string>()       // target being viewed
+  const [body, setBody] = useState('')
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState('')
+  const fail = (e: unknown) => setErr(e instanceof Error ? e.message : String(e))
 
   const load = useCallback(() => {
-    api.workflowMemory(workflow, project || '')
-      .then(m => { setMem(m); setErr('') })
-      .catch(e => setErr(e instanceof Error ? e.message : String(e)))
-  }, [workflow, project])
+    api.workflowMemory(workflow, p).then(m => { setMem(m); setErr('') }).catch(fail)
+  }, [workflow, p])
   useEffect(load, [load])
 
-  const forget = (m: MemoryEntry) => {
-    if (!confirm('Forget this entry? Later runs will no longer read it.')) return
-    api.deleteMemory(m.id).then(load).catch(e => setErr(String(e.message || e)))
+  const view = (target: string) => {
+    setOpen(target); setEditing(false)
+    if (target === 'index') { setBody(mem?.index || ''); return }
+    api.readMemory(workflow, target, p).then(r => setBody(r.body)).catch(e => { setBody(''); fail(e) })
   }
-  const startEdit = (m: MemoryEntry) => { setEditing(m.id); setDraft(m.body) }
-  const save = (m: MemoryEntry) => {
-    if (!draft.trim()) return
-    setBusy(true)
-    api.editMemory(m.id, draft)
-      .then(() => { setEditing(undefined); load() })
-      .catch(e => setErr(String(e.message || e)))
-      .finally(() => setBusy(false))
+  const edit = (target: string, text: string) => { setOpen(target); setDraft(text); setEditing(true) }
+  const save = () => {
+    if (!open) return
+    setBusy('save')
+    api.writeMemory(workflow, open, draft, p)
+      .then(() => { setEditing(false); setBody(draft); load() }).catch(fail).finally(() => setBusy(''))
   }
-  const addNote = () => {
-    if (!note.trim()) return
-    setBusy(true)
-    api.addMemoryNote(workflow, note, project || '')
-      .then(() => { setNote(''); load() })
-      .catch(e => setErr(String(e.message || e)))
-      .finally(() => setBusy(false))
+  const remove = (target: string) => {
+    if (!confirm(`Delete ${target}?`)) return
+    api.deleteMemory(workflow, target, p).then(() => { setOpen(undefined); load() }).catch(fail)
   }
-  const forgetAll = () => {
-    if (!confirm(`Forget everything ${workflow} remembers? The next run starts blind.`)) return
-    api.forgetWorkflowMemory(workflow, project || '').then(load).catch(e => setErr(String(e.message || e)))
+  const dream = () => {
+    setBusy('dream')
+    api.dreamMemory(workflow, p)
+      .then(r => { alert(r.changed ? `Dream changed memory (see the log). ${r.runs} runs checked.` : `Nothing to change. ${r.runs} runs checked.`); load() })
+      .catch(fail).finally(() => setBusy(''))
   }
 
+  // [[slug]] → a code span, so the index reads as links to the notes below.
+  const linked = (s: string) => s.replace(/\[\[([a-z0-9._-]+)\]\]/g, '`[[$1]]`')
+
+  if (!mem) return <div className="card">{err ? <div className="banner err">{err}</div> : <span className="muted">loading…</span>}</div>
+  const notes = mem.notes.filter(n => n.slug !== 'log')
   return (
     <div className="card" style={{ marginBottom: 16 }}>
       <div className="subhead">
         <h2>Memory</h2>
-        {mem && mem.entries.length > 0 &&
-          <button className="ghost small danger-text" onClick={forgetAll}>Forget all</button>}
+        <span style={{ display: 'flex', gap: 8 }}>
+          <button className="ghost small" onClick={() => edit('index', mem.index)}>Edit index</button>
+          <button className="small" disabled={!!busy} onClick={dream}>{busy === 'dream' ? 'Dreaming…' : 'Run dream now'}</button>
+        </span>
       </div>
-      <p className="muted" style={{ marginBottom: 12 }}>
-        What previous runs of this workflow learned. Every finished run leaves a record, agents add
-        lessons with the <span className="mono">remember</span> tool, and every agent step of the next
-        run reads it (also as <span className="mono">{'{{ .Memory }}'}</span>). Secrets are scrubbed before
-        anything is stored. Turn it off with <span className="mono">memory: false</span>.
-      </p>
-
       {err && <div className="banner err">{err}</div>}
-      {mem?.enabled === false && <div className="banner">Memory is off for this workflow (memory: false).</div>}
+      {!mem.enabled && <div className="banner">Memory is off for this workflow (<code>memory: false</code>).</div>}
 
-      {!mem ? <div className="muted">loading…</div>
-        : mem.entries.length === 0
-          ? <div className="muted">Nothing remembered yet — the first finished run will leave a record.</div>
-          : <table className="rows"><tbody>
-            {mem.entries.map(m => (
-              <tr key={m.id}>
-                <td style={{ width: 120, verticalAlign: 'top' }}>
-                  <span className="pill">{m.kind === 'note' ? 'lesson' : m.kind}</span>{' '}
-                  {m.status && <span className="muted" style={{ fontSize: 'var(--fs-2xs)' }}>{m.status}</span>}
-                </td>
-                <td style={{ verticalAlign: 'top' }}>
-                  {m.stepId && <span className="muted mono" style={{ fontSize: 'var(--fs-2xs)' }}>[{m.stepId}] </span>}
-                  {editing === m.id
-                    ? <>
-                      <textarea className="mono" style={{ width: '100%', minHeight: 80, fontSize: 'var(--fs-2xs)' }} value={draft}
-                        autoFocus onChange={e => setDraft(e.target.value)} />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                        <button className="small" disabled={busy || !draft.trim()} onClick={() => save(m)}>Save</button>
-                        <button className="ghost small" disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
-                      </div>
-                    </>
-                    : <pre className="mono" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 'var(--fs-2xs)' }}>{m.body}</pre>}
-                </td>
-                <td className="muted" style={{ width: 150, verticalAlign: 'top', fontSize: 'var(--fs-2xs)' }}>
-                  {new Date(m.createdAt).toLocaleString()}
-                </td>
-                <td style={{ width: 130, verticalAlign: 'top', whiteSpace: 'nowrap' }}>
-                  {editing !== m.id &&
-                    <button className="ghost small" title="Edit" aria-label="Edit entry" onClick={() => startEdit(m)}>✎</button>}{' '}
-                  <button className="ghost small danger-text" onClick={() => forget(m)}>Forget</button>
-                </td>
-              </tr>))}
-          </tbody></table>}
+      <h3>MEMORY.md <span className="muted" style={{ fontWeight: 400 }}>· loaded into every agent step</span></h3>
+      {mem.index.trim()
+        ? <Markdown text={linked(mem.index)} />
+        : <p className="muted">Empty. Agents add lines with the <code>memory</code> tool; detail goes in notes.</p>}
 
-      <div style={{ marginTop: 12 }}>
-        <textarea style={{ width: '100%', minHeight: 46 }} value={note}
-          placeholder="Add a note the next run must read — e.g. “staging is down until Friday; check prod logs instead”"
-          onChange={e => setNote(e.target.value)} />
-        <button className="small" style={{ marginTop: 6 }} disabled={busy || !note.trim()} onClick={addNote}>Add note</button>
+      <h3 style={{ marginTop: 16 }}>Notes <span className="muted" style={{ fontWeight: 400 }}>· read on demand</span></h3>
+      {notes.length === 0 && <p className="muted">No notes yet.</p>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {notes.map(n => (
+          <button key={n.slug} className={`ghost small ${open === 'note:' + n.slug ? 'active' : ''}`}
+            onClick={() => view('note:' + n.slug)} title={`${n.bytes} bytes`}>[[{n.slug}]]</button>))}
+        <button className="ghost small" onClick={() => {
+          const slug = prompt('New note slug (lowercase, digits, . _ -)')
+          if (slug) edit('note:' + slug.trim(), '')
+        }}>+ note</button>
       </div>
 
-      {mem?.preview &&
-        <div style={{ marginTop: 12 }}>
-          <button className="ghost small" onClick={() => setPreview(p => !p)}>
-            {preview ? 'Hide' : 'Show'} what the next run reads
-          </button>
-          {preview && <pre className="mono" style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--fs-2xs)', marginTop: 8 }}>{mem.preview}</pre>}
-        </div>}
+      {open && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div className="subhead">
+            <span className="mono">{open === 'index' ? 'MEMORY.md' : open === 'dream' ? 'DREAM.md' : `memory/${open.slice(5)}.md`}</span>
+            <span style={{ display: 'flex', gap: 8 }}>
+              {!editing && open !== 'note:log' && <button className="ghost small" onClick={() => edit(open, body)}>Edit</button>}
+              {!editing && open.startsWith('note:') && open !== 'note:log' &&
+                <button className="ghost small danger-text" onClick={() => remove(open)}>Delete</button>}
+              <button className="ghost small" onClick={() => setOpen(undefined)}>Close</button>
+            </span>
+          </div>
+          {editing
+            ? <>
+              <textarea rows={10} style={{ width: '100%' }} value={draft} onChange={e => setDraft(e.target.value)} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button className="small" disabled={!!busy} onClick={save}>Save</button>
+                <button className="ghost small" onClick={() => setEditing(false)}>Cancel</button>
+              </div>
+            </>
+            : <Markdown text={linked(body)} />}
+        </div>)}
+
+      <h3 style={{ marginTop: 16 }}>Dream log <span className="muted" style={{ fontWeight: 400 }}>· nightly check against recent runs</span></h3>
+      {mem.log.trim() ? <Markdown text={mem.log} /> : <p className="muted">No dreams have changed anything yet.</p>}
+      <p className="muted" style={{ marginTop: 8 }}>
+        Dream focus (DREAM.md): {mem.dream.trim() ? <i>{mem.dream.trim().slice(0, 120)}</i> : 'default'} ·{' '}
+        <a href="#" onClick={e => { e.preventDefault(); edit('dream', mem.dream) }}>edit</a>
+      </p>
     </div>
   )
 }

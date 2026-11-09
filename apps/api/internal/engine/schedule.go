@@ -272,6 +272,17 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return out, stepDone
 	}
 
+	// A low-confidence output a person approved is accepted as it stands —
+	// re-running the agent would ask the same question again (confidence.go).
+	if out, ok := approvedLowConfidence(step, st); ok {
+		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("done"), FinishedAt: now()})
+		e.persistStepState(ctx, def, step, data, out)
+		if halted := e.applyOutputGates(ctx, runID, step, out, data); halted {
+			return nil, stepHalted
+		}
+		return out, stepDone
+	}
+
 	res, err := e.executeWithRetry(ctx, runID, def, step, data)
 	if err != nil {
 		e.failStep(ctx, runID, step.ID, err)
@@ -289,6 +300,16 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		})
 		e.setRun(ctx, runID, "needs_input", step.ID, res.Pending.Prompt)
 		e.notifyPause(ctx, runID, step.ID, res.Pending.Kind, res.Pending.Prompt, res.Pending)
+		return nil, stepHalted
+	}
+	if msg, low := lowConfidence(step, res.Output); low {
+		// Not sure enough to act alone: the output is kept and the run waits
+		// for a person, exactly like an approval gate.
+		e.setStep(ctx, runID, step.ID, model.StepPatch{
+			Status: str("awaiting_approval"), Output: mustJSON(res.Output), Error: str(msg),
+		})
+		e.setRun(ctx, runID, "awaiting_approval", step.ID, msg)
+		e.notifyPause(ctx, runID, step.ID, "approval", msg, nil)
 		return nil, stepHalted
 	}
 	e.setStep(ctx, runID, step.ID, model.StepPatch{

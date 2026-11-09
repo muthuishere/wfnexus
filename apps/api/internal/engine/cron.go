@@ -50,6 +50,10 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 				}
 				last = minute
 				e.fireSchedules(ctx, minute)
+				// The daily dream (memory.go): 03:00 UTC, one pass per memory home.
+				if minute.Hour() == 3 && minute.Minute() == 0 {
+					go e.dreamAll(context.WithoutCancel(ctx))
+				}
 			}
 		}
 	}()

@@ -54,7 +54,7 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 	}
 	// What previous runs of this workflow learned, unless the prompt placed
 	// `{{ .Memory }}` itself or memory is off for this step (memory.go).
-	prompt = withMemoryInPrompt(prompt, def, step, data.Memory)
+	prompt = withMemoryInPrompt(prompt, step, data.Memory)
 	// Answers to this step's earlier ask_human questions (answers.go).
 	prompt = withAnswersInPrompt(prompt, stepAnswers(data.Input, step.ID))
 	// Where it runs is the step's own `runs-on`, exactly as for a `run:` step.
@@ -73,7 +73,9 @@ func (e *Engine) executeStep(ctx context.Context, runID uuid.UUID, def *workflow
 // same code executes a step here and on a worker, which is the only way the
 // two can be guaranteed to mean the same thing.
 func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, step *workflow.Step, prompt, workdir, baseRef string) (stepResult, error) {
-	schema, err := compileSchema(wfName+"/"+step.ID, step.OutputSchema)
+	// Every agent output reports how sure it is (confidence.go).
+	outSchema := withConfidence(step.OutputSchema)
+	schema, err := compileSchema(wfName+"/"+step.ID, outSchema)
 	if err != nil {
 		return stepResult{}, fmt.Errorf("output_schema: %w", err)
 	}
@@ -84,7 +86,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	var submitted map[string]any
 	submit := tn.NativeTool("submit_output",
 		"Submit the FINAL result of this step as JSON matching the required schema. Call exactly once when the work is complete. If it returns validation errors, fix them and call again.",
-		step.OutputSchema,
+		outSchema,
 		func(_ context.Context, args map[string]any) (string, error) {
 			if err := validateJSON(schema, args); err != nil {
 				return "", err
@@ -99,7 +101,13 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// it is announced as deprecated on the run's own event stream rather than
 	// in a changelog nobody reads.
 	if askHumanGranted(step) {
-		extra = append(extra, e.askHumanTool(ctx, runID, step))
+		if takesAction(step) {
+			extra = append(extra, e.askHumanTool(ctx, runID, step))
+		} else {
+			// An analysis step never blocks on a person: the question is
+			// recorded on the run and the agent proceeds on its best judgement.
+			extra = append(extra, e.noteQuestionTool(ctx, runID, step))
+		}
 		if step.AskHuman && !toolNamed(step.Tools, skills.ToolAskHuman) {
 			e.emit(ctx, runID, step.ID, "log", map[string]any{
 				"text": "deprecated: `ask_human: true` on step " + step.ID +
@@ -111,9 +119,9 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	// dry run — for a step whose job is to AUTHOR a workflow (authoring.go).
 	// Granted only when the step names them, like every other tool.
 	extra = append(extra, e.platformTools(step.Tools)...)
-	// `remember` writes only this run's own workflow memory — the address comes
-	// from the run row — so it widens no reach; `memory: false` withholds it.
-	extra = append(extra, e.rememberTool(runID, wfName, step)...)
+	// toolnexus's `memory` tool over this run's own workflow home — the
+	// address comes from the run row; `memory: false` withholds it (memory.go).
+	extra = append(extra, e.memoryTool(ctx, runID, wfName, step)...)
 
 	// The whole cascade, resolved once for this step: the agent's bash tool and
 	// its CLI provider must see the same environment a `run:` step would.
@@ -290,7 +298,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		spent.Pending = res.Pending
 		return spent, nil
 	case submitted != nil:
-		spent.Output = submitted
+		spent.Output = ensureConfidence(submitted)
 		return spent, nil
 	case res.IsError || res.Status == "error":
 		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, scrub(res.Text))
@@ -592,4 +600,18 @@ func workspaceDiff(ctx context.Context, workdir, baseRef string) []byte {
 		return nil
 	}
 	return diff
+}
+
+// noteQuestionTool is ask_human for a step that takes no action: it records the
+// question as an event on the run and tells the agent to go on, stating its
+// assumption in `why` and lowering `confidence`; downstream steps decide.
+func (e *Engine) noteQuestionTool(ctx context.Context, runID uuid.UUID, step *workflow.Step) tn.Tool {
+	return tn.NativeTool(skills.ToolAskHuman,
+		"Record a question for the operator. Nobody will answer during this run: continue with your best judgement, state the assumption in `why`, and lower `confidence`.",
+		map[string]any{"type": "object", "required": []any{"question"}, "properties": map[string]any{"question": map[string]any{"type": "string"}}},
+		func(_ context.Context, args map[string]any) (string, error) {
+			q, _ := args["question"].(string)
+			e.emit(ctx, runID, step.ID, "question", map[string]any{"text": q, "blocking": false})
+			return "recorded; no human will answer during this run. Proceed on your best judgement and say what you assumed in `why`", nil
+		})
 }

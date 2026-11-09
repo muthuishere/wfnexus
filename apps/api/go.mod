@@ -11,7 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lib/pq v1.10.9
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/muthuishere/toolnexus/golang v0.19.0
+	github.com/muthuishere/toolnexus/golang v0.28.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0

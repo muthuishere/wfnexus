@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
@@ -258,32 +257,6 @@ func msg(ch, chat, text string) map[string]any {
 	return map[string]any{"message": map[string]any{"channel": ch, "chat": chat, "text": text, "from": "u1"}}
 }
 
-func TestMemoryIsPerConversationLessonsAreNot(t *testing.T) {
-	name := uniq("cmem")
-	def := convDef(t, name, "echo hi")
-	h := startHarness(t, def)
-	forgetAfter(t, h, name)
-	ctx := context.Background()
-	ra := h.waitEnded(h.start(name, msg("wa", "chat-a", "hello a")))
-	rb := h.waitEnded(h.start(name, msg("wa", "chat-b", "hello b")))
-	if _, err := h.store.AddMemory(ctx, model.MemoryEntry{Project: "local", Workflow: name, Kind: model.MemoryKindNote, Body: "lesson-everyone-sees"}); err != nil {
-		t.Fatal(err)
-	}
-	memA := h.eng.memoryForConv(ctx, def, "s", "local", "wa:chat-a")
-	if !strings.Contains(memA, shortID(ra.ID.String())) || strings.Contains(memA, shortID(rb.ID.String())) {
-		t.Fatalf("chat a's memory:\n%s", memA)
-	}
-	if !strings.Contains(memA, "lesson-everyone-sees") {
-		t.Fatalf("a workflow-wide lesson was not loaded in a conversation:\n%s", memA)
-	}
-	// `memory: {scope: workflow}` keeps one memory for every chat.
-	def.Memory = &workflow.Memory{Scope: workflow.MemoryScopeWorkflow}
-	rc := h.waitEnded(h.start(name, msg("wa", "chat-c", "hello c")))
-	all := h.eng.memoryForConv(ctx, def, "s", "local", "wa:chat-a")
-	if !strings.Contains(all, shortID(rc.ID.String())) || strings.Contains(all, shortID(ra.ID.String())) {
-		t.Fatalf("scope: workflow memory:\n%s", all)
-	}
-}
 
 func TestConversationKeyFromInput(t *testing.T) {
 	k, ok := ConversationKeyFromInput(map[string]any{"message": map[string]any{"channel": "wa", "chat": "1:2@s.whatsapp.net"}})

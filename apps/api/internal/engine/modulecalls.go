@@ -191,6 +191,13 @@ func (e *Engine) moduleEnv(ctx context.Context, module string) map[string]string
 
 func (e *Engine) wrapperDir() string { return filepath.Join(e.cfg.WorkDir, "module-commands") }
 
+// IsModuleCommand reports whether a definition is a generated module-command
+// wrapper. Those are callable, but listed under Modules, never as workflows.
+func (e *Engine) IsModuleCommand(d *workflow.Definition) bool {
+	return d != nil && d.Path != "" && e.cfg.WorkDir != "" &&
+		strings.HasPrefix(filepath.Clean(d.Path), filepath.Clean(e.wrapperDir())+string(filepath.Separator))
+}
+
 // writeCommandWrappers regenerates one workflow per module command, named like
 // the command, so `wfx module call` and the API start an ordinary run.
 func (e *Engine) writeCommandWrappers() {

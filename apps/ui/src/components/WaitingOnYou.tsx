@@ -3,6 +3,7 @@ import { useWaiting } from '../lib/waiting'
 import { href, shortName } from '../lib/routes'
 import { summariseRun } from '../lib/workflow'
 import { ago } from '../lib/time'
+import Confidence, { confidenceFromReason } from './Confidence'
 
 /** The top bar's "waiting on you". A paused run is an action somebody owes,
  *  and it used to be visible only to whoever happened to open that run — with
@@ -41,12 +42,14 @@ export default function WaitingOnYou() {
           {runs.map(r => {
             const p = r.project || 'local'
             const about = summariseRun(r)
+            const conf = confidenceFromReason(r.error)
             return (
               <a key={r.id} role="menuitem" href={href.run(p, shortName(r.workflow), r.id)} onClick={() => setOpen(false)}>
                 <span className={`badge ${r.status}`}>{r.status === 'needs_input' ? 'question' : 'approval'}</span>
                 <span className="waitwhat">
                   <b className="mono">{shortName(r.workflow)}</b>
                   {r.currentStep && <span className="muted"> · {r.currentStep}</span>}
+                  {conf && <> <Confidence value={conf.confidence} compact /></>}
                   <span className="waitsub">{p}{about ? ` · ${about}` : ''}</span>
                 </span>
                 <span className="muted waitwhen">{ago(r.updatedAt || r.createdAt)}</span>
