@@ -44,7 +44,23 @@ const (
 	exposeRatePerMin  = 60
 	exposeRateBurst   = 20
 	hookSignatureName = "X-WFX-Signature"
+	hookTimestampName = "X-WFX-Timestamp"
+	hookEventIDName   = "X-WFX-Event-Id"
+	// hookWindow is how far a signed hook's timestamp may be from now. A
+	// captured request is dead after it; inside it the event id refuses a
+	// second delivery.
+	hookWindow = 5 * time.Minute
 )
+
+// SignPayload is the one signature both directions use: HMAC-SHA256 over
+// `<timestamp>.<event id>.<body>`, as `sha256=<hex>`. Binding the time and
+// the id into the MAC is what makes the window and the dedupe key hold.
+func SignPayload(secret string, ts int64, eventID string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.%s.", ts, eventID)
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
 
 // exposeWaitDefault is how long a tools/call (or ?wait=1) waits for a run
 // before answering with its id. A var so tests can shorten it.
@@ -249,7 +265,7 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		exposeUnauthorized(w)
 		return
 	}
-	tokenID, ok := s.hookAuth(r, project, name, body)
+	tokenID, eventID, ok := s.hookAuth(r, project, name, body)
 	if !ok {
 		exposeUnauthorized(w)
 		return
@@ -269,6 +285,11 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("Idempotency-Key is longer than 200 characters"))
 		return
 	}
+	// A signed event is delivered once: its id (inside the MAC) is the key,
+	// and a second delivery is refused rather than replayed.
+	if eventID != "" {
+		key = "event:" + eventID
+	}
 	var id uuid.UUID
 	replay := false
 	if key != "" {
@@ -278,6 +299,11 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !claimed {
+			if eventID != "" {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error": "duplicate event: " + eventID + " was already received", "runId": prior})
+				return
+			}
 			if prior == "" {
 				writeErr(w, http.StatusConflict, errors.New("a request with this Idempotency-Key is still starting"))
 				return
@@ -334,43 +360,47 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, exposedResult{RunID: id.String(), Status: status, Settled: runSettled(status)})
 }
 
-// hookAuth accepts a bearer token issued for THIS workflow's hook, or an HMAC
-// of the body in X-WFX-Signature: sha256=<hex>, keyed with the hook's SIGNING
-// SECRET — a separate random secret shown once at issue and stored sealed
-// with the server's env-store key. The stored token hash is never a key.
-func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (string, bool) {
+// hookAuth accepts a bearer token issued for THIS workflow's hook, or a signed
+// request: X-WFX-Signature = SignPayload(signing secret, X-WFX-Timestamp,
+// X-WFX-Event-Id, body), keyed with the hook's SIGNING SECRET — a separate
+// random secret shown once at issue and stored sealed with the server's
+// env-store key. The stored token hash is never a key. eventID is the signed
+// event id ("" for a bearer request).
+func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (tokenID, eventID string, ok bool) {
 	if tok := exposeBearer(r); tok != "" {
 		t, err := s.store.LookupExposeToken(r.Context(), tok)
 		if err != nil || t.Kind != store.ExposeHook || t.Project != project || t.Workflow != name {
-			return "", false
+			return "", "", false
 		}
-		return t.ID, true
+		return t.ID, "", true
 	}
-	sig := strings.TrimPrefix(r.Header.Get(hookSignatureName), "sha256=")
-	got, err := hex.DecodeString(sig)
-	if sig == "" || err != nil {
-		return "", false
+	sig := r.Header.Get(hookSignatureName)
+	eventID = strings.TrimSpace(r.Header.Get(hookEventIDName))
+	ts, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get(hookTimestampName)), 10, 64)
+	if sig == "" || eventID == "" || len(eventID) > 200 || err != nil {
+		return "", "", false
+	}
+	if d := time.Since(time.Unix(ts, 0)); d > hookWindow || d < -hookWindow {
+		return "", "", false // outside the replay window
 	}
 	box := s.eng.Secrets()
 	if box == nil {
-		return "", false // no server key: signed hooks are off, bearer only
+		return "", "", false // no server key: signed hooks are off, bearer only
 	}
 	sealed, err := s.store.ActiveExposeSigning(r.Context(), project, name, store.ExposeHook)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for id, sl := range sealed {
 		key, err := box.Open(sl)
 		if err != nil {
 			continue
 		}
-		mac := hmac.New(sha256.New, []byte(key))
-		mac.Write(body)
-		if hmac.Equal(mac.Sum(nil), got) {
-			return id, true
+		if hmac.Equal([]byte(SignPayload(key, ts, eventID, body)), []byte(sig)) {
+			return id, eventID, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // newSigningSecret is a hook's HMAC key: 32 random bytes, hex, with a prefix
