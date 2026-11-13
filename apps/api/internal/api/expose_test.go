@@ -3,14 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,25 +157,25 @@ func TestHookIsOffUntilExposedAndOnlyForItsWorkflow(t *testing.T) {
 		t.Fatalf("output = %s", o)
 	}
 
-	// HMAC: keyed with the signing secret (shown once), over the raw body.
-	sign := func(key string, b []byte) string {
-		mac := hmac.New(sha256.New, []byte(key))
-		mac.Write(b)
-		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	// HMAC: keyed with the signing secret (shown once), over ts.id.body.
+	signed := func(key, id string, b []byte) map[string]string {
+		ts := time.Now().Unix()
+		return map[string]string{hookSignatureName: SignPayload(key, ts, id, b),
+			hookTimestampName: strconv.FormatInt(ts, 10), hookEventIDName: id}
 	}
 	// The stored token hash is NOT a key: a database leak must not sign.
-	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sign(store.HashExposeToken(tok), body)}); code != 401 {
+	if code, _, _ := f.call(t, "POST", hook, body, signed(store.HashExposeToken(tok), "e1", body)); code != 401 {
 		t.Fatalf("hmac keyed with the token hash = %d, want 401", code)
 	}
-	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sign(tok, body)}); code != 401 {
+	if code, _, _ := f.call(t, "POST", hook, body, signed(tok, "e1", body)); code != 401 {
 		t.Fatalf("hmac keyed with the token = %d, want 401", code)
 	}
-	sig := sign(signing, body)
-	if code, _, _ := f.call(t, "POST", hook, body, map[string]string{hookSignatureName: sig}); code != 202 {
-		t.Fatalf("hmac = %d, want 202", code)
-	}
-	if code, _, _ := f.call(t, "POST", hook, []byte(`{"who":"eve"}`), map[string]string{hookSignatureName: sig}); code != 401 {
+	hdr := signed(signing, "e1", body)
+	if code, _, _ := f.call(t, "POST", hook, []byte(`{"who":"eve"}`), hdr); code != 401 {
 		t.Fatalf("hmac over a different body = %d, want 401", code)
+	}
+	if code, _, _ := f.call(t, "POST", hook, body, hdr); code != 202 {
+		t.Fatalf("hmac = %d, want 202", code)
 	}
 
 	// Rotate: the old token dies. Revoke: the new one dies too.

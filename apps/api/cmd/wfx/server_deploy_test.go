@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,9 @@ func (l localRunner) run(cmd string, stdin io.Reader) (string, error) {
 
 func fakeHost(t *testing.T, systemUnit string) localRunner {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the deploy target is a Linux host: its script runs under sh with Unix PATH and shell stubs")
+	}
 	t.Setenv("WFX_DEPLOY_SKIP_CLIS", "1")
 	home, bin := t.TempDir(), t.TempDir()
 	log := filepath.Join(home, "calls.log")
