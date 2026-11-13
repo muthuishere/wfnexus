@@ -1,0 +1,111 @@
+# tmvp — every system of a product (db, k8s, logs, queues, http, …) across
+# every environment, as module commands (core). Credentials never reach the
+# step: the product's tmvp skill (config.yaml) holds secret references and
+# tmvp resolves them itself.
+#
+#   wfx module call tmvp.check --input skill=/srv/repos/app/.agents/skills/app-tmvp --wait
+#   wfx module call tmvp.read --input skill=… --input envs=prod --input system=db \
+#       --input verb=query --input arg="select count(*) from orders" --wait
+#
+# In a workflow:
+#   - id: stuck
+#     uses: tmvp.read@0
+#     with: { skill: "{{ .Input.skill }}", envs: all, system: db, verb: query, arg: "select …", diff: "true" }
+#
+# Reads are read-only by tmvp's own rules (read-only transactions, row caps,
+# cost estimate first). `write` is an action: the step pauses for approval,
+# needs a reason, and lands in tmvp's audit log.
+name: tmvp
+version: 0.1.0
+description: Diagnose every environment safely via tmvp — read any system across envs, writes only with a reason and approval.
+requires:
+  env: []
+  cli:
+    - name: tmvp
+      check: tmvp version
+
+commands:
+  check:
+    description: "Validate the product's tmvp config and connect to every system (secret names only)."
+    inputs:
+      skill: { type: string, required: true, description: "path of the product's tmvp skill dir or config.yaml on the machine that runs it" }
+    steps:
+      - id: act
+        name: "Through tmvp"
+        timeout_sec: 300
+        run: |
+          cat > in.skill <<'WFX_V'
+          {{ .Inputs.skill }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/tm.sh" check
+  read:
+    description: "Run one read verb on one system across envs (e.g. db query, k8s pods, loki query)."
+    inputs:
+      skill: { type: string, required: true, description: "path of the product's tmvp skill dir or config.yaml" }
+      envs: { type: string, default: "all", description: "all | prod | dev,prod | 'prod*' | type:production" }
+      system: { type: string, required: true, description: "system name from the config (db, k8s, logs, …)" }
+      verb: { type: string, required: true, description: "read verb (`tmvp verbs <type>` lists them)" }
+      arg: { type: string, default: "", description: "the verb's argument (query text, resource, …)" }
+      diff: { type: string, default: "false", description: "true: only rows where envs disagree" }
+    steps:
+      - id: act
+        name: "Through tmvp"
+        timeout_sec: 300
+        run: |
+          cat > in.skill <<'WFX_V'
+          {{ .Inputs.skill }}
+          WFX_V
+          cat > in.envs <<'WFX_V'
+          {{ .Inputs.envs }}
+          WFX_V
+          cat > in.system <<'WFX_V'
+          {{ .Inputs.system }}
+          WFX_V
+          cat > in.verb <<'WFX_V'
+          {{ .Inputs.verb }}
+          WFX_V
+          cat > in.arg <<'WFX_V'
+          {{ .Inputs.arg }}
+          WFX_V
+          cat > in.diff <<'WFX_V'
+          {{ .Inputs.diff }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/tm.sh" read
+  write:
+    effect: write
+    description: "One audited mutation on one env/system; pauses for approval. Use preview first."
+    inputs:
+      skill: { type: string, required: true, description: "path of the product's tmvp skill dir or config.yaml" }
+      env: { type: string, required: true, description: "exactly one env" }
+      system: { type: string, required: true, description: "system name from the config" }
+      statement: { type: string, required: true, description: "the mutation (SQL, command, …)" }
+      reason: { type: string, required: true, description: "why — recorded in the audit log" }
+      preview: { type: string, default: "false", description: "true: show what would change, change nothing" }
+      force: { type: string, default: "false", description: "true: required for a protected (production) env" }
+    steps:
+      - id: act
+        name: "Through tmvp"
+        timeout_sec: 300
+        run: |
+          cat > in.skill <<'WFX_V'
+          {{ .Inputs.skill }}
+          WFX_V
+          cat > in.env <<'WFX_V'
+          {{ .Inputs.env }}
+          WFX_V
+          cat > in.system <<'WFX_V'
+          {{ .Inputs.system }}
+          WFX_V
+          cat > in.statement <<'WFX_V'
+          {{ .Inputs.statement }}
+          WFX_V
+          cat > in.reason <<'WFX_V'
+          {{ .Inputs.reason }}
+          WFX_V
+          cat > in.preview <<'WFX_V'
+          {{ .Inputs.preview }}
+          WFX_V
+          cat > in.force <<'WFX_V'
+          {{ .Inputs.force }}
+          WFX_V
+          sh "$WFX_MODULE_DIR/tm.sh" write

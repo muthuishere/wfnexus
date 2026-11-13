@@ -1,8 +1,9 @@
 // Package builtins provides the tools wfnexus ships with on every machine
 // that runs steps — the server's local runner, every wfx-runner, the Docker
-// image: aos, ctx-optimize and jevx, at pinned versions.
+// image: aos, ctx-optimize, jevx and tmvp, at pinned versions.
 //
-// They come from npm (@muthuishere/<name>) installed into a private prefix
+// tmvp is a GitHub release binary (Release set): downloaded into <dir>/bin
+// and verified against the release's checksums.txt. The rest come from npm (@muthuishere/<name>) installed into a private prefix
 // (<dir>/tools), whose node_modules/.bin is put FIRST on this process's PATH —
 // so every step it starts finds them with no user step. npm picks the right
 // binary per OS/arch (Windows included). Node/npm itself is the runner's:
@@ -23,6 +24,8 @@ import (
 // Tool is one pinned built-in.
 type Tool struct {
 	Name, Package, Version string
+	// Release is the GitHub owner/repo of a release-binary tool; empty = npm.
+	Release string
 }
 
 // Pinned is what every runner carries: the floor and the default. Bump here.
@@ -30,6 +33,7 @@ var Pinned = []Tool{
 	{Name: "aos", Package: "@muthuishere/aos", Version: "0.12.0"},
 	{Name: "ctx-optimize", Package: "@muthuishere/ctx-optimize", Version: "0.15.5"},
 	{Name: "jevx", Package: "@muthuishere/jevx", Version: "0.12.13"},
+	{Name: "tmvp", Package: "github.com/muthuishere/tmvp", Version: "0.1.0", Release: "muthuishere/tmvp"},
 }
 
 // Status is one tool on this machine.
@@ -109,6 +113,15 @@ func Ensure(dir string, want map[string]string) []Status {
 			t.Version = v
 		}
 		s := Status{Name: t.Name, Version: t.Version}
+		if t.Release != "" {
+			if err := ensureRelease(dir, t); err != nil {
+				s.Error = err.Error()
+			} else {
+				s.Path = releasePath(dir, t.Name)
+			}
+			out = append(out, s)
+			continue
+		}
 		switch {
 		case installed(dir, t) == t.Version:
 		case npmErr != nil:
@@ -136,9 +149,10 @@ func Ensure(dir string, want map[string]string) []Status {
 		py.Version = "not installed (optional)"
 	}
 	out = append(out, py)
-	bin := BinDir(dir)
-	if path := os.Getenv("PATH"); !strings.HasPrefix(path, bin+string(os.PathListSeparator)) {
-		_ = os.Setenv("PATH", bin+string(os.PathListSeparator)+path)
+	for _, bin := range []string{RelBinDir(dir), BinDir(dir)} {
+		if path := os.Getenv("PATH"); !strings.HasPrefix(path, bin+string(os.PathListSeparator)) {
+			_ = os.Setenv("PATH", bin+string(os.PathListSeparator)+path)
+		}
 	}
 	mu.Lock()
 	last = out
@@ -161,8 +175,11 @@ func Find(name string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// Latest asks npm for a tool's newest published version.
+// Latest asks npm (or GitHub, for a release tool) for the newest version.
 func Latest(t Tool) (string, error) {
+	if t.Release != "" {
+		return latestRelease(t)
+	}
 	npm, err := exec.LookPath("npm")
 	if err != nil {
 		return "", fmt.Errorf("%s", NoNpm)

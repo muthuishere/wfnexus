@@ -40,8 +40,44 @@ echo "$spec" >> "$pre/installs.log"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+old)
 }
 
+// fakeRelease serves every release tool's binary and checksums.txt; hits
+// counts binary downloads.
+func fakeRelease(t *testing.T, corrupt bool) *int {
+	hits := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := filepath.Base(r.URL.Path)
+		body := []byte("#!/bin/sh\necho " + name + "\n")
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			w.Write([]byte(`{"tag_name":"v0.2.0"}`))
+			return
+		}
+		if name == "checksums.txt" {
+			for _, tool := range Pinned {
+				asset := tool.Name + "_" + runtime.GOOS + "_" + runtime.GOARCH
+				if runtime.GOOS == "windows" {
+					asset += ".exe"
+				}
+				h := sha256.Sum256([]byte("#!/bin/sh\necho " + asset + "\n"))
+				sum := hex.EncodeToString(h[:])
+				if corrupt {
+					sum = strings.Repeat("0", 64)
+				}
+				w.Write([]byte(sum + "  " + asset + "\n"))
+			}
+			return
+		}
+		*hits++
+		w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("WFX_RELEASE_BASE", srv.URL)
+	t.Setenv("WFX_RELEASE_API", srv.URL)
+	return hits
+}
+
 func TestEnsureInstallsUpdatesAndRollsBack(t *testing.T) {
 	fakeNpm(t)
+	fakeRelease(t, false)
 	dir := t.TempDir()
 	for _, s := range Ensure(dir, nil)[:len(Pinned)] {
 		if s.Error != "" || !strings.HasSuffix(s.Path, s.Name) {
@@ -75,8 +111,12 @@ func TestEnsureSaysWhenNodeCannotBeHad(t *testing.T) {
 	nodeDist = srv.URL
 	defer func() { nodeDist = old }()
 	t.Setenv("PATH", t.TempDir())
+	fakeRelease(t, false)
 	st := Ensure(t.TempDir(), nil)
-	for _, s := range st[:len(Pinned)] {
+	for i, s := range st[:len(Pinned)] {
+		if Pinned[i].Release != "" {
+			continue
+		}
 		if s.Error != NoNpm {
 			t.Fatalf("%+v", s)
 		}
@@ -132,5 +172,33 @@ func TestEnsureNodeBundlesLTS(t *testing.T) {
 	}
 	if p, _ := exec.LookPath("node"); !strings.HasPrefix(p, filepath.Join(dir, "node", "v24.0.0")) {
 		t.Fatalf("node on PATH: %q", p)
+	}
+}
+
+// A release tool is fetched once, checksum-verified, put on PATH, and
+// refused when the checksum does not match.
+func TestEnsureReleaseToolVerifiesAndCaches(t *testing.T) {
+	tool, ok := Find("tmvp")
+	if !ok || tool.Release == "" {
+		t.Fatal("tmvp is not a pinned release tool")
+	}
+	hits := fakeRelease(t, false)
+	dir := t.TempDir()
+	if err := ensureRelease(dir, tool); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRelease(dir, tool); err != nil || *hits != 1 {
+		t.Fatalf("second ensure: err=%v downloads=%d", err, *hits)
+	}
+	if b, _ := os.ReadFile(releasePath(dir, "tmvp")); !strings.Contains(string(b), "tmvp_") {
+		t.Fatalf("binary %q", b)
+	}
+	if v, err := Latest(tool); err != nil || v != "0.2.0" {
+		t.Fatalf("latest %q %v", v, err)
+	}
+	fakeRelease(t, true)
+	tool.Version = "0.2.0"
+	if err := ensureRelease(t.TempDir(), tool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("corrupt: %v", err)
 	}
 }

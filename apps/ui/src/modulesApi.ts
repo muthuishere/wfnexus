@@ -31,7 +31,7 @@ const send = (method: string, url: string, body?: unknown) =>
   fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
 const m = (name: string) => `/api/modules/${encodeURIComponent(name)}`
 
-/** A built-in tool (aos, ctx-optimize, jevx): pinned floor, the version every
+/** A built-in tool (aos, ctx-optimize, jevx, tmvp): pinned floor, the version every
  *  runner should run, the latest release, and what each runner reports. */
 export type BuiltinTool = { name: string; repo: string; pinned: string; desired: string; latest?: string; runners: Record<string, string> }
 
