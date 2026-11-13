@@ -440,12 +440,17 @@ func (s *Server) mcpEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	srv := mcpserver.NewMCPServer("wfnexus-"+project, "1", mcpserver.WithToolCapabilities(false))
 	defs := s.eng.Definitions()
+	reach := map[string]bool{}
 	for _, name := range allowed {
 		def := defs[name]
 		if def == nil {
 			continue // exposed, then deleted: not a tool any more
 		}
+		reach[name] = true
 		srv.AddTool(mcpTool(project, def), s.mcpCall(name, t.ID))
+	}
+	if len(reach) > 0 {
+		srv.AddTool(mcpStatusTool(), s.mcpStatus(reach))
 	}
 	mcpserver.NewStreamableHTTPServer(srv, mcpserver.WithStateLess(true)).ServeHTTP(w, r)
 }
@@ -462,7 +467,21 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 		}
 		schema = cp
 	}
-	raw, _ := json.Marshal(schema)
+	// Every workflow tool also takes the optional wait argument.
+	props := map[string]any{}
+	if p, ok := schema["properties"].(map[string]any); ok {
+		for k, v := range p {
+			props[k] = v
+		}
+	}
+	props[mcpWaitArg] = map[string]any{"type": "integer", "minimum": 0, "maximum": int(maxWait / time.Second),
+		"description": "seconds to wait for the run to finish before answering with its id and status (default 30; 0 = answer at once)"}
+	cp := map[string]any{}
+	for k, v := range schema {
+		cp[k] = v
+	}
+	cp["properties"] = props
+	raw, _ := json.Marshal(cp)
 	desc := def.Description
 	if desc == "" {
 		desc = "Run the wfnexus workflow " + def.Name
@@ -470,14 +489,59 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 	return mcp.NewToolWithRawSchema(toolName(project, def.Name), desc, raw)
 }
 
+// mcpWaitArg is the optional tool argument that sets how long a call waits;
+// it is taken out before the workflow sees its input.
+const mcpWaitArg = "wfx_wait"
+
+// mcpStatusName is the tool that reports a run started through this endpoint.
+const mcpStatusName = "wfx_run_status"
+
+func mcpStatusTool() mcp.Tool {
+	return mcp.NewTool(mcpStatusName,
+		mcp.WithDescription("Status of a workflow run started through this endpoint: status, settled, and the result once finished."),
+		mcp.WithString("run_id", mcp.Required(), mcp.Description("the runId a workflow call returned")))
+}
+
+// mcpStatus answers only for runs of the workflows this token reaches; any
+// other id gets the same answer as an id that does not exist.
+func (s *Server) mcpStatus(reach map[string]bool) mcpserver.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		notFound := mcp.NewToolResultError("run not found")
+		id, err := uuid.Parse(req.GetString("run_id", ""))
+		if err != nil {
+			return notFound, nil
+		}
+		run, err := s.store.GetRun(ctx, id)
+		if err != nil || !reach[run.Workflow] {
+			return notFound, nil
+		}
+		res, err := s.waitRun(ctx, id, 0)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		text, _ := json.Marshal(res)
+		return mcp.NewToolResultStructured(res, string(text)), nil
+	}
+}
+
 func (s *Server) mcpCall(name, tokenID string) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		input, _ := json.Marshal(req.GetRawArguments())
+		wait := exposeWaitDefault
+		args, _ := req.GetRawArguments().(map[string]any)
+		if v, ok := args[mcpWaitArg]; ok {
+			n, ok := v.(float64)
+			if !ok || n < 0 {
+				return mcp.NewToolResultError(mcpWaitArg + " must be a number of seconds, 0 or more"), nil
+			}
+			wait = min(time.Duration(n)*time.Second, maxWait)
+			delete(args, mcpWaitArg)
+		}
+		input, _ := json.Marshal(args)
 		id, err := s.startExposedRun(ctx, name, input, "mcp:"+tokenID)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		res, err := s.waitRun(ctx, id, exposeWaitDefault)
+		res, err := s.waitRun(ctx, id, wait)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
