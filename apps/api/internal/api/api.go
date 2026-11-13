@@ -71,6 +71,9 @@ type Server struct {
 
 	// providers are the configured login providers (ADR 0028), by name.
 	providers map[string]*login.Provider
+
+	// events delivers signed run events to each project's URL (events.go).
+	events *eventLoop
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -111,6 +114,14 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	}
 	buildProviders(s)
 	s.registerKnownProjects()
+	s.events = newEventLoop()
+	if st != nil {
+		eng.OnRunStatus(s.recordRunEvent)
+		// Events still owed from before a restart are delivered now.
+		if due, err := st.DueEvents(context.Background(), 1); err == nil && len(due) > 0 {
+			s.kickEvents()
+		}
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -230,6 +241,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/projects/{name}/env", s.setProjectEnv)
 		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
+		r.Get("/projects/{name}/events", s.getProjectEvents)
+		r.Put("/projects/{name}/events", s.setProjectEvents)
+		r.Delete("/projects/{name}/events", s.deleteProjectEvents)
 		r.Get("/projects/{name}/tokens", s.listProjectTokens)
 		r.Post("/projects/{name}/tokens", s.mintProjectToken)
 		r.Delete("/projects/{name}/tokens/{id}", s.revokeProjectToken)
