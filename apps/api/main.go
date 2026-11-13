@@ -265,7 +265,11 @@ func main() {
 	}
 	eng.StartRunDirSweeper(ctx)
 
-	// `on: schedule:` only means something if something ticks.
+	// `on: schedule:` only means something if something ticks. Only the
+	// instance holding the scheduler lock fires (Postgres advisory lock).
+	leader := st.NewLeader(store.SchedulerLockKey)
+	defer leader.Release()
+	eng.UseLeader(leader.Lead)
 	eng.StartScheduler(ctx)
 	// The server's local runner carries the built-in tools too (internal/builtins).
 	go func() {

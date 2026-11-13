@@ -3,14 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
-func bearerHdr(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+func bearerHdr(tok string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + tok}
+}
 
 // provisionTwo creates acme and globex in one call each (project + token),
 // with a same-named workflow in both. Off loopback, so every request needs

@@ -74,6 +74,8 @@ type Server struct {
 
 	// events delivers signed run events to each project's URL (events.go).
 	events *eventLoop
+	// svcLimit is the per-token rate limit on project service tokens (usage.go).
+	svcLimit *rateLimiter
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -115,8 +117,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	buildProviders(s)
 	s.registerKnownProjects()
 	s.events = newEventLoop()
+	s.svcLimit = newRateLimiter(serviceRatePerMin, serviceRateBurst)
 	if st != nil {
-		eng.OnRunStatus(s.recordRunEvent)
+		eng.OnRunStatus(s.onRunStatus)
+		eng.UseAdmission(s.admitRun)
 		// Events still owed from before a restart are delivered now.
 		if due, err := st.DueEvents(context.Background(), 1); err == nil && len(due) > 0 {
 			s.kickEvents()
@@ -241,6 +245,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/projects/{name}/env", s.setProjectEnv)
 		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
+		r.Get("/projects/{name}/usage", s.projectUsage)
+		r.Get("/projects/{name}/quotas", s.getQuotas)
+		r.Put("/projects/{name}/quotas", s.setQuotas)
 		r.Get("/projects/{name}/events", s.getProjectEvents)
 		r.Put("/projects/{name}/events", s.setProjectEvents)
 		r.Delete("/projects/{name}/events", s.deleteProjectEvents)
@@ -928,6 +935,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	// `concurrency:` is honoured here too; ?force=1 is a person overriding it.
 	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
 	run, err := s.eng.CreateRunAdmitted(r.Context(), name, input, force)
+	if refuseQuota(w, err) {
+		return
+	}
 	if errors.Is(err, engine.ErrConcurrencyBusy) {
 		writeErr(w, 409, fmt.Errorf("%v — wait for it, or start anyway with --force", err))
 		return
@@ -999,6 +1009,9 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.StartTriggered(r.Context(), name, workflow.TriggerRepositoryDispatch, body.ClientPayload); err != nil {
+		if refuseQuota(w, err) {
+			return
+		}
 		if errors.Is(err, engine.ErrConcurrencyBusy) {
 			log.Printf("dispatch: %s: %v", name, err)
 			writeErr(w, 409, err)

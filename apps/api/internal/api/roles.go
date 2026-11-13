@@ -130,7 +130,7 @@ func (s *Server) scopedAllows(r *http.Request) bool {
 		name, sub := seg(strings.TrimPrefix(path, "/api/projects/"))
 		switch {
 		case read:
-			return (sub == "env" || sub == "tokens" || sub == "events") && s.canAdminProject(r, name)
+			return (sub == "env" || sub == "tokens" || sub == "events" || sub == "usage" || sub == "quotas") && s.canAdminProject(r, name)
 		case sub == "" && method == http.MethodPatch, sub == "env", sub == "expose", sub == "members", sub == "tokens", sub == "events":
 			return s.canAdminProject(r, name)
 		}

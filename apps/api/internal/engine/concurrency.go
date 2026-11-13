@@ -38,6 +38,12 @@ func (b *BusyError) Unwrap() error { return ErrConcurrencyBusy }
 //
 // Per-process, like the scheduler: one engine owns the runs it starts.
 func (e *Engine) CreateRunAdmitted(ctx context.Context, name string, input json.RawMessage, force bool) (*model.Run, error) {
+	// Quotas first: force overrides a concurrency group, never a quota.
+	if e.admit != nil {
+		if err := e.admit(ctx, e.ProjectFor(name)); err != nil {
+			return nil, err
+		}
+	}
 	def := e.Definitions()[name]
 	if def == nil || def.Concurrency == nil || force {
 		return e.store.CreateRun(ctx, e.ProjectFor(name), name, input)
@@ -62,6 +68,26 @@ func (e *Engine) CreateRunAdmitted(ctx context.Context, name string, input json.
 	}
 	return e.store.CreateRun(ctx, e.ProjectFor(name), name, input)
 }
+
+// QuotaError is a run refused because its project is over a daily quota.
+type QuotaError struct {
+	Project string
+	Quota   string // "runs_per_day" | "cost_per_day"
+	Limit   float64
+	Used    float64
+}
+
+func (q *QuotaError) Error() string {
+	unit := "runs"
+	if q.Quota == "cost_per_day" {
+		return fmt.Sprintf("quota: project %q has spent $%.4f of its $%.4f per day; runs resume at 00:00 UTC", q.Project, q.Used, q.Limit)
+	}
+	return fmt.Sprintf("quota: project %q has started %.0f of its %.0f %s per day; runs resume at 00:00 UTC", q.Project, q.Used, q.Limit, unit)
+}
+
+// UseAdmission installs the check every new run passes before it exists
+// (quotas, from the server). A non-nil error refuses the run.
+func (e *Engine) UseAdmission(f func(ctx context.Context, project string) error) { e.admit = f }
 
 // groupOf is the concurrency group of a workflow by its key; "" for none.
 func (e *Engine) groupOf(name string) string {

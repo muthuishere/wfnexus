@@ -236,6 +236,10 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 				notFound(w)
 				return
 			}
+			if !s.svcLimit.allow("svc:" + sub.TokenID) {
+				refuseRate(w)
+				return
+			}
 		}
 		if passwordChangeRequired(r) {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))

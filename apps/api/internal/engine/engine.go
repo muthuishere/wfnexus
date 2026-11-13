@@ -114,6 +114,11 @@ type Engine struct {
 	// onRunStatus is told every run status the moment it lands (setRun):
 	// the server turns it into signed run events for the run's project.
 	onRunStatus func(ctx context.Context, runID uuid.UUID, status, step, errMsg string)
+	// admit is checked before every run is created (quotas, concurrency.go).
+	admit func(ctx context.Context, project string) error
+	// leader says whether this instance fires schedules (cron.go); nil means
+	// always, which is right for a single process.
+	leader func(ctx context.Context) bool
 }
 
 // OnRunStatus registers the one listener for run status changes.

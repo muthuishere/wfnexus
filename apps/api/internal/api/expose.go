@@ -318,6 +318,9 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 			if key != "" {
 				s.store.ReleaseIdempotencyKey(r.Context(), project, name, key)
 			}
+			if refuseQuota(w, err) {
+				return
+			}
 			if errors.Is(err, engine.ErrConcurrencyBusy) {
 				writeErr(w, http.StatusConflict, err)
 				return

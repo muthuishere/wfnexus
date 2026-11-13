@@ -29,9 +29,9 @@ import (
 //     watching and the reason has passed. Actions does the same, and a
 //     catch-up storm after a restart is worse than a skipped run.
 //
-// Scheduled runs are per-process. With more than one engine process this would
-// start N runs per tick; that is the point at which a claim in Postgres is
-// needed, and it is recorded in docs/not-now.md rather than guessed at here.
+// With more than one engine process on one database, only the LEADER fires
+// (UseLeader: a Postgres advisory lock), so a schedule starts one run, not
+// one per instance.
 func (e *Engine) StartScheduler(ctx context.Context) {
 	go func() {
 		t := time.NewTicker(time.Minute)
@@ -49,14 +49,28 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 					continue
 				}
 				last = minute
-				e.fireSchedules(ctx, minute)
-				// The daily dream (memory.go): 03:00 UTC, one pass per memory home.
-				if minute.Hour() == 3 && minute.Minute() == 0 {
-					go e.dreamAll(context.WithoutCancel(ctx))
-				}
+				e.scheduleTick(ctx, minute)
 			}
 		}
 	}()
+}
+
+// UseLeader makes the scheduler fire only while lead() says this instance is
+// the leader — with several server instances on one database, a schedule
+// then fires once, not once per instance.
+func (e *Engine) UseLeader(lead func(ctx context.Context) bool) { e.leader = lead }
+
+// scheduleTick is one minute of the scheduler: nothing unless this instance
+// leads.
+func (e *Engine) scheduleTick(ctx context.Context, minute time.Time) {
+	if e.leader != nil && !e.leader(ctx) {
+		return
+	}
+	e.fireSchedules(ctx, minute)
+	// The daily dream (memory.go): 03:00 UTC, one pass per memory home.
+	if minute.Hour() == 3 && minute.Minute() == 0 {
+		go e.dreamAll(context.WithoutCancel(ctx))
+	}
 }
 
 // NextRunAt is when a workflow's schedule fires next — the earliest of its
