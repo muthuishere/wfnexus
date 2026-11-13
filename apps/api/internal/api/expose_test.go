@@ -459,3 +459,18 @@ func TestMCPRunStatusIsConfinedToTheTokensWorkflows(t *testing.T) {
 		}
 	}
 }
+
+// A workflow whose input uses the reserved wfx_wait name is not offered.
+func TestMCPSkipsWorkflowsUsingReservedNames(t *testing.T) {
+	def := &workflow.Definition{Name: "demo/x", InputSchema: map[string]any{"type": "object",
+		"properties": map[string]any{"wfx_wait": map[string]any{"type": "string"}}}}
+	if !mcpReserved("demo", def) {
+		t.Fatal("wfx_wait input not treated as reserved")
+	}
+	if !mcpReserved("demo", &workflow.Definition{Name: "demo/wfx_run_status"}) {
+		t.Fatal("a workflow named like the status tool not treated as reserved")
+	}
+	if mcpReserved("demo", &workflow.Definition{Name: "demo/echo"}) {
+		t.Fatal("a plain workflow treated as reserved")
+	}
+}

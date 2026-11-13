@@ -443,8 +443,8 @@ func (s *Server) mcpEndpoint(w http.ResponseWriter, r *http.Request) {
 	reach := map[string]bool{}
 	for _, name := range allowed {
 		def := defs[name]
-		if def == nil {
-			continue // exposed, then deleted: not a tool any more
+		if def == nil || mcpReserved(project, def) {
+			continue // deleted since it was exposed, or clashes with a reserved name
 		}
 		reach[name] = true
 		srv.AddTool(mcpTool(project, def), s.mcpCall(name, t.ID))
@@ -490,15 +490,28 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 }
 
 // mcpWaitArg is the optional tool argument that sets how long a call waits;
-// it is taken out before the workflow sees its input.
+// it is taken out before the workflow sees its input. It is a reserved name:
+// a workflow input property with this name is not offered over MCP.
 const mcpWaitArg = "wfx_wait"
 
-// mcpStatusName is the tool that reports a run started through this endpoint.
+// mcpStatusName is the tool that reports a run of a workflow this endpoint
+// offers. Reserved: a workflow with this tool name is not offered.
 const mcpStatusName = "wfx_run_status"
+
+// mcpReserved: the workflow's tool name or an input property clashes with
+// what the endpoint itself adds.
+func mcpReserved(project string, def *workflow.Definition) bool {
+	if toolName(project, def.Name) == mcpStatusName {
+		return true
+	}
+	p, _ := def.InputSchema["properties"].(map[string]any)
+	_, clash := p[mcpWaitArg]
+	return clash
+}
 
 func mcpStatusTool() mcp.Tool {
 	return mcp.NewTool(mcpStatusName,
-		mcp.WithDescription("Status of a workflow run started through this endpoint: status, settled, and the result once finished."),
+		mcp.WithDescription("Status of a run of any workflow this endpoint offers (however it was started): status, settled, and the result once finished."),
 		mcp.WithString("run_id", mcp.Required(), mcp.Description("the runId a workflow call returned")))
 }
 
