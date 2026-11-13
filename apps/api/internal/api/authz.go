@@ -229,6 +229,14 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("forbidden"))
 			return
 		}
+		if sub, ok := SubjectFrom(r.Context()); ok && sub.Kind == SubjectService {
+			// A service token reaches its own project's routes and nothing
+			// else; anything outside is answered as absent (provision.go).
+			if p, ok := s.serviceTarget(r); !ok || p != sub.Project {
+				notFound(w)
+				return
+			}
+		}
 		if passwordChangeRequired(r) {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return

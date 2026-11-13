@@ -34,6 +34,9 @@ const (
 	// grant. SubjectWorker is a machine: labels, issued by a join.
 	SubjectUser   subjectKind = "user"
 	SubjectWorker subjectKind = "worker"
+	// SubjectService is a project service token (provision.go): a machine
+	// confined to ONE project, holding project_admin there and nothing else.
+	SubjectService subjectKind = "service"
 )
 
 // Subject is the authenticated caller. A nil *Subject means "no identity",
@@ -45,6 +48,8 @@ type Subject struct {
 	Project string
 	User    *store.User
 	Worker  *store.Worker
+	// TokenID is the project service token a SubjectService presented.
+	TokenID string
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
 	// logout deletes it.
 	SessionID uuid.UUID
@@ -177,6 +182,13 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, error) {
 	if auth.LooksLikeJWT(tok) {
 		return s.subjectFromJWT(ctx, tok)
+	}
+	if strings.HasPrefix(tok, store.ProjectTokenPrefix) {
+		t, err := s.store.LookupProjectToken(ctx, tok)
+		if err != nil {
+			return nil, errors.New("unauthenticated")
+		}
+		return &Subject{Kind: SubjectService, Name: "service:" + t.Prefix, Project: t.Project, TokenID: t.ID}, nil
 	}
 	if !strings.HasPrefix(tok, "wfx_") {
 		return nil, errors.New("unauthenticated")

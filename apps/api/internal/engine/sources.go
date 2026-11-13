@@ -303,6 +303,29 @@ func (e *Engine) ForgetRepo(name string) error {
 	return e.ReloadDefinitions()
 }
 
+// DeleteProject forgets a project. On a hosted server the project's directory
+// is the server's own (created or cloned under the runtime dir), so it goes
+// too; elsewhere the working copy is left, as ForgetRepo does.
+func (e *Engine) DeleteProject(name string) error {
+	var dir string
+	for _, src := range e.Sources() {
+		if src.Name == name {
+			dir = src.Repo
+		}
+	}
+	if err := e.ForgetRepo(name); err != nil {
+		return err
+	}
+	if e.cfg.Hosted && dir != "" {
+		for _, root := range []string{filepath.Join(e.cfg.WorkDir, "projects"), filepath.Join(e.cfg.WorkDir, "sources")} {
+			if rel, err := filepath.Rel(root, dir); err == nil && rel == name {
+				return os.RemoveAll(dir)
+			}
+		}
+	}
+	return nil
+}
+
 // cloneOrUpdate clones, or fetches into an existing clone.
 func cloneOrUpdate(ctx context.Context, dir, url, branch string) error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {

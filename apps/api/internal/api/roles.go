@@ -40,6 +40,10 @@ func (s *Server) isSuper(r *http.Request) bool {
 // grants loads the caller's member rows once per request.
 func (s *Server) grants(r *http.Request) []*store.Member {
 	sub, ok := SubjectFrom(r.Context())
+	if ok && sub.Kind == SubjectService {
+		// A service token is project_admin of its one project, by construction.
+		return []*store.Member{{Scope: store.MemberProject, Name: sub.Project, User: sub.Name, Role: store.ProjectAdmin}}
+	}
 	if !ok || sub.User == nil {
 		return nil
 	}
@@ -126,8 +130,8 @@ func (s *Server) scopedAllows(r *http.Request) bool {
 		name, sub := seg(strings.TrimPrefix(path, "/api/projects/"))
 		switch {
 		case read:
-			return sub == "env" && s.canAdminProject(r, name)
-		case sub == "" && method == http.MethodPatch, sub == "env", sub == "expose", sub == "members":
+			return (sub == "env" || sub == "tokens") && s.canAdminProject(r, name)
+		case sub == "" && method == http.MethodPatch, sub == "env", sub == "expose", sub == "members", sub == "tokens":
 			return s.canAdminProject(r, name)
 		}
 	case strings.HasPrefix(path, "/api/runs/") && !read:

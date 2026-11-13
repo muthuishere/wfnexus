@@ -230,6 +230,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/projects/{name}/env", s.setProjectEnv)
 		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
+		r.Get("/projects/{name}/tokens", s.listProjectTokens)
+		r.Post("/projects/{name}/tokens", s.mintProjectToken)
+		r.Delete("/projects/{name}/tokens/{id}", s.revokeProjectToken)
 		// The state store: the operator's door names the scope's owner, a
 		// running step's door (below, under /runs/{id}) never can.
 		r.Get("/state", s.listState)
@@ -621,6 +624,10 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
+	if !s.inScope(r, urlName(r, "name")) {
+		notFound(w)
+		return
+	}
 	p, err := s.eng.Project(r.Context(), urlName(r, "name"))
 	if err != nil {
 		writeErr(w, 404, err)
@@ -642,6 +649,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Branch   string `json:"branch"`
 		Create   bool   `json:"create"`
 		Category string `json:"category"`
+		// ServiceToken mints a project service token in the same call, so a
+		// provisioning platform gets a project and its credential at once.
+		ServiceToken bool   `json:"serviceToken"`
+		TokenLabel   string `json:"tokenLabel"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
@@ -683,7 +694,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 201, p)
+	out := createdProject{Project: p}
+	if body.ServiceToken {
+		t, secret, err := s.store.IssueProjectToken(r.Context(), src.Name, body.TokenLabel)
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		out.ServiceToken = &issuedProjectToken{ProjectToken: t, Token: secret}
+	}
+	writeJSON(w, 201, out)
 }
 
 // patchProject changes what can be changed about a project after the fact —
@@ -722,8 +742,12 @@ func (s *Server) listCategories(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	name := urlName(r, "name")
-	if err := s.eng.ForgetRepo(name); err != nil {
+	if err := s.eng.DeleteProject(name); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if err := s.store.RevokeAllProjectTokens(r.Context(), name); err != nil {
+		writeErr(w, 500, err)
 		return
 	}
 	if err := s.store.UnregisterProject(r.Context(), name); err != nil {
