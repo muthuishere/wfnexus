@@ -80,7 +80,8 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 		}
 		g.defs, g.broken, g.err = parseDirIfPresent(src.Dir)
 	}
-	newExpander(groups, newLoadOptions(opts)).run(cat)
+	lo := newLoadOptions(opts)
+	newExpander(groups, lo).run(cat)
 
 	for i, src := range sources {
 		g := groups[i]
@@ -117,6 +118,11 @@ func LoadSources(sources []Source, cat Catalog, opts ...LoadOption) (map[string]
 			d.RepoDir = src.Repo
 			qualified := src.Name + "/" + name
 			out[qualified] = d
+			// Hosted: a project's workflow has no bare name, so two tenants
+			// may each have a `deploy` and neither shadows the other.
+			if lo.qualifiedOnly && src.Repo != "" {
+				continue
+			}
 			if owner, clash := seen[name]; clash {
 				// A template does not hold a name: a workflow copied from it
 				// under the same name is the point (`wfx new x --as x`), not a

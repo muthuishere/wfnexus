@@ -210,6 +210,9 @@ func (e *Engine) ReloadDefinitions() error {
 	// call, and a load with no remote `use:` never takes it.
 	e.writeCommandWrappers() // `<module>.<command>` as runnable workflows (modulecalls.go)
 	opts := []workflow.LoadOption{e.moduleLoadOption()}
+	if e.cfg.Hosted {
+		opts = append(opts, workflow.QualifiedOnly())
+	}
 	if e.remote != nil {
 		opts = append(opts, workflow.WithRemoteResolver(e.remote))
 	}

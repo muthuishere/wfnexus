@@ -102,7 +102,18 @@ func (e *Engine) writeSources(list []workflow.Source) error {
 // `ref` is either a local path — used in place, because a developer wants to
 // edit a workflow and re-run it without pushing — or a URL, cloned once under
 // the runtime directory.
+//
+// On a hosted server a local path is refused: a tenant names a repository to
+// clone, never a folder of the server's own disk.
 func (e *Engine) ImportRepo(ctx context.Context, name, ref, branch string) (workflow.Source, error) {
+	if e.cfg.Hosted && isLocalPath(ref) {
+		return workflow.Source{}, fmt.Errorf("this server is hosted: a project is created here (`create: true`) " +
+			"or cloned from a repository URL, never pointed at a folder on the server")
+	}
+	return e.importRepo(ctx, name, ref, branch)
+}
+
+func (e *Engine) importRepo(ctx context.Context, name, ref, branch string) (workflow.Source, error) {
 	importMu.Lock()
 	defer importMu.Unlock()
 
@@ -202,6 +213,10 @@ func (e *Engine) CreateProject(ctx context.Context, name, folder string) (workfl
 		}
 	}
 
+	if e.cfg.Hosted && folder != "" {
+		return workflow.Source{}, fmt.Errorf("this server is hosted: a new project gets its own directory; " +
+			"a folder on the server cannot be named")
+	}
 	dir := folder
 	if dir == "" {
 		dir = filepath.Join(e.cfg.WorkDir, "projects", name)
@@ -249,7 +264,7 @@ func (e *Engine) CreateProject(ctx context.Context, name, folder string) (workfl
 			return workflow.Source{}, fmt.Errorf("first commit in %s: %v: %s", dir, err, strings.TrimSpace(string(out)))
 		}
 	}
-	return e.ImportRepo(ctx, name, dir, "")
+	return e.importRepo(ctx, name, dir, "")
 }
 
 // expandHome turns a leading ~ into the home directory. filepath.Abs does not,

@@ -44,6 +44,12 @@ type Config struct {
 	// WorkflowsDir so a template is never mistaken for something to run, and so
 	// `wfx apply` cannot quietly overwrite one.
 	TemplatesDir string
+	// Hosted is `hosted: true` (or WFX_HOSTED=1): one server, many tenant
+	// projects. It turns on the hosted rules — a project workflow is reached
+	// only as `<project>/<name>` (no global short-name alias), a project is
+	// created on the server rather than pointed at a server folder, and the
+	// projects registry is the list of tenants.
+	Hosted bool
 	// TemplatesOff is `templates: off` (or WFX_TEMPLATES=off): the shipped
 	// templates are not loaded, and TemplatesDir is empty.
 	TemplatesOff bool
@@ -301,6 +307,12 @@ func LoadWithFile(path string) (Config, error) {
 			Registries: stated("WFX_REGISTRIES", f.Paths.Registries),
 			UI:         stated("WFX_UI_DIR", f.Paths.UI),
 		},
+	}
+	switch strings.ToLower(strings.TrimSpace(env("WFX_HOSTED", ""))) {
+	case "1", "true", "yes", "on":
+		cfg.Hosted = true
+	case "":
+		cfg.Hosted = f.Hosted
 	}
 	if strings.EqualFold(strings.TrimSpace(env("WFX_TEMPLATES", f.Templates)), "off") {
 		cfg.TemplatesOff, cfg.TemplatesDir = true, ""

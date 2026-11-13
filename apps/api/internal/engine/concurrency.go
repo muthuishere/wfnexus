@@ -42,7 +42,7 @@ func (e *Engine) CreateRunAdmitted(ctx context.Context, name string, input json.
 	if def == nil || def.Concurrency == nil || force {
 		return e.store.CreateRun(ctx, e.ProjectFor(name), name, input)
 	}
-	group := def.Concurrency.GroupFor(def.Name)
+	group := e.groupOf(name)
 
 	e.admitMu.Lock()
 	defer e.admitMu.Unlock()
@@ -69,5 +69,7 @@ func (e *Engine) groupOf(name string) string {
 	if d == nil || d.Concurrency == nil {
 		return ""
 	}
-	return d.Concurrency.GroupFor(d.Name)
+	// Keyed by project: two projects that each name a workflow (or a group)
+	// `deploy` are two groups, never one queue across tenants.
+	return e.ProjectFor(name) + "/" + d.Concurrency.GroupFor(d.Name)
 }

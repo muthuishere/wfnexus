@@ -110,6 +110,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.jwtKey = fixedJWTKey
 	}
 	buildProviders(s)
+	s.registerKnownProjects()
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -591,6 +592,22 @@ func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.eng.DryRunDraft(def, envelope.Input))
 }
 
+// registerKnownProjects gives every project already on disk its registry row
+// (migration 000029), so a server upgraded in place has one row per project.
+func (s *Server) registerKnownProjects() {
+	if s.store == nil {
+		return
+	}
+	for _, src := range s.eng.Sources() {
+		if src.Repo == "" {
+			continue // the platform's own, templates, module commands
+		}
+		if err := s.store.RegisterProject(context.Background(), src.Name); err != nil {
+			log.Printf("projects: registering %s: %v", src.Name, err)
+		}
+	}
+}
+
 // A project is a repository the platform knows about, and it owns its
 // workflows and their runs: project → workflow → runs, the same hierarchy
 // GitHub Actions has.
@@ -651,6 +668,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if err := s.store.RegisterProject(r.Context(), src.Name); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
 	if body.Category != "" {
 		if err := s.eng.SetProjectCategory(src.Name, body.Category); err != nil {
 			writeErr(w, 500, err)
@@ -700,8 +721,13 @@ func (s *Server) listCategories(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
-	if err := s.eng.ForgetRepo(urlName(r, "name")); err != nil {
+	name := urlName(r, "name")
+	if err := s.eng.ForgetRepo(name); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if err := s.store.UnregisterProject(r.Context(), name); err != nil {
+		writeErr(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
@@ -742,12 +768,20 @@ func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if err := s.store.RegisterProject(r.Context(), src.Name); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
 	writeJSON(w, 201, src)
 }
 
 func (s *Server) forgetSource(w http.ResponseWriter, r *http.Request) {
 	if err := s.eng.ForgetRepo(urlName(r, "name")); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if err := s.store.UnregisterProject(r.Context(), urlName(r, "name")); err != nil {
+		writeErr(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

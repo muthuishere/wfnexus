@@ -14,6 +14,8 @@ type RemoteResolver interface {
 // loadOptions is what a caller may vary about a load.
 type loadOptions struct {
 	remote RemoteResolver
+	// qualifiedOnly: no bare-name alias for a project's workflows (hosted).
+	qualifiedOnly bool
 	// modules are installed modules (module.go), the last fallback for a
 	// `use:` name after local tasks and workflows.
 	modules map[string]*Task
@@ -51,6 +53,14 @@ type LoadOption func(*loadOptions)
 // git process, no network, no cache.
 func WithRemoteResolver(r RemoteResolver) LoadOption {
 	return func(o *loadOptions) { o.remote = r }
+}
+
+// QualifiedOnly is the hosted rule: a workflow of an imported project is
+// reachable only as `<project>/<name>`. Without it the first project to load
+// a name also owns the bare name, which across tenants means one project's
+// `deploy` answers another project's call.
+func QualifiedOnly() LoadOption {
+	return func(o *loadOptions) { o.qualifiedOnly = true }
 }
 
 func newLoadOptions(opts []LoadOption) loadOptions {

@@ -127,6 +127,8 @@ type File struct {
 	Templates string `yaml:"templates,omitempty"`
 	// RunArtifactsKeep is how many ended-run artifacts are kept.
 	RunArtifactsKeep int `yaml:"runArtifactsKeep,omitempty"`
+	// Hosted turns on the multi-tenant rules (config.Config.Hosted).
+	Hosted bool `yaml:"hosted,omitempty"`
 
 	// Secrets is the env store's key. Only the variable NAME or a path — the
 	// key is never a value in this file, for the same reason as the model key.
