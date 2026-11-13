@@ -1,8 +1,11 @@
 package builtins
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -59,12 +62,12 @@ func ensureRelease(dir string, t Tool) error {
 			return nil
 		}
 	}
-	asset := fmt.Sprintf("%s_%s_%s", t.Name, runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		asset += ".exe"
+	asset, sumsFile, member := defaultAsset(t)
+	if t.Asset != nil {
+		asset, sumsFile, member = t.Asset(t.Version)
 	}
 	url := fmt.Sprintf("%s/%s/releases/download/v%s/", releaseBase(), t.Release, t.Version)
-	sums, err := relGet(url + "checksums.txt")
+	sums, err := relGet(url + sumsFile)
 	if err != nil {
 		return err
 	}
@@ -76,7 +79,7 @@ func ensureRelease(dir string, t Tool) error {
 		}
 	}
 	if want == "" {
-		return fmt.Errorf("%s v%s has no %s in checksums.txt", t.Release, t.Version, asset)
+		return fmt.Errorf("%s v%s has no %s in %s", t.Release, t.Version, asset, sumsFile)
 	}
 	bin, err := relGet(url + asset)
 	if err != nil {
@@ -85,6 +88,11 @@ func ensureRelease(dir string, t Tool) error {
 	sum := sha256.Sum256(bin)
 	if got := hex.EncodeToString(sum[:]); got != want {
 		return fmt.Errorf("%s checksum mismatch: got %s, want %s", asset, got, want)
+	}
+	if member != "" {
+		if bin, err = extract(bin, asset, member); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(RelBinDir(dir), 0o755); err != nil {
 		return err
@@ -116,4 +124,65 @@ func latestRelease(t Tool) (string, error) {
 		return "", fmt.Errorf("latest release of %s: no tag", t.Release)
 	}
 	return strings.TrimPrefix(r.Tag, "v"), nil
+}
+
+func defaultAsset(t Tool) (file, sums, member string) {
+	file = fmt.Sprintf("%s_%s_%s", t.Name, runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
+	return file, "checksums.txt", ""
+}
+
+// ghAsset: gh_<v>_<linux|macOS|windows>_<arch>.<tar.gz|zip>, bin/gh inside.
+func ghAsset(v string) (file, sums, member string) {
+	osn, ext := runtime.GOOS, "tar.gz"
+	switch osn {
+	case "darwin":
+		osn, ext = "macOS", "zip"
+	case "windows":
+		ext = "zip"
+	}
+	file = fmt.Sprintf("gh_%s_%s_%s.%s", v, osn, runtime.GOARCH, ext)
+	return file, fmt.Sprintf("gh_%s_checksums.txt", v), "bin/" + exe("gh")
+}
+
+// extract returns the file whose path ends in /member from a .zip or .tar.gz.
+func extract(data []byte, name, member string) ([]byte, error) {
+	match := func(p string) bool { return p == member || strings.HasSuffix(p, "/"+member) }
+	if strings.HasSuffix(name, ".zip") {
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range zr.File {
+			if match(f.Name) {
+				rc, err := f.Open()
+				if err != nil {
+					return nil, err
+				}
+				defer rc.Close()
+				return io.ReadAll(rc)
+			}
+		}
+	} else {
+		gz, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		tr := tar.NewReader(gz)
+		for {
+			h, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if h.Typeflag == tar.TypeReg && match(h.Name) {
+				return io.ReadAll(tr)
+			}
+		}
+	}
+	return nil, fmt.Errorf("%s has no %s", name, member)
 }

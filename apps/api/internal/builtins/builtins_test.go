@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -40,34 +41,66 @@ echo "$spec" >> "$pre/installs.log"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+old)
 }
 
-// fakeRelease serves every release tool's binary and checksums.txt; hits
-// counts binary downloads.
+// fakeRelease serves every release tool's asset (raw, .tar.gz or .zip) and
+// its checksums file; hits counts asset downloads.
 func fakeRelease(t *testing.T, corrupt bool) *int {
+	files := map[string][]byte{}
+	sums := map[string]string{}
+	for _, tool := range Pinned {
+		if tool.Release == "" {
+			continue
+		}
+		for _, v := range []string{tool.Version, "0.2.0"} {
+			asset, sumsFile, member := defaultAsset(tool)
+			if tool.Asset != nil {
+				asset, sumsFile, member = tool.Asset(v)
+			}
+			body := []byte("#!/bin/sh\necho " + tool.Name + " " + v + "\n")
+			data := body
+			var buf bytes.Buffer
+			switch {
+			case member == "":
+			case strings.HasSuffix(asset, ".zip"):
+				zw := zip.NewWriter(&buf)
+				w, _ := zw.Create("pkg/" + member)
+				w.Write(body)
+				zw.Close()
+				data = buf.Bytes()
+			default:
+				zw := gzip.NewWriter(&buf)
+				tw := tar.NewWriter(zw)
+				_ = tw.WriteHeader(&tar.Header{Name: "pkg/" + member, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+				tw.Write(body)
+				tw.Close()
+				zw.Close()
+				data = buf.Bytes()
+			}
+			files[v+"/"+asset] = data
+			h := sha256.Sum256(data)
+			sum := hex.EncodeToString(h[:])
+			if corrupt {
+				sum = strings.Repeat("0", 64)
+			}
+			sums[v+"/"+sumsFile] += sum + "  " + asset + "\n"
+		}
+	}
 	hits := new(int)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := filepath.Base(r.URL.Path)
-		body := []byte("#!/bin/sh\necho " + name + "\n")
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
 			w.Write([]byte(`{"tag_name":"v0.2.0"}`))
 			return
 		}
-		if name == "checksums.txt" {
-			for _, tool := range Pinned {
-				asset := tool.Name + "_" + runtime.GOOS + "_" + runtime.GOARCH
-				if runtime.GOOS == "windows" {
-					asset += ".exe"
-				}
-				h := sha256.Sum256([]byte("#!/bin/sh\necho " + asset + "\n"))
-				sum := hex.EncodeToString(h[:])
-				if corrupt {
-					sum = strings.Repeat("0", 64)
-				}
-				w.Write([]byte(sum + "  " + asset + "\n"))
-			}
+		key := strings.TrimPrefix(filepath.Base(filepath.Dir(r.URL.Path)), "v") + "/" + filepath.Base(r.URL.Path)
+		if s, ok := sums[key]; ok {
+			w.Write([]byte(s))
 			return
 		}
-		*hits++
-		w.Write(body)
+		if b, ok := files[key]; ok {
+			*hits++
+			w.Write(b)
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("WFX_RELEASE_BASE", srv.URL)
@@ -190,7 +223,7 @@ func TestEnsureReleaseToolVerifiesAndCaches(t *testing.T) {
 	if err := ensureRelease(dir, tool); err != nil || *hits != 1 {
 		t.Fatalf("second ensure: err=%v downloads=%d", err, *hits)
 	}
-	if b, _ := os.ReadFile(releasePath(dir, "tmvp")); !strings.Contains(string(b), "tmvp_") {
+	if b, _ := os.ReadFile(releasePath(dir, "tmvp")); !strings.Contains(string(b), "tmvp 0.1.0") {
 		t.Fatalf("binary %q", b)
 	}
 	if v, err := Latest(tool); err != nil || v != "0.2.0" {
@@ -200,5 +233,18 @@ func TestEnsureReleaseToolVerifiesAndCaches(t *testing.T) {
 	tool.Version = "0.2.0"
 	if err := ensureRelease(t.TempDir(), tool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("corrupt: %v", err)
+	}
+}
+
+// gh ships as an archive: the binary is pulled out of it.
+func TestEnsureReleaseToolFromArchive(t *testing.T) {
+	tool, _ := Find("gh")
+	fakeRelease(t, false)
+	dir := t.TempDir()
+	if err := ensureRelease(dir, tool); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(releasePath(dir, "gh")); string(b) != "#!/bin/sh\necho gh "+tool.Version+"\n" {
+		t.Fatalf("gh binary %q", b)
 	}
 }

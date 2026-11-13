@@ -175,7 +175,7 @@ function ModuleDetail({ name }: { name: string }) {
   )
 }
 
-/** aos, ctx-optimize, jevx and tmvp ship with every runner (server, wfx-runner,
+/** aos, ctx-optimize, jevx, tmvp and gh ship with every runner (server, wfx-runner,
  *  Docker). Update fetches and checksum-verifies on the server first; every
  *  runner switches at its next heartbeat. An older version is a rollback. */
 function BuiltinsCard() {

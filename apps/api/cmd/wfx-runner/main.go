@@ -282,7 +282,7 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	fmt.Printf("%s serving %s — waiting for work from %s\n", cfg.Name, strings.Join(cfg.Labels, ", "), cfg.URL)
-	// Built-in tools (aos, ctx-optimize, jevx, tmvp) before the first job, then kept
+	// Built-in tools (aos, ctx-optimize, jevx, tmvp, gh) before the first job, then kept
 	// at the server's desired versions on every heartbeat (internal/builtins).
 	syncBuiltins(ctx, cfg)
 	if !*once {

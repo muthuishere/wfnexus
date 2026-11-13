@@ -1,8 +1,8 @@
 // Package builtins provides the tools wfnexus ships with on every machine
 // that runs steps — the server's local runner, every wfx-runner, the Docker
-// image: aos, ctx-optimize, jevx and tmvp, at pinned versions.
+// image: aos, ctx-optimize, jevx, tmvp and gh, at pinned versions.
 //
-// tmvp is a GitHub release binary (Release set): downloaded into <dir>/bin
+// tmvp and gh are GitHub release binaries (Release set): downloaded into <dir>/bin
 // and verified against the release's checksums.txt. The rest come from npm (@muthuishere/<name>) installed into a private prefix
 // (<dir>/tools), whose node_modules/.bin is put FIRST on this process's PATH —
 // so every step it starts finds them with no user step. npm picks the right
@@ -26,6 +26,10 @@ type Tool struct {
 	Name, Package, Version string
 	// Release is the GitHub owner/repo of a release-binary tool; empty = npm.
 	Release string
+	// Asset names the release files for a version on this OS/arch: the
+	// download, its checksums file, and the binary inside an archive ("" =
+	// the download is the binary). nil = <name>_<os>_<arch>[.exe] + checksums.txt.
+	Asset func(version string) (file, sums, member string)
 }
 
 // Pinned is what every runner carries: the floor and the default. Bump here.
@@ -34,6 +38,7 @@ var Pinned = []Tool{
 	{Name: "ctx-optimize", Package: "@muthuishere/ctx-optimize", Version: "0.15.5"},
 	{Name: "jevx", Package: "@muthuishere/jevx", Version: "0.12.13"},
 	{Name: "tmvp", Package: "github.com/muthuishere/tmvp", Version: "0.1.0", Release: "muthuishere/tmvp"},
+	{Name: "gh", Package: "github.com/cli/cli", Version: "2.104.0", Release: "cli/cli", Asset: ghAsset},
 }
 
 // Status is one tool on this machine.

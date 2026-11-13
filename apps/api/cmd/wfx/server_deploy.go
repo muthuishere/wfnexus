@@ -379,7 +379,7 @@ func serverDeploy(r remoteRunner, o serverDeployOpts) error {
 	if !o.skipCLIs && os.Getenv("WFX_DEPLOY_SKIP_CLIS") != "1" {
 		// Core module CLIs are part of every server. A failure is reported,
 		// never fatal: the server runs without them, the Modules page says so.
-		fmt.Println("→ external module CLIs (gh, apl); aos, ctx-optimize, jevx, tmvp are built in")
+		fmt.Println("→ external module CLI (apl); aos, ctx-optimize, jevx, tmvp, gh are built in")
 		out, err := r.run("sh -s --", strings.NewReader(coreCLIs))
 		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 			if l != "" {

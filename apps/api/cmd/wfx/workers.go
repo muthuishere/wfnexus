@@ -68,7 +68,7 @@ func workers(args []string) error {
 	// so is what stops someone adding a worker to fix a run that was never
 	// waiting for one.
 	fmt.Printf("\nServed by the platform itself: %s\n", strings.Join(pool.LocalLabels, ", "))
-	// Built-in tools per runner (aos, ctx-optimize, jevx, tmvp); best effort.
+	// Built-in tools per runner (aos, ctx-optimize, jevx, tmvp, gh); best effort.
 	var bt struct {
 		Tools []struct {
 			Name, Desired string
