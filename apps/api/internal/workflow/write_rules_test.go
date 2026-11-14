@@ -212,3 +212,31 @@ func TestAWriteCallOnAWorkerIsRefusedAtLoad(t *testing.T) {
 		t.Fatalf("a read on a worker should load: %v", err)
 	}
 }
+
+// A write command's steps may not loop: the pause is taken once, on the first
+// step, and a retry restarts from there. A loop anywhere in a write command is
+// a load error naming the step; a read command may loop. Every shipped module
+// still loads (TestEveryShippedWorkflowAndTemplateLoads covers them in use).
+func TestALoopInAWriteCommandIsRefusedAtLoad(t *testing.T) {
+	for name, steps := range map[string]string{
+		"first step foreach": "      - { id: each, foreach: \"{{ .Input.items }}\", run: echo act }\n",
+		"later step until":   "      - { id: plan, run: echo plan }\n      - { id: act, needs: [plan], run: echo act, until: [{ path: act.ok, equals: true }], max_iterations: 3 }\n",
+		"inside a group":     "      - id: group\n        steps:\n          - { id: inner, run: echo act, while: [{ path: inner.more, equals: true }], max_iterations: 3 }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			reg := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(reg, "lp"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(reg, "lp", "module.yaml"), "name: lp\nversion: 1.0.0\ncommands:\n  send:\n    effect: write\n    steps:\n"+steps+"  read:\n    steps:\n"+steps)
+			_, errs := FindModules("reg", reg)
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), "command send") || !strings.Contains(errs[0].Error(), "may not loop") {
+				t.Fatalf("errs = %v", errs)
+			}
+		})
+	}
+	mods, errs := FindModules("builtin", filepath.Join("..", "..", "..", "..", "modules"))
+	if len(errs) > 0 || len(mods) == 0 {
+		t.Fatalf("shipped modules: %d loaded, errors %v", len(mods), errs)
+	}
+}

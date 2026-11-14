@@ -276,7 +276,16 @@ of that command's steps runs.
   default, resolved by the engine when the run pauses. The pause shows it
   (name, account, its inputs such as `repo=`), and every step of the call
   runs with that resolved profile (`WFX_MODULE_PROFILE`); a step never looks
-  the default up for itself.
+  the default up for itself. Where the server resolves the profile again (apl
+  `whatsapp-send` queues on the service's outbox), the step hands it the
+  approved account, and a profile that names another account by then is
+  refused: nothing is queued.
+- **What the pin does not cover: which account a CLI is logged in as.** The
+  pin covers the call's inputs, environment and profile. The identity behind
+  the tools a module runs (`gh auth login`, an apl login, a cloud CLI's
+  credentials) is the machine's, outside the run: switching that login while
+  a run waits changes who the approved write is sent as. Keep those logins
+  stable on a server that runs writes, or give each its own machine.
 - **A retry starts the call again:** retrying any step of a write call resets
   the call from its first step, which pauses again for approval.
 - **Files between a call's steps:** after each step of a write call the
@@ -318,6 +327,13 @@ of that command's steps runs.
     there could type an approver's name (or any name but the starter's), so a
     typed name is refused for a write held to a policy. With no policy a
     typed name is still accepted.
+  - The loopback device sign-in (`/api/device/verify` with no session) is
+    for loopback-only accounts: it creates one, and signs it in again later.
+    It refuses an account with a password (sign in with it: `wfx login
+    --user NAME`) and one an external provider signs in (`name@provider`).
+    A loopback-only account has no credential beyond the machine, so anyone
+    at the machine can sign in as it: give approvers a password or an
+    external sign-in for an approver policy to mean anything on loopback.
   - A second account or a service token counts as a different person: the
     check is on the account name, not on who is behind it.
 - **Agents are different:** an agent step that lists a write command in its
