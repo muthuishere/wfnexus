@@ -61,11 +61,18 @@ worker shortened it first, a piece of a value left at the cut is removed too.
 
 What is matched:
 - the value itself, and with CRLF line endings when it spans lines (a PEM key);
-- base64 (standard and URL alphabets) at any byte offset, so a Basic-auth
-  header (`curl -u user:secret`) is caught whatever the user name;
-- hex and URL-encoded forms;
-- each of those as it reads inside a JSON document the step printed, with or
-  without `& < >` escaped, and inside JSON quoted in JSON.
+- base64 (standard and URL alphabets, padded or not) at any byte offset, so a
+  Basic-auth header (`curl -u user:secret`) is caught whatever the user name;
+  also when the base64 is wrapped across lines (a PEM body, `base64` at 76
+  columns) and the value crosses a line break;
+- hex (either case) and URL-encoded (query and path) forms;
+- inside JSON: every JSON string is decoded before it is scrubbed, so any
+  escape spelling is caught (`\/` as PHP writes it, `\uXXXX` as Python's
+  `json.dumps` or `jq --ascii-output` write it, `&` for `&`). A string
+  whose text is itself a JSON document (a step that printed JSON) is decoded
+  and scrubbed the same way, up to 4 levels deep;
+- in text that is not a JSON document (a log line), each of the forms above
+  JSON-escaped once, with and without `& < >` escaped.
 
 In its place, stored text shows `[redacted:NAME]`.
 
@@ -73,8 +80,15 @@ The step after it therefore reads the scrubbed text: `.Steps.x.output` never
 carries a secret. To hand a credential to a later step, give that step the
 same environment variable; don't print it and read it back.
 
-Limits:
+Limits (not caught):
 - Values shorter than 6 characters are never redacted (too many false hits).
+- A value split across lines (other than wrapped base64) or across separate
+  strings, e.g. printed in two halves.
+- A value printed as a JSON number, or numeric text a tool reformats.
+- JSON nested deeper than 4 levels of JSON-in-a-string: below that, strings
+  are scrubbed as text only, so an escaped spelling there survives.
+- A JSON fragment inside a log line (not a whole document) is only matched in
+  the common escape spellings, not `\/` or `\uXXXX`.
 - The marker names the variable. Whoever can get a value printed can see that
   it matched; don't let outside input choose what a step prints.
 - `wfx state set` values are stored as given, not scrubbed: never put a
