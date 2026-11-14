@@ -48,3 +48,36 @@ steps:
 - A gate whose condition matches the output routes instead of failing.
 
 Prefer `exit-codes` when you know which codes are answers.
+
+## Secrets travel through the environment, never through step output
+
+A step gets its secrets as environment variables: env-store values, and any
+credential-shaped name (`*_TOKEN`, `*_KEY`, …). If a step prints one, the
+platform removes it **before anything is stored**: stdout and stderr, the
+step's output and raw text, its error, the run's outcome, events, artifacts,
+a paused step's question (and what notifiers send of it), and a worker's
+report and live log. Text is scrubbed before it is shortened, and where a
+worker shortened it first, a piece of a value left at the cut is removed too.
+
+What is matched:
+- the value itself, and with CRLF line endings when it spans lines (a PEM key);
+- base64 (standard and URL alphabets) at any byte offset, so a Basic-auth
+  header (`curl -u user:secret`) is caught whatever the user name;
+- hex and URL-encoded forms;
+- each of those as it reads inside a JSON document the step printed, with or
+  without `& < >` escaped, and inside JSON quoted in JSON.
+
+In its place, stored text shows `[redacted:NAME]`.
+
+The step after it therefore reads the scrubbed text: `.Steps.x.output` never
+carries a secret. To hand a credential to a later step, give that step the
+same environment variable; don't print it and read it back.
+
+Limits:
+- Values shorter than 6 characters are never redacted (too many false hits).
+- The marker names the variable. Whoever can get a value printed can see that
+  it matched; don't let outside input choose what a step prints.
+- `wfx state set` values are stored as given, not scrubbed: never put a
+  secret in state.
+- A value a worker resolves on its own machine never reaches the platform, so
+  the platform cannot scrub it from that worker's report.

@@ -542,8 +542,21 @@ func failureLine(runID uuid.UUID, step, reason string) string {
 }
 
 func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) {
+	// Scrubbed BEFORE anything is stored: the error, what the step produced,
+	// its raw text, the command it ran, a question it asked.
+	secrets := e.redactions.get(runID)
 	if p.Error != nil {
-		p.Error = str(redactText(*p.Error, e.redactions.get(runID)))
+		p.Error = str(redactText(*p.Error, secrets))
+	}
+	if len(secrets) > 0 {
+		p.Output = scrubJSON(p.Output, secrets)
+		p.Pending = scrubJSON(p.Pending, secrets)
+		if p.RawText != nil {
+			p.RawText = str(redactText(*p.RawText, secrets))
+		}
+		if p.Prompt != nil {
+			p.Prompt = str(redactText(*p.Prompt, secrets))
+		}
 	}
 	if e.store == nil {
 		// The platform owns the step row; the worker only reports what happened.

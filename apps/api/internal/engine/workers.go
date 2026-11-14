@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -162,7 +163,20 @@ func (e *Engine) Claim(ctx context.Context, w *model.Worker, wait time.Duration)
 		if job != nil {
 			// Values are resolved now, into the response only: a job
 			// reclaimed after a worker restart gets them again here.
-			return job, e.deliverAtClaim(ctx, job)
+			if err := e.deliverAtClaim(ctx, job); err != nil {
+				var missing *MissingDeliverError
+				if errors.As(err, &missing) {
+					// It will not have a value on the next claim either: the
+					// step fails, naming the variable.
+					_ = e.store.FailJob(ctx, job.ID, err.Error())
+				} else {
+					// Nothing was handed out: give the lease back so the job
+					// is claimed again rather than left leased to nobody.
+					_ = e.store.ReleaseJob(ctx, job.ID)
+				}
+				return nil, fmt.Errorf("job %s could not be handed out: %w", job.ID, err)
+			}
+			return job, nil
 		}
 		if time.Now().After(deadline) {
 			return nil, nil
@@ -416,10 +430,12 @@ func (e *Engine) saveRemoteArtifacts(ctx context.Context, runID uuid.UUID, stepI
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
+	secrets := e.redactions.get(runID)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
 			return
 		}
+		body = []byte(redactText(string(body), secrets))
 		key := fmt.Sprintf("runs/%s/%s/%s", runID, stepID, name)
 		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
 			return
@@ -473,42 +489,95 @@ func (e *Engine) withoutDelivered(ctx context.Context, runID uuid.UUID, step *wo
 	return out, deliver
 }
 
+// MissingDeliverError: a job names a variable to be delivered at claim that
+// has no value now (it was removed from the env store, or a module's token
+// cannot be made). The step must not run without it. The message names the
+// variable, never a value.
+type MissingDeliverError struct{ Name, Module string }
+
+func (m *MissingDeliverError) Error() string {
+	if m.Name == "WFX_MODULE_TOKEN" {
+		return fmt.Sprintf("the token for module %q could not be made, so the step was not run", m.Module)
+	}
+	return fmt.Sprintf("variable %s has no value in the env store, so the step was not run; set it and re-run the step", m.Name)
+}
+
+// deliverNames is the job's list of names to deliver, its module, and the env
+// the values go into.
+func deliverNames(p *JobPayload) (names []string, module string, env map[string]string) {
+	if p.Agent != nil {
+		return p.Agent.Deliver, p.Agent.Step.Module, p.Agent.Step.Env
+	}
+	return p.Deliver, p.Module, p.Env
+}
+
+// resolveDelivered is the value of every name the job delivers, resolved now
+// against the env store and the module's token. A name with no value is a
+// *MissingDeliverError; an env store that cannot be read is any other error.
+func (e *Engine) resolveDelivered(ctx context.Context, p *JobPayload) (map[string]string, error) {
+	names, module, _ := deliverNames(p)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	base, err := e.platformEnv(ctx, p.Project)
+	if err != nil {
+		return nil, fmt.Errorf("the env store could not be read: %w", err)
+	}
+	out := make(map[string]string, len(names))
+	var me map[string]string
+	for _, n := range names {
+		var v string
+		if n == "WFX_MODULE_TOKEN" {
+			if me == nil {
+				me = e.moduleEnv(ctx, module)
+			}
+			v = me[n]
+		} else {
+			v = base[n]
+		}
+		if v == "" {
+			return nil, &MissingDeliverError{Name: n, Module: module}
+		}
+		out[n] = v
+	}
+	return out, nil
+}
+
+// registerDelivered tells the run's redactor about values delivered for it,
+// as sealed: every one came from the env store or is a module's token. So a
+// value rotated since the run started, or delivered after a server restart,
+// is scrubbed like any other secret.
+func (e *Engine) registerDelivered(runID uuid.UUID, vals map[string]string) {
+	if len(vals) == 0 || runID == uuid.Nil {
+		return
+	}
+	sealed := make(map[string]bool, len(vals))
+	for k := range vals {
+		sealed[k] = true
+	}
+	e.redactions.add(runID, vals, sealed)
+}
+
 // deliverAtClaim puts the values a job's row names (Deliver) into the claim
-// response, resolved now against the env store and the module's token. The
-// row itself is not touched.
+// response, resolved now, and registers them with the run's redactor. The row
+// itself is not touched.
 func (e *Engine) deliverAtClaim(ctx context.Context, job *model.Job) error {
 	var p JobPayload
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
 		return err
 	}
-	names, module, env := p.Deliver, p.Module, p.Env
-	if p.Agent != nil {
-		names, module, env = p.Agent.Deliver, p.Agent.Step.Module, p.Agent.Step.Env
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	base, err := e.platformEnv(ctx, p.Project)
-	if err != nil {
+	vals, err := e.resolveDelivered(ctx, &p)
+	if err != nil || len(vals) == 0 {
 		return err
 	}
+	runID, _ := uuid.Parse(p.RunID)
+	e.registerDelivered(runID, vals)
+	_, _, env := deliverNames(&p)
 	if env == nil {
 		env = map[string]string{}
 	}
-	var me map[string]string
-	for _, n := range names {
-		if n == "WFX_MODULE_TOKEN" {
-			if me == nil {
-				me = e.moduleEnv(ctx, module)
-			}
-			if v := me[n]; v != "" {
-				env[n] = v
-			}
-			continue
-		}
-		if v, ok := base[n]; ok {
-			env[n] = v
-		}
+	for k, v := range vals {
+		env[k] = v
 	}
 	if p.Agent != nil {
 		p.Agent.Step.Env = env
@@ -521,4 +590,40 @@ func (e *Engine) deliverAtClaim(ctx context.Context, job *model.Job) error {
 	}
 	job.Payload = raw
 	return nil
+}
+
+// ScrubJobResult removes the run's secret values, in every form secretForms
+// knows, from a worker's report before the platform stores it. So that this
+// holds after a server restart too, the values are registered again first:
+// the run's env-store values, the job's own env as it was sent (the step's env
+// block), whose credential-named values count as secret, and the values the
+// job delivers at claim, resolved again now. Values a worker resolves on its
+// own machine never reach the platform, so they cannot be scrubbed here.
+func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload json.RawMessage, res JobResult) JobResult {
+	_ = e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
+	var p JobPayload
+	if len(payload) > 0 && json.Unmarshal(payload, &p) == nil {
+		if _, _, env := deliverNames(&p); len(env) > 0 {
+			e.redactions.add(runID, env, nil)
+		}
+		if vals, err := e.resolveDelivered(ctx, &p); err == nil {
+			e.registerDelivered(runID, vals)
+		}
+	}
+	secrets := e.redactions.get(runID)
+	if len(secrets) == 0 {
+		return res
+	}
+	if res.Agent != nil {
+		ag := *res.Agent
+		// Bytes travel as base64 in JSON, where a value cannot be found: the
+		// diff is scrubbed as text first.
+		ag.Diff = []byte(redactText(string(ag.Diff), secrets))
+		res.Agent = &ag
+	}
+	var out JobResult
+	if json.Unmarshal(scrubJSON(mustJSON(res), secrets), &out) != nil {
+		return JobResult{Error: "the worker's report carried a secret value and could not be scrubbed safely"}
+	}
+	return out
 }
