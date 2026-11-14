@@ -76,9 +76,9 @@ steps:
     timeout_sec: 900
     run: |
       printf '*\n' > .wfx-docs-drift/.gitignore
-      SINCE='{{ if .Input.since }}{{ .Input.since }}{{ else }}{{ .Workflow.last_sha }}{{ end }}' \
-      LOOKBACK_DAYS='{{ .Input.lookback_days }}' DOCS='{{ .Input.docs }}' EXCLUDE='{{ .Input.exclude }}' \
-      MAX_FINDINGS='{{ .Input.max_findings }}' BRANCH="wfx/docs-drift-$(printf %.8s '{{ .RunID }}')" \
+      SINCE="{{ if .Input.since }}{{ .Input.since }}{{ else }}{{ .Workflow.last_sha }}{{ end }}" \
+      LOOKBACK_DAYS="{{ .Input.lookback_days }}" DOCS="{{ .Input.docs }}" EXCLUDE="{{ .Input.exclude }}" \
+      MAX_FINDINGS="{{ .Input.max_findings }}" BRANCH="wfx/docs-drift-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-docs-drift/collect.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
@@ -150,7 +150,7 @@ steps:
     description: Docs-only diff; evidence read from the cited line; stale AND supported both yes, else the doc is restored.
     timeout_sec: 900
     run: |
-      cat > .wfx-docs-drift/sync.json <<'WFX_SYNC_EOF'
+      cat > .wfx-docs-drift/sync.json <<WFX_SYNC_EOF
       {{ json .Steps.sync }}
       WFX_SYNC_EOF
       python3 .wfx-docs-drift/verify.py
@@ -194,7 +194,7 @@ steps:
     name: Remember the last commit checked
     description: Workflow state `last_sha` — advanced only by a real run.
     run: |
-      if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse {{ .BaseRef }}; else printf '%s' '{{ .Workflow.last_sha }}'; fi | tr -d '\n'
+      if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse {{ .BaseRef }}; else printf '%s' "{{ .Workflow.last_sha }}"; fi | tr -d '\n'
     state:
       workflow:
         last_sha: "{{ .Output.stdout }}"

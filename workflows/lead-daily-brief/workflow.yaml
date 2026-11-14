@@ -110,7 +110,7 @@ steps:
 
         Write ./draft.json and submit the same object, with these sections in
         this order (ids exact):
-          meetings    — each of today's meetings: time (in {{ if .Input.tz }}{{ .Input.tz }}{{ else }}the window's tz{{ end }}), who
+          meetings    — each of today"s meetings: time (in {{ if .Input.tz }}{{ .Input.tz }}{{ else }}the window"s tz{{ end }}), who
                         (count, external orgs), and what it needs from me (docs,
                         the last thread with them, an open question). Skip
                         declined/all-day reminders.
@@ -220,7 +220,7 @@ steps:
         # The drafting model often submits the brief without also writing the
         # file (3 failed runs, 2026-10-12); the submitted object IS the draft.
         if [ ! -s draft.json ]; then
-        cat > draft.json <<'WFX_DRAFT_EOF'
+        cat > draft.json <<WFX_DRAFT_EOF
         {{ json .Steps.draft }}
         WFX_DRAFT_EOF
         fi

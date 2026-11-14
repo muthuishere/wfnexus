@@ -86,7 +86,7 @@ steps:
     description: engine.json — workflows, runs, failures, waits, plus every view wfx has (memory, workers, schedules, members, cost, hooks). Never writes.
     needs: [ctx.gather]
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
       python3 ./engine.py
@@ -156,7 +156,7 @@ steps:
     needs: [answer]
     continue-on-error: true
     run: |
-      cat > answer.json <<'WFX_ANSWER_EOF'
+      cat > answer.json <<WFX_ANSWER_EOF
       {{ json .Steps.answer }}
       WFX_ANSWER_EOF
       python3 ./decide.py
@@ -265,7 +265,7 @@ steps:
         equals: 12
     continue-on-error: true
     run: |
-      cat > diagnosis.json <<'WFX_DIAG_EOF'
+      cat > diagnosis.json <<WFX_DIAG_EOF
       {{ json .Steps.diagnose }}
       WFX_DIAG_EOF
       python3 ./explain.py

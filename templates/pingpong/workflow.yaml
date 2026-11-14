@@ -62,10 +62,10 @@ steps:
     description: The reply is "pong #N"; N is one more than the highest pong this conversation remembers. Exit 3 = not a text, nothing to answer.
     continue-on-error: true
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
-      cat > memory.md <<'WFX_MEMORY_EOF'
+      cat > memory.md <<WFX_MEMORY_EOF
       {{ .Workflow.pongs }}
       WFX_MEMORY_EOF
       python3 ./pong.py reply
@@ -107,10 +107,10 @@ steps:
       - path: reply.exitCode
         equals: 0
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
-      cat > sent.json <<'WFX_SENT_EOF'
+      cat > sent.json <<WFX_SENT_EOF
       {{ .Steps.send.output.stdout }}
       WFX_SENT_EOF
       python3 ./pong.py save

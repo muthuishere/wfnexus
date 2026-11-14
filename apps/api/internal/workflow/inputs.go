@@ -207,6 +207,29 @@ func substInputs(text string, vals map[string]any) string {
 	})
 }
 
+// substRunInputs is substInputs for `run:` text. A value that is itself a
+// template (`{{ or .Input.x "" }}`, as `with:` passes on) is placed as is and
+// rendered when the step runs; a literal value becomes a template constant, so
+// it too reaches the script through the environment (runtext.go) rather than
+// as part of its text.
+func substRunInputs(text string, vals map[string]any) string {
+	if !strings.Contains(text, ".Inputs.") {
+		return text
+	}
+	return inputRef.ReplaceAllStringFunc(text, func(m string) string {
+		name := inputRef.FindStringSubmatch(m)[1]
+		v, ok := vals[name]
+		if !ok {
+			return m
+		}
+		t := inputText(v)
+		if strings.Contains(t, "{{") {
+			return t
+		}
+		return "{{ " + strconv.Quote(t) + " }}"
+	})
+}
+
 // applyInputs writes the values into every text a step renders.
 func applyInputs(s *Step, vals map[string]any) {
 	if len(vals) == 0 {
@@ -216,7 +239,7 @@ func applyInputs(s *Step, vals map[string]any) {
 	s.Description = substInputs(s.Description, vals)
 	s.Prompt = substInputs(s.Prompt, vals)
 	s.System = substInputs(s.System, vals)
-	s.Run = substInputs(s.Run, vals)
+	s.Run = substRunInputs(s.Run, vals)
 	s.RunsOn = substInputs(s.RunsOn, vals)
 	if len(s.Env) > 0 {
 		env := make(map[string]string, len(s.Env))

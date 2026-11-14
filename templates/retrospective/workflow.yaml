@@ -71,7 +71,7 @@ steps:
     description: GETs on $WFX_API (runs, memory and state at every scope); writes facts.json. Exit 2 when the API cannot be read.
     when: [{ path: input.mode, equals: review }]
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
       python3 ./collect.py
@@ -191,7 +191,7 @@ steps:
     needs: [analyze]
     when: [{ path: input.mode, equals: review }]
     run: |
-      cat > analysis.json <<'WFX_ANALYSIS_EOF'
+      cat > analysis.json <<WFX_ANALYSIS_EOF
       {{ json .Steps.analyze }}
       WFX_ANALYSIS_EOF
       python3 ./check.py
@@ -225,7 +225,7 @@ steps:
     description: Prints the proposal (kind, target, rationale, evidence, change) so the approver reads it before deciding.
     when: [{ path: input.mode, equals: apply }]
     run: |
-      cat <<'WFX_PROPOSAL_EOF'
+      cat <<WFX_PROPOSAL_EOF
       {{ json .Input.proposal }}
       WFX_PROPOSAL_EOF
     timeout_sec: 10
@@ -244,7 +244,7 @@ steps:
     when: [{ path: input.mode, equals: apply }]
     requires_approval: true
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
       python3 ./apply.py

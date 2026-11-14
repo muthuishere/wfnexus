@@ -37,10 +37,16 @@ func shellFor(step *workflow.Step) (shell.Shell, error) {
 
 // runCommand executes a `run` node in the run's workspace.
 func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
-	cmd, err := workflow.Render(step.Run, data)
+	// Values reach the script through the environment (workflow/runtext.go);
+	// cmd is the script as the run page shows it, with references only.
+	if err := workflow.CheckRunText(step.Run, step.Shell); err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	rt, err := workflow.RenderRun(step.Run, data)
 	if err != nil {
 		return nil, fmt.Errorf("render run: %w", err)
 	}
+	cmd := rt.Display()
 	// Where it runs is the step's own `runs-on`. A label this process serves
 	// runs here; anything else is queued for a worker holding that label and
 	// comes back with the same shape, so nothing downstream can tell.
@@ -54,7 +60,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 		label = strings.TrimSpace(label)
 	}
 	if !e.servesLocally(label) {
-		return e.runRemote(ctx, runID, step, cmd, label, data)
+		return e.runRemote(ctx, runID, step, rt, label, data)
 	}
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("running"), Prompt: str(cmd), StartedAt: now(), Error: str(""), ClearPending: true,
@@ -75,7 +81,18 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if err != nil {
 		return nil, err
 	}
-	argv := sh.Command(cmd)
+	dataDir := ""
+	if len(rt.Data) > 0 {
+		if dataDir, err = os.MkdirTemp("", "wfx-data-"); err != nil {
+			return nil, fmt.Errorf("step %s: %w", step.ID, err)
+		}
+		defer os.RemoveAll(dataDir)
+	}
+	script, dataEnv, err := rt.For(sh.Name, dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	argv := sh.Command(script)
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
@@ -100,7 +117,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	for k, v := range story.env() {
 		stepEnv = append(stepEnv, k+"="+v)
 	}
-	c.Env = append(os.Environ(), stepEnv...)
+	c.Env = append(append(os.Environ(), stepEnv...), dataEnv...)
 	var stdout, stderr strings.Builder
 	c.Stdout, c.Stderr = &stdout, &stderr
 	runErr := c.Run()

@@ -534,6 +534,11 @@ func (d *Definition) validate(cat Catalog) error {
 		} else if kinds == 0 {
 			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision), `send` (a message) or `start` (other workflows)", d.Name, s.ID)
 		}
+		if s.Run != "" {
+			if err := checkRunText(s.Run, s.Shell); err != nil {
+				return fmt.Errorf("%s/%s: run: %w", d.Name, s.ID, err)
+			}
+		}
 		if kinds > 1 {
 			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision, a message or a start — `prompt`, `run`, `judge`, `send` and `start` are mutually exclusive", d.Name, s.ID)
 		}

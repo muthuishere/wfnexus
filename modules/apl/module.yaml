@@ -62,24 +62,12 @@ commands:
         description: Exit 0 send, 10 a person approves first, 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
-          cat > chat.txt <<'WFX_V'
-          {{ .Inputs.chat }}
-          WFX_V
-          cat > text.txt <<'WFX_V'
-          {{ .Inputs.text }}
-          WFX_V
-          cat > replyTo.txt <<'WFX_V'
-          {{ .Inputs.replyTo }}
-          WFX_V
-          cat > policy.txt <<'WFX_V'
-          {{ .Inputs.responsePolicy }}
-          WFX_V
-          cat > profile.txt <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > key.txt <<'WFX_V'
-          {{ .Inputs.key }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.chat }}" > chat.txt
+          printf '%s\n' "{{ .Inputs.text }}" > text.txt
+          printf '%s\n' "{{ .Inputs.replyTo }}" > replyTo.txt
+          printf '%s\n' "{{ .Inputs.responsePolicy }}" > policy.txt
+          printf '%s\n' "{{ .Inputs.profile }}" > profile.txt
+          printf '%s\n' "{{ .Inputs.key }}" > key.txt
           python3 - <<'PY'
           import hashlib, json, sys
           v = lambda n: open(n + ".txt").read().rstrip("\n")
@@ -170,24 +158,12 @@ commands:
         description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
-          cat > in.to <<'WFX_V'
-          {{ .Inputs.to }}
-          WFX_V
-          cat > in.subject <<'WFX_V'
-          {{ .Inputs.subject }}
-          WFX_V
-          cat > in.body <<'WFX_V'
-          {{ .Inputs.body }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.responsePolicy <<'WFX_V'
-          {{ .Inputs.responsePolicy }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.to }}" > in.to
+          printf '%s\n' "{{ .Inputs.subject }}" > in.subject
+          printf '%s\n' "{{ .Inputs.body }}" > in.body
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.responsePolicy }}" > in.responsePolicy
           python3 "$WFX_MODULE_DIR/apl_cmd.py" plan mail-send
         timeout_sec: 30
         gates:
@@ -218,21 +194,11 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.to <<'WFX_V'
-          {{ .Inputs.to }}
-          WFX_V
-          cat > in.subject <<'WFX_V'
-          {{ .Inputs.subject }}
-          WFX_V
-          cat > in.body <<'WFX_V'
-          {{ .Inputs.body }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.to }}" > in.to
+          printf '%s\n' "{{ .Inputs.subject }}" > in.subject
+          printf '%s\n' "{{ .Inputs.body }}" > in.body
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act mail-draft
   mail-list:
     description: "List recent emails, optionally matching a query."
@@ -246,18 +212,10 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.query <<'WFX_V'
-          {{ .Inputs.query }}
-          WFX_V
-          cat > in.top <<'WFX_V'
-          {{ .Inputs.top }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.query }}" > in.query
+          printf '%s\n' "{{ .Inputs.top }}" > in.top
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act mail-list
   teams-send:
     effect: write
@@ -274,21 +232,11 @@ commands:
         description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
-          cat > in.chat <<'WFX_V'
-          {{ .Inputs.chat }}
-          WFX_V
-          cat > in.text <<'WFX_V'
-          {{ .Inputs.text }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.responsePolicy <<'WFX_V'
-          {{ .Inputs.responsePolicy }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.chat }}" > in.chat
+          printf '%s\n' "{{ .Inputs.text }}" > in.text
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.responsePolicy }}" > in.responsePolicy
           python3 "$WFX_MODULE_DIR/apl_cmd.py" plan teams-send
         timeout_sec: 30
         gates:
@@ -317,15 +265,9 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.days <<'WFX_V'
-          {{ .Inputs.days }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.days }}" > in.days
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act calendar-list
   calendar-create:
     effect: write
@@ -344,27 +286,13 @@ commands:
         description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
-          cat > in.subject <<'WFX_V'
-          {{ .Inputs.subject }}
-          WFX_V
-          cat > in.start <<'WFX_V'
-          {{ .Inputs.start }}
-          WFX_V
-          cat > in.end <<'WFX_V'
-          {{ .Inputs.end }}
-          WFX_V
-          cat > in.attendees <<'WFX_V'
-          {{ .Inputs.attendees }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.responsePolicy <<'WFX_V'
-          {{ .Inputs.responsePolicy }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.subject }}" > in.subject
+          printf '%s\n' "{{ .Inputs.start }}" > in.start
+          printf '%s\n' "{{ .Inputs.end }}" > in.end
+          printf '%s\n' "{{ .Inputs.attendees }}" > in.attendees
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.responsePolicy }}" > in.responsePolicy
           python3 "$WFX_MODULE_DIR/apl_cmd.py" plan calendar-create
         timeout_sec: 30
         gates:
@@ -394,18 +322,10 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.out <<'WFX_V'
-          {{ .Inputs.out }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.out }}" > in.out
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act drive-get
   drive-put:
     effect: write
@@ -422,21 +342,11 @@ commands:
         description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.file <<'WFX_V'
-          {{ .Inputs.file }}
-          WFX_V
-          cat > in.handle <<'WFX_V'
-          {{ .Inputs.handle }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.responsePolicy <<'WFX_V'
-          {{ .Inputs.responsePolicy }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.file }}" > in.file
+          printf '%s\n' "{{ .Inputs.handle }}" > in.handle
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.responsePolicy }}" > in.responsePolicy
           python3 "$WFX_MODULE_DIR/apl_cmd.py" plan drive-put
         timeout_sec: 30
         gates:
@@ -464,12 +374,8 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.name <<'WFX_V'
-          {{ .Inputs.name }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.name }}" > in.name
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act contacts-find
   find:
     description: "Search WhatsApp, Gmail, Teams and GitHub at once (apl find)."
@@ -484,19 +390,9 @@ commands:
         name: "Through apl"
         timeout_sec: 180
         run: |
-          cat > in.query <<'WFX_V'
-          {{ .Inputs.query }}
-          WFX_V
-          cat > in.from <<'WFX_V'
-          {{ .Inputs.from }}
-          WFX_V
-          cat > in.only <<'WFX_V'
-          {{ .Inputs.only }}
-          WFX_V
-          cat > in.limit <<'WFX_V'
-          {{ .Inputs.limit }}
-          WFX_V
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.query }}" > in.query
+          printf '%s\n' "{{ .Inputs.from }}" > in.from
+          printf '%s\n' "{{ .Inputs.only }}" > in.only
+          printf '%s\n' "{{ .Inputs.limit }}" > in.limit
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
           python3 "$WFX_MODULE_DIR/apl_cmd.py" act find

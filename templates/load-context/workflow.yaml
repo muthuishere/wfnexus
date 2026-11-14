@@ -50,10 +50,10 @@ steps:
     name: Write the conversation context
     description: context.json for the caller's agent; the chat text stays data in a file, never part of a command.
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
-      python3 - <<'PY'
+      python3 - <<PY
       import json
       i = json.load(open("input.json"))
       m = i.get("message") or {}

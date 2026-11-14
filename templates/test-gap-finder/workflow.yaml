@@ -146,11 +146,11 @@ steps:
     timeout_sec: 3600
     run: |
       printf '*\n' > .wfx-test-gap/.gitignore
-      cat > .wfx-test-gap/style.json <<'WFX_STYLE_EOF'
+      cat > .wfx-test-gap/style.json <<WFX_STYLE_EOF
       {{ json .Steps.style }}
       WFX_STYLE_EOF
-      PR_PREFIX='{{ .Input.pr_prefix }}' ALLOW_RED='{{ .Input.allow_red_baseline }}' SCOPE='{{ .Input.scope }}' \
-      BRANCH="wfx/test-gap-$(printf %.8s '{{ .RunID }}')" \
+      PR_PREFIX="{{ .Input.pr_prefix }}" ALLOW_RED="{{ .Input.allow_red_baseline }}" SCOPE="{{ .Input.scope }}" \
+      BRANCH="wfx/test-gap-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-test-gap/baseline.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
@@ -163,7 +163,7 @@ steps:
     description: Every public function/method/class, branch, error path, boundary, null path, README example and spec scenario/rule, with file:line and coverage; sharded.
     timeout_sec: 900
     run: |
-      SHARDS=4 SPEC_PATHS='{{ .Input.spec_paths }}' python3 .wfx-test-gap/surface.py
+      SHARDS=4 SPEC_PATHS="{{ .Input.spec_paths }}" python3 .wfx-test-gap/surface.py
       c=$?; case $c in 0|11|12|13|78) exit $c;; *) exit 70;; esac
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Surface enumeration failed — {{ .Output.stderr }}" }
@@ -280,10 +280,10 @@ steps:
     description: wfx judge per gap scenario, decision table by code; unsure ones park the run until a person approves or rejects each by id.
     timeout_sec: 900
     run: |
-      cat > .wfx-test-gap/human.txt <<'WFX_HUMAN_EOF'
+      cat > .wfx-test-gap/human.txt <<WFX_HUMAN_EOF
       {{ .Input.extra_context }}
       WFX_HUMAN_EOF
-      MAX_TESTS='{{ .Input.max_tests }}' python3 .wfx-test-gap/triage.py
+      MAX_TESTS="{{ .Input.max_tests }}" python3 .wfx-test-gap/triage.py
       c=$?; case $c in 0|20|78) exit $c;; *) exit 70;; esac
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Triage failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
@@ -363,13 +363,13 @@ steps:
     description: Only tests changed; nothing that passed now fails; each new test passes or is a kept bug finding; each must kill its mutant.
     timeout_sec: 3600
     run: |
-      cat > .wfx-test-gap/write.json <<'WFX_WRITE_EOF'
+      cat > .wfx-test-gap/write.json <<WFX_WRITE_EOF
       {{ json .Steps.write }}
       WFX_WRITE_EOF
-      cat > .wfx-test-gap/human.txt <<'WFX_HUMAN_EOF'
+      cat > .wfx-test-gap/human.txt <<WFX_HUMAN_EOF
       {{ .Input.extra_context }}
       WFX_HUMAN_EOF
-      BASE='{{ .BaseRef }}' python3 .wfx-test-gap/validate.py
+      BASE="{{ .BaseRef }}" python3 .wfx-test-gap/validate.py
       c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "The branch did not prove out — {{ .Output.stdout }}" }
@@ -425,10 +425,10 @@ steps:
     description: Before/after counts and coverage, every scenario with its verdict and who decided, findings, mutation results, commits.
     timeout_sec: 300
     run: |
-      cat > .wfx-test-gap/review.json <<'WFX_REVIEW_EOF'
+      cat > .wfx-test-gap/review.json <<WFX_REVIEW_EOF
       {{ json .Steps.review }}
       WFX_REVIEW_EOF
-      PR_PREFIX='{{ .Input.pr_prefix }}' python3 .wfx-test-gap/prbody.py || exit 70
+      PR_PREFIX="{{ .Input.pr_prefix }}" python3 .wfx-test-gap/prbody.py || exit 70
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Could not write the PR body — {{ .Output.stderr }}" }
 

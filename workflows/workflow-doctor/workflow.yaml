@@ -117,7 +117,7 @@ steps:
       - path: input.dry_run
         equals: false
     run: |
-      cat > diagnosis.json <<'WFX_JSON'
+      cat > diagnosis.json <<WFX_JSON
       {{ json .Steps.diagnose }}
       WFX_JSON
       python3 ./prepare.py
@@ -213,10 +213,10 @@ steps:
     description: wfx validate on every changed workflow; the Go suite where Go changed; a committed, clean branch. Exit 0 proven, 1 a fix failed, 4 nothing to verify.
     needs: [fix]
     run: |
-      cat > diagnosis.json <<'WFX_JSON'
+      cat > diagnosis.json <<WFX_JSON
       {{ json .Steps.diagnose }}
       WFX_JSON
-      cat > fixes.json <<'WFX_JSON'
+      cat > fixes.json <<WFX_JSON
       {{ json .Steps.fix }}
       WFX_JSON
       python3 ./verify.py
@@ -317,7 +317,7 @@ steps:
       - path: publish.any_published
         equals: true   # an empty list of PRs is not something to merge
     run: &merge |
-      cat > prs.json <<'WFX_JSON'
+      cat > prs.json <<WFX_JSON
       {{ json .Steps.publish }}
       WFX_JSON
       python3 ./merge.py
@@ -365,13 +365,13 @@ steps:
     name: Report and remember
     needs: [collect, diagnose, prepare, fix, verify, review, publish, merge_auto, merge_gated]
     run: |
-      cat > review.json <<'WFX_JSON'
+      cat > review.json <<WFX_JSON
       {{ json .Steps.review }}
       WFX_JSON
-      cat > prs.json <<'WFX_JSON'
+      cat > prs.json <<WFX_JSON
       {{ json .Steps.publish }}
       WFX_JSON
-      cat > diagnosis.json <<'WFX_JSON'
+      cat > diagnosis.json <<WFX_JSON
       {{ json .Steps.diagnose }}
       WFX_JSON
       DRY_RUN={{ .Input.dry_run }} COLLECT_EXIT={{ .Steps.collect.exitCode }} python3 ./report.py

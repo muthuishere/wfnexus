@@ -64,7 +64,7 @@ steps:
     description: Validates the request, picks the one op, and derives the idempotency key.
     continue-on-error: true
     run: |
-      cat > input.json <<'WFX_INPUT_EOF'
+      cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
       python3 ./sender.py plan
@@ -147,7 +147,7 @@ steps:
     description: Prints the typed result — sent, drafted, skipped, or already (this key was sent or may have been).
     needs: [plan, send]
     run: |
-      cat > sent.json <<'WFX_SENT_EOF'
+      cat > sent.json <<WFX_SENT_EOF
       {{ json .Steps.send }}
       WFX_SENT_EOF
       python3 ./sender.py deliver
