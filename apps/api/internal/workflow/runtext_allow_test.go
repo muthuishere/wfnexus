@@ -381,3 +381,48 @@ func TestStepConstantsKeepEachInputApart(t *testing.T) {
 		t.Fatalf("data %q %v (run %q)", rt.Data, err, run)
 	}
 }
+
+// Heredocs inside $( … ), here-strings, $$ and \$ before a quote, nested
+// braces in a substring, variable-name positions and `--` before stdin: what
+// follows each is still read as script and checked.
+func TestHeredocsAndNamesAreScannedInPlace(t *testing.T) {
+	for _, run := range []string{
+		// a heredoc inside $( … ) ends at its delimiter
+		"body=$(cat <<EOF\nhello\nEOF\n)\neval \"{{ .Input.x }}\"",
+		"body=\"$(cat <<EOF\nhello\nEOF\n)\"\neval \"{{ .Input.x }}\"",
+		// <<< is a here-string, not a heredoc start
+		"cat <<< $v\neval \"{{ .Input.x }}\"",
+		// \$' and $$' do not open $'…'
+		`echo \$'x\' "'" ; eval {{ .Input.x }} # "`,
+		`echo $$'x\' "'" ; eval {{ .Input.x }} # "`,
+		// nested braces inside a substring offset
+		`echo "${s:${n}:{{ .Input.x }}}"`,
+		`echo "${s:${#t}:{{ .Input.x }}}"`,
+		// a value as a variable name
+		`printf -v "{{ .Input.x }}" '%s' 1`,
+		`read -r "{{ .Input.x }}" < f`,
+		`read -a "{{ .Input.x }}" < f`,
+		`test -v "{{ .Input.x }}"`,
+		`[ -v "{{ .Input.x }}" ]`,
+		`[[ -v "{{ .Input.x }}" ]]`,
+		// -- before stdin as the script
+		"bash -- /dev/stdin <<EOF\n{{ .Input.x }}\nEOF",
+	} {
+		if err := checkRunText(run, "bash"); err == nil {
+			t.Errorf("%q accepted", run)
+		}
+	}
+	for _, run := range []string{
+		"body=$(cat <<EOF\nhello\nEOF\n)\necho \"{{ .Input.x }}\"",
+		"cat <<<\"$v\"\necho \"{{ .Input.x }}\"",
+		`echo "${s:-${n}}" "{{ .Input.x }}"`,
+		`printf -v out '%s' "{{ .Input.x }}"`,
+		`read -r -p "{{ .Input.x }}" answer`,
+		`[[ -n "{{ .Input.x }}" ]]`,
+		"bash -- ./script.sh <<EOF\n{{ .Input.x }}\nEOF",
+	} {
+		if err := checkRunText(run, "bash"); err != nil {
+			t.Errorf("%q refused: %v", run, err)
+		}
+	}
+}
