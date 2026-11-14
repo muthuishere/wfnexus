@@ -1,0 +1,47 @@
+# conversation-task — ask an external conversational service to contact a list
+# of people and collect some fields, then wait for the result.
+#
+#   wfx env set WFX_CONVERSATION_URL https://conversations.example.com/v1
+#   wfx env set WFX_CONVERSATION_KEY --secret      (the API key; never in this file)
+#
+# Starting the task contacts people, so start_task is marked effect: write and
+# the engine pauses the run for approval before it. A retried `start` sends the same Idempotency-Key and the
+# service does not start a second task. `wait` polls until the task is done,
+# failed or cancelled, or fails with "deadline reached: last status …".
+name: conversation-task
+template:
+  title: Conversation task — collect answers through an external service
+  category: operations
+  summary: >-
+    Starts a task on an external conversational service (contact these
+    people, collect these fields), waits for it to finish, and returns the
+    collected fields as the run's output.
+  fill:
+    - "wfx env set WFX_CONVERSATION_URL <base url>; wfx env set WFX_CONVERSATION_KEY --secret"
+input_schema:
+  type: object
+  required: [targets, fields]
+  properties:
+    task_type: { type: string, default: collect }
+    targets: { type: string, description: 'JSON array, e.g. ["+15550100"]' }
+    fields: { type: string, description: 'JSON array of field names, e.g. ["name","email"]' }
+    channel: { type: string, default: whatsapp }
+    wait_seconds: { type: string, default: "1800" }
+steps:
+  - id: start
+    uses: conversation.start_task@0
+    with:
+      task_type: '{{ .Input.task_type }}'
+      targets: "{{ .Input.targets }}"
+      fields: "{{ .Input.fields }}"
+      channel: '{{ .Input.channel }}'
+      service_url_env: WFX_CONVERSATION_URL
+      api_key_env: WFX_CONVERSATION_KEY
+  - id: wait
+    uses: conversation.task_status@0
+    with:
+      task_id: '{{ .Steps.start.start.stdout }}'
+      wait_seconds: '{{ .Input.wait_seconds }}'
+      poll_seconds: "30"
+      service_url_env: WFX_CONVERSATION_URL
+      api_key_env: WFX_CONVERSATION_KEY

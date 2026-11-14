@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,7 +83,7 @@ func loadWATemplates(t *testing.T, env map[string]string, names ...string) map[s
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs, skips, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat))
+	defs, skips, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat), shippedModules(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,6 +375,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 	}
 	defs := loadWATemplates(t, env, "whatsapp-monitor", "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-monitor")
+	pointAPIAt(t, h, env["WFX_API"])
 	useWAChannel(t, h, cmd, "")
 	for i := 0; i < 2; i++ {
 		id := h.start("whatsapp-monitor", map[string]any{"owner_chat": "owner@s.whatsapp.net", "dry_run": false})
@@ -415,9 +417,10 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 	}
 	// load-context's typed inputs (#82) resolve to their defaults in both forms.
 	for _, n := range []string{"frontdesk", "load-context"} {
-		run := defs[n].Steps[0].Run
-		if strings.Contains(run, ".Inputs.") || !strings.Contains(run, `open("context.json", "w")`) || !strings.Contains(run, `or "draft"`) {
-			t.Fatalf("%s: load-context inputs not substituted:\n%s", n, run)
+		s := defs[n].Steps[0]
+		if strings.Contains(s.Run, ".Inputs.") || !strings.Contains(s.Run, `WFX_OUT="{{ .Const.out }}"`) || !strings.Contains(s.Run, `WFX_POLICY="{{ .Const.default_policy }}"`) ||
+			s.RunConst["out"] != "context.json" || s.RunConst["default_policy"] != "draft" {
+			t.Fatalf("%s: load-context inputs not substituted:\n%s %v", n, s.Run, s.RunConst)
 		}
 	}
 	h := waHarness(t, defs, "frontdesk")
@@ -475,4 +478,15 @@ func TestFrontdeskDecides(t *testing.T) {
 			t.Errorf("%s → exit %d %q, want %d %q", c.answer, cmd.ProcessState.ExitCode(), out, c.code, c.out)
 		}
 	}
+}
+
+// pointAPIAt makes a fake server the platform's own address, so a step's
+// WFX_API (the platform's, which a workflow cannot set) reaches it.
+func pointAPIAt(t *testing.T, h *harness, apiURL string) {
+	t.Helper()
+	u, err := url.Parse(apiURL)
+	if err != nil || u.Host == "" {
+		t.Fatalf("api url %q", apiURL)
+	}
+	h.eng.cfg.Addr = u.Host
 }

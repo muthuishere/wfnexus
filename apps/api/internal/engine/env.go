@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -122,8 +123,23 @@ func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.St
 		if u := e.SelfURL(); u != "" {
 			run = workflow.MergeEnv(run, map[string]string{"WFX_API": u})
 		}
+	} else {
+		// No workspace (a worker sets its own, cmd/wfx-runner): the run and
+		// step ids still reach the step, e.g. as an idempotency key.
+		run = workflow.MergeEnv(run, map[string]string{"WFX_RUN_ID": runID.String(), "WFX_STEP_ID": step.ID})
 	}
 	env := workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env)
+	// WFX_* is reserved (workflow.reservedEnv refuses it at load): what the
+	// env store and the platform set wins over any step value, also for a
+	// definition built in code. A value carried in a worker's job (a module
+	// token, a mount) has no store or platform value here and is kept.
+	for _, src := range []map[string]string{base, run} {
+		for k, v := range src {
+			if strings.HasPrefix(strings.ToUpper(k), "WFX_") {
+				env[k] = v
+			}
+		}
+	}
 	// A step from a module's command reaches that module's door (modulecalls.go).
 	if step.Module != "" && e.store != nil {
 		if me := e.moduleEnv(ctx, step.Module); me != nil {

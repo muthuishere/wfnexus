@@ -93,6 +93,7 @@ func (s *Server) moduleEnqueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Service string          `json:"service"`
 		Profile string          `json:"profile"`
+		Account string          `json:"account"`
 		ID      string          `json:"id"`
 		Request json.RawMessage `json:"request"`
 	}
@@ -100,7 +101,7 @@ func (s *Server) moduleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	it, err := s.eng.Enqueue(r.Context(), chi.URLParam(r, "module"), body.Service, body.Profile, body.ID, body.Request)
+	it, err := s.eng.Enqueue(r.Context(), chi.URLParam(r, "module"), body.Service, body.Profile, body.Account, body.ID, body.Request)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return

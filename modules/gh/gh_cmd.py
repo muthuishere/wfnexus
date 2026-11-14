@@ -8,9 +8,10 @@ Inputs arrive as files in.<name> in the step's workspace. Every call is the
 GitHub CLI ($GH_BIN, default `gh`) with its own login. The repository is the
 `repo` input, else the profile's `repo` input.
 
-Writes (issue-create, issue-comment, pr-comment, and api with a method other
-than GET) are policy-gated: plan exits 0 auto, 10 approval, 11 draft, 12 none,
-2 bad input; draft (the default) and none touch nothing.
+Writes (issue-create, issue-comment, pr-comment, api-write) are policy-gated:
+plan exits 0 auto, 10 approval (a write already waited for a person at the engine's pause), 11 draft, 12 none, 2 bad input; draft (the
+default) and none touch nothing. `api` reads only (GET); `api-write` needs a
+method other than GET.
 """
 import json
 import os
@@ -28,8 +29,9 @@ COMMANDS = {
     "checks": ["number"],
     "release-list": [],
     "api": ["path"],
+    "api-write": ["path", "method"],
 }
-WRITES = {"issue-create", "issue-comment", "pr-comment"}
+WRITES = {"issue-create", "issue-comment", "pr-comment", "api-write"}
 POLICY = {"auto": 0, "approval": 10, "draft": 11, "none": 12}
 
 
@@ -46,10 +48,29 @@ def out(res, code=0):
 
 
 def writes(cmd):
-    return cmd in WRITES or (cmd == "api" and (inp("method", "GET").strip().upper() or "GET") != "GET")
+    return cmd in WRITES
+
+
+def method_problem(cmd):
+    """api reads (GET only); api-write writes (any method but GET)."""
+    m = inp("method", "GET").strip().upper() or "GET"
+    if cmd == "api" and m != "GET":
+        return "gh.api reads only (GET); use gh.api-write for " + m
+    if cmd == "api-write" and m == "GET":
+        return "gh.api-write needs a method other than GET; use gh.api to read"
+    return ""
 
 
 def profile():
+    # The engine hands the step the profile it resolved (for a write, the one
+    # shown and pinned when it was approved); the step never looks it up.
+    pinned = os.environ.get("WFX_MODULE_PROFILE")
+    if pinned is not None:
+        try:
+            p = json.loads(pinned)
+        except ValueError:
+            return {}
+        return {} if p.get("error") else p
     api, tok = os.environ.get("WFX_API", "").rstrip("/"), os.environ.get("WFX_MODULE_TOKEN", "")
     if not api or not tok:
         return {}
@@ -82,6 +103,8 @@ def gh(*args, body=None, parse=True):
 
 def plan(cmd):
     bad = [n + " is required" for n in COMMANDS[cmd] if not inp(n).strip()]
+    if method_problem(cmd):
+        bad.append(method_problem(cmd))
     pol = inp("responsePolicy", "draft").strip() or "draft"
     if pol not in POLICY:
         bad.append("responsePolicy is draft, approval, auto or none")
@@ -97,6 +120,8 @@ def plan(cmd):
 
 def act(cmd):
     bad = [n + " is required" for n in COMMANDS[cmd] if not inp(n).strip()]
+    if method_problem(cmd):
+        bad.append(method_problem(cmd))
     if bad:
         out({"status": "failed", "error": "; ".join(bad)}, 2)
     pol = inp("responsePolicy", "draft").strip() or "draft"
@@ -104,7 +129,7 @@ def act(cmd):
         out({"status": "drafted" if pol == "draft" else "skipped", "command": cmd,
              "request": {n: inp(n) for n in COMMANDS[cmd] + ["repo", "body", "method"] if inp(n)}})
     r = repo()
-    if cmd != "api" and not r:
+    if cmd not in ("api", "api-write") and not r:
         out({"status": "failed", "error": "no repo: pass repo=owner/name, or set the profile's repo"}, 2)
     globals()["do_" + cmd.replace("-", "_")](r)
 
@@ -149,6 +174,10 @@ def do_api(r):
         args += ["--input", "-"]
     res = gh(*args, body=body or None)
     out({"status": "ok", "command": "api", "method": method, "path": path, "result": res})
+
+
+def do_api_write(r):
+    do_api(r)
 
 
 if __name__ == "__main__":

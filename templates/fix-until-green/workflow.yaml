@@ -24,7 +24,8 @@ template:
 description: >-
   Bounded repair loop. Baseline the suite; when red, repeat {agent fix → re-run suite} until
   the suite passes (max 4 rounds), each round persisted and visible; then a human approves
-  committing the fix to a branch.
+  committing the fix to a branch. Note: the test_command input is
+  executed as a script; do not expose this workflow to outside input (hooks, MCP).
 
 on:
   workflow_dispatch:
@@ -40,7 +41,10 @@ input_schema:
 steps:
   - id: baseline
     name: Run the suite once
-    run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+    # The command is an input: written to a file as data, then run as a script.
+    run: |
+      f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"
+      bash "$f" 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}
     shell: bash
     continue-on-error: true
 
@@ -75,7 +79,9 @@ steps:
             test_was_wrong: { type: boolean }
       - id: check
         name: Re-run the suite
-        run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+        run: |
+          f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"
+          bash "$f" 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}
         shell: bash
 
   - id: commit

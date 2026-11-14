@@ -32,6 +32,17 @@ import (
 type Engine struct {
 	// redactions holds each run's sensitive values so no event stores one.
 	redactions runSecrets
+	// callFiles holds, per module call directory, the fingerprint of its
+	// files after the call's last step (callgate.go): a write step compares
+	// before it runs. In memory: after a restart a write step refuses.
+	callFiles sync.Map
+	// writePauses holds, per write call, its approved pause record (what was
+	// shown, the pin, the profile): the first step's row gives it up once
+	// that step starts, and every later step of the call checks against it.
+	// In memory, like callFiles: after a restart a later step refuses.
+	writePauses sync.Map
+	// testHookBeforeCallStep runs before a call's step starts (tests only).
+	testHookBeforeCallStep func(step *workflow.Step, dir string)
 
 	cfg     config.Config
 	store   Store
@@ -603,6 +614,24 @@ func (e *Engine) Start(runID uuid.UUID) {
 	}()
 }
 
+// WaitIdle waits until no run is executing (its directory work included), or
+// the timeout passes. For orderly shutdowns and tests.
+func (e *Engine) WaitIdle(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		e.mu.Lock()
+		n := len(e.running)
+		e.mu.Unlock()
+		if n == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (e *Engine) Cancel(ctx context.Context, runID uuid.UUID) {
 	e.mu.Lock()
 	cancel := e.running[runID]
@@ -759,23 +788,66 @@ func (e *Engine) resolve(ctx context.Context, runID uuid.UUID, stepID string, an
 // by the audit patch, exactly as before.
 func (e *Engine) mayAnswer(runID uuid.UUID, stepID string, by Actor) error {
 	run, step := e.stepDef(runID, stepID)
-	if step == nil || !by.Authenticated {
+	approvers, preventSelf := []string(nil), false
+	if step != nil {
+		approvers, preventSelf = step.Approvers, step.PreventSelfApproval
+	}
+	// A write's pause is held to the policy pinned when it paused, not to a
+	// definition reloaded since (writeeffect.go). And it has no loopback
+	// exemption: whoever answers is named and checked.
+	write := false
+	if st, err := e.store.GetStep(context.Background(), runID, stepID); err == nil && st != nil {
+		var p writePause
+		if json.Unmarshal(st.Pending, &p) == nil && p.Kind == "write" {
+			write, approvers, preventSelf = true, p.Approvers, p.PreventSelf
+		}
+	}
+	if !write && (step == nil || !by.Authenticated) {
 		return nil
 	}
-	if step.PreventSelfApproval && run.TriggeredBy != "" && run.TriggeredBy == by.ID {
+	if write && by.ID == "" {
+		return fmt.Errorf("%w: step %s is a write; its approval needs a named approver", ErrNotApprover, stepID)
+	}
+	// Under a policy (approvers, or no self-approval) a typed name proves
+	// nothing: anyone on the loopback could type an approver's name, or any
+	// name but the starter's. A write held to a policy is answered only by a
+	// signed-in user.
+	if write && (len(approvers) > 0 || preventSelf) && !by.Authenticated {
+		return fmt.Errorf("%w: step %s is a write held to an approver policy; it needs a signed-in approver, not a typed name", ErrNotApprover, stepID)
+	}
+	if preventSelf && run != nil && by.ID != "" && e.rootStarter(run) == by.ID {
 		return fmt.Errorf("%w: step %s requires a different approver — %s started this run and may not answer it (prevent_self_approval)",
 			ErrNotApprover, stepID, by.ID)
 	}
-	if len(step.Approvers) == 0 {
+	if len(approvers) == 0 {
 		return nil
 	}
-	for _, a := range step.Approvers {
+	for _, a := range approvers {
 		if a == by.ID || (by.Role != "" && a == "role:"+by.Role) {
 			return nil
 		}
 	}
 	return fmt.Errorf("%w: step %s may be answered only by %s; %s (role %q) is not one of them",
-		ErrNotApprover, stepID, strings.Join(step.Approvers, ", "), by.ID, by.Role)
+		ErrNotApprover, stepID, strings.Join(approvers, ", "), by.ID, by.Role)
+}
+
+// rootStarter is the person behind a run: a run started by another run
+// (`run:<id>`) belongs to whoever started the run at the top, so a parent's
+// starter cannot approve a child's write as if someone else had started it.
+func (e *Engine) rootStarter(run *model.Run) string {
+	who := run.TriggeredBy
+	for hop := 0; hop < 16 && strings.HasPrefix(who, "run:"); hop++ {
+		id, err := uuid.Parse(strings.TrimPrefix(who, "run:"))
+		if err != nil {
+			return who
+		}
+		parent, err := e.store.GetRun(context.Background(), id)
+		if err != nil || parent == nil {
+			return who
+		}
+		who = parent.TriggeredBy
+	}
+	return who
 }
 
 // ErrNotApprover is a refusal on WHO, not on the request: the API answers it
@@ -988,6 +1060,9 @@ func (e *Engine) Retry(ctx context.Context, runID uuid.UUID, stepID string) erro
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
 	}
+	if s := def.Lookup(stepID); s != nil && s.WriteEffect && !isIterationRow(stepID) {
+		stepID = callHeadRow(s)
+	}
 	if err := e.resetFrom(ctx, runID, def, stepID); err != nil {
 		return err
 	}
@@ -1088,11 +1163,22 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		if err != nil {
 			return err
 		}
+		// A step of a call follows the call's first step (callgate.go).
+		if skip, err := e.followCallHead(ctx, runID, step); err != nil {
+			e.failStep(ctx, runID, step.ID, err)
+			return nil
+		} else if skip {
+			continue
+		}
 		// A guard that fails skips the step before its approval is asked for:
 		// nobody should be asked to approve a branch that is not taken.
 		guard := workflow.TemplateData{RunID: runID.String(), WorkDir: workdir, BaseRef: baseRef, Input: input, Steps: outputs}
 		if e.skipUnlessGuarded(ctx, runID, step, guard) {
 			continue
+		}
+		if step.WriteEntry && st.Status != "approved" {
+			e.pauseForWrite(ctx, runID, def, step, guard)
+			return nil
 		}
 		if step.ApprovesOnce() && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})

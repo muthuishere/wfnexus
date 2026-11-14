@@ -380,6 +380,11 @@ func (e *Engine) resetFrom(ctx context.Context, runID uuid.UUID, def *workflow.D
 		}
 		return e.store.ResetStepsRange(ctx, runID, st.Position, -1)
 	}
+	// A step of a write call goes back to the call's first step, which pauses
+	// again: a retry never runs a write whose approval was for something else.
+	if s := def.Lookup(stepID); s != nil && s.WriteEffect {
+		stepID = callHeadRow(s)
+	}
 	pos, _ := def.Step(stepID)
 	if pos < 0 {
 		return fmt.Errorf("unknown step %q", stepID)

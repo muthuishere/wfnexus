@@ -213,6 +213,22 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.failStep(ctx, runID, step.ID, err)
 		return nil, stepHalted
 	}
+	if skip, err := e.followCallHead(ctx, runID, step); err != nil {
+		e.failStep(ctx, runID, step.ID, err)
+		return nil, stepHalted
+	} else if skip {
+		return nil, stepSkipped
+	}
+	if step.WriteEntry && st.Status != "approved" {
+		e.pauseForWrite(ctx, runID, def, step, data)
+		return nil, stepHalted
+	}
+	if step.WriteEffect {
+		if err := e.checkWritePin(ctx, runID, def, step, data); err != nil {
+			e.failStep(ctx, runID, step.ID, err)
+			return nil, stepHalted
+		}
+	}
 	if step.RequiresApproval && st.Status != "approved" {
 		e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 		e.setRun(ctx, runID, "awaiting_approval", step.ID, "")

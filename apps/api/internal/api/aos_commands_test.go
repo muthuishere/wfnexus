@@ -7,12 +7,21 @@ import (
 
 // aos module commands through `wfx module call` against a stub aos. They run
 // only on a worker (WFX_RUNNER, set by wfx-runner; "box" here is served in
-// process to stand in for one), and shell / file-write always wait for a
-// person.
+// process to stand in for one). shell and file-write are write commands, and a
+// write call may run only on the server's own runner for now, so they are not
+// offered.
 func TestAosCommandWrappers(t *testing.T) {
 	h, eng, tmp := aplServer(t, nil)
+	refused := map[string]bool{}
 	for _, s := range eng.SourceSkips() {
+		if strings.Contains(s.Reason, "write commands run on the server's runner only for now") {
+			refused[s.Workflow] = true
+			continue
+		}
 		t.Errorf("skipped: %s %s", s.Workflow, s.Reason)
+	}
+	if !refused["aos.shell"] || !refused["aos.file-write"] {
+		t.Fatalf("aos write commands loaded on a worker: %v", refused)
 	}
 	calls := stubCLI(t, tmp, "aos", "AOS_BIN")
 
@@ -38,14 +47,16 @@ func TestAosCommandWrappers(t *testing.T) {
 	if c := calls(); len(c) != 2 || argsOf(c[1]) != "capture screenshot --app=Chrome --out=s.png" {
 		t.Fatalf("screenshot call: %v", c)
 	}
-	// Writes wait for a person; nothing runs before.
-	if st, _ := callCmd(t, h, "aos.shell", map[string]any{"machine": "box", "script": "rm -rf /tmp/x"}); st != "awaiting_approval" {
-		t.Fatalf("shell: %s", st)
-	}
-	if st, _ := callCmd(t, h, "aos.file-write", map[string]any{"machine": "box", "path": "/tmp/a", "content": "hi"}); st != "awaiting_approval" {
-		t.Fatalf("file-write: %s", st)
+	// Writes are not offered; nothing runs.
+	for name, in := range map[string]map[string]any{
+		"aos.shell":      {"machine": "box", "script": "rm -rf /tmp/x"},
+		"aos.file-write": {"machine": "box", "path": "/tmp/a", "content": "hi"},
+	} {
+		if w := do(h, "POST", "/api/modules/"+name+"/call", "", map[string]any{"inputs": in, "wait": true}); w.Code == 201 {
+			t.Fatalf("%s started: %s", name, w.Body)
+		}
 	}
 	if len(calls()) != 2 {
-		t.Fatalf("a write ran before approval: %v", calls())
+		t.Fatalf("a write ran: %v", calls())
 	}
 }
