@@ -226,9 +226,8 @@ func substRunInputs(text string, vals map[string]any, consts map[string]string) 
 		if strings.Contains(t, "{{") {
 			return t
 		}
-		key := strings.ReplaceAll(name, "-", "_")
-		consts[key] = t
-		return "{{ .Const." + key + " }}"
+		consts[name] = t
+		return "{{ .Const." + name + " }}"
 	})
 }
 
