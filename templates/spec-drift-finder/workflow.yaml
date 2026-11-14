@@ -88,11 +88,11 @@ steps:
     timeout_sec: 3600
     run: |
       printf '*\n' > .wfx-spec-drift/.gitignore
-      if gh pr list --state open --search '{{ .Input.pr_prefix }} in:title' --json title -q '.[].title' 2>/dev/null | grep -qF '{{ .Input.pr_prefix }}'; then
+      if gh pr list --state open --search "{{ .Input.pr_prefix }} in:title" --json title -q '.[].title' 2>/dev/null | grep -qF "{{ .Input.pr_prefix }}"; then
         echo "a {{ .Input.pr_prefix }} PR is already open — nothing to do until it merges"; exit 78
       fi
-      EXTRA_SPECS='{{ .Input.extra_specs }}' EXCLUDE='{{ .Input.exclude }}' MAX_REQUIREMENTS='{{ .Input.max_requirements }}' \
-      TEST_CMD='{{ .Input.test_cmd }}' BRANCH="wfx/spec-drift-$(printf %.8s '{{ .RunID }}')" \
+      EXTRA_SPECS="{{ .Input.extra_specs }}" EXCLUDE="{{ .Input.exclude }}" MAX_REQUIREMENTS="{{ .Input.max_requirements }}" \
+      TEST_CMD="{{ .Input.test_cmd }}" BRANCH="wfx/spec-drift-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-spec-drift/collect.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
@@ -207,8 +207,8 @@ steps:
     description: Evidence read from the files; six verdicts; the decision table says what a person must decide.
     timeout_sec: 1800
     run: |
-      cat > .wfx-spec-drift/gaps.json <<'WFX_GAPS_EOF'
-      {{ json .Steps.map_gaps }}
+      cat > .wfx-spec-drift/gaps.json <<WFX_GAPS_EOF
+      {{ .Steps.map_gaps }}
       WFX_GAPS_EOF
       python3 .wfx-spec-drift/coverage.py --final >/dev/null; [ $? -eq 70 ] && exit 70
       python3 .wfx-spec-drift/judge.py
@@ -265,14 +265,14 @@ steps:
     description: Everything touching a spec, every conflict and every unsure verdict waits for a person; confident code fixes default to approved but are listed.
     timeout_sec: 300
     run: |
-      cat > .wfx-spec-drift/recommend.json <<'WFX_REC_EOF'
-      {{ json .Steps.recommend }}
+      cat > .wfx-spec-drift/recommend.json <<WFX_REC_EOF
+      {{ .Steps.recommend }}
       WFX_REC_EOF
-      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
+      {{ .Input.answers }}
       WFX_ANS_EOF
-      cat > .wfx-spec-drift/decisions.txt <<'WFX_DEC_EOF'
-      {{ if .Input.decisions }}{{ .Input.decisions }}{{ end }}
+      cat > .wfx-spec-drift/decisions.txt <<WFX_DEC_EOF
+      {{ .Input.decisions }}
       WFX_DEC_EOF
       python3 .wfx-spec-drift/gate.py
       c=$?; case $c in 0|20|78) exit $c;; *) exit 70;; esac
@@ -345,8 +345,8 @@ steps:
     description: Each commit in its lane; suite green before → green after; every changed requirement must now be judged `conforms`.
     timeout_sec: 3600
     run: |
-      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
+      {{ .Input.answers }}
       WFX_ANS_EOF
       python3 .wfx-spec-drift/verify.py
       c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
@@ -400,10 +400,10 @@ steps:
     description: Requirement → verdict → decision → change table, decisions and who made them, proof, review — every number from the run's files.
     timeout_sec: 300
     run: |
-      cat > .wfx-spec-drift/review.txt <<'WFX_REV_EOF'
+      cat > .wfx-spec-drift/review.txt <<WFX_REV_EOF
       {{ .Steps.review.verdict }}
       WFX_REV_EOF
-      TITLE_PREFIX='{{ .Input.pr_prefix }}' REVIEW="$(cat .wfx-spec-drift/review.txt)" python3 .wfx-spec-drift/prbody.py || exit 70
+      TITLE_PREFIX="{{ .Input.pr_prefix }}" REVIEW="$(cat .wfx-spec-drift/review.txt)" python3 .wfx-spec-drift/prbody.py || exit 70
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Writing the PR body failed — {{ .Output.stderr }}" }
 
@@ -412,8 +412,8 @@ steps:
     description: Does each commit's diff do what the PR row says, and nothing else? The body must name every commit.
     timeout_sec: 900
     run: |
-      cat > .wfx-spec-drift/answers.txt <<'WFX_ANS_EOF'
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
+      {{ .Input.answers }}
       WFX_ANS_EOF
       python3 .wfx-spec-drift/claims.py
       c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
@@ -438,7 +438,7 @@ steps:
       (
         set -e
         BR=$(git rev-parse --abbrev-ref HEAD)
-        BASE='{{ .Input.base_branch }}'
+        BASE="{{ .Input.base_branch }}"
         [ -n "$BASE" ] || BASE=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
         # push over https with gh's credential (works when origin is ssh and no key is loaded)
         URL=$(gh repo view --json url -q .url)
@@ -463,7 +463,7 @@ steps:
       [ -f $D/decisions.json ] && python3 -c "
       import json
       for r in json.load(open('$D/decisions.json'))['decisions']: print(' ',r['id'],r['verdict'],'->',r['decision']['decision'],'by',r['decision']['by'])"
-      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: suite',v['suite'].get('before'),'->',v['suite'].get('after'),'re-judge',[(r['id'],r['verdict']) for r in v['rejudge']],'problems',v['problems'])"
       [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
       exit 0

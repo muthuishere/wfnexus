@@ -222,7 +222,7 @@ steps:
   - id: summary
     name: What happened this week
     needs: [publish]
-    run: 'echo "removed: {{ json .Steps.remove.removed }} reverted: {{ json .Steps.remove.reverted }} pr: {{ .Steps.publish.pr_url }}"'
+    run: 'echo "removed: {{ .Steps.remove.removed }} reverted: {{ .Steps.remove.reverted }} pr: {{ .Steps.publish.pr_url }}"'
     output_schema:
       type: object
       properties:

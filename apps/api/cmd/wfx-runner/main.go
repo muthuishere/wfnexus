@@ -381,6 +381,9 @@ type payload struct {
 	StepID     string            `json:"stepId"`
 	Project    string            `json:"project"`
 	Command    string            `json:"command"`
+	Data       []string          `json:"data"`
+	CallDir    string            `json:"callDir"`
+	CallLast   bool              `json:"callLast"`
 	Shell      string            `json:"shell"`
 	RepoURL    string            `json:"repoUrl"`
 	Ref        string            `json:"ref"`
@@ -445,7 +448,7 @@ func execute(ctx context.Context, cfg *Config, j *job) {
 		fmt.Printf("• %s %s: agent (%s)\n", short(j.Payload.RunID), j.Payload.StepID, providerOf(j.Payload.Agent))
 		res = doAgent(ctx, cfg, j)
 	} else {
-		fmt.Printf("• %s %s: %s\n", short(j.Payload.RunID), j.Payload.StepID, firstLine(j.Payload.Command))
+		fmt.Printf("• %s %s: %s\n", short(j.Payload.RunID), j.Payload.StepID, firstLine(workflow.RunText{Script: j.Payload.Command, Data: j.Payload.Data}.Display()))
 		res = do(ctx, cfg, j.Payload)
 	}
 	switch {
@@ -525,9 +528,41 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(p.TimeoutSec)*time.Second)
 		defer cancel()
 	}
-	argv := sh.Command(p.Command)
+	// The values the step's template filled travel beside the command and
+	// reach it through the environment, referenced the way this shell spells
+	// a variable (workflow.RunText).
+	rt := workflow.RunText{Script: p.Command, Data: p.Data}
+	dataDir := ""
+	if len(rt.Data) > 0 {
+		if dataDir, err = os.MkdirTemp("", "wfx-data-"); err != nil {
+			return result{Error: err.Error()}
+		}
+		defer os.RemoveAll(dataDir)
+	}
+	script, dataEnv, err := rt.For(sh.Name, dataDir)
+	if err != nil {
+		return result{Error: err.Error()}
+	}
+	argv := sh.Command(script)
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Dir = dir
+	// A module call runs in its own directory under this run's, so two calls
+	// never share their in.* files. Only a plain relative path is accepted.
+	if p.CallDir != "" {
+		clean := filepath.Clean(p.CallDir)
+		if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, "..") {
+			return result{Error: "bad call directory " + p.CallDir}
+		}
+		cd := filepath.Join(cfg.WorkDir, "runs", safeName(p.RunID), clean)
+		if err := os.MkdirAll(cd, 0o700); err != nil {
+			return result{Error: err.Error()}
+		}
+		c.Dir = cd
+		if p.CallLast {
+			// Housekeeping: the call is over after this job.
+			defer os.RemoveAll(cd)
+		}
+	}
 	// The step's env is resolved HERE, against this machine. A value like
 	// ${GITHUB_PAT} names a variable this box holds; the platform never had it
 	// and it never crossed the network.
@@ -546,7 +581,7 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	// WFX_RUN_ID / STEP_ID / PROJECT / WORKSPACE came through the cascade
 	// above, where they are also available to a LOCAL step. Only the runner's
 	// own name is particular to being here.
-	c.Env = append(c.Env, "WFX_RUNNER="+cfg.Name)
+	c.Env = append(append(c.Env, "WFX_RUNNER="+cfg.Name), dataEnv...)
 
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
@@ -560,7 +595,7 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 			// Could not start at all — a fault of this machine, not the
 			// command's verdict, and the platform must be able to tell them
 			// apart or it will retry a missing interpreter forever.
-			return result{Error: fmt.Sprintf("could not run %q: %v", p.Command, runErr)}
+			return result{Error: fmt.Sprintf("could not run %q: %v", rt.Display(), runErr)}
 		}
 	}
 	return result{

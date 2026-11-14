@@ -232,9 +232,10 @@ steps:
     description: Puts the verified brief in the chosen mailbox as a draft or a mail to yourself.
     requires_approval: true
     run: |
+      day="{{ .Input.day }}"
       DRY_RUN="{{ .Input.dry_run }}" python3 deliver.py --md brief.md --channel "{{ .Input.deliver }}" \
         --handle "{{ .Input.deliver_handle }}" --to "{{ .Input.deliver_to }}" \
-        --subject "Daily brief {{ if .Input.day }}{{ .Input.day }}{{ else }}$(date +%F){{ end }}"
+        --subject "Daily brief ${day:-$(date +%F)}"
     timeout_sec: 120
     output_schema:
       type: object

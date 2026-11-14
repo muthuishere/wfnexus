@@ -28,6 +28,7 @@ func buildPlan(def *workflow.Definition, input map[string]any) planner.Plan {
 			Consumes: s.Consumes,
 			Produces: s.Produces,
 			Guard:    guardFor(s.When),
+			Needs:    s.Needs,
 		})
 	}
 	return p
@@ -156,6 +157,13 @@ func (e *Engine) runPlanned(ctx context.Context, runID uuid.UUID, def *workflow.
 		if halted {
 			mu.Unlock()
 			return nil // the step already recorded the terminal status
+		}
+		// A step whose needs are done but whose guard does not hold (a
+		// module's approval step when its policy needs none) is skipped, so
+		// the steps that need it are not stuck behind it.
+		for _, a := range plan.Settled(world, done) {
+			done[a.ID] = true
+			e.setStep(ctx, runID, a.ID, model.StepPatch{Status: str("skipped"), FinishedAt: now()})
 		}
 		ready := plan.Ready(world, done)
 		if len(ready) == 0 {
