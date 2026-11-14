@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,6 +99,16 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
 	}
+	// A module command's step runs in its own call directory, so two calls
+	// running at once never share their in.* files. It is under the run's
+	// own directory, not the checkout, so nothing there is ever committed.
+	if step.Module != "" && e.cfg.WorkDir != "" {
+		dir := filepath.Join(e.cfg.WorkDir, runID.String(), "calls", CallKey(step.ID))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("step %s: call directory: %w", step.ID, err)
+		}
+		c.Dir = dir
+	}
 	// The whole cascade — system, project, then the file — resolved against
 	// THIS machine. A reference to a variable nobody set is an error naming the
 	// variable, rather than an empty string and a 401 somewhere far away.
@@ -174,4 +185,22 @@ func (e *Engine) runJudge(ctx context.Context, runID uuid.UUID, step *workflow.S
 // isAgent reports whether a step actually runs an agent — the expensive kind.
 func isAgent(s *workflow.Step) bool {
 	return s.Run == "" && s.Judge == nil && s.Send == nil && s.Start == nil
+}
+
+// CallKey names a module call's directory: the call's id (the step id without
+// the command's own step), made safe as one path segment. Steps of one call
+// share it; two calls never do.
+func CallKey(stepID string) string {
+	call := stepID
+	if i := strings.LastIndex(stepID, "."); i >= 0 {
+		call = stepID[:i]
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, call)
 }

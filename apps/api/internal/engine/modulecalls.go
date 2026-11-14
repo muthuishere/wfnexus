@@ -181,7 +181,12 @@ func (e *Engine) moduleEnv(ctx context.Context, module string) map[string]string
 	mods, _ := e.Modules()
 	for _, m := range mods {
 		if m.Name == module {
-			env["WFX_MODULE_DIR"] = m.Dir
+			// Absolute: the step runs in its own call directory (nodes.go).
+			dir := m.Dir
+			if abs, err := filepath.Abs(dir); err == nil {
+				dir = abs
+			}
+			env["WFX_MODULE_DIR"] = dir
 		}
 	}
 	return env

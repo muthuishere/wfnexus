@@ -249,12 +249,44 @@ steps:
 A step that uses a module command marked `effect: write` (sending a message,
 creating an issue, writing a file, …) pauses the run for approval before any
 of that command's steps runs.
-- **Once per call:** the pause sits on the command's first step. A later
-  approval step of the command's own, such as a response policy of
-  `approval`, no longer asks again.
+- **Where the pause sits:** on the command's first step, before anything of
+  that call has run. A step the module itself marks `requires_approval` keeps
+  that as well. For example, gh's and apl's `responsePolicy: approval` asks
+  again before the write.
+- **What the person sees:** the pause shows what the call will run, every
+  step of it with its inputs filled in, scrubbed of the run's secrets.
+- **Pinned:** the run holds what was approved. If that text changes before
+  the step starts (the workflow is edited and reloaded, or a value it reads
+  changes), the step fails ("changed after it was approved") instead of
+  running something nobody approved. Approve it again with a retry.
 - **The command's own policy still applies after approval:** gh's and apl's
   default `responsePolicy: draft` still writes nothing.
-- **No opt-out:** there is no way to skip this pause.
+- **No opt-out:** a `with:` override that sets `requires_approval: false` on
+  a module command's step is refused at load, at any level of `uses:`. Other
+  overrides leave the pause in place.
+- **Not in a planned workflow:** a workflow ordered by `goal:` or
+  `consumes`/`produces` cannot use a write command; it is refused at load,
+  naming the workflow and step. (The planner honours each step's `needs`, so
+  a module's steps keep their order there.)
+- **No loops on a `uses:` step:** `foreach`, `until` and `while` on it are a
+  load error. Put the call in a loop's `steps:` instead.
+- **Who may approve:** if the workflow has an approvers policy (`approvers:`
+  or `prevent_self_approval` on any step), the person who started the run may
+  not approve its own write. With no policy, as on a one-person install, the
+  starter may approve.
+- **Agents are different:** an agent step that lists a write command in its
+  `tools:` gets only the low-confidence pause (`min_confidence`), not this
+  mandatory one. Give a write to a `uses:` step when it must always be
+  approved.
+- **Each call has its own directory:** a module command's steps run in a
+  directory of their own under the run's directory (not the checkout). Two
+  calls running at once never share their `in.*` files, and nothing there is
+  ever committed. The checkout is in `WFX_WORKSPACE`.
+- **gh:** `gh.api` only reads (GET); any other method is refused with exit 2.
+  Writing through the API is `gh.api-write` (a write: it pauses), which
+  needs a method other than GET.
+- **Inputs:** module input handling (values reaching module scripts as data)
+  is fixed by #136, so merge #136 first.
 
 ## `WFX_*` variables belong to the platform
 
