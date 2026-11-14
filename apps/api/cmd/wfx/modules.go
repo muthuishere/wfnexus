@@ -62,16 +62,16 @@ type moduleList struct {
 func moduleCmd(args []string) error {
 	const use = "usage: wfx module ls | install <git-url> [--ref r] [--name n] | sync <source> | config <module>" +
 		" | start <module>.<service> [--profile p] [--account a] [--runs-on label] [--input k=v] | stop <module>.<service> --account a" +
-		" | update <aos|ctx-optimize|jevx> [--version vX] | call <module>.<command> [--input k=v] [--wait] | profile ls <module> | profile set <module> <name> --account a [--input k=v] [--default]"
+		" | update <aos|ctx-optimize|jevx|tmvp|gh> [--version vX] | call <module>.<command> [--input k=v] [--wait] | profile ls <module> | profile set <module> <name> --account a [--input k=v] [--default]"
 	if len(args) == 0 || args[0] == "ls" || args[0] == "list" {
 		return moduleLs()
 	}
 	switch args[0] {
 	case "update":
-		// Built-in tools (aos, ctx-optimize, jevx): latest, or --version for a
+		// Built-in tools (aos, ctx-optimize, jevx, tmvp, gh): latest, or --version for a
 		// specific one (an older one is a rollback). Every runner follows.
 		if len(args) < 2 {
-			return fmt.Errorf("usage: wfx module update aos|ctx-optimize|jevx [--version vX]")
+			return fmt.Errorf("usage: wfx module update aos|ctx-optimize|jevx|tmvp|gh [--version vX]")
 		}
 		var out struct {
 			Name, Version string

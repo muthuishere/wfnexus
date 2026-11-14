@@ -52,7 +52,7 @@ one() {
   echo "inst  $1 -> $BIN/$1"
 }
 
-[ $# -gt 0 ] || set -- gh apl
+[ $# -gt 0 ] || set -- apl  # gh is a wfnexus built-in now
 rc=0
 for c in "$@"; do one "$c" || rc=1; done
 exit $rc
