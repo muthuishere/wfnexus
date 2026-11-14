@@ -69,6 +69,43 @@ func (s *Store) CreateUser(ctx context.Context, u *User) error {
 	).Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created)
 }
 
+// CreateFirstUser creates u as the install's first user, with the superadmin
+// role, only while there are no users at all; ok is false (and nothing is
+// written) once there is one. The check and the insert are one transaction,
+// with the table locked on Postgres (SQLite has a single writer), so two first
+// sign-ins at the same moment cannot both become superadmin.
+func (s *Store) CreateFirstUser(ctx context.Context, u *User) (ok bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if !s.d.isSQLite() {
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return false, err
+		}
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx, s.d.q(`SELECT count(*) FROM users`)).Scan(&n); err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, nil
+	}
+	if u.ID == uuid.Nil {
+		u.ID = uuid.New()
+	}
+	u.Role = "superadmin"
+	if err := tx.QueryRowContext(ctx, s.d.q(`
+		INSERT INTO users (id, name, display_name, role, project)
+		VALUES ($1,$2,$3,$4,$5) RETURNING `+userCols),
+		u.ID, u.Name, u.DisplayName, u.Role, u.Project,
+	).Scan(&u.ID, &u.Name, &u.DisplayName, &u.Role, &u.Project, &u.Disabled, &u.MustChange, &u.HasPassword, &u.Created); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
 func (s *Store) UserByName(ctx context.Context, name string) (*User, error) {
 	return scanUser(s.qrow(ctx, `SELECT `+userCols+` FROM users WHERE name=$1`, name))
 }
