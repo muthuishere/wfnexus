@@ -256,6 +256,14 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			if step.WriteEntry {
 				step.RequiresApproval = true
 			}
+			// The call this step belongs to: the innermost call keeps it,
+			// re-prefixed as outer calls rename the step.
+			if s.CallHead != "" {
+				step.CallHead = prefix + "." + s.CallHead
+			} else if len(t.Steps) > 0 {
+				step.CallHead = prefix + "." + t.Steps[0].ID
+			}
+			step.CallSelf = step.ID
 			expanded = append(expanded, step)
 		}
 	}

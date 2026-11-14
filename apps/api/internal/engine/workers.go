@@ -203,8 +203,11 @@ type JobPayload struct {
 	Env     map[string]string `json:"env,omitempty"`
 	// CallDir is a module call's own directory under the worker's run
 	// directory, so two calls never share their in.* files (nodes.go).
-	CallDir    string `json:"callDir,omitempty"`
-	TimeoutSec int    `json:"timeoutSec,omitempty"`
+	CallDir string `json:"callDir,omitempty"`
+	// CallLast: no later step of the call needs this one, so the worker
+	// removes the call directory when the job ends.
+	CallLast   bool `json:"callLast,omitempty"`
+	TimeoutSec int  `json:"timeoutSec,omitempty"`
 	// Mount and Files are the workflow's attachments. The mount SPEC travels,
 	// never the folder: the worker resolves each line against its OWN disk, so
 	// an absolute mount must exist there and a relative one lands under that
@@ -250,6 +253,7 @@ func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.
 	}
 	if step.Module != "" {
 		payload.CallDir = "calls/" + CallKey(step.ID)
+		payload.CallLast = lastOfCall(e.defOfRun(ctx, runID), step)
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project

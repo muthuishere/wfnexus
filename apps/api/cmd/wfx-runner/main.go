@@ -383,6 +383,7 @@ type payload struct {
 	Command    string            `json:"command"`
 	Data       []string          `json:"data"`
 	CallDir    string            `json:"callDir"`
+	CallLast   bool              `json:"callLast"`
 	Shell      string            `json:"shell"`
 	RepoURL    string            `json:"repoUrl"`
 	Ref        string            `json:"ref"`
@@ -557,6 +558,10 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 			return result{Error: err.Error()}
 		}
 		c.Dir = cd
+		if p.CallLast {
+			// Housekeeping: the call is over after this job.
+			defer os.RemoveAll(cd)
+		}
 	}
 	// The step's env is resolved HERE, against this machine. A value like
 	// ${GITHUB_PAT} names a variable this box holds; the platform never had it

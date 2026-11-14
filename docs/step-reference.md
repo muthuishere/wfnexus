@@ -261,10 +261,24 @@ of that command's steps runs.
   `requires_approval` keeps that as well.
 - **What the person sees:** the pause shows what the call will run, every
   step of it with its inputs filled in, scrubbed of the run's secrets.
-- **Pinned:** the run holds what was approved. If that text changes before
-  the step starts (the workflow is edited and reloaded, or a value it reads
-  changes), the step fails ("changed after it was approved") instead of
+- **Pinned:** the run holds what was approved. Its fingerprint covers each
+  step's script, every value the script receives (`WFX_DATA_n`, and the files
+  large values go to), the step's constants, the environment the call runs
+  with (hashed, never shown: `GH_HOST`, env-store values, …), the module's
+  version and the step's definition. If any of it changes before the step
+  starts (a workflow edited and reloaded, a value or an env-store entry
+  changed), the step fails with "changed after it was approved" instead of
   running something nobody approved. Approve it again with a retry.
+- **Files between a call's steps:** after each step of a write call the
+  engine fingerprints the call's files (`in.*`, `plan.json`). The next write
+  step compares before it runs: a file changed in between, by anything,
+  fails it with "changed after it was approved". The record is held in memory,
+  so after a server restart a half-done write call fails (nothing is
+  written); run it again.
+- **A call follows its first step:** a call's `when:` is decided once, on
+  the call's first step. If that step is skipped, every step of the call is
+  skipped. A write step runs only after the call's first step was approved
+  and finished, whatever else has run in between.
 - **The command's own policy still applies after approval:** gh's and apl's
   default `responsePolicy: draft` still writes nothing, and `none` skips.
   `approval` = the engine's pause: the call has already waited for a person,
@@ -277,19 +291,30 @@ of that command's steps runs.
   naming the workflow and step. (The planner honours each step's `needs`, so
   a module's steps keep their order there.)
 - **No loops on a `uses:` step:** `foreach`, `until` and `while` on it are a
-  load error. Put the call in a loop's `steps:` instead.
+  load error. Move the loop into the called workflow, or call the command once
+  per run.
 - **Who may approve:** if the workflow has an approvers policy (`approvers:`
   or `prevent_self_approval` on any step), the person who started the run may
   not approve its own write. With no policy, as on a one-person install, the
   starter may approve.
+  - A run started by another run counts as started by the person at the top.
+  - The policy is the one in force when the run paused; a reloaded
+    definition doesn't change it.
+  - A write's approval needs a named approver; there is no exemption for an
+    unnamed local answer.
+  - A second account or a service token counts as a different person: the
+    check is on the account name, not on who is behind it.
 - **Agents are different:** an agent step that lists a write command in its
   `tools:` gets only the low-confidence pause (`min_confidence`), not this
   mandatory one. Give a write to a `uses:` step when it must always be
   approved.
 - **Each call has its own directory:** a module command's steps run in a
-  directory of their own under the run's directory (not the checkout). Two
-  calls running at once never share their `in.*` files, and nothing there is
-  ever committed. The checkout is in `WFX_WORKSPACE`.
+  directory of their own under the run's directory (not the checkout), so two
+  calls running at once don't share their `in.*` files. That is housekeeping,
+  not a boundary: a step runs as the same user and can reach it. What guards
+  a write is the fingerprint above. The directory is left out of the run's
+  archive, and a worker removes it after the call's last step. The checkout
+  is in `WFX_WORKSPACE`.
 - **gh:** `gh.api` only reads (GET); any other method is refused with exit 2.
   Writing through the API is `gh.api-write` (a write: it pauses), which
   needs a method other than GET.

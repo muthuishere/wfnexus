@@ -29,6 +29,9 @@ type writePause struct {
 	Kind   string `json:"kind"`
 	Effect string `json:"effect"`
 	Pin    string `json:"pin"`
+	// Who may answer, as the definition said when the run paused.
+	Approvers   []string `json:"approvers,omitempty"`
+	PreventSelf bool     `json:"preventSelf,omitempty"`
 }
 
 // writeEffect renders the write call that step opens and pins it.
@@ -80,6 +83,33 @@ func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow
 		for _, k := range keys {
 			pinWrite("const", k, s.RunConst[k])
 		}
+		// The environment the step will run with (GH_BIN, GH_HOST, project
+		// and env-store values, …) — hashed, never shown — the module's
+		// version, and the step's definition itself.
+		step := s
+		if env, err := e.stepEnv(ctx, runID, &step, data.WorkDir); err != nil {
+			pinWrite("env-error", err.Error())
+		} else {
+			names := make([]string, 0, len(env))
+			for k := range env {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			for _, k := range names {
+				v := sha256.Sum256([]byte(env[k]))
+				pinWrite("env", k, hex.EncodeToString(v[:]))
+			}
+		}
+		if s.Module != "" {
+			mods, _ := e.Modules()
+			for _, m := range mods {
+				if m.Name == s.Module {
+					pinWrite("module", m.Name, m.Version)
+				}
+			}
+		}
+		def := sha256.Sum256(mustJSON(s))
+		pinWrite("definition", hex.EncodeToString(def[:]))
 	}
 	scrub := e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
 	return scrub(b.String()), hex.EncodeToString(h.Sum(nil))
@@ -90,7 +120,8 @@ func (e *Engine) pauseForWrite(ctx context.Context, runID uuid.UUID, def *workfl
 	shown, pin := e.writeEffect(ctx, runID, def, step, data)
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("awaiting_approval"), Prompt: str(shown),
-		Pending: mustJSON(writePause{Kind: "write", Effect: shown, Pin: pin}),
+		Pending: mustJSON(writePause{Kind: "write", Effect: shown, Pin: pin,
+			Approvers: step.Approvers, PreventSelf: step.PreventSelfApproval}),
 	})
 	e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 	msg := "step " + step.ID + " is a write and needs approval before it runs. It will run:\n" + shown
