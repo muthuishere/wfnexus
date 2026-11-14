@@ -62,6 +62,15 @@ def method_problem(cmd):
 
 
 def profile():
+    # The engine hands the step the profile it resolved (for a write, the one
+    # shown and pinned when it was approved); the step never looks it up.
+    pinned = os.environ.get("WFX_MODULE_PROFILE")
+    if pinned is not None:
+        try:
+            p = json.loads(pinned)
+        except ValueError:
+            return {}
+        return {} if p.get("error") else p
     api, tok = os.environ.get("WFX_API", "").rstrip("/"), os.environ.get("WFX_MODULE_TOKEN", "")
     if not api or not tok:
         return {}

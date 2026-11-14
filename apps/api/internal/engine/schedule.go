@@ -223,8 +223,8 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.pauseForWrite(ctx, runID, def, step, data)
 		return nil, stepHalted
 	}
-	if step.WriteEntry {
-		if err := e.checkWritePin(ctx, runID, def, step, data, st.Pending); err != nil {
+	if step.WriteEffect {
+		if err := e.checkWritePin(ctx, runID, def, step, data); err != nil {
 			e.failStep(ctx, runID, step.ID, err)
 			return nil, stepHalted
 		}

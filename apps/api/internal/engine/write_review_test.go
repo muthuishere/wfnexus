@@ -374,15 +374,23 @@ func TestAWritePauseIsAnsweredUnderThePinnedPolicy(t *testing.T) {
 	}
 }
 
-// The same rule at dispatch, for a definition the loader never saw: a write
-// step placed on a worker fails before a job is queued for it.
+// The same rule at dispatch, for a definition the loader never saw: an
+// approved write step placed on a worker fails before a job is queued for it.
 func TestAWriteStepIsNotDispatchedToAWorker(t *testing.T) {
 	def := &workflow.Definition{Name: "placed-write", Steps: []workflow.Step{{
-		ID: "send.act", Run: "echo would write", RunsOn: "box-elsewhere", WriteEffect: true,
+		ID: "send.act", Run: "echo would write", RunsOn: "box-elsewhere",
+		WriteEffect: true, WriteEntry: true, RequiresApproval: true,
 	}}}
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t), "")
 	run := h.run(nil)
+	if run.Status != "awaiting_approval" {
+		t.Fatalf("run = %s (%s)", run.Status, run.Error)
+	}
+	if err := h.eng.Approve(context.Background(), run.ID, run.CurrentStep, Actor{ID: "alice", Via: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	run = h.wait(run.ID)
 	if run.Status != "failed" || !strings.Contains(run.Error, "write commands run on the server's runner only for now") {
 		t.Fatalf("run = %s (%s)", run.Status, run.Error)
 	}

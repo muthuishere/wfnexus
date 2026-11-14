@@ -36,6 +36,11 @@ type Engine struct {
 	// files after the call's last step (callgate.go): a write step compares
 	// before it runs. In memory: after a restart a write step refuses.
 	callFiles sync.Map
+	// writePauses holds, per write call, its approved pause record (what was
+	// shown, the pin, the profile): the first step's row gives it up once
+	// that step starts, and every later step of the call checks against it.
+	// In memory, like callFiles: after a restart a later step refuses.
+	writePauses sync.Map
 	// testHookBeforeCallStep runs before a call's step starts (tests only).
 	testHookBeforeCallStep func(step *workflow.Step, dir string)
 
@@ -803,6 +808,13 @@ func (e *Engine) mayAnswer(runID uuid.UUID, stepID string, by Actor) error {
 	if write && by.ID == "" {
 		return fmt.Errorf("%w: step %s is a write; its approval needs a named approver", ErrNotApprover, stepID)
 	}
+	// Under a policy (approvers, or no self-approval) a typed name proves
+	// nothing: anyone on the loopback could type an approver's name, or any
+	// name but the starter's. A write held to a policy is answered only by a
+	// signed-in user.
+	if write && (len(approvers) > 0 || preventSelf) && !by.Authenticated {
+		return fmt.Errorf("%w: step %s is a write held to an approver policy; it needs a signed-in approver, not a typed name", ErrNotApprover, stepID)
+	}
 	if preventSelf && run != nil && by.ID != "" && e.rootStarter(run) == by.ID {
 		return fmt.Errorf("%w: step %s requires a different approver — %s started this run and may not answer it (prevent_self_approval)",
 			ErrNotApprover, stepID, by.ID)
@@ -1047,6 +1059,9 @@ func (e *Engine) Retry(ctx context.Context, runID uuid.UUID, stepID string) erro
 	def := e.defs[run.Workflow]
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
+	}
+	if s := def.Lookup(stepID); s != nil && s.WriteEffect && !isIterationRow(stepID) {
+		stepID = callHeadRow(s)
 	}
 	if err := e.resetFrom(ctx, runID, def, stepID); err != nil {
 		return err

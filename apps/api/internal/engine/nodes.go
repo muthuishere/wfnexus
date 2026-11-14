@@ -131,6 +131,14 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
 	}
+	// The module profile the step uses, resolved by the engine (for a write
+	// call, the one pinned at its pause); added after ResolveEnv so nothing
+	// in it is read as a reference.
+	if prof, ok, err := e.profileEnv(ctx, runID, step, data); err != nil {
+		return nil, err
+	} else if ok {
+		stepEnv = append(stepEnv, "WFX_MODULE_PROFILE="+prof)
+	}
 	// The step's story files (story.go): summary, outcome, state.
 	story, err := newStoryFiles()
 	if err != nil {
