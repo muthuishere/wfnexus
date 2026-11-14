@@ -79,8 +79,8 @@ steps:
     timeout_sec: 3600
     run: |
       printf '*\n' > .wfx-code-remover/.gitignore
-      SCOPE='{{ .Input.scope }}' PR_PREFIX='{{ .Input.pr_prefix }}' \
-      BRANCH="wfx/code-remover-$(printf %.8s '{{ .RunID }}')" \
+      SCOPE="{{ .Input.scope }}" PR_PREFIX="{{ .Input.pr_prefix }}" \
+      BRANCH="wfx/code-remover-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-code-remover/baseline.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
@@ -92,7 +92,7 @@ steps:
     description: deadcode -test, staticcheck U1000, go mod tidy -diff, knip — every candidate with the tool line that found it.
     timeout_sec: 1800
     run: |
-      SCOPE='{{ .Input.scope }}' python3 .wfx-code-remover/inventory.py
+      SCOPE="{{ .Input.scope }}" python3 .wfx-code-remover/inventory.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Inventory failed — {{ .Output.stderr }}" }
@@ -181,10 +181,10 @@ steps:
     description: wfx judge per candidate, then remove / keep / bug / needs-a-human — applied literally, capped per PR.
     timeout_sec: 900
     run: |
-      cat > .wfx-code-remover/prove.json <<'WFX_PROVE_EOF'
-      {{ json .Steps.prove }}
+      cat > .wfx-code-remover/prove.json <<WFX_PROVE_EOF
+      {{ .Steps.prove }}
       WFX_PROVE_EOF
-      MAX_REMOVALS='{{ .Input.max_removals }}' python3 .wfx-code-remover/plan.py
+      MAX_REMOVALS="{{ .Input.max_removals }}" python3 .wfx-code-remover/plan.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
       - { field: exitCode, equals: 70, action: fail, message: "Planning failed — {{ .Output.stdout }}{{ .Output.stderr }}" }
@@ -375,7 +375,7 @@ steps:
     run: |
       D=.wfx-code-remover
       echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD)"
-      echo "--- commits on the branch"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      echo "--- commits on the branch"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/plan.md ] && { echo "--- plan"; head -c 1500 $D/plan.md; }
       [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before',v['before'],'after',v['after'],'lines -%d +%d'%(v['lines_deleted'],v['lines_added']),'next run:',v['newly_unreachable'])"
       [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 900 $D/pr-body.md; }

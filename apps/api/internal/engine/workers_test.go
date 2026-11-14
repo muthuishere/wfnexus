@@ -137,7 +137,7 @@ func TestAnUnservedLabelFailsRatherThanHangs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	step := &def.Steps[0]
-	_, err := h.eng.runRemote(ctx, mustRun(t, h), step, "echo hi", step.RunsOn, workflow.TemplateData{})
+	_, err := h.eng.runRemote(ctx, mustRun(t, h), step, workflow.RunText{Script: "echo hi"}, step.RunsOn, workflow.TemplateData{})
 	if err == nil {
 		t.Fatal("waiting for a label nobody serves succeeded")
 	}

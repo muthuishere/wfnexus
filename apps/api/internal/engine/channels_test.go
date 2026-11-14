@@ -211,7 +211,7 @@ func TestMessageTriggerStartsARun(t *testing.T) {
 	ctx := context.Background()
 	def := &workflow.Definition{Name: "ondeploy",
 		On:    workflow.Triggers{Message: []workflow.MessageTrigger{{Channel: "opstrg", Match: `(?i)^deploy\s+\S+`}}},
-		Steps: []workflow.Step{{ID: "trg-echo", Run: "echo {{ .Input.message.text }}"}}}
+		Steps: []workflow.Step{{ID: "trg-echo", Run: `echo "{{ .Input.message.text }}"`}}}
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t), "")
 	dir := fakeChannel(t, h.eng, "opstrg", true, "a")

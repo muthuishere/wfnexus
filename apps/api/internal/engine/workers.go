@@ -182,6 +182,11 @@ type JobPayload struct {
 	// Command is already rendered — the worker never sees a template, an input
 	// or a secret it was not sent.
 	Command string `json:"command"`
+	// Data are the values the command's template filled, in order: the worker
+	// passes them in the environment and puts its shell's reference to each
+	// where Command marks it (workflow.RunText). They are never part of the
+	// command's text.
+	Data []string `json:"data,omitempty"`
 	// Env is the step's env block AS WRITTEN — references and all. It is
 	// resolved on the worker, against that machine's environment, so a
 	// credential belonging to a build box is used there without the platform
@@ -231,14 +236,15 @@ type JobResult struct {
 }
 
 // runRemote queues a command for a worker holding `label` and waits for it.
-func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, cmd, label string, data workflow.TemplateData) (map[string]any, error) {
+func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, rt workflow.RunText, label string, data workflow.TemplateData) (map[string]any, error) {
+	cmd := rt.Display()
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
 	mounts, files := e.attachmentsOf(runID)
 	payload := JobPayload{
-		RunID: runID.String(), StepID: step.ID, Command: cmd,
+		RunID: runID.String(), StepID: step.ID, Command: rt.Script, Data: rt.Data,
 		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
 		Mount: mounts, Files: files,
 	}
