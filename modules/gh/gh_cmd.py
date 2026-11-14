@@ -9,7 +9,7 @@ GitHub CLI ($GH_BIN, default `gh`) with its own login. The repository is the
 `repo` input, else the profile's `repo` input.
 
 Writes (issue-create, issue-comment, pr-comment, api-write) are policy-gated:
-plan exits 0 auto, 10 approval, 11 draft, 12 none, 2 bad input; draft (the
+plan exits 0 auto, 10 approval (a write already waited for a person at the engine's pause), 11 draft, 12 none, 2 bad input; draft (the
 default) and none touch nothing. `api` reads only (GET); `api-write` needs a
 method other than GET.
 """

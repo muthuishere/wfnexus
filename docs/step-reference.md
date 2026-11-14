@@ -257,9 +257,8 @@ A step that uses a module command marked `effect: write` (sending a message,
 creating an issue, writing a file, …) pauses the run for approval before any
 of that command's steps runs.
 - **Where the pause sits:** on the command's first step, before anything of
-  that call has run. A step the module itself marks `requires_approval` keeps
-  that as well. For example, gh's and apl's `responsePolicy: approval` asks
-  again before the write.
+  that call has run. A step the module or the workflow itself marks
+  `requires_approval` keeps that as well.
 - **What the person sees:** the pause shows what the call will run, every
   step of it with its inputs filled in, scrubbed of the run's secrets.
 - **Pinned:** the run holds what was approved. If that text changes before
@@ -267,7 +266,9 @@ of that command's steps runs.
   changes), the step fails ("changed after it was approved") instead of
   running something nobody approved. Approve it again with a retry.
 - **The command's own policy still applies after approval:** gh's and apl's
-  default `responsePolicy: draft` still writes nothing.
+  default `responsePolicy: draft` still writes nothing, and `none` skips.
+  `approval` = the engine's pause: the call has already waited for a person,
+  so it then writes, as `auto` does, with no second pause.
 - **No opt-out:** a `with:` override that sets `requires_approval: false` on
   a module command's step is refused at load, at any level of `uses:`. Other
   overrides leave the pause in place.

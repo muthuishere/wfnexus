@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -39,6 +40,17 @@ func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow
 	// The same view of the run's data at the pause and at the start: state
 	// included, as the step itself renders it.
 	data = e.withState(ctx, data, def, runID, step.ID)
+	// The pin covers what will actually run: each step's script as the
+	// engine renders it (references to WFX_DATA_n), every value those
+	// references carry (a large one is written to a file from the same
+	// value), and the step's constants. A value that changes while its text
+	// stays the same still changes the pin.
+	h := sha256.New()
+	pinWrite := func(parts ...string) {
+		for _, p := range parts {
+			fmt.Fprintf(h, "%d:%s", len(p), p)
+		}
+	}
 	var b strings.Builder
 	for _, s := range def.Steps {
 		if !s.WriteEffect || !strings.HasPrefix(s.ID, prefix) || s.Run == "" {
@@ -51,10 +63,26 @@ func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow
 			text = "(could not render: " + err.Error() + ")"
 		}
 		fmt.Fprintf(&b, "# %s\n%s\n", s.ID, strings.TrimRight(text, "\n"))
+		pinWrite("step", s.ID)
+		if rt, err := workflow.RenderRun(s.Run, d); err != nil {
+			pinWrite("error", err.Error())
+		} else {
+			pinWrite("script", rt.Script)
+			for _, v := range rt.Data {
+				pinWrite("value", v)
+			}
+		}
+		keys := make([]string, 0, len(s.RunConst))
+		for k := range s.RunConst {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			pinWrite("const", k, s.RunConst[k])
+		}
 	}
-	sum := sha256.Sum256([]byte(b.String()))
 	scrub := e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
-	return scrub(b.String()), hex.EncodeToString(sum[:])
+	return scrub(b.String()), hex.EncodeToString(h.Sum(nil))
 }
 
 // pauseForWrite parks a write command's first step, showing what it will run.

@@ -9,9 +9,10 @@
 #     uses: gh.pr-comment@0
 #     with: { number: "{{ .Input.pr }}", body: "checks are green", responsePolicy: approval }
 #
-# Writes (issue-create, issue-comment, pr-comment, api with a method other than
-# GET) default to draft: nothing is written without a policy. gh uses its own
-# login on the machine that runs the step.
+# Writes (issue-create, issue-comment, pr-comment, api-write) pause the run for
+# approval first (the engine's pause); then the response policy applies: draft
+# (the default) and none write nothing, approval and auto write — approval IS
+# that pause. gh uses its own login on the machine that runs the step.
 name: gh
 version: 0.1.0
 description: GitHub via the gh CLI — issues, PR comments and lists, checks, releases, and the API.
@@ -32,11 +33,11 @@ commands:
       body: { type: string, default: "" }
       repo: { type: string, default: "", description: "owner/name (default: the profile's repo)" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.title }}" > in.title
@@ -48,17 +49,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through gh"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act issue-create
   issue-comment:
@@ -69,11 +62,11 @@ commands:
       body: { type: string, required: true }
       repo: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.number }}" > in.number
@@ -85,17 +78,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through gh"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act issue-comment
   pr-comment:
@@ -106,11 +91,11 @@ commands:
       body: { type: string, required: true }
       repo: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.number }}" > in.number
@@ -122,17 +107,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through gh"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act pr-comment
   pr-list:
@@ -204,18 +181,18 @@ commands:
 
   api-write:
     effect: write
-    description: "Write through the GitHub API (gh api with POST, PATCH, PUT or DELETE). Pauses for approval, then the response policy."
+    description: "Write through the GitHub API (gh api with POST, PATCH, PUT or DELETE). The engine pauses for approval first; then the response policy applies."
     inputs:
       path: { type: string, required: true, description: "e.g. repos/{repo}/issues \u2014 {repo} is the repo input/profile" }
       method: { type: string, required: true, description: "POST, PATCH, PUT or DELETE (not GET)" }
       body: { type: string, default: "", description: "JSON body" }
       repo: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.path }}" > in.path
@@ -228,16 +205,8 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through gh"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act api-write
