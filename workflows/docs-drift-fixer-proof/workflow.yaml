@@ -328,7 +328,7 @@ steps:
       max_turns: 30
       max_attempts: 3
       run: |
-        if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse {{ .BaseRef }}; else printf '%s' "{{ .Workflow.last_sha }}"; fi | tr -d '\n'
+        if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse "{{ .BaseRef }}"; else printf '%s' "{{ .Workflow.last_sha }}"; fi | tr -d '\n'
       state:
         workflow:
             last_sha: "{{ .Output.stdout }}"
@@ -359,7 +359,7 @@ steps:
       run: |
         D=.wfx-docs-drift
         echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD) · since $(cat $D/since.txt 2>/dev/null | cut -c1-10)"
-        echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+        echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
         [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 2200 $D/pr-body.md; }
         exit 0
 max_parallel: 4

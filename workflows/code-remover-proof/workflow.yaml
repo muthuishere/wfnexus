@@ -664,7 +664,7 @@ steps:
       run: |
         D=.wfx-code-remover
         echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD)"
-        echo "--- commits on the branch"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+        echo "--- commits on the branch"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
         [ -f $D/plan.md ] && { echo "--- plan"; head -c 1500 $D/plan.md; }
         [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before',v['before'],'after',v['after'],'lines -%d +%d'%(v['lines_deleted'],v['lines_added']),'next run:',v['newly_unreachable'])"
         [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 900 $D/pr-body.md; }

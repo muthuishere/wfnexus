@@ -25,11 +25,14 @@ import (
 // newlines and any NUL byte; the file itself is exact),
 // and the script's text is only what the workflow author wrote.
 //
-// What still prints into the text: the run's own facts (.RunID, .WorkDir,
-// .BaseRef, .Index), which the platform makes — but only where the dot is the
-// run's own data: at the top level, or written $.RunID anywhere. Inside a
-// `range` or `with` the dot is a value (a loop item, an input object), so a
-// field of it named RunID is that value's and travels as data like any other.
+// What still prints into the text: only .RunID (a UUID) and .Index (an
+// integer), which the engine generates and which cannot hold shell syntax —
+// and only where the dot is the run's own data: at the top level, or written
+// $.RunID anywhere. Every other value, .WorkDir and .BaseRef included, is data
+// (a working folder can be a path the caller gave). Inside a `range` or `with`
+// the dot is a value (a loop item, an input object), so a field of it named
+// RunID is that value's and travels as data like any other. `$` itself may not
+// be declared or assigned in run text, so $.RunID always means the run's.
 // Conditions (`{{ if … }}`,
 // `{{ range … }}`) still read the values directly, so branching is unchanged.
 //
@@ -56,7 +59,7 @@ type RunText struct {
 }
 
 // platformFacts are the fields printed into run text as they are.
-var platformFacts = map[string]bool{"RunID": true, "WorkDir": true, "BaseRef": true, "Index": true}
+var platformFacts = map[string]bool{"RunID": true, "Index": true}
 
 // RenderRun renders a `run:` step's text with every printed value replaced by
 // a mark (see RunText.For).
@@ -94,6 +97,9 @@ func parseRunTemplate(text string, wfxData func(any) string) (*template.Template
 	if len(t.Templates()) > 1 || hasTemplateCall(t.Tree) {
 		return nil, errRunNamedTemplate
 	}
+	if t.Tree != nil && assignsDollar(t.Tree.Root) {
+		return nil, errRunDollar
+	}
 	if t.Tree != nil {
 		walkActions(t.Tree.Root, true, func(a *parse.ActionNode, root bool) {
 			if isPlatformFact(a.Pipe, root) {
@@ -110,6 +116,45 @@ func parseRunTemplate(text string, wfxData func(any) string) (*template.Template
 // (define, template, block). Their bodies are separate trees, and a value they
 // print must travel like every other one, so they are refused.
 var errRunNamedTemplate = errors.New("run text may not use define, template or block; write the text in place (prompts may still use them)")
+
+// errRunDollar: run text may not declare or assign `$`. $.RunID is trusted as
+// the run's own id only because `$` always holds the run's data.
+var errRunDollar = errors.New("run text may not declare or assign $ ({{ $ := … }}, {{ $ = … }}, range $ := …, with $ := …); use a variable of another name")
+
+// assignsDollar: some pipeline anywhere in the tree declares or assigns `$`.
+func assignsDollar(n parse.Node) bool {
+	pipe := func(p *parse.PipeNode) bool {
+		if p == nil {
+			return false
+		}
+		for _, v := range p.Decl {
+			if len(v.Ident) > 0 && v.Ident[0] == "$" {
+				return true
+			}
+		}
+		return false
+	}
+	switch n := n.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return false
+		}
+		for _, c := range n.Nodes {
+			if assignsDollar(c) {
+				return true
+			}
+		}
+	case *parse.ActionNode:
+		return pipe(n.Pipe)
+	case *parse.IfNode:
+		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
+	case *parse.RangeNode:
+		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
+	case *parse.WithNode:
+		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
+	}
+	return false
+}
 
 func hasTemplateCall(t *parse.Tree) bool {
 	if t == nil {
@@ -274,7 +319,7 @@ func checkRunText(text, shellName string) error {
 	}
 	const hole = "\x01"
 	t, err := parseRunTemplate(text, func(any) string { return "" })
-	if errors.Is(err, errRunNamedTemplate) {
+	if errors.Is(err, errRunNamedTemplate) || errors.Is(err, errRunDollar) {
 		return err
 	}
 	if err != nil {
@@ -334,44 +379,75 @@ var (
 	reTrap      = regexp.MustCompile(cmdWord(`trap`) + `\s`)
 	reDeclInt   = regexp.MustCompile(cmdWord(`declare|typeset|local`) + `\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*i`)
 	reInvokeExp = regexp.MustCompile(`(?i)` + cmdWord(`invoke-expression|iex`) + `(?:\s|$)`)
-	// The script is the word right after the -c flag (glued or not).
-	reShellC = regexp.MustCompile(cmdWord(`sh|bash|zsh|dash|ksh`) + `\s+(?:-[A-Za-z-]*\s+)*(-[A-Za-z]*c[A-Za-z]*)(?:\s|$|["'])`)
+	// The script is the word right after the -c flag (glued or not, after
+	// any options and their arguments, and after a `--`).
+	reShellC = regexp.MustCompile(cmdWord(shellNames) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*)(?:\s|$|["'])`)
+	// Interpreters whose code argument runs as a program: python -c, node -e,
+	// perl -e, ruby -e, php -r, … The code is the word after the flag.
+	reInterpCode = regexp.MustCompile(cmdWord(`python[0-9.]*|pypy[0-9.]*|node|nodejs|perl|ruby|php|lua|osascript|awk|gawk|mawk|jshell`) + `\s+(?:[^\s;&|]+\s+)*?(-c|-e|-E|-p|-r|-ne|-pe|-le|-lne|-lpe|--eval|--print|--command)(?:\s|=|$|["'])`)
+	// PowerShell takes everything after -Command as the command.
+	rePwshCommand = regexp.MustCompile(`(?i)` + cmdWord(`pwsh|powershell|pwsh\.exe|powershell\.exe`) + `\s+(?:[^\s;&|]+\s+)*?(-c|-command|-e|-ec|-encodedcommand)(?:\s|$|["'])`)
 	// su and runuser take a user before -c.
 	reSuC       = regexp.MustCompile(cmdWord(`su|runuser`) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*|--command)(?:\s|=|$|["'])`)
 	reSubscript = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
 	reNumTest   = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
-	reDuration  = regexp.MustCompile(`^[0-9.]+[smhd]?$`)
+	reDuration  = regexp.MustCompile(`^[0-9][0-9.]*[smhd]?$`)
 	arithAdvice = "the shell evaluates what is there as an expression, so a value must be checked first: read it into a variable, check it is a number (for example `case \"$n\" in ''|*[!0-9]*) exit 2;; esac`), then use the variable"
 )
+
+// shellNames are the shells (and the variables that name one) a -c script
+// or a pipe can be handed to.
+const shellNames = `sh|bash|zsh|dash|ksh|mksh|ash|fish|csh|tcsh|busybox|\$\{?BASH\}?|\$\{?SHELL\}?`
 
 // scriptReaders are commands that run what they read on stdin (or from a
 // here-string or <( … )) as a script.
 var scriptReaders = map[string]bool{
-	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "ash": true, "fish": true,
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "mksh": true, "ash": true, "fish": true,
+	"csh": true, "tcsh": true, "busybox": true, "$bash": true, "${bash}": true, "$shell": true, "${shell}": true,
 	"python": true, "python2": true, "python3": true, "node": true, "perl": true, "ruby": true,
 	"php": true, "pwsh": true, "powershell": true, "iex": true, "invoke-expression": true,
 	"source": true, ".": true, "ssh": true, "su": true, "runuser": true,
 }
 
-// cmdWrappers run the command that follows them.
-var cmdWrappers = map[string]bool{
-	"env": true, "sudo": true, "doas": true, "exec": true, "command": true, "builtin": true,
-	"nohup": true, "time": true, "nice": true, "xargs": true, "timeout": true, "stdbuf": true,
+// cmdWrappers run the command that follows them. The value lists the options
+// that take a separate argument (short letters, and long names).
+var cmdWrappers = map[string][]string{
+	"env": {"u", "C", "S", "P", "unset", "chdir", "split-string"}, "sudo": {"u", "g", "C", "D", "h", "p", "r", "t", "U", "T", "user", "group", "chdir", "host", "prompt", "role", "type", "other-user", "command-timeout"},
+	"doas": {"u", "C"}, "exec": {"a"}, "command": nil, "builtin": nil, "nohup": nil, "time": {"f", "o", "format", "output"},
+	"nice": {"n", "adjustment"}, "xargs": {"I", "n", "P", "d", "L", "s", "E", "a", "max-args", "max-procs", "delimiter", "arg-file", "max-chars", "eof", "max-lines"},
+	"timeout": {"s", "k", "signal", "kill-after"}, "stdbuf": {"i", "o", "e", "input", "output", "error"},
+	"setsid": nil, "chroot": nil, "unbuffer": nil, "ionice": {"c", "n", "p", "class", "classdata", "pid"},
 }
 
 // commandName is the command a simple command's text runs: its first word
-// after assignments, wrappers and their options, without quotes, escape or
-// directory, lower-cased.
+// after assignments, wrappers and their options (and those options'
+// arguments), without quotes, escape, parentheses or directory, lower-cased.
 func commandName(seg string) string {
+	var argOpts []string
+	skip := false
 	for _, w := range strings.Fields(seg) {
-		w = strings.ToLower(bareWord(w))
-		if k := strings.LastIndexByte(w, '/'); k >= 0 {
+		if skip {
+			skip = false
+			continue
+		}
+		w = strings.Trim(strings.ToLower(bareWord(w)), "()")
+		if k := strings.LastIndexByte(w, '/'); k >= 0 && !strings.HasPrefix(w, "$") {
 			w = w[k+1:]
 		}
 		switch {
-		case w == "", strings.HasPrefix(w, "-"), strings.Contains(w, "="), reDuration.MatchString(w):
+		case w == "", strings.Contains(w, "="), reDuration.MatchString(w):
 			continue
-		case cmdWrappers[w]:
+		case strings.HasPrefix(w, "-"):
+			name := strings.TrimLeft(w, "-")
+			for _, o := range argOpts {
+				if strings.EqualFold(o, name) {
+					skip = true
+				}
+			}
+			continue
+		}
+		if opts, ok := cmdWrappers[w]; ok {
+			argOpts = opts
 			continue
 		}
 		return w
@@ -379,10 +455,35 @@ func commandName(seg string) string {
 	return ""
 }
 
+// afterPipe is where the command that a pipe at i feeds begins: past `|&`,
+// spaces, newlines and line continuations.
+func afterPipe(s string, i int) int {
+	i++
+	if i < len(s) && s[i] == '&' {
+		i++
+	}
+	for i < len(s) {
+		switch {
+		case s[i] == ' ' || s[i] == '\t' || s[i] == '\n':
+			i++
+		case s[i] == '\\' && i+1 < len(s) && s[i+1] == '\n':
+			i += 2
+		default:
+			return i
+		}
+	}
+	return i
+}
+
 // lineCommands are the names of the commands in the pipeline or list on the
 // line around i (split at unquoted |, ;, &).
 func lineCommands(s string, ctx []byte, i int) []string {
 	start := strings.LastIndexByte(s[:i], '\n') + 1
+	// A line continued from the one before (a trailing backslash) belongs to
+	// the same command.
+	for start >= 2 && s[start-1] == '\n' && s[start-2] == '\\' {
+		start = strings.LastIndexByte(s[:start-2], '\n') + 1
+	}
 	end := strings.IndexByte(s[i:], '\n')
 	if end < 0 {
 		end = len(s)
@@ -502,12 +603,34 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 			if !plain(m[2]) {
 				continue
 			}
-			// The script is the word after -c; later words are its arguments
-			// ($0, $1, …) and stay data.
-			if end := wordEnd(s, ctx, m[5]); strings.Contains(s[m[5]:end], hole) {
+			// The script is the word after -c (past a `--`); later words are
+			// its arguments ($0, $1, …) and stay data.
+			from := m[5]
+			if end := wordEnd(s, ctx, from); strings.TrimSpace(s[from:end]) == "--" {
+				from = end
+			}
+			if end := wordEnd(s, ctx, from); strings.Contains(s[from:end], hole) {
 				w := bareWord(s[m[2]:m[3]])
 				return fmt.Errorf("a {{ … }} value is in the script passed to %s -c, which runs it again as a script; pass it as an argument instead: %s -c 'echo \"$1\"' _ \"{{ … }}\"", w, w)
 			}
+		}
+	}
+	for _, m := range reInterpCode.FindAllStringSubmatchIndex(s, -1) {
+		if !plain(m[2]) {
+			continue
+		}
+		from := m[5]
+		if from < len(s) && s[from] == '=' {
+			from++
+		}
+		if end := wordEnd(s, ctx, from); strings.Contains(s[from:end], hole) {
+			w := bareWord(s[m[2]:m[3]])
+			return fmt.Errorf("a {{ … }} value is in the code passed to %s %s, which runs it as a program; pass it as an argument after the code (sys.argv, process.argv, @ARGV, ARGV) or in an environment variable instead", w, s[m[4]:m[5]])
+		}
+	}
+	for _, m := range rePwshCommand.FindAllStringSubmatchIndex(s, -1) {
+		if plain(m[2]) && strings.Contains(s[m[5]:commandEnd(s, ctx, m[5])], hole) {
+			return fmt.Errorf("a {{ … }} value is in the command passed to %s %s, which runs it as a script; pass it in an environment variable instead", bareWord(s[m[2]:m[3]]), s[m[4]:m[5]])
 		}
 	}
 	// Text fed to a shell or interpreter as its script: a pipe into it, a
@@ -518,7 +641,8 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 		}
 		switch {
 		case s[i] == '|' && !strings.HasPrefix(s[i:], "||") && (i == 0 || s[i-1] != '|'):
-			if r := commandName(s[i+1 : commandEnd(s, ctx, i+1)]); scriptReaders[r] {
+			at := afterPipe(s, i)
+			if r := commandName(s[at:commandEnd(s, ctx, at)]); scriptReaders[r] {
 				start := i
 				for start > 0 && !(plain(start-1) && strings.IndexByte(";&\n", s[start-1]) >= 0) {
 					start--

@@ -463,7 +463,7 @@ steps:
       [ -f $D/decisions.json ] && python3 -c "
       import json
       for r in json.load(open('$D/decisions.json'))['decisions']: print(' ',r['id'],r['verdict'],'->',r['decision']['decision'],'by',r['decision']['by'])"
-      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: suite',v['suite'].get('before'),'->',v['suite'].get('after'),'re-judge',[(r['id'],r['verdict']) for r in v['rejudge']],'problems',v['problems'])"
       [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
       exit 0

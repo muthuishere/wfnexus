@@ -46,18 +46,26 @@ What this means when you write a step:
 - **Places that evaluate text again are refused at load:**
   - shell arithmetic: `$(( ))`, `(( ))`, `let`, `declare`/`typeset`/`local -i`,
     a numeric `[[ … -eq … ]]`, an array subscript;
-  - text given to `eval`, `trap`, `sh`/`bash`/`zsh`/`dash`/`ksh -c` (also
-    glued, `sh -c"…"`), `su`/`runuser … -c`, `ssh`, or pwsh
+  - text given to `eval`, `trap`, the script of a shell's `-c`
+    (`sh`, `bash`, `zsh`, `dash`, `ksh`, `csh`, `tcsh`, `fish`, `"$BASH"`,
+    `$SHELL`; also glued `sh -c"…"`, after options such as `-o pipefail`, and
+    after `--`), `su`/`runuser … -c`, `ssh`, or pwsh
     `Invoke-Expression`/`iex`. Quoted or escaped command words (`"sh"`,
     `\eval`) count the same;
+  - the code argument of an interpreter: `python -c`, `node -e`/`-p`,
+    `perl -e`, `ruby -e`, `php -r`, and pwsh `-Command`;
   - text fed to a shell or interpreter as its script: a heredoc that `sh`,
     `bash`, `python`, `node`, `perl`, `ruby` and the like read
-    (`bash <<EOF`, `cat <<EOF | sh`), a pipe into one (`echo "…" | sh`), a
-    here-string (`bash <<<"…"`) or `<( … )`.
+    (`bash <<EOF`, also after a line continuation; `cat <<EOF | sh`), a pipe
+    into one (`echo "…" | sh`, `|& bash`, a pipe continued on the next line,
+    inside `$( … )`, or through `env -u X`, `sudo -u u`, `xargs -I {}` and
+    similar), a here-string (`bash <<<"…"`, `. /dev/stdin <<<"…"`) or `<( … )`.
 
   For a number, read it into a variable, check it
   (`case "$n" in ''|*[!0-9]*) exit 2;; esac`), then use the variable. For
-  `sh -c`, pass the value as an argument: `sh -c 'echo "$1"' _ "{{ .Input.x }}"`.
+  `sh -c`, pass the value as an argument: `sh -c 'echo "$1"' _ "{{ .Input.x }}"`;
+  for an interpreter, after the code:
+  `python3 -c 'import sys; print(sys.argv[1])' "{{ .Input.x }}"`.
   For a script read on stdin, put the value in the environment and quote the
   heredoc: `V="{{ .Input.x }}" bash <<'EOF'` … `echo "$V"` … `EOF`.
 - **This check is a guard, not a proof.** It catches the common ways a value
@@ -66,21 +74,26 @@ What this means when you write a step:
     `${!…}`);
   - a value copied into a variable and then used in arithmetic;
   - a value written to a file that is then sourced or run;
-  - a value inside the program text of `awk`, `sed -e`, `python -c`,
-    `node -e`, `perl -e`, `jq` or `find -exec`.
+  - a value inside the program text of `awk`, `sed -e`, `jq`, `find -exec` or an
+    interpreter not listed above.
 
   Pass values to such programs as arguments, environment or files, never inside
   their code. For input that comes from outside (hooks, MCP), typed inputs that
   limit what a value may be (#137) are the defence; this check is not.
 - **`define`, `template` and `block` are not used in `run:` text** (they are
   refused at load); write the text in place.
+- **`$` is never declared or assigned in `run:` text** (`{{ $ = … }}`,
+  `{{ $ := … }}`, `range $ := …`, `with $ := …`, anywhere): refused at load.
+  Use a variable of another name.
 - **Conditions are unchanged.** `{{ if eq .Input.mode "fast" }}--fast{{ end }}`
   still branches on the value; only printed values move to the environment.
-- **The run's own facts print as they are:** `.RunID`, `.WorkDir`, `.BaseRef`
-  and `.Index`, so `cd '{{ .WorkDir }}'` keeps working. Only where the dot is
-  the run's own data, though: at the top level, or written `$.RunID` anywhere.
-  Inside `range` or `with` the dot is a value, so `.RunID` there is that
-  value's field and travels as data like any other value.
+- **Only `.RunID` and `.Index` print as text.** The engine makes them (a UUID
+  and an integer), so they cannot hold shell syntax — and only where the dot is
+  the run's own data: at the top level, or written `$.RunID` anywhere. Inside
+  `range` or `with` the dot is a value, so `.RunID` there is that value's field
+  and travels as data. **Everything else is data, `.WorkDir` and `.BaseRef`
+  included** (a working folder can be a path the caller gave): write
+  `cd "{{ .WorkDir }}"` and `git log "{{ .BaseRef }}..HEAD"`.
 - **Large values go to a file.** A value over 64 KiB (or once a step's values
   pass 256 KiB together, or one holding a NUL byte) is written to a 0600 file. `WFX_DATA_<n>_FILE` names
   it, and the reference becomes `$(cat "${WFX_DATA_<n>_FILE}")`. Read that
