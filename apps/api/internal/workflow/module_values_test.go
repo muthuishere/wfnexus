@@ -54,19 +54,13 @@ func TestModuleCommandsCarryValuesUnchanged(t *testing.T) {
 					"`touch " + marker + "` $(touch " + marker + ") ${HOME} 'q' \\",
 					"--help -rf /nonexistent",
 				}
-				// One distinct value per input, cycling through the shapes.
 				keys := make([]string, 0, len(task.Inputs))
 				for k := range task.Inputs {
 					keys = append(keys, k)
 				}
 				sort.Strings(keys)
-				input := map[string]any{}
 				with := map[string]string{}
-				want := map[string]bool{}
-				for i, k := range keys {
-					v := crafted[i%len(crafted)] + "#" + k
-					input[k] = v
-					want[v+"\n"] = true
+				for _, k := range keys {
 					with[k] = fmt.Sprintf(`{{ or .Input.%s "" }}`, k)
 				}
 				dir := t.TempDir()
@@ -77,28 +71,38 @@ func TestModuleCommandsCarryValuesUnchanged(t *testing.T) {
 				if err != nil {
 					t.Fatalf("load: %v", err)
 				}
-				work := t.TempDir()
-				for _, s := range defs["call"].Steps {
-					if s.Run == "" {
-						continue
+				// Every shape goes to every input at once, one round per shape.
+				for round, shape := range crafted {
+					input := map[string]any{}
+					want := map[string]bool{}
+					for _, k := range keys {
+						v := shape + "#" + k
+						input[k] = v
+						want[v+"\n"] = true
 					}
-					script, env := renderForTest(t, s.Run, input, work)
-					c := exec.Command("sh", "-c", script)
-					c.Dir = work
-					c.Env = append(os.Environ(), env...)
-					c.Env = append(c.Env, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
-						"WFX_MODULE_DIR="+m.Dir, "WFX_RUNNER=test", "AOS_BIN="+filepath.Join(fake, "aos"))
-					_ = c.Run() // a module may refuse fake inputs; what matters is below
-					if _, err := os.Stat(marker); err == nil {
-						t.Fatalf("step %s: part of a value ran as a command", s.ID)
+					work := t.TempDir()
+					for _, s := range defs["call"].Steps {
+						if s.Run == "" {
+							continue
+						}
+						script, env := renderForTest(t, s.Run, input, work)
+						c := exec.Command("sh", "-c", script)
+						c.Dir = work
+						c.Env = append(os.Environ(), env...)
+						c.Env = append(c.Env, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+							"WFX_MODULE_DIR="+m.Dir, "WFX_RUNNER=test", "AOS_BIN="+filepath.Join(fake, "aos"))
+						_ = c.Run() // a module may refuse fake inputs; what matters is below
+						if _, err := os.Stat(marker); err == nil {
+							t.Fatalf("shape %d, step %s: part of a value ran as a command", round, s.ID)
+						}
 					}
-				}
-				files, _ := filepath.Glob(filepath.Join(work, "in.*"))
-				checked += len(files)
-				for _, f := range files {
-					b, _ := os.ReadFile(f)
-					if !want[string(b)] {
-						t.Errorf("%s holds %q, which is not one of the values", filepath.Base(f), b)
+					files, _ := filepath.Glob(filepath.Join(work, "in.*"))
+					checked += len(files)
+					for _, f := range files {
+						b, _ := os.ReadFile(f)
+						if !want[string(b)] {
+							t.Errorf("shape %d: %s holds %q, which is not one of the values", round, filepath.Base(f), b)
+						}
 					}
 				}
 			})
