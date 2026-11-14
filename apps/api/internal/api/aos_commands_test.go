@@ -39,10 +39,10 @@ func TestAosCommandWrappers(t *testing.T) {
 		t.Fatalf("screenshot call: %v", c)
 	}
 	// Writes wait for a person; nothing runs before.
-	if st, _ := callCmd(t, h, "aos.shell", map[string]any{"machine": "box", "script": "rm -rf /tmp/x"}); st != "awaiting_approval" {
+	if st := callPaused(t, h, "aos.shell", map[string]any{"machine": "box", "script": "rm -rf /tmp/x"}); st != "awaiting_approval" {
 		t.Fatalf("shell: %s", st)
 	}
-	if st, _ := callCmd(t, h, "aos.file-write", map[string]any{"machine": "box", "path": "/tmp/a", "content": "hi"}); st != "awaiting_approval" {
+	if st := callPaused(t, h, "aos.file-write", map[string]any{"machine": "box", "path": "/tmp/a", "content": "hi"}); st != "awaiting_approval" {
 		t.Fatalf("file-write: %s", st)
 	}
 	if len(calls()) != 2 {

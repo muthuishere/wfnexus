@@ -48,3 +48,24 @@ steps:
 - A gate whose condition matches the output routes instead of failing.
 
 Prefer `exit-codes` when you know which codes are answers.
+
+## A module command marked `effect: write` always pauses the run for approval
+
+A step that uses a module command marked `effect: write` (sending a message,
+creating an issue, writing a file, …) pauses the run for approval before any
+of that command's steps runs.
+- **Once per call:** the pause sits on the command's first step. A later
+  approval step of the command's own, such as a response policy of
+  `approval`, no longer asks again.
+- **The command's own policy still applies after approval:** gh's and apl's
+  default `responsePolicy: draft` still writes nothing.
+- **No opt-out:** there is no way to skip this pause.
+
+## `WFX_*` variables belong to the platform
+
+A workflow, a job or a step may not set a `WFX_*` variable in its `env:`.
+Those names are provided by the platform (`WFX_RUN_ID`, `WFX_STEP_ID`,
+`WFX_API`, `WFX_DATA_*`, …) or by the env store (`wfx env set WFX_…`). A
+workflow that sets one does not load, and the error names the workflow or
+step and the variable. When a step runs, the env store's and the platform's
+`WFX_*` values win over anything else.

@@ -23,10 +23,11 @@ func TestALocalStepIsGivenTheWayBackToTheServer(t *testing.T) {
 	if got["WFX_API"] != "http://127.0.0.1:8090" {
 		t.Fatalf("WFX_API = %q, want the server's loopback address", got["WFX_API"])
 	}
-	// A workflow that sets WFX_API on purpose still wins.
+	// WFX_* is the platform's: a step value (only possible for a definition
+	// built in code; the loader refuses it) does not override it.
 	got, _ = e.stepEnv(t.Context(), runID, &workflow.Step{ID: "s", Env: map[string]string{"WFX_API": "http://other:1"}}, "/ws")
-	if got["WFX_API"] != "http://other:1" {
-		t.Fatalf("the file did not win: %q", got["WFX_API"])
+	if got["WFX_API"] != "http://127.0.0.1:8090" {
+		t.Fatalf("a step value overrode the platform's WFX_API: %q", got["WFX_API"])
 	}
 	// A packed step gets the worker's URL from the worker, not this one.
 	got, _ = e.stepEnv(t.Context(), runID, &workflow.Step{ID: "s"}, "")
