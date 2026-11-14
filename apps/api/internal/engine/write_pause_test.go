@@ -78,14 +78,8 @@ func TestEveryWriteCommandPausesBeforeAnythingRuns(t *testing.T) {
 				t.Fatal(err)
 			}
 			def := defs["write-call"]
-			n := 0
-			for _, s := range def.Steps {
-				if s.RequiresApproval {
-					n++
-				}
-			}
-			if n != 1 || !def.Steps[0].RequiresApproval {
-				t.Fatalf("approvals on the expanded steps = %d (first step: %v), want exactly one, on the first", n, def.Steps[0].RequiresApproval)
+			if !def.Steps[0].RequiresApproval || !def.Steps[0].WriteEntry {
+				t.Fatalf("the command's first step does not pause: %+v", def.Steps[0])
 			}
 			_ = os.Remove(calls)
 			h := newHarness(t, def, newFakeLLM(t), "")

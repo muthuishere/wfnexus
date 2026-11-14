@@ -58,6 +58,9 @@ func expandSteps(d *Definition, label string, steps []Step, tasks map[string]*Ta
 		if s.ID == "" {
 			return nil, fmt.Errorf("%s: a step with `uses: %s` needs an id", d.Name, s.Uses)
 		}
+		if s.Foreach != nil || len(s.Until) > 0 || len(s.While) > 0 {
+			return nil, fmt.Errorf("%s/%s: a `uses:` step cannot loop (foreach, until, while); put it in a loop's `steps:` instead", d.Name, s.ID)
+		}
 		if s.Prompt != "" || s.Run != "" || s.Judge != nil || s.Send != nil || s.Start != nil || len(s.Steps) > 0 {
 			return nil, fmt.Errorf("%s/%s: a `uses:` step is a module call — it may not also carry prompt, run, judge, send, start or steps", d.Name, s.ID)
 		}

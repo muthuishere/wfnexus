@@ -233,10 +233,39 @@ commands:
           WFX_V
           python3 "$WFX_MODULE_DIR/gh_cmd.py" act release-list
   api:
-    description: "Call the GitHub API (gh api). GET reads; any other method is a write and goes through the response policy."
+    description: "Read the GitHub API (gh api, GET only). Any other method is refused (exit 2): use gh.api-write."
     inputs:
       path: { type: string, required: true, description: "e.g. repos/{repo}/issues \u2014 {repo} is the repo input/profile" }
-      method: { type: string, default: "GET" }
+      method: { type: string, default: "GET", description: "GET only" }
+      repo: { type: string, default: "" }
+      profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
+    steps:
+      - id: act
+        name: "Read through gh"
+        timeout_sec: 180
+        run: |
+          cat > in.path <<'WFX_V'
+          {{ .Inputs.path }}
+          WFX_V
+          cat > in.method <<'WFX_V'
+          {{ .Inputs.method }}
+          WFX_V
+          cat > in.repo <<'WFX_V'
+          {{ .Inputs.repo }}
+          WFX_V
+          cat > in.profile <<'WFX_V'
+          {{ .Inputs.profile }}
+          WFX_V
+          python3 "$WFX_MODULE_DIR/gh_cmd.py" act api
+        gates:
+          - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
+
+  api-write:
+    effect: write
+    description: "Write through the GitHub API (gh api with POST, PATCH, PUT or DELETE). Pauses for approval, then the response policy."
+    inputs:
+      path: { type: string, required: true, description: "e.g. repos/{repo}/issues \u2014 {repo} is the repo input/profile" }
+      method: { type: string, required: true, description: "POST, PATCH, PUT or DELETE (not GET)" }
       body: { type: string, default: "", description: "JSON body" }
       repo: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
@@ -265,7 +294,7 @@ commands:
           cat > in.responsePolicy <<'WFX_V'
           {{ .Inputs.responsePolicy }}
           WFX_V
-          python3 "$WFX_MODULE_DIR/gh_cmd.py" plan api
+          python3 "$WFX_MODULE_DIR/gh_cmd.py" plan api-write
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
@@ -281,4 +310,4 @@ commands:
         name: "Do it through gh"
         needs: [plan, approve]
         timeout_sec: 180
-        run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act api
+        run: python3 "$WFX_MODULE_DIR/gh_cmd.py" act api-write

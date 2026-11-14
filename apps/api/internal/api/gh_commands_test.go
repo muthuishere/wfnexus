@@ -89,17 +89,23 @@ func TestGhCommandWrappers(t *testing.T) {
 		t.Fatalf("release-list: %s", st)
 	}
 	last(5, "release list -R o/r --limit 10")
-	// api: GET reads without a policy; POST is a write and drafts.
+	// gh.api reads (GET only); another method is refused.
 	if st, _ := callCmd(t, h, "gh.api", map[string]any{"path": "repos/{repo}/issues"}); st != "done" {
 		t.Fatalf("api GET: %s", st)
 	}
 	last(6, "api -X GET repos/o/r/issues")
-	if st, out := callCmd(t, h, "gh.api", map[string]any{"path": "repos/{repo}/labels", "method": "POST", "body": `{"name":"bug"}`}); st != "done" || !strings.Contains(out, "drafted") {
-		t.Fatalf("api POST draft: %s %s", st, out)
+	if st, out := callCmd(t, h, "gh.api", map[string]any{"path": "repos/{repo}/labels", "method": "POST"}); st != "failed" && !strings.Contains(out, "gh.api-write") {
+		t.Fatalf("api POST must be refused: %s %s", st, out)
 	}
 	last(6)
-	if st, _ := callCmd(t, h, "gh.api", map[string]any{"path": "repos/{repo}/labels", "method": "POST", "body": `{"name":"bug"}`, "responsePolicy": "auto"}); st != "done" {
-		t.Fatalf("api POST auto: %s", st)
+	// gh.api-write is the write: it pauses (approved here), then its policy
+	// applies: draft writes nothing, auto writes.
+	if st, out := callCmd(t, h, "gh.api-write", map[string]any{"path": "repos/{repo}/labels", "method": "POST", "body": `{"name":"bug"}`}); st != "done" || !strings.Contains(out, "drafted") {
+		t.Fatalf("api-write draft: %s %s", st, out)
+	}
+	last(6)
+	if st, _ := callCmd(t, h, "gh.api-write", map[string]any{"path": "repos/{repo}/labels", "method": "POST", "body": `{"name":"bug"}`, "responsePolicy": "auto"}); st != "done" {
+		t.Fatalf("api-write auto: %s", st)
 	}
 	last(7, "api -X POST repos/o/r/labels --input -", `| {"name":"bug"}`)
 }

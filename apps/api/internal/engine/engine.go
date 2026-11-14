@@ -1094,6 +1094,10 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 		if e.skipUnlessGuarded(ctx, runID, step, guard) {
 			continue
 		}
+		if step.WriteEntry && st.Status != "approved" {
+			e.pauseForWrite(ctx, runID, def, step, guard)
+			return nil
+		}
 		if step.ApprovesOnce() && st.Status != "approved" {
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Status: str("awaiting_approval")})
 			e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
