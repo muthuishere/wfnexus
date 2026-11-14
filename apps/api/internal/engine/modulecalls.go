@@ -319,10 +319,20 @@ type OutboxItem struct {
 // Enqueue puts a request on the outbox of module.service for a profile's
 // account. id is the idempotency key: a key seen before is never queued again,
 // its item is returned as it stands.
-func (e *Engine) Enqueue(ctx context.Context, module, service, profile, id string, req json.RawMessage) (OutboxItem, error) {
+//
+// account is the account the send was approved for (the call's pinned
+// profile): the profile is resolved again here, and a send whose profile now
+// names another account is refused rather than sent from it.
+func (e *Engine) Enqueue(ctx context.Context, module, service, profile, account, id string, req json.RawMessage) (OutboxItem, error) {
 	p, err := e.ResolveProfile(ctx, module, profile)
 	if err != nil {
 		return OutboxItem{}, err
+	}
+	if account == "" {
+		return OutboxItem{}, fmt.Errorf("an outbox item needs the account its send was approved for")
+	}
+	if p.Account != account {
+		return OutboxItem{}, fmt.Errorf("profile %s now names account %s, not %s, the account this send was approved for; nothing was queued — run the call again", p.Name, p.Account, account)
 	}
 	key := module + "." + service + "/" + p.Account
 	if _, ok, err := e.store.GetState(ctx, serviceScope, key, "spec"); err != nil {
