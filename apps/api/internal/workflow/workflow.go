@@ -131,6 +131,25 @@ type Step struct {
 	// Module is the installed module whose command this step came from
 	// (task.go); the engine gives such a step that module's token.
 	Module string `yaml:"-" json:"module,omitempty"`
+	// WriteEffect marks a step expanded from a module command marked
+	// `effect: write`; WriteEntry marks that command's first step, which
+	// always requires approval. Set only by expansion, never by a file, and
+	// not overridable (task.go).
+	WriteEffect bool `yaml:"-" json:"writeEffect,omitempty"`
+	WriteEntry  bool `yaml:"-" json:"writeEntry,omitempty"`
+	// CallHead is the expanded id of the first step of the call this step
+	// came from, and CallSelf this step's own expanded id. The engine reads
+	// the head's row (relative to this step's row, so loop iterations work)
+	// before running any other step of the call: a skipped head skips the
+	// call, and a write step runs only after an approved, finished head.
+	CallHead string `yaml:"-" json:"callHead,omitempty"`
+	CallSelf string `yaml:"-" json:"callSelf,omitempty"`
+	// CallProfile is the `profile` input a module command was called with
+	// (possibly a template; empty means the module's default profile), on
+	// each step of a command that declares one. nil: the command has no
+	// profile input. The engine resolves it and hands the step the resolved
+	// profile, so a step never looks the default up for itself.
+	CallProfile *string `yaml:"-" json:"callProfile,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`
@@ -203,6 +222,10 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// RunConst are literal inputs a task or module was given, placed into Run
+	// as {{ .Const.<name> }} references (inputs.go) so they too reach the
+	// script as data.
+	RunConst map[string]string `yaml:"run_const,omitempty" json:"runConst,omitempty"`
 	// Env is this step's environment, layered over its job's and the
 	// workflow's. A value may NAME a variable rather than hold one — see
 	// env.go, which is what keeps a credential out of the file.
@@ -506,6 +529,34 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: step %s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, s.ID, s.RunsOn)
 		}
 	}
+	// The approval of a write command's first step is derived, never
+	// overridden: whatever an override said, it holds here. Where the
+	// workflow already says who may approve (approvers, or no self-approval,
+	// on any step), a write's pause follows the stricter half of that policy:
+	// whoever started the run may not approve its own write. With no policy
+	// at all (one person, one install) the starter approves, as before.
+	policy := false
+	for _, s := range d.Steps {
+		policy = policy || len(s.Approvers) > 0 || s.PreventSelfApproval
+	}
+	for i := range d.Steps {
+		if d.Steps[i].WriteEntry {
+			d.Steps[i].RequiresApproval = true
+			if policy {
+				d.Steps[i].PreventSelfApproval = true
+			}
+		}
+	}
+	// WFX_* names belong to the platform (run facts, module and data
+	// variables) and to the env store; a workflow may not set one.
+	if err := reservedEnv(d.Name, d.Env); err != nil {
+		return err
+	}
+	for _, s := range d.Steps {
+		if err := reservedEnv(d.Name+"/"+s.ID, s.Env); err != nil {
+			return err
+		}
+	}
 	// Mounts and sidecar files are checked BEFORE the steps, because they
 	// decide what the steps can reach. A workflow that could not attach its
 	// folders safely must not load at all, let alone run.
@@ -533,6 +584,11 @@ func (d *Definition) validate(cat Catalog) error {
 			// A loop over a `steps:` body: the body is the work, checked below.
 		} else if kinds == 0 {
 			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision), `send` (a message) or `start` (other workflows)", d.Name, s.ID)
+		}
+		if s.Run != "" {
+			if err := checkRunText(s.Run, s.Shell); err != nil {
+				return fmt.Errorf("%s/%s: run: %w", d.Name, s.ID, err)
+			}
 		}
 		if kinds > 1 {
 			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision, a message or a start — `prompt`, `run`, `judge`, `send` and `start` are mutually exclusive", d.Name, s.ID)
@@ -716,6 +772,14 @@ func validateApprovers(wf, stepID string, approvers []string) error {
 func (d *Definition) validatePlan() error {
 	if !d.IsPlanned() {
 		return nil
+	}
+	// A planned workflow derives its order from facts; a write command's
+	// approval must come before its write whatever the facts say, so a write
+	// command is not used inside one.
+	for _, s := range d.Steps {
+		if s.WriteEffect {
+			return fmt.Errorf("%s/%s: a module command marked effect: write cannot be used in a planned workflow (goal, consumes/produces); call it from a workflow with an ordinary step order", d.Name, s.ID)
+		}
 	}
 	if d.authoredNeeds {
 		return fmt.Errorf("%s: a workflow declares its order EITHER with `needs` OR with consumes/produces and a goal — not both, because the two would disagree the moment a guard fails", d.Name)
@@ -1238,6 +1302,10 @@ type TemplateData struct {
 	// Memory is what previous runs of this workflow left behind, rendered as a
 	// bounded section (engine/memory.go). Empty when memory is off or empty.
 	Memory string
+
+	// Const are the step's own constants: literal inputs a task or module
+	// was given at load, which run text references as {{ .Const.<name> }}.
+	Const map[string]string
 }
 
 var funcs = template.FuncMap{
@@ -1424,3 +1492,55 @@ func ParseYAML(raw []byte) (*Definition, error) {
 
 // MarshalYAML renders a definition as the document a bundle carries.
 func MarshalYAML(d *Definition) ([]byte, error) { return yaml.Marshal(d) }
+
+// reservedEnv refuses an env block that sets a WFX_* variable: that prefix is
+// the platform's (WFX_RUN_ID, WFX_STEP_ID, WFX_API, WFX_DATA_*, …) and the env
+// store's (WFX_CONVERSATION_*, …). A workflow that could set one could steer
+// a module to another credential or impersonate a run fact.
+func reservedEnv(where string, env map[string]string) error {
+	var bad []string
+	for k := range env {
+		if strings.HasPrefix(strings.ToUpper(k), "WFX_") {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("%s: env sets %s; WFX_* variables are provided by the platform or the env store (wfx env), never by a workflow", where, strings.Join(bad, ", "))
+}
+
+// writeOnWorker is the refusal of a write call placed on a worker.
+const writeOnWorker = "write commands run on the server's runner only for now"
+
+// checkWritePlacement refuses a write call whose steps would run on a worker:
+// what guards a write between its approval and its steps (the fingerprint of
+// the call's files) is only taken on the server's own runner. A step runs on
+// a worker when its runs-on — its own, its job's or the workflow's — is not a
+// label the server serves itself, or is decided by a template at run time.
+func checkWritePlacement(d *Definition, local []string) error {
+	if len(local) == 0 {
+		local = []string{"local"}
+	}
+	var walk func(steps []Step) error
+	walk = func(steps []Step) error {
+		for _, s := range steps {
+			if err := walk(s.Steps); err != nil {
+				return err
+			}
+			if !s.WriteEffect || s.RunsOn == "" {
+				continue
+			}
+			served := false
+			for _, l := range local {
+				served = served || strings.EqualFold(l, s.RunsOn)
+			}
+			if strings.Contains(s.RunsOn, "{{") || !served {
+				return fmt.Errorf("%s/%s: runs-on %q places this module command's step on a worker; %s", d.Name, s.ID, s.RunsOn, writeOnWorker)
+			}
+		}
+		return nil
+	}
+	return walk(d.Steps)
+}

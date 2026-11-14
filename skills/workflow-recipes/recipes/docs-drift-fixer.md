@@ -55,7 +55,7 @@ steps:
     name: Code changed since last time, and the docs that mention it
     run: |
       # stdout is ONLY the commit this run saw — it becomes the watermark below.
-      SINCE="{{ .Input.since }}"; [ -n "$SINCE" ] || SINCE="{{ default "HEAD~20" .Workflow.last_sha }}"
+      SINCE="{{ .Input.since }}"; LAST="{{ .Workflow.last_sha }}"; [ -n "$SINCE" ] || SINCE="${LAST:-HEAD~20}"
       git diff --name-only "$SINCE"..HEAD -- {{CODE_GLOB}} | sort -u | grep . > changed.txt || true
       printf %s "$(git rev-parse HEAD)"
       test -s changed.txt || { echo "no code changes" >&2; exit 0; }

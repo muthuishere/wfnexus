@@ -533,6 +533,9 @@ func dryPlanWaves(def *workflow.Definition, input map[string]any) ([][]string, s
 	done := map[string]bool{}
 	var waves [][]string
 	for range def.Steps {
+		for _, a := range plan.Settled(world, done) {
+			done[a.ID] = true
+		}
 		ready := plan.Ready(world, done)
 		if len(ready) == 0 {
 			break

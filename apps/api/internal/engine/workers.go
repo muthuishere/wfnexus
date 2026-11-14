@@ -182,6 +182,11 @@ type JobPayload struct {
 	// Command is already rendered — the worker never sees a template, an input
 	// or a secret it was not sent.
 	Command string `json:"command"`
+	// Data are the values the command's template filled, in order: the worker
+	// passes them in the environment and puts its shell's reference to each
+	// where Command marks it (workflow.RunText). They are never part of the
+	// command's text.
+	Data []string `json:"data,omitempty"`
 	// Env is the step's env block AS WRITTEN — references and all. It is
 	// resolved on the worker, against that machine's environment, so a
 	// credential belonging to a build box is used there without the platform
@@ -193,10 +198,16 @@ type JobPayload struct {
 	Shell string `json:"shell,omitempty"`
 	// RepoURL and Ref, when set, are the checkout the worker makes before
 	// running. A remote machine has no workspace otherwise.
-	RepoURL    string            `json:"repoUrl,omitempty"`
-	Ref        string            `json:"ref,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	TimeoutSec int               `json:"timeoutSec,omitempty"`
+	RepoURL string            `json:"repoUrl,omitempty"`
+	Ref     string            `json:"ref,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// CallDir is a module call's own directory under the worker's run
+	// directory, so two calls never share their in.* files (nodes.go).
+	CallDir string `json:"callDir,omitempty"`
+	// CallLast: no later step of the call needs this one, so the worker
+	// removes the call directory when the job ends.
+	CallLast   bool `json:"callLast,omitempty"`
+	TimeoutSec int  `json:"timeoutSec,omitempty"`
 	// Mount and Files are the workflow's attachments. The mount SPEC travels,
 	// never the folder: the worker resolves each line against its OWN disk, so
 	// an absolute mount must exist there and a relative one lands under that
@@ -228,16 +239,24 @@ type JobResult struct {
 }
 
 // runRemote queues a command for a worker holding `label` and waits for it.
-func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, cmd, label string, data workflow.TemplateData) (map[string]any, error) {
+func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, rt workflow.RunText, label string, data workflow.TemplateData) (map[string]any, error) {
+	if step.WriteEffect {
+		return nil, fmt.Errorf("step %s would run on a worker (%s): write commands run on the server's runner only for now", step.ID, label)
+	}
+	cmd := rt.Display()
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
 	mounts, files := e.attachmentsOf(runID)
 	payload := JobPayload{
-		RunID: runID.String(), StepID: step.ID, Command: cmd,
+		RunID: runID.String(), StepID: step.ID, Command: rt.Script, Data: rt.Data,
 		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
 		Mount: mounts, Files: files,
+	}
+	if step.Module != "" {
+		payload.CallDir = "calls/" + CallKey(step.ID)
+		payload.CallLast = lastOfCall(e.defOfRun(ctx, runID), step)
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project

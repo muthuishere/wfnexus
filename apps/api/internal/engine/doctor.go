@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/browsercfg"
 	"github.com/muthuishere/wfnexus/apps/api/internal/bundle"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/judge"
@@ -46,6 +47,9 @@ type Doctor struct {
 	// Carry is whether this process was started with CARRY_REPO, i.e. its
 	// tools and config come from a carry bucket. The value is not reported.
 	Carry bool `json:"carry"`
+	// Browser is the browser block on this machine (browsercfg): each profile
+	// and whether it is usable. Empty when none is configured.
+	Browser DoctorBrowser `json:"browser"`
 	// Storage is what this server is ACTUALLY running on. The UI used to print
 	// a hardcoded "postgres · s3" in its header, which became a lie the moment
 	// the sqlite/folder path existed — a status line nobody can trust is worse
@@ -168,6 +172,7 @@ func (e *Engine) Doctor() Doctor {
 
 	d.Shell = DoctorShell{OS: runtime.GOOS, Arch: runtime.GOARCH}
 	d.Carry = os.Getenv("CARRY_REPO") != ""
+	d.Browser = doctorBrowser()
 	if sh, err := shell.Default(); err != nil {
 		d.Shell.Problem = err.Error()
 		d.Problems = append(d.Problems, "no shell: "+err.Error()+" — every `run:` step fails without one")
@@ -565,4 +570,22 @@ func envRefs(s string) []string {
 		out = append(out, s[i+2:i+j])
 		s = s[i+j+1:]
 	}
+}
+
+// DoctorBrowser is the browser block as found on this machine.
+type DoctorBrowser struct {
+	Path     string              `json:"path"`
+	Error    string              `json:"error,omitempty"`
+	Profiles []browsercfg.Status `json:"profiles"`
+}
+
+func doctorBrowser() DoctorBrowser {
+	b := DoctorBrowser{Path: browsercfg.Path(), Profiles: []browsercfg.Status{}}
+	c, err := browsercfg.Load(b.Path)
+	if err != nil {
+		b.Error = err.Error()
+		return b
+	}
+	b.Profiles = c.Check()
+	return b
 }

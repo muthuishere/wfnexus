@@ -25,9 +25,7 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 900
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
           sh "$WFX_MODULE_DIR/cx.sh" up
   query:
     description: "Answer a question about the code from the graph, with file:line citations."
@@ -39,12 +37,8 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.a <<'WFX_V'
-          {{ .Inputs.question }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.question }}" > in.a
           sh "$WFX_MODULE_DIR/cx.sh" query
   card:
     description: "Symbol card: signature, doc, location, callers, callees."
@@ -56,12 +50,8 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.a <<'WFX_V'
-          {{ .Inputs.symbol }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.symbol }}" > in.a
           sh "$WFX_MODULE_DIR/cx.sh" card
   change-plan:
     description: "Everything needed before editing a symbol: callers, impact, tests."
@@ -73,12 +63,8 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.a <<'WFX_V'
-          {{ .Inputs.symbol }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.symbol }}" > in.a
           sh "$WFX_MODULE_DIR/cx.sh" change-plan
   affected:
     description: "Blast radius: what breaks if this symbol changes."
@@ -90,12 +76,8 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.a <<'WFX_V'
-          {{ .Inputs.symbol }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.symbol }}" > in.a
           sh "$WFX_MODULE_DIR/cx.sh" affected
   path:
     description: "Shortest path between two nodes of the graph."
@@ -108,13 +90,7 @@ commands:
         name: "Through ctx-optimize"
         timeout_sec: 180
         run: |
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.a <<'WFX_V'
-          {{ .Inputs.from }}
-          WFX_V
-          cat > in.b <<'WFX_V'
-          {{ .Inputs.to }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.from }}" > in.a
+          printf '%s\n' "{{ .Inputs.to }}" > in.b
           sh "$WFX_MODULE_DIR/cx.sh" path
