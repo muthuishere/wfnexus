@@ -96,6 +96,9 @@ func TestLDAPAccountsAreKeyedOnTheEntrysStableID(t *testing.T) {
 		t.Fatalf("seed: %v %v", ok, err)
 	}
 	h := ldapServer(t, st, "users:\n  - username: ana\n    password: ana-long-password\n    id: A1\n")
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
 	for _, typed := range []string{"ana", "ANA", "Ana"} {
 		if w := providerSignIn(h, "corp", typed, "ana-long-password"); w.Code != 200 {
 			t.Fatalf("%s: %d %s", typed, w.Code, w.Body)
@@ -104,6 +107,10 @@ func TestLDAPAccountsAreKeyedOnTheEntrysStableID(t *testing.T) {
 	u, err := st.UserBySubject(ctx, "corp", "entryUUID:a1")
 	if err != nil || u.ID != ana.ID || u.Role != RoleSuperadmin {
 		t.Fatalf("re-keyed = %+v %v", u, err)
+	}
+	if !strings.Contains(logs.String(), "AUDIT account ana@corp re-keyed to directory id entryUUID:a1 on sign-in as ana") ||
+		strings.Count(logs.String(), "re-keyed") != 1 {
+		t.Fatalf("re-key audit line: %s", logs.String())
 	}
 	if users, _ := st.ListUsers(ctx); len(users) != 1 {
 		t.Fatalf("a case variant made another account: %d users", len(users))

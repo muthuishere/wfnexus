@@ -116,7 +116,11 @@ auth:
   - LDAP accounts are keyed on the entry's stable id (`entryUUID`, or
     `objectGUID` on Active Directory), else the entry's own username attribute
     (`usernameClaim`, default `uid`), never what was typed. A binding made
-    under the typed username is re-keyed on the next sign-in.
+    under the typed username is re-keyed on the next sign-in, with an audit
+    line (`account … re-keyed to directory id … on sign-in as …`). The
+    directory is the source of truth: if a username was reassigned in the
+    directory before the upgrade, the old account is re-keyed to whoever
+    holds that username now. Check the audit lines after the upgrade.
   - Discovery runs on its own context with a timeout; a failure is retried
     after a pause that grows with each failure (from 1 s to 5 min), and a
     success is kept.

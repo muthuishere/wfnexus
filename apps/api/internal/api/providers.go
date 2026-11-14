@@ -100,8 +100,12 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 		// The same person bound under the subject an older version used (an
 		// LDAP username): moved to the stable one, once.
 		if ok, rerr := s.store.ReKeySubject(ctx, provider, id.LegacySubject, id.Subject); rerr == nil && ok {
-			log.Printf("auth: AUDIT %s binding %q re-keyed to %s", provider, id.LegacySubject, id.Subject)
 			u, err = s.store.UserBySubject(ctx, provider, id.Subject)
+			account := "(unknown)"
+			if err == nil {
+				account = u.Name
+			}
+			log.Printf("auth: AUDIT account %s re-keyed to directory id %s on sign-in as %s (%s)", account, id.Subject, id.Username, provider)
 		}
 	}
 	switch {
