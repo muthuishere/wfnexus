@@ -11,3 +11,7 @@ create table if not exists link_rejections (
     created_at timestamptz not null default now(),
     primary key (user_id, provider, subject)
 );
+-- Case-insensitive lookups at sign-in (legacy names, older LDAP bindings) use
+-- these rather than scanning users.
+create index if not exists users_lower_name_idx on users (lower(name));
+create index if not exists users_auth_subject_lower_idx on users (auth_provider, lower(auth_subject));

@@ -114,6 +114,10 @@ auth:
     superadmin is never removed this way, even when several leave the group
     and sign in at once (the check and the change are one transaction that
     holds the superadmin rows): the role is kept and a warning is logged.
+    The same locked check covers every way a superadmin can be removed: role
+    sync, and an admin demoting, disabling or deleting one. When every
+    remaining superadmin waits on an account link, a warning says nobody can
+    sign in as an administrator until one is confirmed.
   - LDAP accounts are keyed on the entry's stable id (`entryUUID`, or
     `objectGUID` on Active Directory), else the entry's own username attribute
     (`usernameClaim`, default `uid`), never what was typed. The username

@@ -280,6 +280,8 @@ func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) (bo
 		}
 		if !revoked {
 			log.Printf("auth: WARNING %s left the group that grants superadmin but is the only superadmin; the role is kept — add another superadmin, then sign in again to have it removed", u.Name)
+		} else {
+			s.warnIfNoAdminCanSignIn(ctx)
 		}
 		return revoked, nil
 	case store.ProjectAdmin, store.WorkflowAdmin, store.WorkflowRunner:

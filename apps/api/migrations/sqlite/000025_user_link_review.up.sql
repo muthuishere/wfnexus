@@ -7,3 +7,6 @@ CREATE TABLE IF NOT EXISTS link_rejections (
     created_at timestamp NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
     PRIMARY KEY (user_id, provider, subject)
 );
+-- Case-insensitive lookups at sign-in use these rather than scanning users.
+CREATE INDEX IF NOT EXISTS users_lower_name_idx ON users (lower(name));
+CREATE INDEX IF NOT EXISTS users_auth_subject_lower_idx ON users (auth_provider, lower(auth_subject));

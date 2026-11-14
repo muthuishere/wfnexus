@@ -179,20 +179,32 @@ func (s *Store) RejectLink(ctx context.Context, name string) error {
 	defer tx.Rollback()
 	var id uuid.UUID
 	var provider, subject string
-	err = tx.QueryRowContext(ctx, s.d.q(`SELECT id, auth_provider, auth_subject FROM users WHERE name=$1 AND link_state IN ($2, $3)`),
-		name, LinkLinked, LinkConfirm).Scan(&id, &provider, &subject)
+	// The row is held (Postgres) and the update below re-checks the state,
+	// so a confirm that lands first is never undone by this reject.
+	q := `SELECT id, auth_provider, auth_subject FROM users WHERE name=$1 AND link_state IN ($2, $3)`
+	if !s.d.isSQLite() {
+		q += ` FOR UPDATE`
+	}
+	err = tx.QueryRowContext(ctx, s.d.q(q), name, LinkLinked, LinkConfirm).Scan(&id, &provider, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
+	res, err := tx.ExecContext(ctx, s.d.q(`UPDATE users SET auth_provider='', auth_subject='', auth_claim='', link_state=$2
+		WHERE id=$1 AND link_state IN ($3, $4)`), id, LinkLegacy, LinkLinked, LinkConfirm)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
 	for _, q := range []struct {
 		sql  string
 		args []any
 	}{
 		{`INSERT INTO link_rejections (user_id, provider, subject) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, []any{id, provider, subject}},
-		{`UPDATE users SET auth_provider='', auth_subject='', auth_claim='', link_state=$2 WHERE id=$1`, []any{id, LinkLegacy}},
 		{`DELETE FROM user_tokens WHERE user_id=$1`, []any{id}},
 	} {
 		if _, err := tx.ExecContext(ctx, s.d.q(q.sql), q.args...); err != nil {
@@ -202,20 +214,54 @@ func (s *Store) RejectLink(ctx context.Context, name string) error {
 	return tx.Commit()
 }
 
-// RevokeSuperadminUnlessLast takes superadmin from name unless that would
-// leave no enabled superadmin, deciding and changing in one transaction that
-// holds the superadmin rows (Postgres: FOR UPDATE; SQLite: BEGIN IMMEDIATE,
-// the database write lock), so two revokes at once cannot both see another
-// admin and both go through. It reports whether it revoked.
-func (s *Store) RevokeSuperadminUnlessLast(ctx context.Context, name string) (bool, error) {
+// ErrLastAdmin refuses a change that would leave no enabled superadmin.
+var ErrLastAdmin = errors.New("refused: this is the last administrator")
+
+// adminTx is what a change under the administrator lock runs its statements
+// on: a *sql.Tx (Postgres) or a *sql.Conn inside BEGIN IMMEDIATE (SQLite).
+type adminTx interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// withAdminLock runs fn in one transaction that holds the enabled
+// superadmins, handing it their names, and commits only when fn returns nil.
+// Every change that can take superadmin away — role sync, an admin's demote,
+// disable or delete — goes through here, so two of them at once cannot both
+// see another administrator and both go through.
+//
+// Postgres: SELECT … FOR UPDATE on the superadmin rows. SQLite: BEGIN
+// IMMEDIATE takes the database write lock at the start; within one process
+// the store's single connection already serialises writes, and the lock is
+// what keeps two processes (two servers, or a server and `wfx-server link`)
+// on the same file from interleaving.
+func (s *Store) withAdminLock(ctx context.Context, fn func(tx adminTx, admins []string) error) error {
+	const listAdmins = `SELECT name FROM users WHERE role='superadmin' AND disabled=false ORDER BY id`
+	readAdmins := func(tx adminTx, q string) ([]string, error) {
+		rows, err := tx.QueryContext(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var names []string
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				return nil, err
+			}
+			names = append(names, n)
+		}
+		return names, rows.Err()
+	}
 	if s.d.isSQLite() {
 		conn, err := s.db.Conn(ctx)
 		if err != nil {
-			return false, err
+			return err
 		}
 		defer conn.Close()
 		if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-			return false, err
+			return err
 		}
 		done := false
 		defer func() {
@@ -223,60 +269,135 @@ func (s *Store) RevokeSuperadminUnlessLast(ctx context.Context, name string) (bo
 				_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 			}
 		}()
-		var others int
-		if err := conn.QueryRowContext(ctx, s.d.q(`SELECT count(*) FROM users WHERE role='superadmin' AND disabled=false AND name<>$1`), name).Scan(&others); err != nil {
-			return false, err
-		}
-		if others == 0 {
-			return false, nil
-		}
-		res, err := conn.ExecContext(ctx, s.d.q(`UPDATE users SET role='' WHERE name=$1 AND role='superadmin'`), name)
+		admins, err := readAdmins(conn, listAdmins)
 		if err != nil {
-			return false, err
+			return err
+		}
+		if err := fn(sqliteTx{conn, s.d}, admins); err != nil {
+			return err
 		}
 		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-			return false, err
+			return err
 		}
 		done = true
-		n, _ := res.RowsAffected()
-		return n == 1, nil
+		return nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT name FROM users WHERE role='superadmin' AND disabled=false ORDER BY id FOR UPDATE`)
+	admins, err := readAdmins(tx, listAdmins+` FOR UPDATE`)
 	if err != nil {
-		return false, err
+		return err
 	}
-	others := 0
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
-			return false, err
+	if err := fn(tx, admins); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// sqliteTx rewrites $n placeholders for SQLite on a locked connection.
+type sqliteTx struct {
+	c *sql.Conn
+	d dialect
+}
+
+func (t sqliteTx) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	return t.c.ExecContext(ctx, t.d.q(q), args...)
+}
+
+func (t sqliteTx) QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row {
+	return t.c.QueryRowContext(ctx, t.d.q(q), args...)
+}
+
+func (t sqliteTx) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
+	return t.c.QueryContext(ctx, t.d.q(q), args...)
+}
+
+// othersThan counts the administrators other than name.
+func othersThan(admins []string, name string) int {
+	n := 0
+	for _, a := range admins {
+		if a != name {
+			n++
 		}
-		if n != name {
-			others++
+	}
+	return n
+}
+
+// RevokeSuperadminUnlessLast takes superadmin from name unless that would
+// leave no enabled superadmin (role sync). It reports whether it revoked.
+func (s *Store) RevokeSuperadminUnlessLast(ctx context.Context, name string) (bool, error) {
+	revoked := false
+	err := s.withAdminLock(ctx, func(tx adminTx, admins []string) error {
+		if othersThan(admins, name) == 0 {
+			return nil
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE users SET role='' WHERE name=$1 AND role='superadmin'`, name)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		revoked = n == 1
+		return nil
+	})
+	return revoked, err
+}
+
+// UpdateUserUnlessLastAdmin is UpdateUser, refused with ErrLastAdmin when it
+// would demote or disable the last enabled superadmin.
+func (s *Store) UpdateUserUnlessLastAdmin(ctx context.Context, name, displayName, role, project string, disabled bool) (*User, error) {
+	var u *User
+	err := s.withAdminLock(ctx, func(tx adminTx, admins []string) error {
+		losing := containsName(admins, name) && (role != "superadmin" || disabled)
+		if losing && othersThan(admins, name) == 0 {
+			return ErrLastAdmin
+		}
+		var err error
+		u, err = scanUser(tx.QueryRowContext(ctx, `UPDATE users SET display_name=$2, role=$3, project=$4, disabled=$5
+			WHERE name=$1 RETURNING `+userCols, name, displayName, role, project, disabled))
+		return err
+	})
+	return u, err
+}
+
+// DeleteUserUnlessLastAdmin is DeleteUser, refused with ErrLastAdmin for the
+// last enabled superadmin.
+func (s *Store) DeleteUserUnlessLastAdmin(ctx context.Context, name string) error {
+	return s.withAdminLock(ctx, func(tx adminTx, admins []string) error {
+		if containsName(admins, name) && othersThan(admins, name) == 0 {
+			return ErrLastAdmin
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE name=$1`, name)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+func containsName(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
 		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	if others == 0 {
-		return false, nil
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE users SET role='' WHERE name=$1 AND role='superadmin'`, name)
-	if err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n == 1, nil
+	return false
+}
+
+// SuperadminsAbleToSignIn counts enabled superadmins whose account is not
+// waiting on a link (pending confirmation, or a legacy account not yet bound).
+// The last-administrator rule counts every enabled superadmin; this says
+// whether any of them can actually sign in.
+func (s *Store) SuperadminsAbleToSignIn(ctx context.Context) (int, error) {
+	var n int
+	err := s.qrow(ctx, `SELECT count(*) FROM users WHERE role='superadmin' AND disabled=false AND link_state NOT IN ($1, $2)`,
+		LinkConfirm, LinkLegacy).Scan(&n)
+	return n, err
 }
 
 func (s *Store) bind(ctx context.Context, q string, args ...any) (bool, error) {
@@ -317,15 +438,15 @@ type PendingLink struct {
 }
 
 func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
-	// Legacy rows that differ from another legacy row only in case are listed
-	// as "ambiguous": no sign-in binds either until an admin removes or
-	// renames one.
+	// Accounts whose names differ from another account's only in case are
+	// listed as "ambiguous": a sign-in matching them ignoring case binds none
+	// of them until an admin removes or renames all but one.
 	rows, err := s.query(ctx, `SELECT name, auth_provider, auth_subject, auth_claim, link_state FROM users
 		WHERE link_state IN ($1, $2)
 		UNION ALL
-		SELECT u.name, '', '', '', '`+LinkAmbiguous+`' FROM users u
-		WHERE u.link_state=$3 AND EXISTS (SELECT 1 FROM users o WHERE o.id<>u.id AND o.link_state=$3 AND lower(o.name)=lower(u.name))
-		ORDER BY 1`, LinkConfirm, LinkLinked, LinkLegacy)
+		SELECT u.name, u.auth_provider, u.auth_subject, u.auth_claim, '`+LinkAmbiguous+`' FROM users u
+		WHERE EXISTS (SELECT 1 FROM users o WHERE o.id<>u.id AND lower(o.name)=lower(u.name))
+		ORDER BY 1`, LinkConfirm, LinkLinked)
 	if err != nil {
 		return nil, err
 	}

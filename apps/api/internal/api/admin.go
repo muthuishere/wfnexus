@@ -113,20 +113,19 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	losingAdmin := cur.Role == RoleSuperadmin && !cur.Disabled && (b.Role != RoleSuperadmin || b.Disabled)
-	if losingAdmin {
-		if ok, err := s.anotherAdminRemains(r, name); err != nil {
-			writeErr(w, 500, err)
-			return
-		} else if !ok {
-			writeErr(w, 409, errors.New("refused: this is the last administrator"))
-			return
-		}
+	// The last-administrator rule is checked and applied in one locked
+	// transaction (store.withAdminLock), never as a count and then a change.
+	u, err := s.store.UpdateUserUnlessLastAdmin(r.Context(), name, b.DisplayName, b.Role, b.Project, b.Disabled)
+	if errors.Is(err, store.ErrLastAdmin) {
+		writeErr(w, 409, err)
+		return
 	}
-	u, err := s.store.UpdateUser(r.Context(), name, b.DisplayName, b.Role, b.Project, b.Disabled)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	if cur.Role == RoleSuperadmin && (u.Role != RoleSuperadmin || u.Disabled) {
+		s.warnIfNoAdminCanSignIn(r.Context())
 	}
 	writeJSON(w, 200, u)
 }
@@ -138,25 +137,29 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		notFound(w)
 		return
 	}
-	if cur.Role == RoleSuperadmin && !cur.Disabled {
-		if ok, err := s.anotherAdminRemains(r, name); err != nil {
-			writeErr(w, 500, err)
-			return
-		} else if !ok {
-			writeErr(w, 409, errors.New("refused: this is the last administrator"))
-			return
-		}
+	err = s.store.DeleteUserUnlessLastAdmin(r.Context(), name)
+	if errors.Is(err, store.ErrLastAdmin) {
+		writeErr(w, 409, err)
+		return
 	}
-	if err := s.store.DeleteUser(r.Context(), name); err != nil {
+	if err != nil {
 		notFound(w)
 		return
+	}
+	if cur.Role == RoleSuperadmin {
+		s.warnIfNoAdminCanSignIn(r.Context())
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-func (s *Server) anotherAdminRemains(r *http.Request, name string) (bool, error) {
-	n, err := s.store.CountAdminsExcept(r.Context(), name)
-	return n > 0, err
+// warnIfNoAdminCanSignIn logs when, after an administrator was removed, every
+// remaining superadmin's account waits on a link (pending confirmation or a
+// legacy account not yet bound): the rule kept one, but nobody can use it
+// until a link is confirmed with `wfx-server link confirm NAME`.
+func (s *Server) warnIfNoAdminCanSignIn(ctx context.Context) {
+	if n, err := s.store.SuperadminsAbleToSignIn(ctx); err == nil && n == 0 {
+		log.Printf("auth: WARNING no remaining superadmin can sign in: each waits on an account link; confirm one with `wfx-server link confirm NAME`")
+	}
 }
 
 // globalRoleOK: users.role is superadmin or nothing (ADR 0028).
