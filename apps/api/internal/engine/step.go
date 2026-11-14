@@ -561,10 +561,12 @@ func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, wor
 		return // a worker has neither; its evidence travels back on the result
 	}
 	ctx = context.WithoutCancel(ctx)
+	secrets := e.redactions.get(runID)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
 			return
 		}
+		body = []byte(redactText(string(body), secrets))
 		key := fmt.Sprintf("runs/%s/%s/%s", runID, stepID, name)
 		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
 			e.emit(ctx, runID, stepID, "error", map[string]any{"text": "artifact upload failed: " + scrub(err.Error())})

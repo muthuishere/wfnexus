@@ -2,8 +2,10 @@ package engine
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,19 +149,65 @@ func redactEvent(payload any, secrets []secretValue) any {
 	return out
 }
 
-// secretForms is how a value can appear inside a JSON-encoded event: as
-// itself, JSON-escaped (a quote or backslash in it), and base64 — the form an
-// Authorization header or a curl -u leaves behind.
+// secretForms is how a value can appear in what a step prints or an event
+// carries: as itself, JSON-escaped (a quote or backslash in it), base64 (the
+// form an Authorization header or a curl -u leaves behind; standard and URL
+// alphabets, padded or not), hex (either case) and URL-encoded (query and path
+// forms). Each form also in its JSON-escaped spelling, since events and step
+// outputs are stored as JSON.
 func secretForms(v string) []string {
-	forms := []string{v}
-	if esc, err := json.Marshal(v); err == nil {
-		if e := string(esc[1 : len(esc)-1]); e != v {
-			forms = append(forms, e)
+	b := []byte(v)
+	raw := []string{v,
+		base64.StdEncoding.EncodeToString(b), base64.RawStdEncoding.EncodeToString(b),
+		base64.URLEncoding.EncodeToString(b), base64.RawURLEncoding.EncodeToString(b),
+		hex.EncodeToString(b), strings.ToUpper(hex.EncodeToString(b)),
+		url.QueryEscape(v), url.PathEscape(v),
+	}
+	seen := map[string]bool{}
+	var forms []string
+	add := func(f string) {
+		if f != "" && !seen[f] {
+			seen[f] = true
+			forms = append(forms, f)
 		}
 	}
-	forms = append(forms, base64.StdEncoding.EncodeToString([]byte(v)),
-		strings.TrimRight(base64.StdEncoding.EncodeToString([]byte(v)), "="))
+	for _, f := range raw {
+		add(f)
+		if esc, err := json.Marshal(f); err == nil {
+			add(string(esc[1 : len(esc)-1]))
+		}
+	}
+	// Longest first, so a form that contains another is replaced whole.
+	sort.Slice(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
 	return forms
+}
+
+// scrubJSON scrubs a stored JSON document (a step's output) the same way an
+// event is scrubbed. Text that is not JSON is scrubbed as text.
+func scrubJSON(raw []byte, secrets []secretValue) []byte {
+	if len(raw) == 0 || len(secrets) == 0 {
+		return raw
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return []byte(redactText(string(raw), secrets))
+	}
+	out, _ := json.Marshal(redactEvent(v, secrets))
+	return out
+}
+
+// scrubOutput is scrubJSON for a step output as the engine holds it, so the
+// steps after it read the scrubbed value too: secrets travel through the
+// environment, never through step output.
+func scrubOutput(out map[string]any, secrets []secretValue) map[string]any {
+	if out == nil || len(secrets) == 0 {
+		return out
+	}
+	var m map[string]any
+	if json.Unmarshal(scrubJSON(mustJSON(out), secrets), &m) != nil {
+		return map[string]any{"redacted": "this output carried a secret value and could not be scrubbed safely"}
+	}
+	return m
 }
 
 // secretEnvFile writes a step's sensitive variables to a 0600 file under the

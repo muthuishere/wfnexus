@@ -288,6 +288,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.failStep(ctx, runID, step.ID, err)
 		return nil, stepHalted
 	}
+	res.Output = scrubOutput(res.Output, e.redactions.get(runID))
 	if res.Pending != nil {
 		// Request.URL is the field an answer-here link belongs in, and it was
 		// stored empty until now. It is a POINTER at our own UI — never a link
@@ -325,7 +326,14 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 
 // executeNode runs the non-agent kinds, with the step's retry policy applied
 // exactly as it is to an agent — a flaky command deserves the same treatment.
+// executeNode runs a command, judge or send node; what it produced is scrubbed
+// of the run's secret values before anything keeps it.
 func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
+	out, err := e.executeNodeRaw(ctx, runID, step, data)
+	return scrubOutput(out, e.redactions.get(runID)), err
+}
+
+func (e *Engine) executeNodeRaw(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
 	attempts := 1
 	if step.Retry != nil && step.Retry.MaxAttempts > attempts {
 		attempts = step.Retry.MaxAttempts

@@ -268,7 +268,7 @@ func (e *Engine) settleOutcome(ctx context.Context, runID uuid.UUID, status, err
 		log.Printf("engine: outcome: %v", err)
 		return
 	}
-	if err := e.store.SetRunOutcome(ctx, runID, DeriveOutcome(status, errMsg, steps)); err != nil {
+	if err := e.store.SetRunOutcome(ctx, runID, redactText(DeriveOutcome(status, errMsg, steps), e.redactions.get(runID))); err != nil {
 		log.Printf("engine: outcome: %v", err)
 	}
 }
