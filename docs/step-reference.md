@@ -327,13 +327,18 @@ of that command's steps runs.
     there could type an approver's name (or any name but the starter's), so a
     typed name is refused for a write held to a policy. With no policy a
     typed name is still accepted.
-  - The loopback device sign-in (`/api/device/verify` with no session) is
-    for loopback-only accounts: it creates one, and signs it in again later.
-    It refuses an account with a password (sign in with it: `wfx login
-    --user NAME`) and one an external provider signs in (`name@provider`).
-    A loopback-only account has no credential beyond the machine, so anyone
-    at the machine can sign in as it: give approvers a password or an
-    external sign-in for an approver policy to mean anything on loopback.
+  - The loopback device sign-in (`/api/device/verify` with no session)
+    creates only the install's FIRST account, its superadmin owner, and
+    signs loopback-only accounts in again later. Any other new name is
+    refused (an admin adds users: `wfx user add`), so a name typed at the
+    machine can never become a new account with a role. That is what an
+    approver policy on loopback rests on. It also refuses an account with a
+    password (sign in with it: `wfx login --user NAME`) and one an external
+    provider signs in (`name@provider`).
+  - A loopback-only account (no password, no external sign-in) has no
+    credential beyond the machine, so anyone at the machine can sign in as
+    it. Give approvers a password or an external sign-in for an approver
+    policy to hold on loopback.
   - A second account or a service token counts as a different person: the
     check is on the account name, not on who is behind it.
 - **Agents are different:** an agent step that lists a write command in its
