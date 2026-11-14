@@ -13,7 +13,7 @@ COPY apps/ui ./
 RUN npm run build
 
 # ---- the server -----------------------------------------------------------
-FROM golang:1.26-alpine AS api
+FROM golang:1.26.11-alpine AS api
 WORKDIR /src
 RUN apk add --no-cache git
 COPY apps/api/go.mod apps/api/go.sum ./
