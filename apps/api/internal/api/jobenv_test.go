@@ -169,7 +169,7 @@ func TestJobEnvIsDeliveredAtClaimAndNeverStored(t *testing.T) {
 	// First claim: the value is delivered. The worker then dies.
 	_, p1 := claim()
 	if p1.Env["CANARY_KEY"] != jobCanary {
-		t.Fatalf("the first claim did not deliver the value: %v", p1.Deliver)
+		t.Fatalf("the first claim did not deliver the value: %v", len(p1.Env))
 	}
 	nowhere("after the first claim")
 
@@ -185,7 +185,7 @@ func TestJobEnvIsDeliveredAtClaimAndNeverStored(t *testing.T) {
 	}
 	jobID, p2 := claim()
 	if p2.Env["CANARY_KEY"] != jobCanary {
-		t.Fatalf("the reclaim did not deliver the value again: %v", p2.Deliver)
+		t.Fatalf("the reclaim did not deliver the value again: %v", len(p2.Env))
 	}
 	nowhere("after the reclaim, while the step runs")
 

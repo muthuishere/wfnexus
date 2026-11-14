@@ -199,17 +199,17 @@ type JobPayload struct {
 	Shell string `json:"shell,omitempty"`
 	// RepoURL and Ref, when set, are the checkout the worker makes before
 	// running. A remote machine has no workspace otherwise.
-	RepoURL    string            `json:"repoUrl,omitempty"`
-	Ref        string            `json:"ref,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
+	RepoURL string            `json:"repoUrl,omitempty"`
+	Ref     string            `json:"ref,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 	// Deliver names the variables whose values come from the env store (and a
 	// module's token). The job row keeps only these NAMES; the values are put
 	// into Env in the claim response, for the worker that holds the job, and
 	// are never stored (Claim, deliverAtClaim).
 	Deliver []string `json:"deliver,omitempty"`
 	// Module is the module a step came from, for its token at claim.
-	Module string `json:"module,omitempty"`
-	TimeoutSec int               `json:"timeoutSec,omitempty"`
+	Module     string `json:"module,omitempty"`
+	TimeoutSec int    `json:"timeoutSec,omitempty"`
 	// Mount and Files are the workflow's attachments. The mount SPEC travels,
 	// never the folder: the worker resolves each line against its OWN disk, so
 	// an absolute mount must exist there and a relative one lands under that
