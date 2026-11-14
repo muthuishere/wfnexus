@@ -53,7 +53,7 @@ What this means when you write a step:
     `Invoke-Expression`/`iex`. Quoted or escaped command words (`"sh"`,
     `\eval`) count the same;
   - the code argument of an interpreter: `python -c`, `node -e`/`-p`,
-    `perl -e`, `ruby -e`, `php -r`, `awk`, and pwsh `-Command`;
+    `perl -e`, `ruby -e`, `php -r`, and pwsh `-Command`;
   - text fed to a shell or interpreter as its script: a heredoc that `sh`,
     `bash`, `python`, `node`, `perl`, `ruby` and the like read
     (`bash <<EOF`, also after a line continuation; `cat <<EOF | sh`), a pipe
@@ -74,7 +74,7 @@ What this means when you write a step:
     `${!…}`);
   - a value copied into a variable and then used in arithmetic;
   - a value written to a file that is then sourced or run;
-  - a value inside the program text of `sed -e`, `jq`, `find -exec` or an
+  - a value inside the program text of `awk`, `sed -e`, `jq`, `find -exec` or an
     interpreter not listed above.
 
   Pass values to such programs as arguments, environment or files, never inside
