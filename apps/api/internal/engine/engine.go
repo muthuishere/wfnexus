@@ -609,6 +609,24 @@ func (e *Engine) Start(runID uuid.UUID) {
 	}()
 }
 
+// WaitIdle waits until no run is executing (its directory work included), or
+// the timeout passes. For orderly shutdowns and tests.
+func (e *Engine) WaitIdle(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		e.mu.Lock()
+		n := len(e.running)
+		e.mu.Unlock()
+		if n == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (e *Engine) Cancel(ctx context.Context, runID uuid.UUID) {
 	e.mu.Lock()
 	cancel := e.running[runID]
