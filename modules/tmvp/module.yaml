@@ -34,9 +34,7 @@ commands:
         name: "Through tmvp"
         timeout_sec: 300
         run: |
-          cat > in.skill <<'WFX_V'
-          {{ .Inputs.skill }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.skill }}" > in.skill
           sh "$WFX_MODULE_DIR/tm.sh" check
   read:
     description: "Run one read verb on one system across envs (e.g. db query, k8s pods, loki query)."
@@ -52,24 +50,12 @@ commands:
         name: "Through tmvp"
         timeout_sec: 300
         run: |
-          cat > in.skill <<'WFX_V'
-          {{ .Inputs.skill }}
-          WFX_V
-          cat > in.envs <<'WFX_V'
-          {{ .Inputs.envs }}
-          WFX_V
-          cat > in.system <<'WFX_V'
-          {{ .Inputs.system }}
-          WFX_V
-          cat > in.verb <<'WFX_V'
-          {{ .Inputs.verb }}
-          WFX_V
-          cat > in.arg <<'WFX_V'
-          {{ .Inputs.arg }}
-          WFX_V
-          cat > in.diff <<'WFX_V'
-          {{ .Inputs.diff }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.skill }}" > in.skill
+          printf '%s\n' "{{ .Inputs.envs }}" > in.envs
+          printf '%s\n' "{{ .Inputs.system }}" > in.system
+          printf '%s\n' "{{ .Inputs.verb }}" > in.verb
+          printf '%s\n' "{{ .Inputs.arg }}" > in.arg
+          printf '%s\n' "{{ .Inputs.diff }}" > in.diff
           sh "$WFX_MODULE_DIR/tm.sh" read
   write:
     effect: write
@@ -87,25 +73,11 @@ commands:
         name: "Through tmvp"
         timeout_sec: 300
         run: |
-          cat > in.skill <<'WFX_V'
-          {{ .Inputs.skill }}
-          WFX_V
-          cat > in.env <<'WFX_V'
-          {{ .Inputs.env }}
-          WFX_V
-          cat > in.system <<'WFX_V'
-          {{ .Inputs.system }}
-          WFX_V
-          cat > in.statement <<'WFX_V'
-          {{ .Inputs.statement }}
-          WFX_V
-          cat > in.reason <<'WFX_V'
-          {{ .Inputs.reason }}
-          WFX_V
-          cat > in.preview <<'WFX_V'
-          {{ .Inputs.preview }}
-          WFX_V
-          cat > in.force <<'WFX_V'
-          {{ .Inputs.force }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.skill }}" > in.skill
+          printf '%s\n' "{{ .Inputs.env }}" > in.env
+          printf '%s\n' "{{ .Inputs.system }}" > in.system
+          printf '%s\n' "{{ .Inputs.statement }}" > in.statement
+          printf '%s\n' "{{ .Inputs.reason }}" > in.reason
+          printf '%s\n' "{{ .Inputs.preview }}" > in.preview
+          printf '%s\n' "{{ .Inputs.force }}" > in.force
           sh "$WFX_MODULE_DIR/tm.sh" write
