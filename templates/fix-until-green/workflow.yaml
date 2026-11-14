@@ -24,7 +24,8 @@ template:
 description: >-
   Bounded repair loop. Baseline the suite; when red, repeat {agent fix → re-run suite} until
   the suite passes (max 4 rounds), each round persisted and visible; then a human approves
-  committing the fix to a branch.
+  committing the fix to a branch. Note: the test_command input is
+  executed as a script; do not expose this workflow to outside input (hooks, MCP).
 
 on:
   workflow_dispatch:
