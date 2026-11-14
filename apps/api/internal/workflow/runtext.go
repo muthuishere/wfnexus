@@ -90,7 +90,7 @@ var rootFields = func() map[string]bool {
 }()
 
 // hyphenRoots are the roots whose keys may hold a hyphen (step ids, state keys).
-var hyphenRoots = map[string]bool{"Steps": true, "Step": true, "Workflow": true, "Project": true, "Global": true}
+var hyphenRoots = map[string]bool{"Steps": true, "Step": true, "Workflow": true, "Project": true, "Global": true, "Const": true}
 
 const runTextAdvice = "run: text may only reference values, like {{ .Input.x }}; do the logic in the script using the env value"
 
@@ -190,6 +190,10 @@ func checkRef(inner string) error {
 // refValue is the value a reference names, as the script receives it: a
 // string as it is, anything else as JSON, nothing as "".
 func refValue(path string, data TemplateData) (string, error) {
+	// A step constant is looked up by its input name as written.
+	if k, ok := strings.CutPrefix(path, ".Const."); ok {
+		return data.Const[k], nil
+	}
 	var got any
 	t, err := template.New("ref").Funcs(funcs).Funcs(template.FuncMap{"wfxRef": func(v any) string { got = v; return "" }}).
 		Option("missingkey=zero").Parse(rewriteStatePaths(rewriteStepPaths("{{ " + path + " }}")))
@@ -203,6 +207,11 @@ func refValue(path string, data TemplateData) (string, error) {
 		}
 	}
 	if err := t.Execute(io.Discard, data); err != nil {
+		// A path through something absent (a step that did not run, a key a
+		// value does not have) is an absent value, like a missing map key.
+		if strings.Contains(err.Error(), "nil pointer evaluating") || strings.Contains(err.Error(), "can't evaluate field") {
+			return "", nil
+		}
 		return "", err
 	}
 	switch v := got.(type) {
@@ -381,7 +390,7 @@ func bareValue(s, hole string, ctx []byte) error {
 // escaped (\sh), which the shell all runs as the same command. The word is
 // capture group 1; it must start at a word boundary.
 func cmdWord(names string) string {
-	return `(?:^|[\s;&|(/])(\\(?:` + names + `)|"(?:` + names + `)"|'(?:` + names + `)'|(?:` + names + `))`
+	return `(?:^|[\s;&|(/` + "`" + `])(\\(?:` + names + `)|"(?:` + names + `)"|'(?:` + names + `)'|(?:` + names + `))`
 }
 
 // bareWord is a command word without its quotes or escape.
@@ -403,11 +412,14 @@ var (
 	// PowerShell takes everything after -Command as the command.
 	rePwshCommand = regexp.MustCompile(`(?i)` + cmdWord(`pwsh|powershell|pwsh\.exe|powershell\.exe`) + `\s+(?:[^\s;&|]+\s+)*?(-c|-command|-e|-ec|-encodedcommand)(?:\s|$|["'])`)
 	// su and runuser take a user before -c.
-	reSuC       = regexp.MustCompile(cmdWord(`su|runuser`) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*|--command)(?:\s|=|$|["'])`)
-	reSubscript = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
-	reNumTest   = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
-	reDuration  = regexp.MustCompile(`^[0-9][0-9.]*[smhd]?$`)
-	arithAdvice = "the shell evaluates what is there as an expression, so a value must be checked first: read it into a variable, check it is a number (for example `case \"$n\" in ''|*[!0-9]*) exit 2;; esac`), then use the variable"
+	reSuC        = regexp.MustCompile(cmdWord(`su|runuser`) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*|--command)(?:\s|=|$|["'])`)
+	reSubscript  = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
+	reNumTest    = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
+	reSubstr     = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*:(?:[^-=+?}\x01][^}]*)?\x01`)
+	reOldArith   = regexp.MustCompile(`\$\[[^\]]*\x01`)
+	reDeclareCmd = regexp.MustCompile(cmdWord(`declare|typeset|local|export|readonly`) + `(?:\s|$)`)
+	reDuration   = regexp.MustCompile(`^[0-9][0-9.]*[smhd]?$`)
+	arithAdvice  = "the shell evaluates what is there as an expression, so a value must be checked first: read it into a variable, check it is a number (for example `case \"$n\" in ''|*[!0-9]*) exit 2;; esac`), then use the variable"
 )
 
 // shellNames are the shells (and the variables that name one) a -c script
@@ -452,7 +464,7 @@ func commandSplit(seg string) (string, []string) {
 			skip = false
 			continue
 		}
-		w = strings.Trim(strings.ToLower(bareWord(w)), "()")
+		w = strings.Trim(strings.ToLower(bareWord(w)), "()`")
 		if k := strings.LastIndexByte(w, '/'); k >= 0 && !strings.HasPrefix(w, "$") {
 			w = w[k+1:]
 		}
@@ -528,7 +540,7 @@ func stdinIsCode(seg string) (string, bool) {
 	case "iex", "invoke-expression":
 		return name, true
 	case "source", ".":
-		return name, len(words) == 0 || words[0] == "-" || words[0] == "/dev/stdin" || words[0] == "/proc/self/fd/0"
+		return name, len(words) == 0 || stdinPath(words[0])
 	case "ssh":
 		// options, then the host; any word after the host is the remote
 		// command, and stdin is its data.
@@ -590,10 +602,15 @@ func stdinIsCode(seg string) (string, bool) {
 				i++
 			}
 		default:
-			return name, false // a script file
+			return name, stdinPath(w) // a script file, unless it is stdin itself
 		}
 	}
 	return name, true
+}
+
+// stdinPath: a file name that is the process's own stdin.
+func stdinPath(w string) bool {
+	return w == "-" || w == "/dev/stdin" || w == "/dev/fd/0" || w == "/proc/self/fd/0"
 }
 
 // afterPipe is where the command that a pipe at i feeds begins: past `|&`,
@@ -634,7 +651,7 @@ func lineCommands(s string, ctx []byte, i int) []string {
 	var out []string
 	from := start
 	for k := start; k <= end; k++ {
-		if k == end || (ctx[k] == 'n' && strings.IndexByte("|;&", s[k]) >= 0) {
+		if k == end || (cmdCtx(ctx[k]) && strings.IndexByte("|;&", s[k]) >= 0) {
 			if strings.TrimSpace(s[from:k]) != "" {
 				out = append(out, s[from:k])
 			}
@@ -660,7 +677,7 @@ func readsScript(segs []string) string {
 // its relatives, su -c, ssh or Invoke-Expression, and text fed to a shell or
 // interpreter through a pipe, a heredoc, a here-string or <( … ).
 func evaluatedAgain(s, hole string, ctx []byte) error {
-	plain := func(i int) bool { return i >= 0 && i < len(ctx) && ctx[i] == 'n' }
+	plain := func(i int) bool { return i >= 0 && i < len(ctx) && cmdCtx(ctx[i]) }
 	open := func(i int) bool { return i < len(ctx) && (ctx[i] == 'n' || ctx[i] == 'd') }
 	// $(( … )) and (( … )): find the matching close by paren depth.
 	for i := 0; i+1 < len(s); i++ {
@@ -708,6 +725,42 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 			}
 		}
 		return false
+	}
+	// ${s:offset:length} (not ${s:-…} and friends) and $[ … ] are arithmetic.
+	for _, re := range []*regexp.Regexp{reSubstr, reOldArith} {
+		for _, m := range re.FindAllStringIndex(s, -1) {
+			if open(m[0]) {
+				return fmt.Errorf("a {{ … }} value is in a substring offset or $[ … ], which the shell evaluates as arithmetic; %s", arithAdvice)
+			}
+		}
+	}
+	// declare -n makes a value a variable name; declare "<value>" makes it an
+	// assignment the shell reads (a subscript in it is arithmetic).
+	for _, m := range reDeclareCmd.FindAllStringSubmatchIndex(s, -1) {
+		if !plain(m[2]) {
+			continue
+		}
+		end := commandEnd(s, ctx, m[3])
+		nameref := false
+		for i := m[3]; i < end; {
+			for i < end && (s[i] == ' ' || s[i] == '\t') {
+				i++
+			}
+			j := wordEnd(s, ctx, i)
+			if j <= i {
+				break
+			}
+			w := s[i:j]
+			if strings.HasPrefix(w, "-") && strings.Contains(w, "n") {
+				nameref = true
+			}
+			if h := strings.Index(w, hole); h >= 0 {
+				if eq := strings.IndexByte(w, '='); nameref || eq < 0 || eq > h {
+					return fmt.Errorf("a {{ … }} value is used as a variable name or assignment in %s; assign the value to a variable you name: x=\"{{ … }}\"", bareWord(s[m[2]:m[3]]))
+				}
+			}
+			i = j
+		}
 	}
 	if inCommand(reLet) {
 		return fmt.Errorf("a {{ … }} value is in a let expression; %s", arithAdvice)
@@ -866,11 +919,15 @@ func assignAfter(s string, i int) bool {
 	return j >= 0 && strings.HasPrefix(s[i+j:], "]=")
 }
 
+// cmdCtx: a byte in a context where the shell reads commands — unquoted, or
+// inside backticks (as inside $( … )).
+func cmdCtx(c byte) bool { return c == 'n' || c == 'b' }
+
 // commandEnd is where the simple command running from i ends: the first
 // unquoted ;, &, |, or newline.
 func commandEnd(s string, ctx []byte, i int) int {
 	for ; i < len(s); i++ {
-		if ctx[i] == 'n' && strings.IndexByte(";&|\n", s[i]) >= 0 {
+		if cmdCtx(ctx[i]) && strings.IndexByte(";&|\n", s[i]) >= 0 {
 			return i
 		}
 	}
@@ -883,7 +940,7 @@ func wordEnd(s string, ctx []byte, i int) int {
 		i++
 	}
 	for ; i < len(s); i++ {
-		if ctx[i] == 'n' && strings.IndexByte(" \t;&|\n", s[i]) >= 0 {
+		if cmdCtx(ctx[i]) && strings.IndexByte(" \t;&|\n", s[i]) >= 0 {
 			return i
 		}
 	}
@@ -897,16 +954,21 @@ func quotedHole(s, hole string) string { return scanShell(s, hole, nil) }
 
 // scanShell is quotedHole that also records, when ctx is given, the quoting
 // context of every byte: 'n' unquoted (top level or inside $( … )), 'd' double
-// quotes, 's' single quotes, 'b' backticks, 'h' a heredoc body.
+// quotes, 's' single quotes (and $'…'), 'b' backticks, 'h' a heredoc body.
 func scanShell(s, hole string, ctx []byte) string {
 	const (
 		normal = iota
 		dq
 		sq
 		bq
+		ansi // $'…': like single quotes, but \' does not end it
 	)
-	type frame struct{ kind, depth int }
-	stack := []frame{{normal, 0}}
+	// arith marks $(( … )) and (( … )), where << is a shift, not a heredoc.
+	type frame struct {
+		kind, depth int
+		arith       bool
+	}
+	stack := []frame{{normal, 0, false}}
 	type heredoc struct {
 		word   string
 		strip  bool
@@ -918,14 +980,24 @@ func scanShell(s, hole string, ctx []byte) string {
 		c := s[i]
 		top := &stack[len(stack)-1]
 		if ctx != nil {
-			ctx[i] = "ndsb"[top.kind]
+			ctx[i] = "ndsbs"[top.kind]
 		}
-		if strings.HasPrefix(s[i:], hole) && top.kind == sq {
+		if strings.HasPrefix(s[i:], hole) && (top.kind == sq || top.kind == ansi) {
 			return "single quotes"
 		}
 		switch top.kind {
 		case sq:
 			if c == '\'' {
+				stack = stack[:len(stack)-1]
+			}
+			continue
+		case ansi:
+			if c == '\\' {
+				i++
+				if ctx != nil && i < len(s) {
+					ctx[i] = 's'
+				}
+			} else if c == '\'' {
 				stack = stack[:len(stack)-1]
 			}
 			continue
@@ -935,11 +1007,14 @@ func scanShell(s, hole string, ctx []byte) string {
 				i++
 			case c == '"':
 				stack = stack[:len(stack)-1]
+			case strings.HasPrefix(s[i:], "$(("):
+				stack = append(stack, frame{normal, 2, true})
+				i += 2
 			case c == '$' && i+1 < len(s) && s[i+1] == '(':
-				stack = append(stack, frame{normal, 1})
+				stack = append(stack, frame{normal, 1, false})
 				i++
 			case c == '`':
-				stack = append(stack, frame{bq, 0})
+				stack = append(stack, frame{bq, 0, false})
 			}
 			continue
 		case bq:
@@ -948,9 +1023,9 @@ func scanShell(s, hole string, ctx []byte) string {
 			} else if c == '`' {
 				stack = stack[:len(stack)-1]
 			} else if c == '\'' {
-				stack = append(stack, frame{sq, 0})
+				stack = append(stack, frame{sq, 0, false})
 			} else if c == '"' {
-				stack = append(stack, frame{dq, 0})
+				stack = append(stack, frame{dq, 0, false})
 			}
 			continue
 		}
@@ -959,14 +1034,22 @@ func scanShell(s, hole string, ctx []byte) string {
 		case c == '\\':
 			i++
 			atWordStart = false
-		case c == '\'': // also $'…', which expands no variables either
-			stack = append(stack, frame{sq, 0})
+		case c == '\'' && i > 0 && s[i-1] == '$':
+			stack = append(stack, frame{ansi, 0, false})
+		case c == '\'':
+			stack = append(stack, frame{sq, 0, false})
 		case c == '"':
-			stack = append(stack, frame{dq, 0})
+			stack = append(stack, frame{dq, 0, false})
 		case c == '`':
-			stack = append(stack, frame{bq, 0})
+			stack = append(stack, frame{bq, 0, false})
+		case strings.HasPrefix(s[i:], "$(("):
+			stack = append(stack, frame{normal, 2, true})
+			i += 2
+		case strings.HasPrefix(s[i:], "((") && atWordStart:
+			stack = append(stack, frame{normal, 2, true})
+			i++
 		case c == '$' && i+1 < len(s) && s[i+1] == '(':
-			stack = append(stack, frame{normal, 1})
+			stack = append(stack, frame{normal, 1, false})
 			i++
 		case c == '(' && len(stack) > 1:
 			top.depth++
@@ -980,7 +1063,7 @@ func scanShell(s, hole string, ctx []byte) string {
 				i++
 			}
 			i-- // let the newline be handled below
-		case c == '<' && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<"):
+		case c == '<' && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<") && !top.arith:
 			j := i + 2
 			h := heredoc{}
 			if j < len(s) && s[j] == '-' {

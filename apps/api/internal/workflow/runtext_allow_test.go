@@ -303,3 +303,81 @@ func TestMigratedFallbacksBehaveAsBefore(t *testing.T) {
 		}
 	}
 }
+
+// Shapes that once slipped past the shell checks: a shift read as a heredoc
+// start, backtick bodies, stdin named as a file, $'…' escapes, substring
+// offsets, $[ … ] and declare. Each is refused; the near misses still load.
+func TestMoreShellShapesAreChecked(t *testing.T) {
+	for _, run := range []string{
+		// << inside arithmetic is a shift: what follows is still checked
+		"x=$(( 1<<true ))\neval \"{{ .Input.x }}\"",
+		"x=$(( 1<<2 ))\n(( n = {{ .Input.x }} ))",
+		"(( y = 1<<2 ))\neval \"{{ .Input.x }}\"",
+		"echo \"$(( 1<<2 ))\"\neval \"{{ .Input.x }}\"",
+		// backtick bodies are commands
+		"`eval \"{{ .Input.x }}\"`",
+		"y=`sh -c \"echo {{ .Input.x }}\"`",
+		// stdin named as a file
+		"bash /dev/stdin <<EOF\n{{ .Input.x }}\nEOF",
+		"sh /dev/fd/0 <<EOF\n{{ .Input.x }}\nEOF",
+		"python3 /dev/stdin <<EOF\n{{ .Input.x }}\nEOF",
+		// $'…' with an escaped quote
+		`echo $'\'' "'" ; eval {{ .Input.x }} # "`,
+		`echo $'it\'s' && eval "{{ .Input.x }}"`,
+		// substring offsets, $[ ], declare
+		`echo "${s:{{ .Input.x }}}"`,
+		`echo "${s:0:{{ .Input.x }}}"`,
+		`echo "$[ {{ .Input.x }} + 1 ]"`,
+		`declare -n r="{{ .Input.x }}"`,
+		`declare "{{ .Input.x }}"`,
+		`local -n r="{{ .Input.x }}"`,
+		`export "{{ .Input.x }}"`,
+	} {
+		if err := checkRunText(run, "bash"); err == nil {
+			t.Errorf("%q accepted", run)
+		}
+	}
+	for _, run := range []string{
+		"x=$(( 1<<2 ))\necho \"{{ .Input.x }}\"",
+		"y=`date`; echo \"{{ .Input.x }}\"",
+		"bash ./script.sh <<EOF\n{{ .Input.x }}\nEOF",
+		`echo $'it\'s' && echo "{{ .Input.x }}"`,
+		`echo "${s:-{{ .Input.x }}}"`,
+		`echo "${s:={{ .Input.x }}}"`,
+		`declare x="{{ .Input.x }}"`,
+		`local -r y="{{ .Input.x }}"`,
+		`export X="{{ .Input.x }}"`,
+	} {
+		if err := checkRunText(run, "bash"); err != nil {
+			t.Errorf("%q refused: %v", run, err)
+		}
+	}
+}
+
+// Anything absent arrives empty, whatever the path goes through.
+func TestAbsentValuesArriveEmpty(t *testing.T) {
+	rt, err := RenderRun(`echo "{{ .Steps.missing.output.y }}|{{ .Decide.q }}|{{ .Input.a.b }}|{{ .Item.z }}|{{ .Workflow.k }}|{{ .Input.s.t }}|{{ .Output.v }}"`,
+		TemplateData{Input: map[string]any{"s": "text"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range rt.Data {
+		if v != "" {
+			t.Errorf("value %d = %q", i+1, v)
+		}
+	}
+}
+
+// A task's literal inputs are its step's constants, looked up by the input's
+// own name: two names that differ only by '-' and '_' stay apart.
+func TestStepConstantsKeepEachInputApart(t *testing.T) {
+	consts := map[string]string{}
+	run := substRunInputs(`echo "{{ .Inputs.a-b }}" "{{ .Inputs.a_b }}"`, map[string]any{"a-b": "one", "a_b": "two"}, consts)
+	if err := checkRunText(run, "sh"); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := RenderRun(run, TemplateData{Const: consts})
+	if err != nil || strings.Join(rt.Data, ",") != "one,two" {
+		t.Fatalf("data %q %v (run %q)", rt.Data, err, run)
+	}
+}

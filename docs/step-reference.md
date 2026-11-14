@@ -53,7 +53,8 @@ arrive the same way; there is no exception for them.
 
 - **A string arrives as it is. Any other value arrives as JSON**: an object, a
   list, a number or a boolean, indented as the `json` function writes it. An
-  absent value arrives empty. A key that only `index` could reach (a space or
+  absent value arrives empty, whatever the path goes through: a step that did
+  not run, a key a value does not have, an unset judge answer or state key. A key that only `index` could reach (a space or
   odd characters in it) can't be referenced. Reference the whole value instead
   and read the key in the script:
   `printf '%s' "{{ .Steps.x.output }}" | jq -r '.["odd key"]'`.
@@ -101,7 +102,12 @@ arrive the same way; there is no exception for them.
   - a value written to a file that is then sourced or run;
   - a value inside the program text of `awk`, `sed -e`, `jq`, `find -exec`,
     `watch`, `flock -c`, `script -c`, `tmux` commands, `git -c alias.*=!…`, or
-    an interpreter not listed above.
+    an interpreter not listed above;
+  - a command word split by a line continuation (`ev\` + newline + `al`), or
+    named by a default (`${SHELL:-sh} -c`);
+  - a shell started through a wrapper's own placeholder (`xargs -I{} sh -c`);
+  - a value in `PS4` with `set -x`, or in an `alias`;
+  - pwsh `[scriptblock]::Create(…)`.
 
   Pass values to such programs as arguments, environment or files, never inside
   their code. For input that comes from outside (hooks, MCP), typed inputs that
@@ -118,7 +124,8 @@ arrive the same way; there is no exception for them.
 - The same happens on a worker: the job carries the command and its values
   separately, and the worker uses its own shell's syntax for the references.
 - A task's or module's literal inputs (`inputs:`/`with:` values) become the
-  step's constants, referenced as `{{ .Const.<name> }}`, and arrive the same way.
+  step's constants, referenced as `{{ .Const.<name> }}` by the input's own
+  name, and arrive the same way.
 
 ## A non-zero exit fails the step
 
