@@ -18,7 +18,8 @@
 # writer: sends queued through wfnexus (the outbox) go out from this process.
 #
 # whatsapp-send (command): applies the response policy — draft (the default)
-# and none send nothing, approval waits for a person, auto sends — and queues
+# and none send nothing; approval and auto send (approval is the engine's
+# pause: every send already waited for a person) — and queues
 # the send on the running whatsapp service of the profile's account, then waits
 # for its answer: sent, failed, or uncertain (never resent).
 name: apl
@@ -51,7 +52,7 @@ commands:
       chat:           { type: string, required: true, description: chat JID (DM or group) }
       text:           { type: string, required: true }
       replyTo:        { type: string, default: "", description: message id to quote-reply to }
-      responsePolicy: { type: string, default: draft, description: "draft | approval | auto | none" }
+      responsePolicy: { type: string, default: draft, description: "draft | approval | auto | none. approval = the engine's pause: the call already waits for a person, then sends" }
       profile:        { type: string, default: "", description: "apl profile (default: the module's default profile)" }
       key:            { type: string, default: "", description: "idempotency key (default: hash of chat+text+replyTo)" }
     outputs:
@@ -93,19 +94,10 @@ commands:
             equals: 2
             action: fail
             message: "The send request is invalid — see stdout."
-      - id: approve
-        name: A person approves this send
-        needs: [plan]
-        when:
-          - path: plan.exitCode
-            equals: 10
-        requires_approval: true
-        run: python3 -c "import json; p=json.load(open('plan.json')); print('to', p['chat']); print(p['text'])"
-        timeout_sec: 30
       - id: send
         name: Send through the account's whatsapp service
         description: Drafted/skipped by policy, or queued on the service's outbox and waited for. Prints the typed result.
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: |
           python3 - <<'PY'
@@ -151,11 +143,11 @@ commands:
       body: { type: string, required: true }
       handle: { type: string, default: "", description: "apl handle, e.g. ms:work or google:me (default: the profile's mail_handle)" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.to }}" > in.to
@@ -168,17 +160,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through apl"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/apl_cmd.py" act mail-send
   mail-draft:
@@ -225,11 +209,11 @@ commands:
       text: { type: string, required: true }
       handle: { type: string, default: "", description: "ms: handle (default: the profile's teams_handle)" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.chat }}" > in.chat
@@ -241,17 +225,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through apl"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/apl_cmd.py" act teams-send
   calendar-list:
@@ -279,11 +255,11 @@ commands:
       attendees: { type: string, default: "", description: "emails, comma separated" }
       handle: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.subject }}" > in.subject
@@ -297,17 +273,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through apl"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/apl_cmd.py" act calendar-create
   drive-get:
@@ -335,11 +303,11 @@ commands:
       file: { type: string, required: true, description: "local file to upload" }
       handle: { type: string, default: "" }
       profile: { type: string, default: "", description: "profile (default: the module's default profile)" }
-      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing)" }
+      responsePolicy: { type: string, default: "draft", description: "draft | approval | auto | none (default draft: does nothing). approval = the engine's pause: the call already waits for a person, then writes" }
     steps:
       - id: plan
         name: Apply the response policy
-        description: Exit 0 auto, 10 a person approves first, 11 draft, 12 none, 2 invalid.
+        description: Exit 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 invalid.
         continue-on-error: true
         run: |
           printf '%s\n' "{{ .Inputs.path }}" > in.path
@@ -351,17 +319,9 @@ commands:
         timeout_sec: 30
         gates:
           - { field: exitCode, equals: 2, action: fail, message: "invalid request — see stdout" }
-      - id: approve
-        name: A person approves
-        needs: [plan]
-        when:
-          - { path: plan.exitCode, equals: 10 }
-        requires_approval: true
-        run: cat in.* 2>/dev/null | head -50
-        timeout_sec: 30
       - id: act
         name: "Do it through apl"
-        needs: [plan, approve]
+        needs: [plan]
         timeout_sec: 180
         run: python3 "$WFX_MODULE_DIR/apl_cmd.py" act drive-put
   contacts-find:

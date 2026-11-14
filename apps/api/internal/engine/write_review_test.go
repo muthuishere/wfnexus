@@ -184,3 +184,76 @@ func TestAnApprovedWriteCallWhoseInputChangedDoesNotRun(t *testing.T) {
 		t.Fatalf("gh ran with an input that changed after approval: %s", b)
 	}
 }
+
+// responsePolicy: approval is the engine's pause: a gh write with it pauses
+// exactly once, then writes; draft still writes nothing after approval.
+func TestApprovalPolicyIsTheEnginesSinglePause(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	for policy, wantWrite := range map[string]bool{"approval": true, "draft": false} {
+		t.Run(policy, func(t *testing.T) {
+			calls := ghStub(t)
+			defs := loadWithModules(t, map[string]string{
+				"w.yaml": "name: w\nsteps:\n  - id: open\n    uses: gh.issue-create@0\n    with: { title: t, repo: o/r, responsePolicy: " + policy + " }\n",
+			})
+			h := newHarness(t, defs["w"], newFakeLLM(t), "")
+			h.eng.cfg.ModulesDir = repoPath(t, "modules")
+			run := h.run(nil)
+			if run.Status != "awaiting_approval" {
+				t.Fatalf("run = %s", run.Status)
+			}
+			if err := h.eng.Approve(context.Background(), run.ID, run.CurrentStep, Actor{ID: "alice", Via: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			run = h.wait(run.ID)
+			if run.Status != "done" {
+				t.Fatalf("after one approval the run = %s (%s), want done: no second pause", run.Status, run.Error)
+			}
+			b, _ := os.ReadFile(calls)
+			if wrote := strings.Contains(string(b), "issue create"); wrote != wantWrite {
+				t.Fatalf("policy %s: wrote = %v, want %v (%s)", policy, wrote, wantWrite, b)
+			}
+		})
+	}
+}
+
+// That single pause keeps the workflow's approver policy: where the workflow
+// says who may approve, whoever started the run may not approve its write.
+func TestTheWritePauseRefusesSelfApprovalUnderAPolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	calls := ghStub(t)
+	defs := loadWithModules(t, map[string]string{
+		"w.yaml": "name: w\nsteps:\n  - id: review\n    run: echo ok\n    approvers: [ada, bob]\n  - id: open\n    needs: [review]\n    uses: gh.issue-create@0\n    with: { title: t, repo: o/r, responsePolicy: approval }\n",
+	})
+	h := newHarness(t, defs["w"], newFakeLLM(t), "")
+	h.eng.cfg.ModulesDir = repoPath(t, "modules")
+	run, err := h.store.CreateRun(context.Background(), "local", "w", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetTriggeredBy(context.Background(), run.ID, "ada"); err != nil {
+		t.Fatal(err)
+	}
+	h.runs = append(h.runs, run.ID)
+	h.eng.Start(run.ID)
+	got := h.wait(run.ID)
+	if got.Status != "awaiting_approval" {
+		t.Fatalf("run = %s (%s)", got.Status, got.Error)
+	}
+	err = h.eng.Approve(context.Background(), run.ID, got.CurrentStep, Actor{ID: "ada", Via: "api", Authenticated: true, Role: "admin"})
+	if err == nil || !strings.Contains(err.Error(), "started this run") {
+		t.Fatalf("the starter approving their own write returned %v", err)
+	}
+	if err := h.eng.Approve(context.Background(), run.ID, got.CurrentStep, Actor{ID: "bob", Via: "api", Authenticated: true, Role: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if done := h.wait(run.ID); done.Status != "done" {
+		t.Fatalf("after bob approved: %s (%s)", done.Status, done.Error)
+	}
+	if b, _ := os.ReadFile(calls); !strings.Contains(string(b), "issue create") {
+		t.Fatalf("the approved write did not happen: %s", b)
+	}
+}
