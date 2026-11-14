@@ -227,15 +227,26 @@ of that command's steps runs.
   step's script, every value the script receives (`WFX_DATA_n`, and the files
   large values go to), the step's constants, the environment the call runs
   with (hashed, never shown: `GH_HOST`, env-store values, …), the module's
-  version and the step's definition. If any of it changes before the step
-  starts (a workflow edited and reloaded, a value or an env-store entry
-  changed), the step fails with "changed after it was approved" instead of
-  running something nobody approved. Approve it again with a retry.
+  version, the step's definition and the module profile the call resolves
+  to. It is checked before every step of the call, not only the first: if any
+  of it changes (a workflow edited and reloaded, a value, an env-store entry
+  or the profile changed), the step fails with "changed after it was
+  approved" instead of running something nobody approved. Approve it again
+  with a retry.
+- **The profile is resolved at the pause:** a command with a `profile` input
+  (gh's repo, apl's handles) gets the profile the call names, or the module's
+  default, resolved by the engine when the run pauses. The pause shows it
+  (name, account, its inputs such as `repo=`), and every step of the call
+  runs with that resolved profile (`WFX_MODULE_PROFILE`); a step never looks
+  the default up for itself.
+- **A retry starts the call again:** retrying any step of a write call resets
+  the call from its first step, which pauses again for approval.
 - **Files between a call's steps:** after each step of a write call the
   engine fingerprints the call's files (`in.*`, `plan.json`). The next write
   step compares before it runs: a file changed in between, by anything,
-  fails it with "changed after it was approved". The record is held in memory,
-  so after a server restart a half-done write call fails (nothing is
+  fails it with "changed after it was approved". The record (and the call's
+  approval record, once its first step has started) is held in memory, so
+  after a server restart a half-done write call fails (nothing more is
   written); run it again.
 - **A call follows its first step:** a call's `when:` is decided once, on
   the call's first step. If that step is skipped, every step of the call is
@@ -264,6 +275,11 @@ of that command's steps runs.
     definition doesn't change it.
   - A write's approval needs a named approver; there is no exemption for an
     unnamed local answer.
+  - Under a policy, a write's approval needs a signed-in user. On the
+    unauthenticated loopback the approver is only a typed name, and anyone
+    there could type an approver's name (or any name but the starter's), so a
+    typed name is refused for a write held to a policy. With no policy a
+    typed name is still accepted.
   - A second account or a service token counts as a different person: the
     check is on the account name, not on who is behind it.
 - **Agents are different:** an agent step that lists a write command in its

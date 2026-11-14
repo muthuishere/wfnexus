@@ -144,6 +144,12 @@ type Step struct {
 	// call, and a write step runs only after an approved, finished head.
 	CallHead string `yaml:"-" json:"callHead,omitempty"`
 	CallSelf string `yaml:"-" json:"callSelf,omitempty"`
+	// CallProfile is the `profile` input a module command was called with
+	// (possibly a template; empty means the module's default profile), on
+	// each step of a command that declares one. nil: the command has no
+	// profile input. The engine resolves it and hands the step the resolved
+	// profile, so a step never looks the default up for itself.
+	CallProfile *string `yaml:"-" json:"callProfile,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`

@@ -23,7 +23,9 @@ import (
 // is stored with the pause. When the approved step starts, the call is
 // rendered again; if it differs (the workflow was edited and reloaded, or a
 // value it reads changed), the step fails instead of running something that
-// was not the thing approved.
+// was not the thing approved. The check is repeated before EVERY step of the
+// call, not only the first, so nothing that changes between the call's steps
+// (a reload, an env-store value, the profile) reaches a later step.
 
 type writePause struct {
 	Kind   string `json:"kind"`
@@ -32,17 +34,22 @@ type writePause struct {
 	// Who may answer, as the definition said when the run paused.
 	Approvers   []string `json:"approvers,omitempty"`
 	PreventSelf bool     `json:"preventSelf,omitempty"`
+	// Profile is the module profile the call resolved at the pause, which
+	// every step of the call runs with (profilepin.go).
+	Profile *resolvedProfile `json:"profile,omitempty"`
 }
 
-// writeEffect renders the write call that step opens and pins it.
-func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) (shown, pin string) {
+// writeEffect renders the write call step belongs to and pins it, with the
+// profile the call resolves to.
+func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) (shown, pin string, prof *resolvedProfile) {
+	head := callHeadRow(step)
 	prefix := ""
-	if i := strings.LastIndex(step.ID, "."); i >= 0 {
-		prefix = step.ID[:i+1]
+	if i := strings.LastIndex(head, "."); i >= 0 {
+		prefix = head[:i+1]
 	}
-	// The same view of the run's data at the pause and at the start: state
-	// included, as the step itself renders it.
-	data = e.withState(ctx, data, def, runID, step.ID)
+	// The same view of the run's data at the pause and at every step: state
+	// included, as the call's first step renders it.
+	data = e.withState(ctx, data, def, runID, head)
 	// The pin covers what will actually run: each step's script as the
 	// engine renders it (references to WFX_DATA_n), every value those
 	// references carry (a large one is written to a file from the same
@@ -110,18 +117,28 @@ func (e *Engine) writeEffect(ctx context.Context, runID uuid.UUID, def *workflow
 		}
 		def := sha256.Sum256(mustJSON(s))
 		pinWrite("definition", hex.EncodeToString(def[:]))
+		// The profile the call resolves to — its name and contents — once.
+		if prof == nil {
+			if p, ok := e.callProfile(ctx, &step, d); ok {
+				prof = &p
+				pinWrite("profile", string(mustJSON(p)))
+			}
+		}
+	}
+	if prof != nil {
+		b.WriteString(prof.describe())
 	}
 	scrub := e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
-	return scrub(b.String()), hex.EncodeToString(h.Sum(nil))
+	return scrub(b.String()), hex.EncodeToString(h.Sum(nil)), prof
 }
 
 // pauseForWrite parks a write command's first step, showing what it will run.
 func (e *Engine) pauseForWrite(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) {
-	shown, pin := e.writeEffect(ctx, runID, def, step, data)
+	shown, pin, prof := e.writeEffect(ctx, runID, def, step, data)
 	e.setStep(ctx, runID, step.ID, model.StepPatch{
 		Status: str("awaiting_approval"), Prompt: str(shown),
 		Pending: mustJSON(writePause{Kind: "write", Effect: shown, Pin: pin,
-			Approvers: step.Approvers, PreventSelf: step.PreventSelfApproval}),
+			Approvers: step.Approvers, PreventSelf: step.PreventSelfApproval, Profile: prof}),
 	})
 	e.setRun(ctx, runID, "awaiting_approval", step.ID, "")
 	msg := "step " + step.ID + " is a write and needs approval before it runs. It will run:\n" + shown
@@ -131,14 +148,19 @@ func (e *Engine) pauseForWrite(ctx context.Context, runID uuid.UUID, def *workfl
 	e.notifyPause(ctx, runID, step.ID, "approval", msg, nil)
 }
 
-// checkWritePin refuses to start an approved write call whose render is no
-// longer the one approved.
-func (e *Engine) checkWritePin(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData, pending json.RawMessage) error {
+// checkWritePin refuses to start any step of an approved write call whose
+// render is no longer the one approved. The pause is recorded on the call's
+// first step.
+func (e *Engine) checkWritePin(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) error {
+	pending, err := e.writePauseOf(ctx, runID, step)
+	if err != nil {
+		return err
+	}
 	var p writePause
 	if len(pending) == 0 || json.Unmarshal(pending, &p) != nil || p.Kind != "write" || p.Pin == "" {
 		return fmt.Errorf("step %s was approved without the record of what it would run; approve it again", step.ID)
 	}
-	if _, pin := e.writeEffect(ctx, runID, def, step, data); pin != p.Pin {
+	if _, pin, _ := e.writeEffect(ctx, runID, def, step, data); pin != p.Pin {
 		return fmt.Errorf("what step %s would run changed after it was approved (the workflow or a value it reads changed); approve it again", step.ID)
 	}
 	return nil
