@@ -182,7 +182,8 @@ func TestAStepThatPrintsASecretStoresNoFormOfIt(t *testing.T) {
 			}
 			for where, text := range places {
 				for form, v := range scrubForms() {
-					if strings.Contains(text, v) {
+					esc, _ := json.Marshal(v) // as it is spelled inside JSON (& → \u0026)
+					if strings.Contains(text, v) || strings.Contains(text, string(esc[1:len(esc)-1])) {
 						t.Errorf("%s holds the %s form of the secret", where, form)
 					}
 				}

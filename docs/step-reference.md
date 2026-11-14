@@ -48,3 +48,17 @@ steps:
 - A gate whose condition matches the output routes instead of failing.
 
 Prefer `exit-codes` when you know which codes are answers.
+
+## Secrets travel through the environment, never through step output
+
+A step gets its secrets as environment variables: env-store values, and any
+credential-shaped name (`*_TOKEN`, `*_KEY`, …). If a step prints one, the
+platform removes it **before anything is stored**: stdout and stderr, the
+step's output and raw text, its error, the run's outcome, events, artifacts,
+and a worker's report and live log. That applies to the value itself and to
+its JSON-escaped, base64 (standard and URL alphabets), hex and URL-encoded
+forms. In its place, stored text shows `[redacted:NAME]`.
+
+The step after it therefore reads the scrubbed text: `.Steps.x.output` never
+carries a secret. To hand a credential to a later step, give that step the
+same environment variable; don't print it and read it back.
