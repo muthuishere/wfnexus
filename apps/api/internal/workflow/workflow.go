@@ -1504,3 +1504,37 @@ func reservedEnv(where string, env map[string]string) error {
 	sort.Strings(bad)
 	return fmt.Errorf("%s: env sets %s; WFX_* variables are provided by the platform or the env store (wfx env), never by a workflow", where, strings.Join(bad, ", "))
 }
+
+// writeOnWorker is the refusal of a write call placed on a worker.
+const writeOnWorker = "write commands run on the server's runner only for now"
+
+// checkWritePlacement refuses a write call whose steps would run on a worker:
+// what guards a write between its approval and its steps (the fingerprint of
+// the call's files) is only taken on the server's own runner. A step runs on
+// a worker when its runs-on — its own, its job's or the workflow's — is not a
+// label the server serves itself, or is decided by a template at run time.
+func checkWritePlacement(d *Definition, local []string) error {
+	if len(local) == 0 {
+		local = []string{"local"}
+	}
+	var walk func(steps []Step) error
+	walk = func(steps []Step) error {
+		for _, s := range steps {
+			if err := walk(s.Steps); err != nil {
+				return err
+			}
+			if !s.WriteEffect || s.RunsOn == "" {
+				continue
+			}
+			served := false
+			for _, l := range local {
+				served = served || strings.EqualFold(l, s.RunsOn)
+			}
+			if strings.Contains(s.RunsOn, "{{") || !served {
+				return fmt.Errorf("%s/%s: runs-on %q places this module command's step on a worker; %s", d.Name, s.ID, s.RunsOn, writeOnWorker)
+			}
+		}
+		return nil
+	}
+	return walk(d.Steps)
+}

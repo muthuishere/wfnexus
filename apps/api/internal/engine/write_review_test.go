@@ -373,3 +373,17 @@ func TestAWritePauseIsAnsweredUnderThePinnedPolicy(t *testing.T) {
 		t.Fatal("an unnamed answer approved a write")
 	}
 }
+
+// The same rule at dispatch, for a definition the loader never saw: a write
+// step placed on a worker fails before a job is queued for it.
+func TestAWriteStepIsNotDispatchedToAWorker(t *testing.T) {
+	def := &workflow.Definition{Name: "placed-write", Steps: []workflow.Step{{
+		ID: "send.act", Run: "echo would write", RunsOn: "box-elsewhere", WriteEffect: true,
+	}}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	run := h.run(nil)
+	if run.Status != "failed" || !strings.Contains(run.Error, "write commands run on the server's runner only for now") {
+		t.Fatalf("run = %s (%s)", run.Status, run.Error)
+	}
+}

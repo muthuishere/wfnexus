@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,5 +150,65 @@ func TestAWritePauseFollowsTheWorkflowsApproverPolicy(t *testing.T) {
 		if s.ID == "s.plan" && !s.PreventSelfApproval {
 			t.Fatal("the workflow has an approvers policy, yet the write may be self-approved")
 		}
+	}
+}
+
+// placedWriteModule is a write module whose steps run where runsOn says.
+func placedWriteModule(t *testing.T, runsOn string) []*Module {
+	t.Helper()
+	reg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(reg, "p"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(reg, "p", "module.yaml"), fmt.Sprintf(`
+name: p
+version: 1.0.0
+commands:
+  send:
+    effect: write
+    inputs:
+      machine: { required: true }
+    steps:
+      - { id: act, run: echo act, runs-on: %q }
+`, runsOn))
+	mods, errs := FindModules("reg", reg)
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	return mods
+}
+
+// A write call whose steps would run on a worker is refused at load, however
+// the worker is named (the workflow, a job, the module's own steps, a
+// template); one on a label the server serves itself loads.
+func TestAWriteCallOnAWorkerIsRefusedAtLoad(t *testing.T) {
+	const call = "    uses: %s@1\n    with: { machine: x }\n"
+	for name, c := range map[string]struct {
+		mods []*Module
+		wf   string
+	}{
+		"workflow runs-on": {writeModule(t), "name: w\nruns-on: build-box\nsteps:\n  - id: s\n    uses: m.send@1\n"},
+		"job runs-on":      {writeModule(t), "name: w\njobs:\n  j:\n    runs-on: build-box\n    steps:\n      - id: s\n        uses: m.send@1\n"},
+		"module step":      {placedWriteModule(t, "build-box"), "name: w\nsteps:\n  - id: s\n" + fmt.Sprintf(call, "p.send")},
+		"templated":        {placedWriteModule(t, "{{ .Input.machine }}"), "name: w\nsteps:\n  - id: s\n" + fmt.Sprintf(call, "p.send")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "w.yaml"), c.wf)
+			_, err := LoadDirWithTasks(dir, "", catalog(), WithModules(c.mods), WithLocalLabels([]string{"local"}))
+			if err == nil || !strings.Contains(err.Error(), "write commands run on the server's runner only for now") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	dir := t.TempDir()
+	mods := append(placedWriteModule(t, "server-box"), writeModule(t)...)
+	write(t, filepath.Join(dir, "w.yaml"), "name: w\nsteps:\n  - id: s\n"+fmt.Sprintf(call, "p.send")+"  - id: r\n    uses: m.read@1\n")
+	if _, err := LoadDirWithTasks(dir, "", catalog(), WithModules(mods), WithLocalLabels([]string{"server-box"})); err != nil {
+		t.Fatalf("a write on a label the server serves should load: %v", err)
+	}
+	write(t, filepath.Join(dir, "w.yaml"), "name: w\nruns-on: build-box\nsteps:\n  - id: r\n    uses: m.read@1\n")
+	if _, err := LoadDirWithTasks(dir, "", catalog(), WithModules(mods), WithLocalLabels([]string{"server-box"})); err != nil {
+		t.Fatalf("a read on a worker should load: %v", err)
 	}
 }

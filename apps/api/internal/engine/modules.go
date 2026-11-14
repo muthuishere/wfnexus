@@ -101,5 +101,5 @@ func (e *Engine) ModuleViews(ctx context.Context) ([]ModuleView, []string) {
 
 func (e *Engine) moduleLoadOption() workflow.LoadOption {
 	mods, _ := e.Modules()
-	return workflow.WithModules(mods)
+	return workflow.Options(workflow.WithModules(mods), workflow.WithLocalLabels(e.cfg.RunnerLabels))
 }
