@@ -506,6 +506,16 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: step %s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, s.ID, s.RunsOn)
 		}
 	}
+	// WFX_* names belong to the platform (run facts, module and data
+	// variables) and to the env store; a workflow may not set one.
+	if err := reservedEnv(d.Name, d.Env); err != nil {
+		return err
+	}
+	for _, s := range d.Steps {
+		if err := reservedEnv(d.Name+"/"+s.ID, s.Env); err != nil {
+			return err
+		}
+	}
 	// Mounts and sidecar files are checked BEFORE the steps, because they
 	// decide what the steps can reach. A workflow that could not attach its
 	// folders safely must not load at all, let alone run.
@@ -1424,3 +1434,21 @@ func ParseYAML(raw []byte) (*Definition, error) {
 
 // MarshalYAML renders a definition as the document a bundle carries.
 func MarshalYAML(d *Definition) ([]byte, error) { return yaml.Marshal(d) }
+
+// reservedEnv refuses an env block that sets a WFX_* variable: that prefix is
+// the platform's (WFX_RUN_ID, WFX_STEP_ID, WFX_API, WFX_DATA_*, …) and the env
+// store's (WFX_CONVERSATION_*, …). A workflow that could set one could steer
+// a module to another credential or impersonate a run fact.
+func reservedEnv(where string, env map[string]string) error {
+	var bad []string
+	for k := range env {
+		if strings.HasPrefix(strings.ToUpper(k), "WFX_") {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("%s: env sets %s; WFX_* variables are provided by the platform or the env store (wfx env), never by a workflow", where, strings.Join(bad, ", "))
+}

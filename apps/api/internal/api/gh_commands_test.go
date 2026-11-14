@@ -69,7 +69,7 @@ func TestGhCommandWrappers(t *testing.T) {
 		t.Fatalf("issue-comment: %s %s", st, out)
 	}
 	last(1, "issue comment 12 -R o/r --body-file -", "| looks good")
-	if st, _ := callCmd(t, h, "gh.pr-comment", map[string]any{"number": "3", "body": "ship it", "responsePolicy": "approval"}); st != "awaiting_approval" {
+	if st := callPaused(t, h, "gh.pr-comment", map[string]any{"number": "3", "body": "ship it", "responsePolicy": "approval"}); st != "awaiting_approval" {
 		t.Fatalf("pr-comment approval: %s", st)
 	}
 	last(1)

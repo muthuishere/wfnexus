@@ -4,7 +4,8 @@
 //                               step wrote; never interpolated into a command)
 //
 // read runs only the actions the profile lists in read_actions (none listed =
-// no reads); act runs any action (the step is a write that pauses first).
+// no reads); act runs any action (marked effect: write, so the engine pauses
+// the run for approval before it).
 //
 // Config: $WFX_BROWSER_CONFIG or ~/.config/wfx/browser.json —
 //   {"default":"us","profiles":{"us":{"command":["some-browser-cli"],

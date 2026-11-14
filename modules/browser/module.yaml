@@ -14,7 +14,8 @@
 # A named profile that is not configured fails the step; the default is used
 # only when no profile is named. `read` runs only the actions the profile
 # lists in read_actions (none listed = no reads). `act` runs any action and
-# is a write: the step pauses for approval. `wfx doctor` lists the profiles.
+# is marked effect: write, so the engine pauses the run for approval before
+# it. `wfx doctor` lists the profiles.
 name: browser
 version: 0.1.0
 description: Run the configured browser command with a named profile (folder + proxy) — read, or act with approval.
@@ -42,7 +43,7 @@ commands:
           node "$WFX_MODULE_DIR/browser.mjs" read
   act:
     effect: write
-    description: "Run a browser action that changes something on a site; pauses for approval."
+    description: "Run a browser action that changes something on a site (effect: write: the engine pauses the run for approval first)."
     inputs:
       profile: { type: string, default: "", description: "profile name (default: the configured default)" }
       action: { type: string, required: true, description: "the action passed to the browser command" }
