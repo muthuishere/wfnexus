@@ -58,6 +58,9 @@ func buildProviders(s *Server) {
 		}
 	}
 	s.providers = ps
+	if s.configuredPublicURL() == "" {
+		log.Printf("WARNING: WFX_PUBLIC_URL (publicUrl) is not set: worker join commands, hook and MCP addresses and device links fall back to %s, which other machines may not reach; set WFX_PUBLIC_URL to the address clients use", s.externalBase(nil))
+	}
 }
 
 func (s *Server) configuredPublicURL() string { return strings.TrimRight(s.eng.PublicURL(), "/") }
@@ -98,14 +101,22 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	u, err := s.store.UserBySubject(ctx, provider, id.Subject)
 	if errors.Is(err, store.ErrNotFound) && id.LegacySubject != "" && id.LegacySubject != id.Subject {
 		// The same person bound under the subject an older version used (an
-		// LDAP username): moved to the stable one, once.
-		if ok, rerr := s.store.ReKeySubject(ctx, provider, id.LegacySubject, id.Subject); rerr == nil && ok {
-			u, err = s.store.UserBySubject(ctx, provider, id.Subject)
-			account := "(unknown)"
-			if err == nil {
-				account = u.Name
+		// LDAP username, matched ignoring case as the directory does): moved
+		// to the stable one, once — and only when exactly one binding matches.
+		olds, ferr := s.store.UsersBoundToFold(ctx, provider, id.LegacySubject)
+		switch {
+		case ferr != nil:
+			return nil, ferr
+		case len(olds) == 1:
+			if ok, rerr := s.store.ReKeyUser(ctx, olds[0].ID, provider, id.Subject); rerr != nil {
+				return nil, rerr
+			} else if ok {
+				log.Printf("auth: AUDIT account %s re-keyed to directory id %s on sign-in as %s (%s)", olds[0].Name, id.Subject, id.Username, provider)
+				u, err = s.store.UserBySubject(ctx, provider, id.Subject)
 			}
-			log.Printf("auth: AUDIT account %s re-keyed to directory id %s on sign-in as %s (%s)", account, id.Subject, id.Username, provider)
+		case len(olds) > 1:
+			log.Printf("auth: AUDIT sign-in as %s (%s) refused: accounts %s are all bound to %q and differ only in case; an admin removes or renames all but one", id.Username, provider, userNames(olds), id.LegacySubject)
+			return nil, errAmbiguousAccount
 		}
 	}
 	switch {
@@ -129,6 +140,18 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	return s.store.UserByName(ctx, u.Name)
 }
 
+// errAmbiguousAccount: several existing accounts could be this person's (their
+// names differ only in case); none is picked.
+var errAmbiguousAccount = errors.New("more than one account matches this sign-in; an administrator must resolve it")
+
+func userNames(us []*store.User) string {
+	names := make([]string, len(us))
+	for i, u := range us {
+		names[i] = u.Name
+	}
+	return strings.Join(names, ", ")
+}
+
 // bindOrCreate handles a (provider, subject) seen for the first time.
 //
 // A legacy row named <user>@<provider> (one that existed before subjects were
@@ -141,6 +164,27 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.Identity) (*store.User, error) {
 	provider := p.Config.Name
 	name := id.Username + "@" + provider
+	if p.Redirect == nil {
+		// A directory matches names ignoring case, so a legacy LDAP account
+		// may be spelt differently from the entry: one match binds it (with
+		// an audit line); several are left to an admin, unchanged.
+		legacies, err := s.store.LegacyUsersNamed(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if len(legacies) > 1 {
+			log.Printf("auth: AUDIT sign-in as %s (%s) refused: legacy accounts %s differ only in case; an admin removes or renames all but one (`wfx-server link list` shows them)", id.Username, provider, userNames(legacies))
+			return nil, errAmbiguousAccount
+		}
+		if len(legacies) == 1 && legacies[0].Name != name {
+			if ok, err := s.store.BindLegacy(ctx, legacies[0].ID, provider, id.Subject, id.Username, ""); err != nil {
+				return nil, err
+			} else if ok {
+				log.Printf("auth: AUDIT account %s bound to directory id %s on sign-in as %s (%s); its name differs in case", legacies[0].Name, id.Subject, id.Username, provider)
+				return legacies[0], nil
+			}
+		}
+	}
 	if legacy, err := s.store.UserByName(ctx, name); err == nil {
 		if st, _ := s.store.LinkState(ctx, legacy.ID); st == store.LinkLegacy {
 			if p.Redirect == nil {

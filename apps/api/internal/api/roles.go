@@ -272,14 +272,16 @@ func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) (bo
 			return false, nil
 		}
 		// The host keeps an administrator: a group change never takes the
-		// last one away. It is logged for someone to sort out instead.
-		if n, err := s.store.CountAdminsExcept(ctx, u.Name); err != nil {
+		// last one away, even when several leave at once (the check and the
+		// change are one transaction). It is logged for someone to sort out.
+		revoked, err := s.store.RevokeSuperadminUnlessLast(ctx, u.Name)
+		if err != nil {
 			return false, err
-		} else if n == 0 {
-			log.Printf("auth: WARNING %s left the group that grants superadmin but is the only superadmin; the role is kept — add another superadmin, then sign in again to have it removed", u.Name)
-			return false, nil
 		}
-		return true, s.store.SetUserRole(ctx, u.Name, "")
+		if !revoked {
+			log.Printf("auth: WARNING %s left the group that grants superadmin but is the only superadmin; the role is kept — add another superadmin, then sign in again to have it removed", u.Name)
+		}
+		return revoked, nil
 	case store.ProjectAdmin, store.WorkflowAdmin, store.WorkflowRunner:
 		scope := store.MemberWorkflow
 		if role == store.ProjectAdmin {

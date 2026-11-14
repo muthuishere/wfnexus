@@ -80,6 +80,10 @@ const (
 	LinkLegacy  = "legacy"  // made by an external sign-in before subjects were kept: bound once, on the next sign-in
 	LinkLinked  = "linked"  // bound that way, held no roles: signs in, open to review (confirm or reject)
 	LinkConfirm = "confirm" // bound, but it held roles: signs in only after an admin confirms
+
+	// LinkAmbiguous is not stored: link list shows it for legacy rows whose
+	// names differ only in case, which no sign-in binds.
+	LinkAmbiguous = "ambiguous"
 )
 
 // UserBySubject is the user an external provider's subject is bound to;
@@ -112,31 +116,167 @@ func (s *Store) SetSubject(ctx context.Context, id uuid.UUID, provider, subject 
 // the name the person claimed. It reports whether it bound.
 func (s *Store) BindLegacy(ctx context.Context, id uuid.UUID, provider, subject, claim, state string) (bool, error) {
 	return s.bind(ctx, `UPDATE users SET auth_provider=$2, auth_subject=$3, auth_claim=$4, link_state=$5
-		WHERE id=$1 AND auth_subject='' AND link_state='`+LinkLegacy+`' AND link_rejected<>$3`, id, provider, subject, claim, state)
+		WHERE id=$1 AND auth_subject='' AND link_state='`+LinkLegacy+`'
+		AND NOT EXISTS (SELECT 1 FROM link_rejections r WHERE r.user_id=$1 AND r.provider=$2 AND r.subject=$3)`, id, provider, subject, claim, state)
 }
 
-// ReKeySubject moves a user's binding from an old subject to a new one for
-// the same person (an LDAP binding re-keyed from the username to the entry's
-// stable id). It reports whether it moved.
-func (s *Store) ReKeySubject(ctx context.Context, provider, from, to string) (bool, error) {
-	return s.bind(ctx, `UPDATE users SET auth_subject=$3 WHERE auth_provider=$1 AND auth_subject=$2 AND $2<>''`, provider, from, to)
+// LegacyUsersNamed are the legacy rows whose name matches, ignoring case (a
+// directory matches names that way, and accounts made from it may differ in
+// case only).
+func (s *Store) LegacyUsersNamed(ctx context.Context, name string) ([]*User, error) {
+	rows, err := s.query(ctx, `SELECT `+userCols+` FROM users WHERE lower(name)=lower($1) AND link_state=$2 AND auth_subject='' ORDER BY name`, name, LinkLegacy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
-// RejectLink undoes a binding made on first sign-in after the upgrade: the
-// account is unbound, back to legacy, its sessions and tokens end, and the
-// rejected subject may not bind it again. ErrNotFound when it has no such
+// UsersBoundToFold are the users bound to provider under subject, ignoring
+// case (an LDAP binding made under the username as typed).
+func (s *Store) UsersBoundToFold(ctx context.Context, provider, subject string) ([]*User, error) {
+	rows, err := s.query(ctx, `SELECT `+userCols+` FROM users WHERE auth_provider=$1 AND lower(auth_subject)=lower($2) AND auth_subject<>'' ORDER BY name`, provider, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ReKeyUser moves one user's binding to a new subject for the same person
+// (an LDAP binding re-keyed from the username to the entry's stable id). It
+// reports whether it moved.
+func (s *Store) ReKeyUser(ctx context.Context, id uuid.UUID, provider, to string) (bool, error) {
+	return s.bind(ctx, `UPDATE users SET auth_subject=$3 WHERE id=$1 AND auth_provider=$2 AND auth_subject<>''`, id, provider, to)
+}
+
+// RejectLink undoes a binding made on first sign-in after the upgrade, in
+// one transaction: the account is unbound, back to legacy, the rejected
+// subject is recorded so it may not bind it again (every rejected subject is
+// kept), and its sessions and tokens end. ErrNotFound when it has no such
 // binding.
 func (s *Store) RejectLink(ctx context.Context, name string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	var id uuid.UUID
-	err := s.qrow(ctx, `UPDATE users SET link_rejected=auth_subject, auth_provider='', auth_subject='', auth_claim='', link_state=$2
-		WHERE name=$1 AND link_state IN ($3, $4) RETURNING id`, name, LinkLegacy, LinkLinked, LinkConfirm).Scan(&id)
+	var provider, subject string
+	err = tx.QueryRowContext(ctx, s.d.q(`SELECT id, auth_provider, auth_subject FROM users WHERE name=$1 AND link_state IN ($2, $3)`),
+		name, LinkLinked, LinkConfirm).Scan(&id, &provider, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	return s.RevokeAllUserTokens(ctx, id)
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO link_rejections (user_id, provider, subject) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, []any{id, provider, subject}},
+		{`UPDATE users SET auth_provider='', auth_subject='', auth_claim='', link_state=$2 WHERE id=$1`, []any{id, LinkLegacy}},
+		{`DELETE FROM user_tokens WHERE user_id=$1`, []any{id}},
+	} {
+		if _, err := tx.ExecContext(ctx, s.d.q(q.sql), q.args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// RevokeSuperadminUnlessLast takes superadmin from name unless that would
+// leave no enabled superadmin, deciding and changing in one transaction that
+// holds the superadmin rows (Postgres: FOR UPDATE; SQLite: BEGIN IMMEDIATE,
+// the database write lock), so two revokes at once cannot both see another
+// admin and both go through. It reports whether it revoked.
+func (s *Store) RevokeSuperadminUnlessLast(ctx context.Context, name string) (bool, error) {
+	if s.d.isSQLite() {
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			return false, err
+		}
+		defer conn.Close()
+		if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+			return false, err
+		}
+		done := false
+		defer func() {
+			if !done {
+				_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+			}
+		}()
+		var others int
+		if err := conn.QueryRowContext(ctx, s.d.q(`SELECT count(*) FROM users WHERE role='superadmin' AND disabled=false AND name<>$1`), name).Scan(&others); err != nil {
+			return false, err
+		}
+		if others == 0 {
+			return false, nil
+		}
+		res, err := conn.ExecContext(ctx, s.d.q(`UPDATE users SET role='' WHERE name=$1 AND role='superadmin'`), name)
+		if err != nil {
+			return false, err
+		}
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			return false, err
+		}
+		done = true
+		n, _ := res.RowsAffected()
+		return n == 1, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM users WHERE role='superadmin' AND disabled=false ORDER BY id FOR UPDATE`)
+	if err != nil {
+		return false, err
+	}
+	others := 0
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if n != name {
+			others++
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if others == 0 {
+		return false, nil
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE users SET role='' WHERE name=$1 AND role='superadmin'`, name)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 func (s *Store) bind(ctx context.Context, q string, args ...any) (bool, error) {
@@ -177,8 +317,15 @@ type PendingLink struct {
 }
 
 func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
+	// Legacy rows that differ from another legacy row only in case are listed
+	// as "ambiguous": no sign-in binds either until an admin removes or
+	// renames one.
 	rows, err := s.query(ctx, `SELECT name, auth_provider, auth_subject, auth_claim, link_state FROM users
-		WHERE link_state IN ($1, $2) ORDER BY name`, LinkConfirm, LinkLinked)
+		WHERE link_state IN ($1, $2)
+		UNION ALL
+		SELECT u.name, '', '', '', '`+LinkAmbiguous+`' FROM users u
+		WHERE u.link_state=$3 AND EXISTS (SELECT 1 FROM users o WHERE o.id<>u.id AND o.link_state=$3 AND lower(o.name)=lower(u.name))
+		ORDER BY 1`, LinkConfirm, LinkLinked, LinkLegacy)
 	if err != nil {
 		return nil, err
 	}

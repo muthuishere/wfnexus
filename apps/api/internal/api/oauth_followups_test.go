@@ -60,6 +60,18 @@ func TestARejectedBindingCanBeTakenByTheRealOwner(t *testing.T) {
 	if who := signIn(2002); who["name"] == "octo@gh" {
 		t.Fatalf("the rejected subject bound it again: %v", who)
 	}
+	// A second wrong subject binds and is rejected too: both stay rejected.
+	if who := signIn(3003); who["name"] != "octo@gh" {
+		t.Fatalf("second impostor: %v", who)
+	}
+	if err := st.RejectLink(ctx, "octo@gh"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{2002, 3003} {
+		if who := signIn(id); who["name"] == "octo@gh" {
+			t.Fatalf("rejected subject %d bound it again: %v", id, who)
+		}
+	}
 	// The real owner does.
 	if who := signIn(1001); who["name"] != "octo@gh" {
 		t.Fatalf("the real owner: %v", who)

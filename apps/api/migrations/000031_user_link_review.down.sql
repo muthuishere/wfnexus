@@ -1,2 +1,2 @@
-alter table users drop column if exists link_rejected;
+drop table if exists link_rejections;
 alter table users drop column if exists auth_claim;

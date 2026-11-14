@@ -63,17 +63,32 @@ func (l *LDAP) Authenticate(_ context.Context, username, password string) (*Iden
 	for _, g := range e.GetAttributeValues(groupAttr) {
 		groups = append(groups, firstRDN(g))
 	}
-	canonical := e.GetAttributeValue(l.uidAttr())
-	if canonical == "" {
-		return nil, errors.New("ldap: the entry has no " + l.uidAttr() + " attribute to name the person")
+	return ldapIdentity(l.cfg.Name, l.uidAttr(), username, e.GetAttributeValue(l.uidAttr()),
+		e.GetAttributeValue("entryUUID"), e.GetRawAttributeValue("objectGUID"), groups)
+}
+
+// ldapIdentity names the person from their directory entry: the stable id
+// (entryUUID, else objectGUID) is the key when there is one, and only without
+// one is the entry's own username attribute required. The account's name is
+// that attribute, or — when an entry with a stable id lacks it — the name the
+// person typed, which is then only a label.
+func ldapIdentity(provider, uidAttr, typed, canonical, entryUUID string, objectGUID []byte, groups []string) (*Identity, error) {
+	subject := ""
+	switch {
+	case entryUUID != "":
+		subject = "entryUUID:" + strings.ToLower(entryUUID)
+	case len(objectGUID) > 0:
+		subject = "objectGUID:" + hex.EncodeToString(objectGUID)
+	case canonical != "":
+		subject = "uid:" + canonical
+	default:
+		return nil, errors.New("ldap: the entry has neither a stable id (entryUUID, objectGUID) nor a " + uidAttr + " attribute to name the person")
 	}
-	subject := "uid:" + canonical
-	if v := e.GetAttributeValue("entryUUID"); v != "" {
-		subject = "entryUUID:" + strings.ToLower(v)
-	} else if raw := e.GetRawAttributeValue("objectGUID"); len(raw) > 0 {
-		subject = "objectGUID:" + hex.EncodeToString(raw)
+	name := canonical
+	if name == "" {
+		name = typed
 	}
-	return &Identity{Provider: l.cfg.Name, Subject: subject, LegacySubject: canonical, Username: canonical, Groups: groups}, nil
+	return &Identity{Provider: provider, Subject: subject, LegacySubject: canonical, Username: name, Groups: groups}, nil
 }
 
 // uidAttr is the entry attribute that holds the person's username.
