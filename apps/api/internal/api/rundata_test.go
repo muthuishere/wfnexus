@@ -197,6 +197,12 @@ func TestRunTextThatWouldEvaluateAValueAgainIsRefusedAtLoad(t *testing.T) {
 		"glued":     `sh -c"echo {{ .Input.v }}"`,
 		"heredocsh": "bash <<EOF\necho \"{{ .Input.v }}\"\nEOF",
 		"pipesh":    `echo "{{ .Input.v }}" | sh`,
+		"pipefail":  `bash -o pipefail -c "echo {{ .Input.v }}"`,
+		"pipenl":    "echo \"{{ .Input.v }}\" |\n  bash",
+		"subshell":  `x=$(echo "{{ .Input.v }}" | bash)`,
+		"pythonc":   `python3 -c "print({{ .Input.v }})"`,
+		"dollar":    `{{ $ = .Input }}echo "{{ $.RunID }}"`,
+		"rangedol":  `{{ range $ := .Input }}echo "{{ $.RunID }}"{{ end }}`,
 	}
 	files := map[string]string{"ok.yaml": "name: ok\nsteps:\n  - id: s\n    run: echo fine\n"}
 	for name, run := range shapes {
@@ -217,6 +223,46 @@ func TestRunTextThatWouldEvaluateAValueAgainIsRefusedAtLoad(t *testing.T) {
 			}
 			if _, err := os.Stat(marker); err == nil {
 				t.Fatal("part of the value ran as a command")
+			}
+		})
+	}
+}
+
+// The working folder is data like every other value: with isolate false it is
+// the repo_path the caller gave, as given. A folder whose name holds a quote,
+// a `$` or a quote break-out is entered as it is, and nothing in its name runs.
+func TestAWorkingFolderWithShellSyntaxIsData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	out := filepath.Join(t.TempDir(), "pwd")
+	f := dataServer(t, map[string]string{
+		"wd.yaml": "name: wd\ninput_schema: {type: object, properties: {repo_path: {type: string}, isolate: {type: boolean}}}\nsteps:\n" +
+			"  - id: s\n    shell: sh\n    run: cd \"{{ .WorkDir }}\" && printf '%s' \"$PWD\" > " + out + "\n",
+	})
+	for name, folder := range map[string]string{
+		"quote-and-dollar": `a"b$HOME c`,
+		"break-out":        `x"; touch ran; echo "`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, folder)
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(out)
+			r := f.runToEnd(t, "demo%2Fwd", map[string]any{"repo_path": dir, "isolate": false})
+			if r.Status != "done" {
+				t.Fatalf("run %s (%s)", r.Status, r.Error)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil || filepath.Base(string(got)) != folder {
+				t.Errorf("entered %q, want the folder %q (%v)", got, folder, err)
+			}
+			for _, d := range []string{dir, parent} {
+				if _, err := os.Stat(filepath.Join(d, "ran")); err == nil {
+					t.Error("part of the folder name ran as a command")
+				}
 			}
 		})
 	}

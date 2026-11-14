@@ -70,16 +70,17 @@ func TestEveryRuntimeSourceIsData(t *testing.T) {
 	}
 }
 
-// Conditions read the values themselves, so branching is unchanged; the
-// platform's own facts print as they are.
+// Conditions read the values themselves, so branching is unchanged. Only the
+// run id and the loop index print as text; the working folder and base ref
+// are data like every other value.
 func TestConditionsAndPlatformFactsAreUnchanged(t *testing.T) {
-	rt, err := RenderRun(`{{ if eq .Input.mode "fast" }}--fast{{ end }} cd '{{ .WorkDir }}' && echo {{ .RunID }} {{ .Index }}{{ $x := .Input.mode }}`,
-		TemplateData{Input: map[string]any{"mode": "fast"}, WorkDir: "/w", RunID: "r1"})
+	rt, err := RenderRun(`{{ if eq .Input.mode "fast" }}--fast{{ end }} cd "{{ .WorkDir }}" && git log "{{ .BaseRef }}" && echo {{ .RunID }} {{ .Index }}{{ $x := .Input.mode }}`,
+		TemplateData{Input: map[string]any{"mode": "fast"}, WorkDir: "/w", BaseRef: "main", RunID: "r1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rt.Data) != 0 || rt.Script != "--fast cd '/w' && echo r1 0" {
-		t.Fatalf("script %q data %q", rt.Script, rt.Data)
+	if strings.Join(rt.Data, ",") != "/w,main" || rt.Display() != `--fast cd "${WFX_DATA_1}" && git log "${WFX_DATA_2}" && echo r1 0` {
+		t.Fatalf("script %q data %q", rt.Display(), rt.Data)
 	}
 	if rt, _ := RenderRun(`x{{ .Input.missing }}y`, TemplateData{Input: map[string]any{}}); filled(t, `x{{ .Input.missing }}y`, nil) != "xy" || len(rt.Data) != 1 {
 		t.Fatalf("missing = %q", rt.Data)
@@ -195,7 +196,9 @@ func TestRunTextCheck(t *testing.T) {
 		{"echo `{{ .Input.x }}`", "", "bare word"},
 		{`x={{ .Input.x }}; echo "$x"`, "", "bare word"},
 		{"cat > f <<EOF\n{{ .Input.x }}\nEOF", "", ""},
-		{`echo '{{ .WorkDir }}'`, "", ""},
+		{`echo '{{ .WorkDir }}'`, "", "single quotes"},
+		{`cd "{{ .WorkDir }}" && git log "{{ .BaseRef }}..HEAD"`, "", ""},
+		{`echo {{ .RunID }} {{ .Index }}`, "", ""},
 		{`echo '{{ .Input.x }}'`, "", "single quotes"},
 		{`echo "$(echo '{{ .Input.x }}')"`, "", "single quotes"},
 		{"cat > f <<'EOF'\n{{ .Input.x }}\nEOF", "", "quoted heredoc"},
@@ -272,7 +275,52 @@ func TestRunTextCheck(t *testing.T) {
 		{`echo "sh -c {{ .Input.x }}"`, "", ""},
 		{`n=$(( 1 + 2 )); echo "{{ .Input.x }}"`, "", ""},
 		{`grep "a[{{ .Input.x }}]" f`, "", ""},
-		{`cd {{ .WorkDir }} && echo "{{ .Input.x }}"`, "", ""},
+		{`cd {{ .WorkDir }} && echo "{{ .Input.x }}"`, "", "bare word"},
+		{`git log {{ .BaseRef }}..HEAD`, "", "bare word"},
+		// $ is never declared or assigned, so $.RunID is always the run's
+		{`{{ $ = .Input.o }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
+		{`{{ $ := .Input.o }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
+		{`{{ range $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
+		{`{{ range $i, $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
+		{`{{ with $ := .Input.o }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
+		{`{{ if $ = .Input.o }}x{{ end }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
+		{`{{ range .Input.objs }}{{ $ = . }}{{ end }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
+		{`{{ if .Input.x }}{{ with .Input.o }}{{ $ = . }}{{ end }}{{ end }}echo {{ $.RunID }}`, "", "may not declare or assign $"},
+		{`{{ $o := .Input.o }}{{ range $i, $v := .Input.objs }}echo "{{ $v }}" {{ $.RunID }}{{ end }}`, "", ""},
+		// more ways to hand a value to a shell as its script
+		{`bash -o pipefail -c "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`bash --norc -o errexit -c "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`bash -c -- "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`tcsh -c "echo {{ .Input.x }}"`, "", "tcsh -c"},
+		{`csh -c "echo {{ .Input.x }}"`, "", "csh -c"},
+		{`"$BASH" -c "echo {{ .Input.x }}"`, "", "-c"},
+		{`$SHELL -c "echo {{ .Input.x }}"`, "", "-c"},
+		{`echo "{{ .Input.x }}" | "$BASH"`, "", "piped into $bash"},
+		{`echo "{{ .Input.x }}" |& bash`, "", "piped into bash"},
+		{"echo \"{{ .Input.x }}\" |\n  bash", "", "piped into bash"},
+		{"echo \"{{ .Input.x }}\" | \\\n  bash", "", "piped into bash"},
+		{`x=$(echo "{{ .Input.x }}" | bash)`, "", "piped into bash"},
+		{`echo "{{ .Input.x }}" | env -u X bash`, "", "piped into bash"},
+		{`echo "{{ .Input.x }}" | sudo -u root bash`, "", "piped into bash"},
+		{`echo "{{ .Input.x }}" | xargs -I {} sh`, "", "piped into sh"},
+		{`. /dev/stdin <<< "{{ .Input.x }}"`, "", "here-string"},
+		{"bash \\\n  <<EOF\necho \"{{ .Input.x }}\"\nEOF", "", "heredoc that bash reads"},
+		{`python3 -c "print('{{ .Input.x }}')"`, "", "python3 -c"},
+		{`python3 -c "print({{ .Input.x }})"`, "", "python3 -c"},
+		{`python -u -c "import os; print(\"{{ .Input.x }}\")"`, "", "python -c"},
+		{`node -e "console.log(\"{{ .Input.x }}\")"`, "", "node -e"},
+		{`perl -e "print \"{{ .Input.x }}\""`, "", "perl -e"},
+		{`ruby -e "puts \"{{ .Input.x }}\""`, "", "ruby -e"},
+		{`pwsh -Command "Write-Output \"{{ .Input.x }}\""`, "", "pwsh -Command"},
+		{`pwsh -NoProfile -Command Write-Output "{{ .Input.x }}"`, "", "pwsh -Command"},
+		// the same programs given the value as data
+		{`python3 -c 'import sys; print(sys.argv[1])' "{{ .Input.x }}"`, "", ""},
+		{`node -e 'console.log(process.argv[1])' "{{ .Input.x }}"`, "", ""},
+		{`perl -e 'print $ARGV[0]' "{{ .Input.x }}"`, "", ""},
+		{`bash -o pipefail -c 'echo "$1"' _ "{{ .Input.x }}"`, "", ""},
+		{`bash -c -- 'echo "$1"' _ "{{ .Input.x }}"`, "", ""},
+		{`echo "{{ .Input.x }}" | env -u X grep -c y`, "", ""},
+		{`python3 script.py "{{ .Input.x }}"`, "", ""},
 	} {
 		err := checkRunText(c.run, c.shell)
 		switch {
@@ -353,4 +401,31 @@ func runValues(v any) []runValue {
 		}
 	}
 	return out
+}
+
+// `$` may not be declared or assigned in run text: $.RunID is printed as text
+// only because `$` always holds the run's own data. Assigning a caller's
+// object to `$` used to put that object's RunID field into the script.
+func TestDollarIsNeverReassigned(t *testing.T) {
+	evil := "x\"; touch /tmp/p; echo \""
+	data := TemplateData{RunID: "r1", Input: map[string]any{
+		"o":    map[string]any{"RunID": evil},
+		"objs": []any{map[string]any{"RunID": evil}},
+	}}
+	for _, run := range []string{
+		`{{ $ = .Input.o }}echo "{{ $.RunID }}"`,
+		`{{ range $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`,
+		`{{ range $i, $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`,
+		`{{ with $ := .Input.o }}echo "{{ $.RunID }}"{{ end }}`,
+		`{{ $ := .Input.o }}echo "{{ $.RunID }}"`,
+	} {
+		rt, err := RenderRun(run, data)
+		if err == nil {
+			t.Errorf("%s rendered: %q", run, rt.Script)
+			continue
+		}
+		if strings.Contains(rt.Script, "touch") {
+			t.Errorf("%s: the value reached the script: %q", run, rt.Script)
+		}
+	}
 }

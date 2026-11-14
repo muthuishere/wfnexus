@@ -487,7 +487,7 @@ steps:
       [ -f $D/scenarios.jsonl ] && python3 -c "import json,collections;s=[json.loads(l) for l in open('$D/scenarios.jsonl')];print('--- scenarios:', len(s), dict(collections.Counter(x['status'] for x in s)))"
       [ -f $D/triage.json ] && python3 -c "import json,collections;t=json.load(open('$D/triage.json'));print('--- triage:', dict(collections.Counter(r['verdict'] for r in t['rows'])), 'human-decided:', [(r['id'], r['human']) for r in t['rows'] if r.get('human')])"
       [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before', v['before'], 'after', v['after'], 'coverage', v['coverage_before'], '->', v['coverage_after'], 'mutation', v['mutation'], 'findings', v['findings'])"
-      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
       {{ if .Steps.publish }}echo "--- PR: {{ .Steps.publish.pr_url }}"{{ end }}
       exit 0
