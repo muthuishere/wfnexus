@@ -100,6 +100,9 @@ func TestAnApprovedWriteCallThatChangedDoesNotRun(t *testing.T) {
 	// The definition is edited while the run waits.
 	for i := range def.Steps {
 		def.Steps[i].Run = strings.ReplaceAll(def.Steps[i].Run, "Approved title", "Something else")
+		for k, v := range def.Steps[i].RunConst {
+			def.Steps[i].RunConst[k] = strings.ReplaceAll(v, "Approved title", "Something else")
+		}
 	}
 	if err := h.eng.Approve(context.Background(), run.ID, run.CurrentStep, Actor{ID: "alice", Via: "test"}); err != nil {
 		t.Fatal(err)
@@ -147,5 +150,37 @@ func TestModuleCallsDoNotShareTheirInputFiles(t *testing.T) {
 	}
 	if !strings.HasSuffix(dirs["a"], filepath.Join("calls", "a")) || !strings.HasSuffix(dirs["b"], filepath.Join("calls", "b")) {
 		t.Fatalf("calls did not each run in their own directory: %v (log %q)", dirs, raw)
+	}
+}
+
+// The pin covers the values, not only the text: the run text holds the same
+// references whatever the input is, so an input changed between the pause and
+// the approval must still stop the step.
+func TestAnApprovedWriteCallWhoseInputChangedDoesNotRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	calls := ghStub(t)
+	defs := loadWithModules(t, map[string]string{
+		"w.yaml": "name: w\ninput_schema: {type: object, properties: {title: {type: string}}}\nsteps:\n  - id: open\n    uses: gh.issue-create@0\n    with: { title: \"{{ .Input.title }}\", repo: o/r, responsePolicy: auto }\n",
+	})
+	h := newHarness(t, defs["w"], newFakeLLM(t), "")
+	h.eng.cfg.ModulesDir = repoPath(t, "modules")
+	run := h.run(map[string]any{"title": "Approved title"})
+	if run.Status != "awaiting_approval" {
+		t.Fatalf("run = %s (%s)", run.Status, run.Error)
+	}
+	if err := h.store.UpdateRunInput(context.Background(), run.ID, []byte(`{"title":"A different title"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.eng.Approve(context.Background(), run.ID, run.CurrentStep, Actor{ID: "alice", Via: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	run = h.wait(run.ID)
+	if run.Status != "failed" || !strings.Contains(run.Error, "changed after it was approved") {
+		t.Fatalf("run = %s (%s), want failed: changed after it was approved", run.Status, run.Error)
+	}
+	if b, _ := os.ReadFile(calls); len(b) > 0 {
+		t.Fatalf("gh ran with an input that changed after approval: %s", b)
 	}
 }
