@@ -59,7 +59,7 @@ func expandSteps(d *Definition, label string, steps []Step, tasks map[string]*Ta
 			return nil, fmt.Errorf("%s: a step with `uses: %s` needs an id", d.Name, s.Uses)
 		}
 		if s.Foreach != nil || len(s.Until) > 0 || len(s.While) > 0 {
-			return nil, fmt.Errorf("%s/%s: a `uses:` step cannot loop (foreach, until, while); put it in a loop's `steps:` instead", d.Name, s.ID)
+			return nil, fmt.Errorf("%s/%s: a `uses:` step cannot loop (foreach, until, while); move the loop into the called workflow, or call the command once per run", d.Name, s.ID)
 		}
 		if s.Prompt != "" || s.Run != "" || s.Judge != nil || s.Send != nil || s.Start != nil || len(s.Steps) > 0 {
 			return nil, fmt.Errorf("%s/%s: a `uses:` step is a module call — it may not also carry prompt, run, judge, send, start or steps", d.Name, s.ID)
@@ -84,8 +84,23 @@ func expandSteps(d *Definition, label string, steps []Step, tasks map[string]*Ta
 				exp[i].Needs = append([]string(nil), s.Needs...)
 			}
 		}
+		// The call's own `when:` is decided ONCE, on the call's first step;
+		// every other step of the call follows that step (the engine skips
+		// the rest when it was skipped), so a guard that changes between the
+		// call's steps cannot run half a call. Every other step also needs
+		// the first, so it cannot start before the first is settled.
+		head := ""
+		if len(exp) > 0 {
+			head = exp[0].CallHead
+		}
 		for i := range exp {
-			exp[i].When = append(append([]Guard(nil), s.When...), exp[i].When...)
+			if exp[i].ID == head || head == "" {
+				exp[i].When = append(append([]Guard(nil), s.When...), exp[i].When...)
+				continue
+			}
+			if !inJob && !contains(exp[i].Needs, head) {
+				exp[i].Needs = append(exp[i].Needs, head)
+			}
 		}
 		for _, e := range exp {
 			if !needed[e.ID] {
@@ -115,4 +130,13 @@ func joinLabel(a, b string) string {
 		return b
 	}
 	return a + " " + b
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

@@ -137,6 +137,13 @@ type Step struct {
 	// not overridable (task.go).
 	WriteEffect bool `yaml:"-" json:"writeEffect,omitempty"`
 	WriteEntry  bool `yaml:"-" json:"writeEntry,omitempty"`
+	// CallHead is the expanded id of the first step of the call this step
+	// came from, and CallSelf this step's own expanded id. The engine reads
+	// the head's row (relative to this step's row, so loop iterations work)
+	// before running any other step of the call: a skipped head skips the
+	// call, and a write step runs only after an approved, finished head.
+	CallHead string `yaml:"-" json:"callHead,omitempty"`
+	CallSelf string `yaml:"-" json:"callSelf,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`
@@ -209,6 +216,10 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// RunConst are literal inputs a task or module was given, placed into Run
+	// as {{ .Const.<name> }} references (inputs.go) so they too reach the
+	// script as data.
+	RunConst map[string]string `yaml:"run_const,omitempty" json:"runConst,omitempty"`
 	// Env is this step's environment, layered over its job's and the
 	// workflow's. A value may NAME a variable rather than hold one — see
 	// env.go, which is what keeps a credential out of the file.
@@ -567,6 +578,11 @@ func (d *Definition) validate(cat Catalog) error {
 			// A loop over a `steps:` body: the body is the work, checked below.
 		} else if kinds == 0 {
 			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision), `send` (a message) or `start` (other workflows)", d.Name, s.ID)
+		}
+		if s.Run != "" {
+			if err := checkRunText(s.Run, s.Shell); err != nil {
+				return fmt.Errorf("%s/%s: run: %w", d.Name, s.ID, err)
+			}
 		}
 		if kinds > 1 {
 			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision, a message or a start — `prompt`, `run`, `judge`, `send` and `start` are mutually exclusive", d.Name, s.ID)
@@ -1280,6 +1296,10 @@ type TemplateData struct {
 	// Memory is what previous runs of this workflow left behind, rendered as a
 	// bounded section (engine/memory.go). Empty when memory is off or empty.
 	Memory string
+
+	// Const are the step's own constants: literal inputs a task or module
+	// was given at load, which run text references as {{ .Const.<name> }}.
+	Const map[string]string
 }
 
 var funcs = template.FuncMap{

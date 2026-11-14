@@ -13,7 +13,7 @@ resolve` for search. The handle is the `handle` input, else the profile's
 `<kind>_handle` input (mail_handle, teams_handle, calendar_handle,
 drive_handle), else the profile's account.
 
-plan exit codes: 0 auto, 10 a person approves first, 11 draft, 12 none, 2 bad
+plan exit codes: 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 bad
 input. A drafted or skipped send prints {"status": "drafted"|"skipped", ...}
 and touches nothing.
 """

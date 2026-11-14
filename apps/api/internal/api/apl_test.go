@@ -56,6 +56,9 @@ func aplServer(t *testing.T, files map[string]string) (http.Handler, *engine.Eng
 		_ = os.WriteFile(filepath.Join(cfg.WorkflowsDir, name), []byte(y), 0o644)
 	}
 	eng := engine.New(cfg, st, nil, map[string]*workflow.Definition{}, skills.Load(cfg.SkillsDir), nil)
+	// Runs still finishing (a paused one is not running) end before the
+	// test's temp directories are removed.
+	t.Cleanup(func() { eng.WaitIdle(30 * time.Second) })
 	if err := eng.ReloadDefinitions(); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +201,11 @@ steps:
 			t.Fatalf("uses: sends %v", sends())
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	// The run finishes before the test moves on (and before its temp
+	// directories are removed under a run still writing to them).
+	if st := waitStatus(t, h, created.Run.ID, "done"); st != "done" {
+		t.Fatalf("notify-ops ended %s", st)
 	}
 
 	// A profile whose account has no running service: refused, nothing sent.

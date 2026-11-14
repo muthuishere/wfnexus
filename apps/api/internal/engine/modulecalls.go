@@ -249,7 +249,7 @@ func wrapperYAML(name, major string, t *workflow.Task) string {
 		if spec.Required {
 			required = append(required, k)
 		}
-		with[k] = fmt.Sprintf(`{{ or .Input.%s "" }}`, k)
+		with[k] = fmt.Sprintf(`{{ .Input.%s }}`, k)
 	}
 	schema := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
