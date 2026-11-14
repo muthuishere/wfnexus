@@ -31,13 +31,17 @@ or shell syntax it holds, and the run page shows the references, not the values.
 
 What this means when you write a step:
 
-- **Single quotes and quoted heredocs are refused.** `'{{ .Input.x }}'` or a
-  heredoc with a quoted delimiter (`<<'EOF'`) would print the variable's name,
-  because neither expands variables. Such a workflow does not load, and the
-  error names the step. Use double quotes, a bare word, or an unquoted
-  heredoc (`<<EOF`).
-- **Quote references:** write `"{{ .Input.x }}"`. An unquoted one splits on
-  spaces and expands globs like any unquoted variable.
+- **A value sits inside double quotes or an unquoted heredoc — nowhere else.**
+  Write `"{{ .Input.x }}"` or put it in a `<<EOF` body. A workflow that breaks
+  this does not load, and the error names the step:
+  - a bare word (`echo {{ .Input.x }}`, `gh pr view {{ .Inputs.n }}`,
+    `X={{ .Input.x }}`): unquoted, the shell splits it on spaces, expands
+    globs in it, and a value starting with `-` becomes an option;
+  - single quotes (`'{{ .Input.x }}'`) or a quoted heredoc (`<<'EOF'`): they
+    expand nothing, so the script would see a variable name, not the value.
+- **A command that is itself an input** (a test command, say) is run on
+  purpose: write it to a file as data, then run the file —
+  `f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"; bash "$f"`.
 - **Places that evaluate text again are refused at load:** shell arithmetic
   (`$(( ))`, `(( ))`, `let`, a numeric `[[ … -eq … ]]`, an array subscript)
   and the text given to `eval`, `sh`/`bash`/`zsh -c` or `ssh`. For a number,
