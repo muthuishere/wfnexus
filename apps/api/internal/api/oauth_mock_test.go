@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -17,7 +18,32 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
+
+// testPublicURL is the public address the OAuth tests configure.
+const testPublicURL = "https://wfx.example.com"
+
+// testServerPublic is testServerAuth with a public URL.
+func testServerPublic(t *testing.T, a config.Auth, publicURL string) (http.Handler, *store.Store) {
+	t.Helper()
+	path := t.TempDir() + "/wfnexus.db"
+	if err := store.Migrate("sqlite", path); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(context.Background(), "sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	eng := engine.New(config.Config{Addr: remoteAddr, Auth: a, PublicURL: publicURL}, st, nil, map[string]*workflow.Definition{}, skills.Load(), nil)
+	return New(eng, st, nil, remoteAddr, "", nil), st
+}
 
 // mockOP is an OpenID Provider for tests: discovery, an authorize endpoint
 // that records the PKCE challenge and nonce, a token endpoint that checks the
@@ -34,12 +60,17 @@ type mockOP struct {
 	challenge string
 	nonce     string
 	gotVerif  string
+	gotRedir  string
 
-	// Per test: what the token and userinfo say.
+	// Per test: what discovery, the token and userinfo say.
+	discIssuer string // "" = its own URL
+	badPKCE    bool   // expect a challenge other than the one sent
 	alg        string // "RS256" (default), "ES256", "none", "HS256"
 	badSig     bool   // sign with a key the set does not publish
 	noIDToken  bool
-	sub        string // userinfo sub; "" = same as the id_token's
+	sub        string // id_token and userinfo sub (default "42")
+	uiSub      string // userinfo sub when it should differ
+	userinfo   map[string]any
 	claimsEdit func(c map[string]any)
 }
 
@@ -50,7 +81,8 @@ func newMockOP(t *testing.T, secret string) *mockOP {
 		t.Fatal(err)
 	}
 	ek, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	m := &mockOP{t: t, secret: secret, rsa: rk, ec: ek, alg: "RS256"}
+	m := &mockOP{t: t, secret: secret, rsa: rk, ec: ek, alg: "RS256", sub: "42",
+		userinfo: map[string]any{"preferred_username": "bob", "groups": []string{"admins"}}}
 	m.srv = httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(m.srv.Close)
 	return m
@@ -63,22 +95,29 @@ func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 func (m *mockOP) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/.well-known/openid-configuration":
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"issuer": m.srv.URL, "authorization_endpoint": m.srv.URL + "/authorize",
+		iss := m.srv.URL
+		if m.discIssuer != "" {
+			iss = m.discIssuer
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": iss, "authorization_endpoint": m.srv.URL + "/authorize",
 			"token_endpoint": m.srv.URL + "/token", "userinfo_endpoint": m.srv.URL + "/userinfo",
-			"jwks_uri": m.srv.URL + "/jwks",
+			"jwks_uri": m.srv.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256", "ES256"},
 		})
 	case "/jwks":
 		e := big.NewInt(int64(m.rsa.E)).Bytes()
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{
-			{"kty": "RSA", "kid": "rsa1", "use": "sig", "n": b64(m.rsa.N.Bytes()), "e": b64(e)},
-			{"kty": "EC", "kid": "ec1", "use": "sig", "crv": "P-256",
+			{"kty": "RSA", "kid": "rsa1", "use": "sig", "alg": "RS256", "n": b64(m.rsa.N.Bytes()), "e": b64(e)},
+			{"kty": "EC", "kid": "ec1", "use": "sig", "alg": "ES256", "crv": "P-256",
 				"x": b64(m.ec.X.FillBytes(make([]byte, 32))), "y": b64(m.ec.Y.FillBytes(make([]byte, 32)))},
 		}})
 	case "/authorize":
 		q := r.URL.Query()
 		m.mu.Lock()
-		m.challenge, m.nonce = q.Get("code_challenge"), q.Get("nonce")
+		m.challenge, m.nonce, m.gotRedir = q.Get("code_challenge"), q.Get("nonce"), q.Get("redirect_uri")
+		if m.badPKCE {
+			m.challenge = b64([]byte("some-other-challenge-value-0123456789"))
+		}
 		m.mu.Unlock()
 		if q.Get("code_challenge_method") != "S256" {
 			w.WriteHeader(400)
@@ -95,7 +134,7 @@ func (m *mockOP) serve(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		if r.Form.Get("code") != "good" || r.Form.Get("client_secret") != m.secret || r.Form.Get("client_id") != "wfx" || !pkceOK {
 			w.WriteHeader(400)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant", "error_description": "provider-detail-text"})
 			return
 		}
 		out := map[string]string{"access_token": "at-123", "token_type": "Bearer"}
@@ -108,11 +147,14 @@ func (m *mockOP) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(401)
 			return
 		}
-		sub := m.sub
-		if sub == "" {
-			sub = "42"
+		out := map[string]any{"sub": m.sub}
+		if m.uiSub != "" {
+			out["sub"] = m.uiSub
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"sub": sub, "id": 42, "login": "octo", "preferred_username": "bob", "groups": []string{"admins"}})
+		for k, v := range m.userinfo {
+			out[k] = v
+		}
+		_ = json.NewEncoder(w).Encode(out)
 	default:
 		w.WriteHeader(404)
 	}
@@ -121,7 +163,7 @@ func (m *mockOP) serve(w http.ResponseWriter, r *http.Request) {
 // idToken is a token for this sign-in, shaped by the test's knobs.
 func (m *mockOP) idToken(nonce string) string {
 	now := time.Now().Unix()
-	c := map[string]any{"iss": m.srv.URL, "sub": "42", "aud": "wfx", "exp": now + 300, "iat": now, "nonce": nonce}
+	c := map[string]any{"iss": m.srv.URL, "sub": m.sub, "aud": "wfx", "exp": now + 300, "iat": now, "nonce": nonce}
 	if m.claimsEdit != nil {
 		m.claimsEdit(c)
 	}
@@ -151,58 +193,67 @@ func (m *mockOP) idToken(nonce string) string {
 		mac := hmac.New(sha256.New, []byte("shared"))
 		mac.Write([]byte(input))
 		sig = mac.Sum(nil)
-	case "none":
-		sig = nil
 	}
 	return input + "." + b64(sig)
 }
 
-// oauthFlow drives one sign-in through h: start, the browser at the
-// provider's authorize URL, the callback. It returns the callback's response
-// and the start response's cookies.
+// oauthFlow drives one sign-in through h: start (sent with a forged Host),
+// the browser at the provider's authorize URL, the callback. edit may change
+// the cookies the callback carries.
 func oauthFlow(t *testing.T, h http.Handler, provider string, edit func(cookies []*http.Cookie) []*http.Cookie) (*httptest.ResponseRecorder, *url.URL) {
 	t.Helper()
 	start := httptest.NewRecorder()
-	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/"+provider+"/start", nil))
+	req := httptest.NewRequest("GET", "/api/auth/oauth/"+provider+"/start", nil)
+	req.Host = "evil.example"
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	h.ServeHTTP(start, req)
 	if start.Code != 302 {
 		t.Fatalf("start: %d %s", start.Code, start.Body)
 	}
 	loc, _ := url.Parse(start.Header().Get("Location"))
 	// The browser visits the provider, which records the challenge and nonce.
-	if res, err := http.Get(loc.String()); err != nil || res.StatusCode != 200 {
+	res, err := http.Get(loc.String())
+	if err != nil || res.StatusCode != 200 {
 		t.Fatalf("authorize: %v %v", res, err)
-	} else {
-		res.Body.Close()
 	}
+	res.Body.Close()
 	cookies := start.Result().Cookies()
 	if edit != nil {
 		cookies = edit(cookies)
 	}
-	req := httptest.NewRequest("GET", "/api/auth/oauth/"+provider+"/callback?code=good&state="+url.QueryEscape(loc.Query().Get("state")), nil)
+	cb := httptest.NewRequest("GET", "/api/auth/oauth/"+provider+"/callback?code=good&state="+url.QueryEscape(loc.Query().Get("state")), nil)
 	for _, c := range cookies {
-		req.AddCookie(c)
+		cb.AddCookie(c)
 	}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
+	h.ServeHTTP(w, cb)
 	return w, loc
 }
 
-func dropCookie(name string) func([]*http.Cookie) []*http.Cookie {
-	return func(cs []*http.Cookie) []*http.Cookie {
-		var out []*http.Cookie
-		for _, c := range cs {
-			if c.Name != name {
-				out = append(out, c)
-			}
-		}
-		return out
+// oauthCookieName is the sign-in cookie's name under testPublicURL (https).
+const oauthCookieName = "__Host-" + oauthCookieBase
+
+func withoutCookies(cs []*http.Cookie) []*http.Cookie { return nil }
+
+// replaceTicket swaps the sign-in cookie's value.
+func replaceTicket(value string) func([]*http.Cookie) []*http.Cookie {
+	return func([]*http.Cookie) []*http.Cookie {
+		return []*http.Cookie{{Name: oauthCookieName, Value: value}}
 	}
 }
 
-func setCookie(name, value string) func([]*http.Cookie) []*http.Cookie {
+// reseal re-signs the ticket the server set, changed by edit, with key.
+func reseal(key []byte, edit func(*oauthTicket)) func([]*http.Cookie) []*http.Cookie {
 	return func(cs []*http.Cookie) []*http.Cookie {
-		out := dropCookie(name)(cs)
-		return append(out, &http.Cookie{Name: name, Value: value})
+		var t oauthTicket
+		for _, c := range cs {
+			if c.Name == oauthCookieName {
+				t, _ = (&Server{jwtKey: fixedJWTKey}).openTicket(c.Value, "sso")
+			}
+		}
+		edit(&t)
+		return []*http.Cookie{{Name: oauthCookieName, Value: (&Server{jwtKey: key}).sealTicket(t)}}
 	}
 }
 

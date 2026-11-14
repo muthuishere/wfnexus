@@ -16,9 +16,12 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 )
 
-// Identity is who a provider says the person is.
+// Identity is who a provider says the person is. (Provider, Subject) is the
+// stable key a local user is matched on; Username is only the name shown and
+// the start of a new user's name, never a key.
 type Identity struct {
 	Provider string
+	Subject  string // the provider's id for the person: the verified id_token sub, GitHub's numeric user id, the LDAP username
 	Username string
 	Groups   []string
 }

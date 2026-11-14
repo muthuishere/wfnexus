@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 )
 
@@ -27,13 +29,22 @@ import (
 // challenge, and the code is worth nothing without the verifier kept between
 // start and callback.
 //
-// For OpenID Connect providers (oidc, google) the token response must carry an
-// id_token, which is verified before anything else is trusted: its signature
-// (RS256 or ES256) against the issuer's published keys (jwks_uri), its issuer,
-// audience, expiry, issue time and the nonce sent at start. The identity is
-// then read from userinfo with the access token, and userinfo must name the
-// same subject as the id_token. GitHub is OAuth 2.0 only and issues no
-// id_token; it gets PKCE and the userinfo read.
+// For OpenID Connect providers (oidc, google) discovery must name exactly the
+// configured issuer, and the token response must carry an id_token, verified
+// with go-oidc before anything else is trusted: signature (RS256 or ES256)
+// against the issuer's published keys, issuer, audience and expiry. On top of
+// that: iat present and not in the future, azp equal to the client when present
+// (and present when there are several audiences), and the nonce sent at start.
+// The identity is then read from userinfo with the access token, and userinfo
+// must name the same subject. GitHub is OAuth 2.0 only and issues no id_token;
+// it gets PKCE and the userinfo read.
+//
+// A person is identified by the provider's subject for them — never by a name
+// or an email, which can change or be claimed by someone else
+// (Identity.Subject).
+//
+// Errors from the provider are returned to the caller to log; they are not
+// meant for the browser.
 type OAuth struct {
 	cfg  config.AuthProvider
 	http *http.Client
@@ -41,9 +52,11 @@ type OAuth struct {
 	once                     sync.Once
 	discErr                  error
 	authURL, tokenURL, uiURL string
-	issuer                   string
-	keys                     *keySet
+	verifier                 *oidc.IDTokenVerifier
 }
+
+// idTokenSkew is the clock difference allowed on iat.
+const idTokenSkew = 60 * time.Second
 
 // AuthRequest is one sign-in's single-use values, made at start and kept by
 // the caller (in cookies) until the callback.
@@ -130,41 +143,35 @@ func or(a, b string) string {
 	return b
 }
 
-// discover reads {issuer}/.well-known/openid-configuration once: the
-// endpoints the config did not state, and for an OpenID provider its issuer
-// (which must be the configured one) and jwks_uri.
+// discover runs once. An OpenID provider is discovered with go-oidc, which
+// requires the discovery document's issuer to equal the configured issuer
+// exactly; endpoints in the config still win over discovered ones. A provider
+// with all three endpoints configured and no id_token (github) needs none.
 func (o *OAuth) discover(ctx context.Context) error {
 	o.once.Do(func() {
-		if !o.oidc() && o.authURL != "" && o.tokenURL != "" && o.uiURL != "" {
-			return
+		if !o.oidc() {
+			if o.authURL != "" && o.tokenURL != "" && o.uiURL != "" {
+				return
+			}
+			var d struct {
+				Auth     string `json:"authorization_endpoint"`
+				Token    string `json:"token_endpoint"`
+				UserInfo string `json:"userinfo_endpoint"`
+			}
+			o.discErr = o.getJSON(ctx, strings.TrimRight(o.cfg.Issuer, "/")+"/.well-known/openid-configuration", "", &d)
+			o.authURL, o.tokenURL, o.uiURL = or(o.authURL, d.Auth), or(o.tokenURL, d.Token), or(o.uiURL, d.UserInfo)
+		} else {
+			p, err := oidc.NewProvider(oidc.ClientContext(ctx, o.http), o.cfg.Issuer)
+			if err != nil {
+				o.discErr = err
+				return
+			}
+			ep := p.Endpoint()
+			o.authURL, o.tokenURL, o.uiURL = or(o.authURL, ep.AuthURL), or(o.tokenURL, ep.TokenURL), or(o.uiURL, p.UserInfoEndpoint())
+			o.verifier = p.Verifier(&oidc.Config{ClientID: o.cfg.ClientID, SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256}})
 		}
-		var d struct {
-			Issuer   string `json:"issuer"`
-			Auth     string `json:"authorization_endpoint"`
-			Token    string `json:"token_endpoint"`
-			UserInfo string `json:"userinfo_endpoint"`
-			JWKS     string `json:"jwks_uri"`
-		}
-		o.discErr = o.getJSON(ctx, strings.TrimRight(o.cfg.Issuer, "/")+"/.well-known/openid-configuration", "", &d)
-		if o.discErr != nil {
-			return
-		}
-		o.authURL, o.tokenURL, o.uiURL = or(o.authURL, d.Auth), or(o.tokenURL, d.Token), or(o.uiURL, d.UserInfo)
-		if o.authURL == "" || o.tokenURL == "" || o.uiURL == "" {
+		if o.discErr == nil && (o.authURL == "" || o.tokenURL == "" || o.uiURL == "") {
 			o.discErr = errors.New("discovery document is missing an endpoint")
-			return
-		}
-		if o.oidc() {
-			if strings.TrimRight(d.Issuer, "/") != strings.TrimRight(o.cfg.Issuer, "/") {
-				o.discErr = fmt.Errorf("discovery names issuer %q, configured %q", d.Issuer, o.cfg.Issuer)
-				return
-			}
-			if d.JWKS == "" {
-				o.discErr = errors.New("discovery document has no jwks_uri")
-				return
-			}
-			o.issuer = d.Issuer
-			o.keys = &keySet{url: d.JWKS, client: o.http}
 		}
 	})
 	return o.discErr
@@ -234,18 +241,18 @@ func (o *OAuth) Exchange(ctx context.Context, code, redirectURI string, a AuthRe
 	if res.StatusCode != 200 || json.Unmarshal(raw, &tok) != nil || tok.AccessToken == "" {
 		return nil, fmt.Errorf("token exchange refused: %s %s", res.Status, tok.Error)
 	}
-	var subject string
+	var claims map[string]any
+	subject := ""
+	var idt *oidc.IDToken
 	if o.oidc() {
 		if tok.IDToken == "" {
 			return nil, errors.New("the provider returned no id_token")
 		}
-		idc, err := verifyIDToken(ctx, tok.IDToken, o.keys, o.issuer, o.cfg.ClientID, a.Nonce, time.Now())
-		if err != nil {
+		if idt, err = o.checkIDToken(ctx, tok.IDToken, a.Nonce); err != nil {
 			return nil, fmt.Errorf("id_token refused: %w", err)
 		}
-		subject = idc.Subject
+		subject = idt.Subject
 	}
-	var claims map[string]any
 	if err := o.getJSON(ctx, o.uiURL, tok.AccessToken, &claims); err != nil {
 		return nil, err
 	}
@@ -253,17 +260,37 @@ func (o *OAuth) Exchange(ctx context.Context, code, redirectURI string, a AuthRe
 		if sub, _ := claims["sub"].(string); sub == "" || subtle.ConstantTimeCompare([]byte(sub), []byte(subject)) != 1 {
 			return nil, errors.New("userinfo names a different subject than the id_token")
 		}
+	} else {
+		// GitHub's stable key is its numeric user id; the login can change.
+		id, ok := claims["id"].(float64)
+		if !ok || id <= 0 {
+			return nil, errors.New("the provider named no user id")
+		}
+		subject = fmt.Sprintf("%.0f", id)
+	}
+	emailVerified := verified(claims["email_verified"])
+	if idt != nil && !emailVerified {
+		var c struct {
+			EmailVerified any `json:"email_verified"`
+		}
+		if idt.Claims(&c) == nil {
+			emailVerified = verified(c.EmailVerified)
+		}
 	}
 	name := ""
 	for _, k := range []string{o.cfg.UsernameClaim, "preferred_username", "email", "login", "sub"} {
-		if v, ok := claims[k]; ok && k != "" {
+		if k == "" || (k == "email" && !emailVerified) {
+			// An email the provider has not verified does not name anyone.
+			continue
+		}
+		if v, ok := claims[k]; ok {
 			if name = fmt.Sprint(v); name != "" {
 				break
 			}
 		}
 	}
 	if name == "" {
-		return nil, errors.New("the provider named no user")
+		name = subject
 	}
 	var groups []string
 	if gs, ok := claims[or(o.cfg.GroupsClaim, "groups")].([]any); ok {
@@ -271,7 +298,53 @@ func (o *OAuth) Exchange(ctx context.Context, code, redirectURI string, a AuthRe
 			groups = append(groups, fmt.Sprint(g))
 		}
 	}
-	return &Identity{Provider: o.cfg.Name, Username: name, Groups: groups}, nil
+	return &Identity{Provider: o.cfg.Name, Subject: subject, Username: name, Groups: groups}, nil
+}
+
+// checkIDToken verifies an id_token with go-oidc (signature, iss, aud, exp)
+// and then what go-oidc leaves to the caller: iat present and not in the
+// future, azp, and the nonce.
+func (o *OAuth) checkIDToken(ctx context.Context, raw, nonce string) (*oidc.IDToken, error) {
+	idt, err := o.verifier.Verify(oidc.ClientContext(ctx, o.http), raw)
+	if err != nil {
+		return nil, err
+	}
+	var c struct {
+		Azp string          `json:"azp"`
+		Exp json.RawMessage `json:"exp"`
+		Iat json.RawMessage `json:"iat"`
+	}
+	if err := idt.Claims(&c); err != nil {
+		return nil, err
+	}
+	if len(c.Exp) == 0 || string(c.Exp) == "null" || len(c.Iat) == 0 || string(c.Iat) == "null" {
+		return nil, errors.New("exp and iat are required")
+	}
+	if idt.IssuedAt.After(time.Now().Add(idTokenSkew)) {
+		return nil, errors.New("the token was issued in the future")
+	}
+	if c.Azp != "" && c.Azp != o.cfg.ClientID {
+		return nil, errors.New("the token's authorized party is another client")
+	}
+	if len(idt.Audience) > 1 && c.Azp == "" {
+		return nil, errors.New("the token names several audiences and no authorized party")
+	}
+	if idt.Nonce == "" || subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(nonce)) != 1 {
+		return nil, errors.New("nonce does not match this sign-in")
+	}
+	return idt, nil
+}
+
+// verified reads an email_verified claim, which providers send as a boolean
+// or as the string "true".
+func verified(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t == "true"
+	}
+	return false
 }
 
 func (o *OAuth) getJSON(ctx context.Context, u, bearer string, out any) error {

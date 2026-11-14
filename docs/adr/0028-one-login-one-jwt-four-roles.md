@@ -82,15 +82,44 @@ auth:
 - `oidc` uses the authorization-code flow with discovery. The identity is
   read from the userinfo endpoint. `google` is an OIDC preset. `github` is an
   OAuth 2.0 preset that reads `/user`.
-  The browser goes to `/api/auth/oauth/{name}/start`. The state, a PKCE
-  verifier and (for OIDC) a nonce are kept in HttpOnly cookies scoped to
-  `/api/auth/oauth/` for 10 minutes, and cleared at the callback. Every
-  provider uses PKCE (S256). An OIDC provider (`oidc`, `google`) needs an
-  `issuer`: its token response must carry an `id_token` signed with RS256 or
-  ES256 by a key in the issuer's `jwks_uri`, with matching `iss`, `aud` (and
-  `azp` when there are several audiences), `exp`, `iat` and `nonce`, and
-  userinfo must name the same `sub`. `github` issues no `id_token`.
-  (Updated 2026-11: PKCE, nonce and id_token verification added.)
+  The browser goes to `/api/auth/oauth/{name}/start`.
+  (Updated 2026-11.)
+  - Redirect providers need the server's public URL (`WFX_PUBLIC_URL` /
+    `publicUrl`): the callback address is built from it, never from the
+    request's Host or `X-Forwarded-*` headers. Without it they are not
+    enabled.
+  - The sign-in's state, PKCE verifier, nonce, provider and expiry (10
+    minutes) travel in one HttpOnly, SameSite=Lax cookie signed with a key
+    only the server holds. Over https it is `__Host-wfx_oauth` (Path=/,
+    Secure); over http (a local install) `wfx_oauth` on `/api/auth/oauth/`.
+    The Secure flag follows the public URL's scheme. It is cleared at the
+    callback.
+  - Every provider uses PKCE (S256).
+  - An OIDC provider (`oidc`, `google`) needs an `issuer`, and discovery must
+    name exactly that issuer. Its token response must carry an `id_token`,
+    verified with go-oidc: RS256 or ES256 only, against the issuer's keys,
+    with `iss`, `aud` and `exp` checked. On top of that, `iat` must be present
+    and not in the future, `azp` must equal the client id when present (and is
+    required when there are several audiences), the `nonce` must match, and
+    userinfo must name the same `sub`. `github` issues no `id_token`.
+  - Errors from the provider are logged; the browser sees "sign-in failed".
+  - Accounts are keyed on (provider, subject): the verified `sub` for OIDC,
+    GitHub's numeric user id, the LDAP username. A name never finds or links
+    an account; a new subject whose name is taken gets its own account. An
+    email names an account only when the provider says it is verified.
+  - Roles mapped by `defaultRole` and `groupRoles` follow the person's groups
+    at every sign-in, granted and revoked. Roles the provider config does not
+    mention are left alone.
+
+  Upgrade note: accounts created by an external sign-in before this change
+  are bound, once, to the subject that next signs in with their name, and the
+  server log says so (`AUDIT account … linked to … on first sign-in after
+  upgrade; review`). Accounts that hold roles are re-linked on first sign-in
+  but keep no roles until an admin confirms with
+  `wfx-server link confirm NAME` (on the server, no sign-in needed;
+  `wfx-server link list` shows them), or a superadmin confirms with
+  `POST /api/users/{name}/link/confirm`. Until then that sign-in is refused
+  with "your account link is pending confirmation".
 - `ldap`: a service bind, a search, then a bind as the user. Groups come from
   `memberOf`. `mock-ldap` is an in-process fake directory read from a YAML
   file, for dev and tests. It is refused off loopback unless `force: true`.
