@@ -224,6 +224,16 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			}
 			step.Consumes = renameAll(u.Consumes, s.Consumes)
 			step.Produces = renameAll(u.Produces, s.Produces)
+			// A module command's step may not be told not to pause: an
+			// approval its module or the platform asks for is not the
+			// caller's to waive.
+			if s.Module != "" || s.WriteEffect || t.Module != "" {
+				for _, key := range []string{"*", s.ID} {
+					if o, ok := u.With[key]; ok && o.RequiresApproval != nil && !*o.RequiresApproval {
+						return fmt.Errorf("%s: with %q sets requires_approval: false on %s, a module command's step; a module command's approval cannot be switched off", where, key, step.ID)
+					}
+				}
+			}
 			applyOverride(&step, u.With["*"])
 			applyOverride(&step, u.With[s.ID])
 			if len(t.Inputs) > 0 {
@@ -233,13 +243,18 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 				step.Module = t.Module
 			}
 			// A module command marked `effect: write` changes something
-			// outside the run, so the run pauses for approval before it:
-			// once per call, on the command's first step, before anything
-			// of it has run. There is no opt-out. A later approval step of
-			// the command's own (a response policy of "approval") would ask
-			// the same question twice, so it no longer pauses.
+			// outside the run, so the run pauses for approval before it, on
+			// the command's first step, before anything of it has run. The
+			// marks travel with the step through every level of `uses:` and
+			// the pause is derived from them AFTER every override, so no
+			// caller can switch it off. A step the module itself marks
+			// requires_approval keeps it.
 			if t.Effect == "write" {
-				step.RequiresApproval = i == 0
+				step.WriteEffect = true
+				step.WriteEntry = step.WriteEntry || i == 0
+			}
+			if step.WriteEntry {
+				step.RequiresApproval = true
 			}
 			expanded = append(expanded, step)
 		}

@@ -131,6 +131,12 @@ type Step struct {
 	// Module is the installed module whose command this step came from
 	// (task.go); the engine gives such a step that module's token.
 	Module string `yaml:"-" json:"module,omitempty"`
+	// WriteEffect marks a step expanded from a module command marked
+	// `effect: write`; WriteEntry marks that command's first step, which
+	// always requires approval. Set only by expansion, never by a file, and
+	// not overridable (task.go).
+	WriteEffect bool `yaml:"-" json:"writeEffect,omitempty"`
+	WriteEntry  bool `yaml:"-" json:"writeEntry,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`
@@ -506,6 +512,24 @@ func (d *Definition) validate(cat Catalog) error {
 			return fmt.Errorf("%s: step %s: runs-on %q is a template, but runs-on is a literal runner label", d.Name, s.ID, s.RunsOn)
 		}
 	}
+	// The approval of a write command's first step is derived, never
+	// overridden: whatever an override said, it holds here. Where the
+	// workflow already says who may approve (approvers, or no self-approval,
+	// on any step), a write's pause follows the stricter half of that policy:
+	// whoever started the run may not approve its own write. With no policy
+	// at all (one person, one install) the starter approves, as before.
+	policy := false
+	for _, s := range d.Steps {
+		policy = policy || len(s.Approvers) > 0 || s.PreventSelfApproval
+	}
+	for i := range d.Steps {
+		if d.Steps[i].WriteEntry {
+			d.Steps[i].RequiresApproval = true
+			if policy {
+				d.Steps[i].PreventSelfApproval = true
+			}
+		}
+	}
 	// WFX_* names belong to the platform (run facts, module and data
 	// variables) and to the env store; a workflow may not set one.
 	if err := reservedEnv(d.Name, d.Env); err != nil {
@@ -726,6 +750,14 @@ func validateApprovers(wf, stepID string, approvers []string) error {
 func (d *Definition) validatePlan() error {
 	if !d.IsPlanned() {
 		return nil
+	}
+	// A planned workflow derives its order from facts; a write command's
+	// approval must come before its write whatever the facts say, so a write
+	// command is not used inside one.
+	for _, s := range d.Steps {
+		if s.WriteEffect {
+			return fmt.Errorf("%s/%s: a module command marked effect: write cannot be used in a planned workflow (goal, consumes/produces); call it from a workflow with an ordinary step order", d.Name, s.ID)
+		}
 	}
 	if d.authoredNeeds {
 		return fmt.Errorf("%s: a workflow declares its order EITHER with `needs` OR with consumes/produces and a goal — not both, because the two would disagree the moment a guard fails", d.Name)
