@@ -17,8 +17,9 @@ output, state, memory, a loop item. Each such value reaches the script as
 data. When the step runs, every `{{ … }}` that prints a value becomes a
 reference to an environment variable (`${WFX_DATA_1}`, `${WFX_DATA_2}`, … in
 the order they appear; `${env:WFX_DATA_1}` under `pwsh`), and the value travels
-in the environment. So a value arrives byte for byte, whatever quotes, newlines
-or shell syntax it holds, and the run page shows the references, not the values.
+in the environment. So a value arrives unchanged, whatever quotes, newlines or
+shell syntax it holds (two exceptions under "Large values" below), and the run
+page shows the references, not the values.
 
 ```yaml
 - id: greet
@@ -42,25 +43,50 @@ What this means when you write a step:
 - **A command that is itself an input** (a test command, say) is run on
   purpose: write it to a file as data, then run the file —
   `f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"; bash "$f"`.
-- **Places that evaluate text again are refused at load:** shell arithmetic
-  (`$(( ))`, `(( ))`, `let`, a numeric `[[ … -eq … ]]`, an array subscript)
-  and the text given to `eval`, `sh`/`bash`/`zsh -c` or `ssh`. For a number,
-  read it into a variable, check it (`case "$n" in ''|*[!0-9]*) exit 2;; esac`),
-  then use the variable. For `sh -c`, pass the value as an argument:
-  `sh -c 'echo "$1"' _ "{{ .Input.x }}"`. A program that runs its own argument
-  as code (`python -c`, `node -e`) cannot be checked for you: pass values to it
-  as arguments, environment or files, never inside its code.
+- **Places that evaluate text again are refused at load:**
+  - shell arithmetic: `$(( ))`, `(( ))`, `let`, `declare`/`typeset`/`local -i`,
+    a numeric `[[ … -eq … ]]`, an array subscript;
+  - text given to `eval`, `trap`, `sh`/`bash`/`zsh`/`dash`/`ksh -c` (also
+    glued, `sh -c"…"`), `su`/`runuser … -c`, `ssh`, or pwsh
+    `Invoke-Expression`/`iex`. Quoted or escaped command words (`"sh"`,
+    `\eval`) count the same;
+  - text fed to a shell or interpreter as its script: a heredoc that `sh`,
+    `bash`, `python`, `node`, `perl`, `ruby` and the like read
+    (`bash <<EOF`, `cat <<EOF | sh`), a pipe into one (`echo "…" | sh`), a
+    here-string (`bash <<<"…"`) or `<( … )`.
+
+  For a number, read it into a variable, check it
+  (`case "$n" in ''|*[!0-9]*) exit 2;; esac`), then use the variable. For
+  `sh -c`, pass the value as an argument: `sh -c 'echo "$1"' _ "{{ .Input.x }}"`.
+  For a script read on stdin, put the value in the environment and quote the
+  heredoc: `V="{{ .Input.x }}" bash <<'EOF'` … `echo "$V"` … `EOF`.
+- **This check is a guard, not a proof.** It catches the common ways a value
+  ends up evaluated, not every way. Not detected:
+  - a value used as a variable name (`test -v`, `printf -v`, `read`,
+    `${!…}`);
+  - a value copied into a variable and then used in arithmetic;
+  - a value written to a file that is then sourced or run;
+  - a value inside the program text of `awk`, `sed -e`, `python -c`,
+    `node -e`, `perl -e`, `jq` or `find -exec`.
+
+  Pass values to such programs as arguments, environment or files, never inside
+  their code. For input that comes from outside (hooks, MCP), typed inputs that
+  limit what a value may be (#137) are the defence; this check is not.
 - **`define`, `template` and `block` are not used in `run:` text** (they are
   refused at load); write the text in place.
 - **Conditions are unchanged.** `{{ if eq .Input.mode "fast" }}--fast{{ end }}`
   still branches on the value; only printed values move to the environment.
 - **The run's own facts print as they are:** `.RunID`, `.WorkDir`, `.BaseRef`
-  and `.Index`, so `cd '{{ .WorkDir }}'` keeps working.
+  and `.Index`, so `cd '{{ .WorkDir }}'` keeps working. Only where the dot is
+  the run's own data, though: at the top level, or written `$.RunID` anywhere.
+  Inside `range` or `with` the dot is a value, so `.RunID` there is that
+  value's field and travels as data like any other value.
 - **Large values go to a file.** A value over 64 KiB (or once a step's values
   pass 256 KiB together, or one holding a NUL byte) is written to a 0600 file. `WFX_DATA_<n>_FILE` names
-  it, and the reference becomes `$(cat "${WFX_DATA_<n>_FILE}")`, which drops
-  trailing newlines as command substitution does. A script can also read the
-  file itself.
+  it, and the reference becomes `$(cat "${WFX_DATA_<n>_FILE}")`. Read that
+  way, a value is not exact in two cases: command substitution drops trailing
+  newlines, and the shell drops a NUL byte. The file itself holds the value
+  exactly, so a script that needs every byte reads the file.
 - **`shell: cmd` cannot take values**: cmd re-reads an expanded variable as
   code. Use `pwsh`, `bash` or `sh`.
 - The same happens on a worker: the job carries the command and its values

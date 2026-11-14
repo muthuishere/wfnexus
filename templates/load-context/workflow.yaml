@@ -53,8 +53,8 @@ steps:
       cat > input.json <<WFX_INPUT_EOF
       {{ json .Input }}
       WFX_INPUT_EOF
-      python3 - <<PY
-      import json
+      WFX_POLICY="{{ .Inputs.default_policy }}" WFX_OUT="{{ .Inputs.out }}" python3 - <<PY
+      import json, os
       i = json.load(open("input.json"))
       m = i.get("message") or {}
       if not m and i.get("messages"):
@@ -66,9 +66,9 @@ steps:
           "kind": m.get("kind") or "message", "text": m.get("text", ""), "replyTo": m.get("replyTo"),
           "media": m.get("media"), "fromOwner": bool(m.get("fromOwner")),
           "watch": s.get("name", ""), "instructions": s.get("instructions", ""),
-          "skills": s.get("skills") or [], "responsePolicy": s.get("responsePolicy") or "{{ .Inputs.default_policy }}",
+          "skills": s.get("skills") or [], "responsePolicy": s.get("responsePolicy") or os.environ["WFX_POLICY"],
       }
-      json.dump(ctx, open("{{ .Inputs.out }}", "w"), indent=2)
+      json.dump(ctx, open(os.environ["WFX_OUT"], "w"), indent=2)
       print(f"context for {ctx['chat'] or '?'} from {ctx['from'] or '?'} ({ctx['kind']}), policy {ctx['responsePolicy']}")
       PY
     timeout_sec: 30

@@ -119,6 +119,59 @@ func TestRunStepValuesArriveUnchangedAndNothingElseRuns(t *testing.T) {
 	}
 }
 
+// Inside range or with the dot is a value, so a field of it named like one of
+// the run's own facts (.RunID, .Index, …) is that value's and travels as
+// data: nothing in it runs, and as a bare word it is refused at load.
+func TestFactNamesOnACallersValueRunNothing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	evil := "x\"; touch " + marker + "; echo \""
+	schema := "input_schema: {type: object, properties: {o: {type: object}, objs: {type: array}}}\n"
+	f := dataServer(t, map[string]string{
+		"withfact.yaml": "name: withfact\n" + schema + "steps:\n  - id: s\n    shell: sh\n    run: " +
+			`'{{ with .Input.o }}printf "%s" "{{ .RunID }}" > ` + filepath.Join(dir, "with") + `{{ end }}'` + "\n",
+		"rangefact.yaml": "name: rangefact\n" + schema + "steps:\n  - id: s\n    shell: sh\n    run: " +
+			`'{{ range .Input.objs }}printf "%s" "{{ .Index }}" > ` + filepath.Join(dir, "range") + `; {{ end }}'` + "\n",
+		"itemfact.yaml": "name: itemfact\n" + schema + "steps:\n  - id: s\n    shell: sh\n    foreach: input.objs\n    run: " +
+			`'{{ with .Item }}echo {{ .RunID }}{{ end }}'` + "\n",
+	})
+	for wf, file := range map[string]string{"demo%2Fwithfact": "with", "demo%2Frangefact": "range"} {
+		t.Run(file, func(t *testing.T) {
+			_ = os.Remove(marker)
+			r := f.runToEnd(t, wf, map[string]any{"o": map[string]any{"RunID": evil}, "objs": []any{map[string]any{"Index": evil}}})
+			if r.Status != "done" {
+				t.Fatalf("run %s (%s)", r.Status, r.Error)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, file)); err != nil || string(got) != evil {
+				t.Errorf("got %q, want %q (%v)", got, evil, err)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Error("part of the value ran as a command")
+			}
+		})
+	}
+	t.Run("item-bare", func(t *testing.T) {
+		_ = os.Remove(marker)
+		b, _ := json.Marshal(map[string]any{"objs": []any{map[string]any{"RunID": "x; touch " + marker}}})
+		if code, out, _ := f.call(t, "POST", "/api/workflows/demo%2Fitemfact/runs", b, nil); code == 201 {
+			id := uuid.MustParse(out["run"].(map[string]any)["id"].(string))
+			for i := 0; i < 200; i++ {
+				if r, _ := f.st.GetRun(context.Background(), id); r != nil && (r.Status == "done" || r.Status == "failed") {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			t.Error("the workflow loaded and started")
+		}
+		if _, err := os.Stat(marker); err == nil {
+			t.Error("part of the value ran as a command")
+		}
+	})
+}
+
 // Shapes where the shell would evaluate a value a second time, and named
 // templates whose bodies are separate trees, are refused when the workflow
 // loads: it cannot be started, and nothing runs.
@@ -137,6 +190,13 @@ func TestRunTextThatWouldEvaluateAValueAgainIsRefusedAtLoad(t *testing.T) {
 		"shc":       `sh -c "echo {{ .Input.v }}"`,
 		"bashc":     `bash -c "echo {{ .Input.v }}"`,
 		"eval":      `eval "echo {{ .Input.v }}"`,
+		"trap":      `trap "echo {{ .Input.v }}" EXIT`,
+		"declarei":  `declare -i n="{{ .Input.v }}"`,
+		"quotedsh":  `"sh" -c "echo {{ .Input.v }}"`,
+		"escaped":   `\eval "echo {{ .Input.v }}"`,
+		"glued":     `sh -c"echo {{ .Input.v }}"`,
+		"heredocsh": "bash <<EOF\necho \"{{ .Input.v }}\"\nEOF",
+		"pipesh":    `echo "{{ .Input.v }}" | sh`,
 	}
 	files := map[string]string{"ok.yaml": "name: ok\nsteps:\n  - id: s\n    run: echo fine\n"}
 	for name, run := range shapes {
