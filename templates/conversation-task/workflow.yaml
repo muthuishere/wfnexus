@@ -31,17 +31,17 @@ steps:
   - id: start
     uses: conversation.start_task@0
     with:
-      task_type: '{{ or .Input.task_type "collect" }}'
+      task_type: '{{ .Input.task_type }}'
       targets: "{{ .Input.targets }}"
       fields: "{{ .Input.fields }}"
-      channel: '{{ or .Input.channel "whatsapp" }}'
+      channel: '{{ .Input.channel }}'
       service_url_env: WFX_CONVERSATION_URL
       api_key_env: WFX_CONVERSATION_KEY
   - id: wait
     uses: conversation.task_status@0
     with:
-      task_id: '{{ (fromJson .Steps.start.start.stdout).task_id }}'
-      wait_seconds: '{{ or .Input.wait_seconds "1800" }}'
+      task_id: '{{ .Steps.start.start.stdout }}'
+      wait_seconds: '{{ .Input.wait_seconds }}'
       poll_seconds: "30"
       service_url_env: WFX_CONVERSATION_URL
       api_key_env: WFX_CONVERSATION_KEY

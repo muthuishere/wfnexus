@@ -230,8 +230,23 @@ async function start() {
   out({ task_id: String(id), status: String(r.status ?? "accepted") });
 }
 
+// taskId is the task_id input: the id itself, or start_task's whole output
+// ({"task_id": …}), so a workflow can pass the earlier step's stdout as is.
+function taskId() {
+  let id = input("task_id", { required: true, max: 4096 }).trim();
+  if (id.startsWith("{")) {
+    try {
+      id = String(JSON.parse(id).task_id ?? "");
+    } catch {
+      fail(2, "task_id must be an id or start_task's JSON output");
+    }
+  }
+  if (id === "" || Buffer.byteLength(id) > 256) fail(2, "task_id must be an id of at most 256 bytes");
+  return id;
+}
+
 async function status() {
-  const id = input("task_id", { required: true, max: 256 });
+  const id = taskId();
   const num = (name, def, lo, hi) => {
     const raw = input(name).trim();
     if (raw === "") return def;

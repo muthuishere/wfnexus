@@ -148,7 +148,7 @@ func runModuleCommand(t *testing.T, name string, input map[string]any, env []str
 	}
 	with := map[string]string{}
 	for k := range task.Inputs {
-		with[k] = fmt.Sprintf(`{{ or .Input.%s "" }}`, k)
+		with[k] = fmt.Sprintf(`{{ .Input.%s }}`, k)
 	}
 	dir := t.TempDir()
 	wj, _ := json.Marshal(with)
@@ -228,8 +228,9 @@ func TestConversationStartPollResult(t *testing.T) {
 	if body := m.tasks["t-1"]; body["type"] != "collect" || body["channel"] != "whatsapp" || len(body["targets"].([]any)) != 2 {
 		t.Fatalf("task sent = %v", body)
 	}
+	// task_id takes start_task's whole output as well as the bare id.
 	out, errOut, code = runModuleCommand(t, "conversation.task_status",
-		with(convNames, map[string]any{"task_id": "t-1", "wait_seconds": "30", "poll_seconds": "0.1"}), env)
+		with(convNames, map[string]any{"task_id": out, "wait_seconds": "30", "poll_seconds": "0.1"}), env)
 	if code != 0 {
 		t.Fatalf("status: %d %s", code, errOut)
 	}

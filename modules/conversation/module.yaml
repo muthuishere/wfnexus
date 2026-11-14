@@ -60,7 +60,7 @@ commands:
   task_status:
     description: "Read a task's status and collected fields; with wait_seconds, poll until it is done, failed or cancelled."
     inputs:
-      task_id: { type: string, required: true, description: "the task_id start_task returned" }
+      task_id: { type: string, required: true, description: "the task_id start_task returned, or start_task's whole JSON output" }
       wait_seconds: { type: string, default: "0", description: "0 to 3600: how long to poll for a terminal status (0 = read once)" }
       poll_seconds: { type: string, default: "10", description: "seconds between reads" }
       service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (WFX_CONVERSATION_*)" }
