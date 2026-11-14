@@ -5,13 +5,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -340,13 +343,68 @@ func (e *Engine) secretEnvFile(runID uuid.UUID, stepID string, env map[string]st
 		return "", env, func() {}, nil
 	}
 	sort.Strings(lines)
-	dir := filepath.Join(e.cfg.WorkDir, runID.String(), "secrets")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// One 0700 directory per job, never a folder shared across runs or
+	// projects: under the run's own directory on the platform, under the
+	// machine's temp dir on a worker (which has no work dir). It is named for
+	// this process, so a worker that died mid-job has its leftovers swept at
+	// the next start (SweepStaleSecrets).
+	parent := secretsBase()
+	if e.cfg.WorkDir != "" {
+		parent = filepath.Join(e.cfg.WorkDir, runID.String(), "secrets")
+	}
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", nil, nil, err
 	}
-	path := filepath.Join(dir, stepID+".env")
+	dir, err := os.MkdirTemp(parent, fmt.Sprintf("job-%d-", os.Getpid()))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	drop := func() { _ = os.RemoveAll(dir) }
+	path := filepath.Join(dir, "step.env")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		drop()
 		return "", nil, nil, err
 	}
-	return fmt.Sprintf(". %s && ", workflow.ShellQuote(path)), rest, func() { _ = os.Remove(path) }, nil
+	return fmt.Sprintf(". %s && ", workflow.ShellQuote(path)), rest, drop, nil
+}
+
+// secretsBase is where a machine with no work dir (a worker) keeps its
+// per-job secret directories.
+func secretsBase() string { return filepath.Join(os.TempDir(), "wfx-secrets") }
+
+// SweepStaleSecrets removes the per-job secret directories of processes that
+// are gone — left behind when a worker was killed mid-job, so its deferred
+// cleanup never ran. A worker calls it when it starts. It returns how many it
+// removed.
+func SweepStaleSecrets() int {
+	entries, err := os.ReadDir(secretsBase())
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, en := range entries {
+		var pid int
+		if _, err := fmt.Sscanf(en.Name(), "job-%d-", &pid); err != nil || processAlive(pid) {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(secretsBase(), en.Name())) == nil {
+			n++
+		}
+	}
+	return n
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true // FindProcess opened it, so it exists
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

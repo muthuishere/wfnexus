@@ -284,6 +284,19 @@ func (e *Engine) RunAgentJob(ctx context.Context, job *AgentJob, workdir string)
 
 	runID, _ := uuid.Parse(job.RunID)
 	step := job.Step
+	// The values delivered at claim are sealed here as on the platform: they
+	// reach the agent's shell through the per-job secrets file, never a
+	// command line, and are scrubbed from everything this machine reports.
+	if len(job.Deliver) > 0 {
+		vals := map[string]string{}
+		for _, n := range job.Deliver {
+			if v, ok := step.Env[n]; ok {
+				vals[n] = v
+			}
+		}
+		e.registerDelivered(runID, vals)
+		defer e.redactions.forget(runID)
+	}
 	// The workflow's folders are attached HERE, against this machine. Nothing
 	// was copied over the wire but the workflow's own files; a `mount:` line
 	// names a folder that must exist on this box, and says so by name if it

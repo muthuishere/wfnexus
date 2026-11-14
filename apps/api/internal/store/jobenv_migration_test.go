@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store/pgtest"
 	"github.com/muthuishere/wfnexus/apps/api/migrations"
@@ -29,11 +30,23 @@ func mustDSN(t *testing.T) string {
 const oldJobPayload = `{"runId":"r","stepId":"s","command":"echo","env":{"API_TOKEN":"canary-old-format-value","PLAIN":"x"},` +
 	`"agent":{"step":{"id":"s","env":{"GH_TOKEN":"canary-old-agent-value"}}}}`
 
-func checkBlanked(t *testing.T, st *Store, id string) {
+// checkBlanked: the row's values are gone, its names kept. A job that was
+// still queued is failed with a reason to re-run it (an old row cannot say
+// which values were the workflow's own); a leased one keeps running.
+func checkBlanked(t *testing.T, st *Store, id, wantStatus string) {
 	t.Helper()
-	var raw string
-	if err := st.db.QueryRow(`SELECT CAST(payload AS TEXT) FROM worker_jobs WHERE CAST(id AS TEXT) = $1`, id).Scan(&raw); err != nil {
+	var raw, status, result string
+	if err := st.db.QueryRow(`SELECT CAST(payload AS TEXT), status, COALESCE(CAST(result AS TEXT), '') FROM worker_jobs WHERE CAST(id AS TEXT) = $1`, id).Scan(&raw, &status, &result); err != nil {
 		t.Fatal(err)
+	}
+	if status != wantStatus {
+		t.Fatalf("status = %s, want %s", status, wantStatus)
+	}
+	if wantStatus == "done" && !strings.Contains(result, "re-run the step") {
+		t.Fatalf("a queued pre-upgrade job was not failed with a reason: %q", result)
+	}
+	if wantStatus == "leased" && result != "" {
+		t.Fatalf("a leased job was given a result: %q", result)
 	}
 	if strings.Contains(raw, "canary-old") {
 		t.Fatalf("a value survived: %s", raw)
@@ -86,14 +99,16 @@ func TestMigrationBlanksStoredJobEnvSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leased := enqueueLeased(t, st, run.ID)
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
 	if err := Migrate("sqlite", path); err != nil {
 		t.Fatal(err)
 	}
-	checkBlanked(t, st, job.ID.String())
-	if !strings.Contains(logs.String(), "blanked stored env values in 1 job rows") || strings.Contains(logs.String(), "canary") {
+	checkBlanked(t, st, job.ID.String(), "done")
+	checkBlanked(t, st, leased, "leased")
+	if !strings.Contains(logs.String(), "blanked stored env values in 2 job rows") || strings.Contains(logs.String(), "canary") {
 		t.Fatalf("log = %q", logs.String())
 	}
 }
@@ -112,6 +127,7 @@ func TestMigrationBlanksStoredJobEnvPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leased := enqueueLeased(t, st, run.ID)
 	if n := countStoredJobEnv(driverPostgres, mustDSN(t)); n < 1 {
 		t.Fatalf("count before = %d", n)
 	}
@@ -122,8 +138,22 @@ func TestMigrationBlanksStoredJobEnvPostgres(t *testing.T) {
 	if _, err := st.db.Exec(string(sqlText)); err != nil {
 		t.Fatal(err)
 	}
-	checkBlanked(t, st, job.ID.String())
+	checkBlanked(t, st, job.ID.String(), "done")
+	checkBlanked(t, st, leased, "leased")
 	if n := countStoredJobEnv(driverPostgres, mustDSN(t)); n != 0 {
 		t.Fatalf("count after = %d", n)
 	}
+}
+
+// enqueueLeased writes an old-format job that a worker holds right now.
+func enqueueLeased(t *testing.T, st *Store, runID uuid.UUID) string {
+	t.Helper()
+	job, err := st.EnqueueJob(context.Background(), runID, "s2", "box", json.RawMessage(oldJobPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`UPDATE worker_jobs SET status='leased' WHERE CAST(id AS TEXT) = $1`, job.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	return job.ID.String()
 }

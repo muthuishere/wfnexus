@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -159,9 +161,15 @@ func TestJobEnvIsDeliveredAtClaimAndNeverStored(t *testing.T) {
 		rec = httptest.NewRecorder()
 		f.h.ServeHTTP(rec, req)
 		places["GET /api/workers"] = rec.Body.String()
+		forms := map[string]string{
+			"raw": jobCanary, "base64": base64.StdEncoding.EncodeToString([]byte(jobCanary)),
+			"hex": hex.EncodeToString([]byte(jobCanary)),
+		}
 		for where, text := range places {
-			if strings.Contains(text, jobCanary) {
-				t.Errorf("%s: the value is in the %s", when, where)
+			for form, v := range forms {
+				if strings.Contains(text, v) {
+					t.Errorf("%s: the %s form of the value is in the %s", when, form, where)
+				}
 			}
 		}
 	}
@@ -201,7 +209,9 @@ func TestJobEnvIsDeliveredAtClaimAndNeverStored(t *testing.T) {
 	if b, _ := os.ReadFile(got); string(b) != jobCanary {
 		t.Fatalf("the step did not receive the value: %q", b)
 	}
-	res, _ := json.Marshal(engine.JobResult{OK: true})
+	// The worker's report quotes the value in every form; it is stored in none.
+	b64, hx := base64.StdEncoding.EncodeToString([]byte(jobCanary)), hex.EncodeToString([]byte(jobCanary))
+	res, _ := json.Marshal(engine.JobResult{OK: true, Stdout: jobCanary + " " + b64 + " " + hx})
 	if code, out, _ := f.call(t, "POST", "/api/workers/jobs/"+jobID+"/result", res, auth); code != 200 {
 		t.Fatalf("result = %d %v", code, out)
 	}
