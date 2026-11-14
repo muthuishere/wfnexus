@@ -129,6 +129,31 @@ func TestANulByteGoesByFile(t *testing.T) {
 	}
 }
 
+// A field named like a platform fact under a dot that range or with moved
+// onto a value is that value's: it travels as data. $.RunID stays the run's.
+func TestPlatformFactNamesUnderAMovedDotAreData(t *testing.T) {
+	evil := "x\"; touch /tmp/p; echo \""
+	data := TemplateData{RunID: "r1", Input: map[string]any{
+		"o":    map[string]any{"RunID": evil, "WorkDir": evil},
+		"objs": []any{map[string]any{"Index": evil}},
+	}}
+	for _, c := range []struct{ run, script string }{
+		{`{{ with .Input.o }}echo "{{ .RunID }}"{{ end }}`, `echo "${WFX_DATA_1}"`},
+		{`{{ range .Input.objs }}echo "{{ .Index }}"; {{ end }}`, `echo "${WFX_DATA_1}"; `},
+		{`{{ with .Input.o }}cd "{{ .WorkDir }}"{{ end }}`, `cd "${WFX_DATA_1}"`},
+		{`{{ with .Input.o }}echo "{{ $.RunID }}"{{ end }}`, `echo "r1"`},
+		{`{{ with .Input.none }}x{{ else }}echo "{{ .RunID }}"{{ end }}`, `echo "r1"`},
+	} {
+		rt, err := RenderRun(c.run, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(rt.Script, "touch") || rt.Display() != c.script {
+			t.Errorf("%s: script %q", c.run, rt.Display())
+		}
+	}
+}
+
 // RenderRun refuses what checkRunText refuses: named templates.
 func TestRenderRunRefusesNamedTemplates(t *testing.T) {
 	if _, err := RenderRun(`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, TemplateData{}); err == nil {
@@ -200,6 +225,46 @@ func TestRunTextCheck(t *testing.T) {
 		{`zsh -c "echo {{ .Input.x }}"`, "", "zsh -c"},
 		{`eval "echo {{ .Input.x }}"`, "", "eval"},
 		{`ssh host "ls {{ .Input.x }}"`, "", "ssh"},
+		// a platform fact's name under a dot moved onto a value is that value's
+		{`{{ with .Item }}echo {{ .RunID }}{{ end }}`, "", "bare word"},
+		{`{{ range .Input.objs }}echo {{ .Index }}; {{ end }}`, "", "bare word"},
+		{`{{ with .Input.o }}echo "{{ .RunID }}"{{ end }}`, "", ""},
+		{`{{ with .Input.o }}echo {{ $.RunID }}{{ end }}`, "", ""},
+		{`{{ with .Input.o }}x{{ else }}echo {{ .RunID }}{{ end }}`, "", ""},
+		// trap actions, integer variables, quoted or escaped command words
+		{`trap "echo {{ .Input.x }}" EXIT`, "", "trap"},
+		{`trap 'echo "$v"' EXIT; v="{{ .Input.x }}"`, "", ""},
+		{`declare -i n="{{ .Input.x }}"`, "", "integer variable"},
+		{`typeset -i n="{{ .Input.x }}"`, "", "integer variable"},
+		{`f() { local -ri n="{{ .Input.x }}"; }`, "", "integer variable"},
+		{`declare n="{{ .Input.x }}"`, "", ""},
+		{`"sh" -c "echo {{ .Input.x }}"`, "", "sh -c"},
+		{`'bash' -c "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`\sh -c "echo {{ .Input.x }}"`, "", "sh -c"},
+		{`\eval "echo {{ .Input.x }}"`, "", "eval"},
+		{`"eval" "echo {{ .Input.x }}"`, "", "eval"},
+		{`sh -c"echo {{ .Input.x }}"`, "", "sh -c"},
+		{`su deploy -c "echo {{ .Input.x }}"`, "", "su -c"},
+		{`su - deploy -c "echo {{ .Input.x }}"`, "", "su -c"},
+		{`Invoke-Expression "echo {{ .Input.x }}"`, "pwsh", "Invoke-Expression"},
+		{`iex "echo {{ .Input.x }}"`, "pwsh", "Invoke-Expression"},
+		// text fed to a shell or interpreter as its script
+		{"bash <<EOF\necho \"{{ .Input.x }}\"\nEOF", "", "heredoc that bash reads"},
+		{"sh -s <<EOF\necho {{ .Input.x }}\nEOF", "", "heredoc that sh reads"},
+		{"python3 - <<PY\nprint(\"{{ .Input.x }}\")\nPY", "", "heredoc that python3 reads"},
+		{"cat <<EOF | sh\necho {{ .Input.x }}\nEOF", "", "heredoc that sh reads"},
+		{"node <<JS\nconsole.log(\"{{ .Input.x }}\")\nJS", "", "heredoc that node reads"},
+		{`echo "{{ .Input.x }}" | sh`, "", "piped into sh"},
+		{`printf '%s' "{{ .Input.x }}" | tr a b | bash -s`, "", "piped into bash"},
+		{`echo "{{ .Input.x }}" | env X=1 zsh`, "", "piped into zsh"},
+		{`"{{ .Input.x }}" | iex`, "pwsh", "piped into iex"},
+		{`bash <<<"{{ .Input.x }}"`, "", "here-string"},
+		{`source <(echo "{{ .Input.x }}")`, "", "here-string or <( … )"},
+		// the same readers given values as data
+		{"cat > f <<EOF\n{{ .Input.x }}\nEOF\nbash f.sh", "", ""},
+		{`echo "{{ .Input.x }}" | grep -c sh`, "", ""},
+		{`echo "{{ .Input.x }}" || sh -c 'exit 1'`, "", ""},
+		{`V="{{ .Input.x }}" bash <<'EOF'` + "\necho \"$V\"\nEOF", "", ""},
 		// the same words where nothing is evaluated again
 		{`sh -c 'echo "$1"' _ "{{ .Input.x }}"`, "", ""},
 		{`[[ "{{ .Input.x }}" == yes ]] && echo y`, "", ""},

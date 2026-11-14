@@ -20,11 +20,17 @@ import (
 // they reach the script as data: each `{{ … }}` that prints a value becomes a
 // reference to an environment variable (WFX_DATA_1, WFX_DATA_2, …) and the
 // value travels in the environment beside the command. A value therefore
-// arrives byte for byte, whatever quotes, newlines or shell syntax it holds,
+// arrives unchanged, whatever quotes, newlines or shell syntax it holds (a
+// value that goes by file and is read back with $(cat …) loses trailing
+// newlines and any NUL byte; the file itself is exact),
 // and the script's text is only what the workflow author wrote.
 //
 // What still prints into the text: the run's own facts (.RunID, .WorkDir,
-// .BaseRef, .Index), which the platform makes. Conditions (`{{ if … }}`,
+// .BaseRef, .Index), which the platform makes — but only where the dot is the
+// run's own data: at the top level, or written $.RunID anywhere. Inside a
+// `range` or `with` the dot is a value (a loop item, an input object), so a
+// field of it named RunID is that value's and travels as data like any other.
+// Conditions (`{{ if … }}`,
 // `{{ range … }}`) still read the values directly, so branching is unchanged.
 //
 // Prompts, gate messages and every other non-shell text keep plain
@@ -89,8 +95,8 @@ func parseRunTemplate(text string, wfxData func(any) string) (*template.Template
 		return nil, errRunNamedTemplate
 	}
 	if t.Tree != nil {
-		walkActions(t.Tree.Root, func(a *parse.ActionNode) {
-			if isPlatformFact(a.Pipe) {
+		walkActions(t.Tree.Root, true, func(a *parse.ActionNode, root bool) {
+			if isPlatformFact(a.Pipe, root) {
 				return
 			}
 			id := parse.NewIdentifier("wfxData").SetTree(t.Tree).SetPos(a.Pos)
@@ -137,38 +143,48 @@ func hasTemplateCall(t *parse.Tree) bool {
 }
 
 // walkActions calls f on every action that prints (not one that only
-// declares a variable), inside conditions, loops and withs too.
-func walkActions(n parse.Node, f func(*parse.ActionNode)) {
+// declares a variable), inside conditions, loops and withs too. root says
+// whether the dot there is still the run's own data: the body of a range or
+// with moves the dot onto a value; their else branches keep it.
+func walkActions(n parse.Node, root bool, f func(*parse.ActionNode, bool)) {
 	switch n := n.(type) {
 	case *parse.ListNode:
 		if n == nil {
 			return
 		}
 		for _, c := range n.Nodes {
-			walkActions(c, f)
+			walkActions(c, root, f)
 		}
 	case *parse.ActionNode:
 		if len(n.Pipe.Decl) == 0 {
-			f(n)
+			f(n, root)
 		}
 	case *parse.IfNode:
-		walkActions(n.List, f)
-		walkActions(n.ElseList, f)
+		walkActions(n.List, root, f)
+		walkActions(n.ElseList, root, f)
 	case *parse.RangeNode:
-		walkActions(n.List, f)
-		walkActions(n.ElseList, f)
+		walkActions(n.List, false, f)
+		walkActions(n.ElseList, root, f)
 	case *parse.WithNode:
-		walkActions(n.List, f)
-		walkActions(n.ElseList, f)
+		walkActions(n.List, false, f)
+		walkActions(n.ElseList, root, f)
 	}
 }
 
-func isPlatformFact(p *parse.PipeNode) bool {
+// isPlatformFact: the action prints exactly one of the run's own facts — .RunID
+// (and the others) where the dot is the run's data, or $.RunID anywhere. A
+// field of that name under any other dot belongs to a value.
+func isPlatformFact(p *parse.PipeNode, root bool) bool {
 	if p == nil || len(p.Cmds) != 1 || len(p.Cmds[0].Args) != 1 {
 		return false
 	}
-	fn, ok := p.Cmds[0].Args[0].(*parse.FieldNode)
-	return ok && len(fn.Ident) == 1 && platformFacts[fn.Ident[0]]
+	switch a := p.Cmds[0].Args[0].(type) {
+	case *parse.FieldNode:
+		return root && len(a.Ident) == 1 && platformFacts[a.Ident[0]]
+	case *parse.VariableNode:
+		return len(a.Ident) == 2 && a.Ident[0] == "$" && platformFacts[a.Ident[1]]
+	}
+	return false
 }
 
 // For produces the script for one shell and the environment that carries its
@@ -265,7 +281,7 @@ func checkRunText(text, shellName string) error {
 		return nil // a bad template is reported where it renders
 	}
 	var b strings.Builder
-	flatten(t.Tree.Root, &b, hole)
+	flatten(t.Tree.Root, true, &b, hole)
 	skel := b.String()
 	if !strings.Contains(skel, hole) {
 		return nil
@@ -301,21 +317,107 @@ func bareValue(s, hole string, ctx []byte) error {
 	return nil
 }
 
+// cmdWord matches a command word written plainly, quoted ("sh", 'sh') or
+// escaped (\sh), which the shell all runs as the same command. The word is
+// capture group 1; it must start at a word boundary.
+func cmdWord(names string) string {
+	return `(?:^|[\s;&|(/])(\\(?:` + names + `)|"(?:` + names + `)"|'(?:` + names + `)'|(?:` + names + `))`
+}
+
+// bareWord is a command word without its quotes or escape.
+func bareWord(w string) string { return strings.Trim(w, `\"'`) }
+
 var (
-	reLet       = regexp.MustCompile(`(?:^|[\s;&|(])let\s`)
-	reEval      = regexp.MustCompile(`(?:^|[\s;&|(])eval\s`)
-	reSSH       = regexp.MustCompile(`(?:^|[\s;&|(/])ssh\s`)
-	reShellC    = regexp.MustCompile(`(?:^|[\s;&|(/])(sh|bash|zsh|dash|ksh|su)\s+(?:-[A-Za-z-]*\s+)*-[A-Za-z]*c[A-Za-z]*\s`)
+	reLet       = regexp.MustCompile(cmdWord(`let`) + `\s`)
+	reEval      = regexp.MustCompile(cmdWord(`eval`) + `(?:\s|$)`)
+	reSSH       = regexp.MustCompile(cmdWord(`ssh`) + `\s`)
+	reTrap      = regexp.MustCompile(cmdWord(`trap`) + `\s`)
+	reDeclInt   = regexp.MustCompile(cmdWord(`declare|typeset|local`) + `\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*i`)
+	reInvokeExp = regexp.MustCompile(`(?i)` + cmdWord(`invoke-expression|iex`) + `(?:\s|$)`)
+	// The script is the word right after the -c flag (glued or not).
+	reShellC = regexp.MustCompile(cmdWord(`sh|bash|zsh|dash|ksh`) + `\s+(?:-[A-Za-z-]*\s+)*(-[A-Za-z]*c[A-Za-z]*)(?:\s|$|["'])`)
+	// su and runuser take a user before -c.
+	reSuC       = regexp.MustCompile(cmdWord(`su|runuser`) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*|--command)(?:\s|=|$|["'])`)
 	reSubscript = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
 	reNumTest   = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
+	reDuration  = regexp.MustCompile(`^[0-9.]+[smhd]?$`)
 	arithAdvice = "the shell evaluates what is there as an expression, so a value must be checked first: read it into a variable, check it is a number (for example `case \"$n\" in ''|*[!0-9]*) exit 2;; esac`), then use the variable"
 )
 
+// scriptReaders are commands that run what they read on stdin (or from a
+// here-string or <( … )) as a script.
+var scriptReaders = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "ash": true, "fish": true,
+	"python": true, "python2": true, "python3": true, "node": true, "perl": true, "ruby": true,
+	"php": true, "pwsh": true, "powershell": true, "iex": true, "invoke-expression": true,
+	"source": true, ".": true, "ssh": true, "su": true, "runuser": true,
+}
+
+// cmdWrappers run the command that follows them.
+var cmdWrappers = map[string]bool{
+	"env": true, "sudo": true, "doas": true, "exec": true, "command": true, "builtin": true,
+	"nohup": true, "time": true, "nice": true, "xargs": true, "timeout": true, "stdbuf": true,
+}
+
+// commandName is the command a simple command's text runs: its first word
+// after assignments, wrappers and their options, without quotes, escape or
+// directory, lower-cased.
+func commandName(seg string) string {
+	for _, w := range strings.Fields(seg) {
+		w = strings.ToLower(bareWord(w))
+		if k := strings.LastIndexByte(w, '/'); k >= 0 {
+			w = w[k+1:]
+		}
+		switch {
+		case w == "", strings.HasPrefix(w, "-"), strings.Contains(w, "="), reDuration.MatchString(w):
+			continue
+		case cmdWrappers[w]:
+			continue
+		}
+		return w
+	}
+	return ""
+}
+
+// lineCommands are the names of the commands in the pipeline or list on the
+// line around i (split at unquoted |, ;, &).
+func lineCommands(s string, ctx []byte, i int) []string {
+	start := strings.LastIndexByte(s[:i], '\n') + 1
+	end := strings.IndexByte(s[i:], '\n')
+	if end < 0 {
+		end = len(s)
+	} else {
+		end += i
+	}
+	var out []string
+	from := start
+	for k := start; k <= end; k++ {
+		if k == end || (ctx[k] == 'n' && strings.IndexByte("|;&", s[k]) >= 0) {
+			if name := commandName(s[from:k]); name != "" {
+				out = append(out, name)
+			}
+			from = k + 1
+		}
+	}
+	return out
+}
+
+func readsScript(names []string) string {
+	for _, n := range names {
+		if scriptReaders[n] {
+			return n
+		}
+	}
+	return ""
+}
+
 // evaluatedAgain refuses a value in a place where the shell evaluates text a
-// second time: arithmetic ($(( )), (( )), let, a numeric [[ ]] comparison) and
-// the text handed to eval, to `sh -c` and its relatives, or to ssh.
+// second time: arithmetic ($(( )), (( )), let, declare -i, a numeric [[ ]]
+// comparison, array subscripts), the text handed to eval, trap, `sh -c` and
+// its relatives, su -c, ssh or Invoke-Expression, and text fed to a shell or
+// interpreter through a pipe, a heredoc, a here-string or <( … ).
 func evaluatedAgain(s, hole string, ctx []byte) error {
-	plain := func(i int) bool { return i < len(ctx) && ctx[i] == 'n' }
+	plain := func(i int) bool { return i >= 0 && i < len(ctx) && ctx[i] == 'n' }
 	open := func(i int) bool { return i < len(ctx) && (ctx[i] == 'n' || ctx[i] == 'd') }
 	// $(( … )) and (( … )): find the matching close by paren depth.
 	for i := 0; i+1 < len(s); i++ {
@@ -354,10 +456,21 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 			return fmt.Errorf("a {{ … }} value is in an array subscript a[ … ]=; %s", arithAdvice)
 		}
 	}
-	for _, m := range reLet.FindAllStringIndex(s, -1) {
-		if plain(m[1]-4) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
-			return fmt.Errorf("a {{ … }} value is in a let expression; %s", arithAdvice)
+	// inCommand: the command word at group 1 is really a command (unquoted
+	// context) and its command text holds a value.
+	inCommand := func(re *regexp.Regexp) bool {
+		for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
+			if plain(m[2]) && strings.Contains(s[m[2]:commandEnd(s, ctx, m[3])], hole) {
+				return true
+			}
 		}
+		return false
+	}
+	if inCommand(reLet) {
+		return fmt.Errorf("a {{ … }} value is in a let expression; %s", arithAdvice)
+	}
+	if inCommand(reDeclInt) {
+		return fmt.Errorf("a {{ … }} value is assigned to an integer variable (declare/typeset/local -i), which evaluates it as arithmetic; %s", arithAdvice)
 	}
 	for i := 0; i+1 < len(s); i++ {
 		if s[i] == '[' && s[i+1] == '[' && plain(i) {
@@ -372,27 +485,113 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 			i += j
 		}
 	}
-	for _, m := range reEval.FindAllStringIndex(s, -1) {
-		if plain(m[1]-5) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
-			return fmt.Errorf("a {{ … }} value is in text passed to eval, which runs it as a script; pass it as data instead (for example in an environment variable or a file the script reads)")
+	if inCommand(reEval) {
+		return fmt.Errorf("a {{ … }} value is in text passed to eval, which runs it as a script; pass it as data instead (for example in an environment variable or a file the script reads)")
+	}
+	if inCommand(reTrap) {
+		return fmt.Errorf("a {{ … }} value is in a trap action, which the shell runs as a script later; set a variable to the value and refer to the variable inside a single-quoted action: trap 'echo \"$v\"' EXIT")
+	}
+	if inCommand(reInvokeExp) {
+		return fmt.Errorf("a {{ … }} value is in text passed to Invoke-Expression, which runs it as a script; pass it as data instead")
+	}
+	if inCommand(reSSH) {
+		return fmt.Errorf("a {{ … }} value is in an ssh command, whose remote shell runs it as a script; copy it over as a file, or check it first")
+	}
+	for _, re := range []*regexp.Regexp{reShellC, reSuC} {
+		for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
+			if !plain(m[2]) {
+				continue
+			}
+			// The script is the word after -c; later words are its arguments
+			// ($0, $1, …) and stay data.
+			if end := wordEnd(s, ctx, m[5]); strings.Contains(s[m[5]:end], hole) {
+				w := bareWord(s[m[2]:m[3]])
+				return fmt.Errorf("a {{ … }} value is in the script passed to %s -c, which runs it again as a script; pass it as an argument instead: %s -c 'echo \"$1\"' _ \"{{ … }}\"", w, w)
+			}
 		}
 	}
-	for _, m := range reSSH.FindAllStringIndex(s, -1) {
-		if plain(m[1]-4) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
-			return fmt.Errorf("a {{ … }} value is in an ssh command, whose remote shell runs it as a script; copy it over as a file, or check it first")
-		}
-	}
-	for _, m := range reShellC.FindAllStringSubmatchIndex(s, -1) {
-		if !plain(m[2]) {
+	// Text fed to a shell or interpreter as its script: a pipe into it, a
+	// heredoc or here-string it reads, or <( … ) it is given.
+	for i := 0; i < len(s); i++ {
+		if !plain(i) {
 			continue
 		}
-		// The script is the word after -c; later words are its arguments
-		// ($0, $1, …) and stay data.
-		if end := wordEnd(s, ctx, m[1]); strings.Contains(s[m[1]:end], hole) {
-			return fmt.Errorf("a {{ … }} value is in the script passed to %s -c, which runs it again as a script; pass it as an argument instead: %s -c 'echo \"$1\"' _ \"{{ … }}\"", s[m[2]:m[3]], s[m[2]:m[3]])
+		switch {
+		case s[i] == '|' && !strings.HasPrefix(s[i:], "||") && (i == 0 || s[i-1] != '|'):
+			if r := commandName(s[i+1 : commandEnd(s, ctx, i+1)]); scriptReaders[r] {
+				start := i
+				for start > 0 && !(plain(start-1) && strings.IndexByte(";&\n", s[start-1]) >= 0) {
+					start--
+				}
+				if strings.Contains(s[start:i], hole) {
+					return fmt.Errorf("a {{ … }} value is piped into %s, which runs what it reads as a script; write the value to a file, or pass it as an argument or environment variable", r)
+				}
+			}
+		case strings.HasPrefix(s[i:], "<<<"), strings.HasPrefix(s[i:], "<("):
+			if r := readsScript(lineCommands(s, ctx, i)); r != "" {
+				end := strings.IndexByte(s[i:], '\n')
+				if end < 0 {
+					end = len(s) - i
+				}
+				if strings.Contains(s[i:i+end], hole) {
+					return fmt.Errorf("a {{ … }} value is given to %s as a script (here-string or <( … )), which runs it; pass it as data instead", r)
+				}
+			}
+			if strings.HasPrefix(s[i:], "<<<") {
+				i += 2
+			}
+		case strings.HasPrefix(s[i:], "<<"):
+			if r := readsScript(lineCommands(s, ctx, i)); r != "" {
+				if body := heredocBody(s, i); strings.Contains(body, hole) {
+					return fmt.Errorf("a {{ … }} value is in a heredoc that %s reads as a script, which runs it; write the value to a file the script reads, or pass it as an argument or environment variable", r)
+				}
+			}
+			i++
 		}
 	}
 	return nil
+}
+
+// heredocBody is the body of the heredoc whose << starts at i: the lines after
+// the command's line, up to the delimiter line.
+func heredocBody(s string, i int) string {
+	j := i + 2
+	strip := j < len(s) && s[j] == '-'
+	if strip {
+		j++
+	}
+	for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+		j++
+	}
+	k := j
+	for k < len(s) && !strings.ContainsRune(" \t\n;&|<>()", rune(s[k])) {
+		k++
+	}
+	word := strings.NewReplacer(`'`, "", `"`, "", `\`, "").Replace(s[j:k])
+	nl := strings.IndexByte(s[i:], '\n')
+	if nl < 0 || word == "" {
+		return ""
+	}
+	start := i + nl + 1
+	for p := start; p < len(s); {
+		e := strings.IndexByte(s[p:], '\n')
+		line := s[p:]
+		if e >= 0 {
+			line = s[p : p+e]
+		}
+		probe := line
+		if strip {
+			probe = strings.TrimLeft(probe, "\t")
+		}
+		if probe == word {
+			return s[start:p]
+		}
+		if e < 0 {
+			break
+		}
+		p += e + 1
+	}
+	return s[start:]
 }
 
 // assignAfter: the subscript holding the hole that ends at i closes with "]=".
@@ -427,14 +626,14 @@ func wordEnd(s string, ctx []byte, i int) int {
 
 // flatten writes the run text with every value-printing action as hole, in
 // source order (both branches of a condition).
-func flatten(n parse.Node, b *strings.Builder, hole string) {
+func flatten(n parse.Node, root bool, b *strings.Builder, hole string) {
 	switch n := n.(type) {
 	case *parse.ListNode:
 		if n == nil {
 			return
 		}
 		for _, c := range n.Nodes {
-			flatten(c, b, hole)
+			flatten(c, root, b, hole)
 		}
 	case *parse.TextNode:
 		b.Write(n.Text)
@@ -442,20 +641,20 @@ func flatten(n parse.Node, b *strings.Builder, hole string) {
 		if len(n.Pipe.Decl) > 0 {
 			return
 		}
-		if isPlatformFact(n.Pipe) {
+		if isPlatformFact(n.Pipe, root) {
 			b.WriteString("x")
 		} else {
 			b.WriteString(hole)
 		}
 	case *parse.IfNode:
-		flatten(n.List, b, hole)
-		flatten(n.ElseList, b, hole)
+		flatten(n.List, root, b, hole)
+		flatten(n.ElseList, root, b, hole)
 	case *parse.RangeNode:
-		flatten(n.List, b, hole)
-		flatten(n.ElseList, b, hole)
+		flatten(n.List, false, b, hole)
+		flatten(n.ElseList, root, b, hole)
 	case *parse.WithNode:
-		flatten(n.List, b, hole)
-		flatten(n.ElseList, b, hole)
+		flatten(n.List, false, b, hole)
+		flatten(n.ElseList, root, b, hole)
 	}
 }
 
