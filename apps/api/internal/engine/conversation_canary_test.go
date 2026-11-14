@@ -48,7 +48,7 @@ func TestConversationKeyNeverReachesARecord(t *testing.T) {
 steps:
   - id: read
     uses: conversation.task_status@0
-    with: { task_id: t-1, service_url_env: CONV_URL, api_key_env: CONV_KEY }
+    with: { task_id: t-1, service_url_env: WFX_CONVERSATION_URL, api_key_env: WFX_CONVERSATION_KEY }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -59,15 +59,15 @@ steps:
 	h := newHarness(t, defs["conv-canary"], newFakeLLM(t), "")
 	h.eng.cfg.ModulesDir = mods
 	ctx := context.Background()
-	if err := h.eng.SetEnvVar(ctx, store.ScopeSystem, "", "CONV_KEY", canary, true); err != nil {
+	if err := h.eng.SetEnvVar(ctx, store.ScopeSystem, "", "WFX_CONVERSATION_KEY", canary, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.eng.SetEnvVar(ctx, store.ScopeSystem, "", "CONV_URL", srv.URL, false); err != nil {
+	if err := h.eng.SetEnvVar(ctx, store.ScopeSystem, "", "WFX_CONVERSATION_URL", srv.URL, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = h.eng.DeleteEnvVar(ctx, store.ScopeSystem, "", "CONV_KEY")
-		_ = h.eng.DeleteEnvVar(ctx, store.ScopeSystem, "", "CONV_URL")
+		_ = h.eng.DeleteEnvVar(ctx, store.ScopeSystem, "", "WFX_CONVERSATION_KEY")
+		_ = h.eng.DeleteEnvVar(ctx, store.ScopeSystem, "", "WFX_CONVERSATION_URL")
 	})
 
 	var logs bytes.Buffer

@@ -17,13 +17,17 @@ import (
 // mockConversation is a minimal external conversational service: it keys
 // tasks on Idempotency-Key, and a task turns done on its second read.
 type mockConversation struct {
-	mu      sync.Mutex
-	key     string
-	tasks   map[string]map[string]any // by id
-	byIdem  map[string]string
-	reads   map[string]int
-	never   bool // never finish
-	authBad int
+	mu       sync.Mutex
+	key      string
+	tasks    map[string]map[string]any // by id
+	byIdem   map[string]string
+	reads    map[string]int
+	never    bool   // never finish
+	redirect string // answer every request with a redirect here
+	bigBody  bool   // answer a status read with more than 1 MiB
+	bigField bool   // a finished task carries a 20 KiB field value
+	requests int
+	authBad  int
 }
 
 func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest.Server) {
@@ -31,6 +35,11 @@ func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		m.requests++
+		if m.redirect != "" {
+			http.Redirect(w, r, m.redirect+r.URL.Path, http.StatusFound)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+m.key {
 			m.authBad++
 			http.Error(w, "unauthorized", 401)
@@ -61,6 +70,14 @@ func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest
 				return
 			}
 			m.reads[id]++
+			if m.bigBody {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": map[string]any{"x": strings.Repeat("a", 1100*1024)}})
+				return
+			}
+			if m.bigField {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": map[string]any{"note": strings.Repeat("b", 20*1024), "name": "Ada"}})
+				return
+			}
 			if m.reads[id] < 2 || m.never {
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 				return
@@ -142,10 +159,10 @@ func needNode(t *testing.T) {
 const convKey = "conv-key-0123456789abcdef"
 
 func convEnv(srvURL string) []string {
-	return []string{"CONV_URL=" + srvURL + "/v1?token=hidden", "CONV_KEY=" + convKey, "WFX_RUN_ID=run-1", "WFX_STEP_ID=ask.start"}
+	return []string{"WFX_CONVERSATION_URL=" + srvURL + "/v1?token=hidden", "WFX_CONVERSATION_KEY=" + convKey, "WFX_RUN_ID=run-1", "WFX_STEP_ID=ask.start"}
 }
 
-var convNames = map[string]any{"service_url_env": "CONV_URL", "api_key_env": "CONV_KEY"}
+var convNames = map[string]any{"service_url_env": "WFX_CONVERSATION_URL", "api_key_env": "WFX_CONVERSATION_KEY"}
 
 func with(base map[string]any, more map[string]any) map[string]any {
 	out := map[string]any{}
@@ -227,7 +244,7 @@ func TestConversationDeadline(t *testing.T) {
 
 func TestConversationRefusesBadInput(t *testing.T) {
 	needNode(t)
-	_, srv := newMockConversation(t, convKey)
+	m, srv := newMockConversation(t, convKey)
 	base := with(convNames, map[string]any{"task_type": "collect", "targets": `["a"]`, "fields": `["x"]`, "channel": "sms"})
 	many := make([]string, 201)
 	for i := range many {
@@ -241,14 +258,26 @@ func TestConversationRefusesBadInput(t *testing.T) {
 		"targets not JSON":  {with(base, map[string]any{"targets": "a,b"}), nil, "targets must be JSON"},
 		"too many targets":  {with(base, map[string]any{"targets": "[" + strings.Join(many, ",") + "]"}), nil, "more than 200"},
 		"fields not a list": {with(base, map[string]any{"fields": `{"a":1}`}), nil, "fields must be"},
-		"long task type":    {with(base, map[string]any{"task_type": strings.Repeat("x", 5000)}), nil, "longer than 4096"},
-		"bad env name":      {with(base, map[string]any{"api_key_env": "A-B"}), nil, "must name an environment variable"},
-		"not http":          {base, []string{"CONV_URL=file:///etc/passwd"}, "must be an http(s) URL"},
+		"long task type":    {with(base, map[string]any{"task_type": strings.Repeat("x", 65)}), nil, "task_type must be 1 to 64"},
+		"task type shape":   {with(base, map[string]any{"task_type": "Collect now"}), nil, "task_type must be 1 to 64"},
+		"channel shape":     {with(base, map[string]any{"channel": "WhatsApp;rm"}), nil, "channel must be 1 to 64"},
+		"key name outside":  {with(base, map[string]any{"api_key_env": "GH_TOKEN"}), []string{"GH_TOKEN=other-secret-0123"}, "starting with WFX_CONVERSATION_"},
+		"url name outside":  {with(base, map[string]any{"service_url_env": "HOME"}), nil, "starting with WFX_CONVERSATION_"},
+		"bad env name":      {with(base, map[string]any{"api_key_env": "A-B"}), nil, "starting with WFX_CONVERSATION_"},
+		"not http":          {base, []string{"WFX_CONVERSATION_URL=file:///etc/passwd"}, "must be an http(s) URL"},
+		"plain http remote": {base, []string{"WFX_CONVERSATION_URL=http://conversations.example.com/v1"}, "must be https"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			before := m.requests
 			_, errOut, code := runModuleCommand(t, "conversation.start_task", c.in, append(convEnv(srv.URL), c.env...))
 			if code != 2 || !strings.Contains(errOut, c.want) {
 				t.Fatalf("code %d stderr %q", code, errOut)
+			}
+			if m.requests != before {
+				t.Fatal("a refused input still reached the service")
+			}
+			if strings.Contains(errOut, "other-secret-0123") {
+				t.Fatal("another variable's value was printed")
 			}
 		})
 	}
@@ -273,5 +302,64 @@ func TestConversationModuleShape(t *testing.T) {
 	}
 	if len(m.Commands) != 2 || m.Commands["start_task"].Effect != "write" || m.Commands["task_status"].Effect == "write" {
 		t.Fatalf("commands = %+v", m.Commands)
+	}
+}
+
+// A redirect is never followed, so the key cannot reach another origin.
+func TestConversationRefusesRedirects(t *testing.T) {
+	needNode(t)
+	other, otherSrv := newMockConversation(t, convKey)
+	m, srv := newMockConversation(t, convKey)
+	m.redirect = otherSrv.URL
+	_, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), convEnv(srv.URL))
+	if code != 4 || !strings.Contains(errOut, "redirects are refused") {
+		t.Fatalf("code %d stderr %q", code, errOut)
+	}
+	if other.requests != 0 {
+		t.Fatal("the redirect was followed")
+	}
+}
+
+// An answer over 1 MiB is refused; a field value over 16 KiB is cut and marked.
+func TestConversationCapsTheAnswer(t *testing.T) {
+	needNode(t)
+	m, srv := newMockConversation(t, convKey)
+	m.tasks["t-1"] = map[string]any{}
+	m.bigBody = true
+	_, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), convEnv(srv.URL))
+	if code != 4 || !strings.Contains(errOut, "larger than 1048576 bytes") {
+		t.Fatalf("big body: code %d stderr %.200q", code, errOut)
+	}
+	m.bigBody, m.bigField = false, true
+	out, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), convEnv(srv.URL))
+	if code != 0 {
+		t.Fatalf("big field: code %d %s", code, errOut)
+	}
+	var res struct {
+		Fields map[string]string `json:"fields"`
+	}
+	_ = json.Unmarshal([]byte(out), &res)
+	if n := res.Fields["note"]; len(n) > 16*1024+20 || !strings.HasSuffix(n, "…[truncated]") || res.Fields["name"] != "Ada" {
+		t.Fatalf("fields: note %d bytes, name %q", len(n), res.Fields["name"])
+	}
+}
+
+// Inside a loop each iteration has its own step id (each[0].…, each[1].…),
+// which the engine passes as WFX_STEP_ID: two iterations start two tasks, and
+// a retry of one iteration starts none.
+func TestConversationLoopIterationsAreSeparateTasks(t *testing.T) {
+	needNode(t)
+	m, srv := newMockConversation(t, convKey)
+	start := with(convNames, map[string]any{"task_type": "collect", "targets": `["a"]`, "fields": `["x"]`, "channel": "sms"})
+	env := func(step string) []string {
+		return append(convEnv(srv.URL), "WFX_STEP_ID="+step)
+	}
+	for _, step := range []string{"each[0].ask.start", "each[1].ask.start", "each[1].ask.start"} {
+		if _, errOut, code := runModuleCommand(t, "conversation.start_task", start, env(step)); code != 0 {
+			t.Fatalf("%s: %s", step, errOut)
+		}
+	}
+	if len(m.tasks) != 2 {
+		t.Fatalf("tasks = %d, want 2 (two iterations, one retried)", len(m.tasks))
 	}
 }

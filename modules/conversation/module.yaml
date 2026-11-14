@@ -2,7 +2,7 @@
 # example "contact these people and collect these fields") and read its status.
 #
 #   wfx module call conversation.task_status --input task_id=t-1 \
-#       --input service_url_env=CONVERSATION_URL --input api_key_env=CONVERSATION_KEY --wait
+#       --input service_url_env=WFX_CONVERSATION_URL --input api_key_env=WFX_CONVERSATION_KEY --wait
 #
 # In a workflow (see templates/conversation-task):
 #   - id: ask
@@ -12,10 +12,11 @@
 #       targets: '["+15550100"]'
 #       fields: '["name","email"]'
 #       channel: whatsapp
-#       service_url_env: CONVERSATION_URL
-#       api_key_env: CONVERSATION_KEY
+#       service_url_env: WFX_CONVERSATION_URL
+#       api_key_env: WFX_CONVERSATION_KEY
 #
-# service_url_env / api_key_env are the NAMES of environment variables (set in
+# service_url_env / api_key_env are the NAMES of environment variables, which
+# must start with WFX_CONVERSATION_ (set in
 # the env store, `wfx env`) that hold the service URL and API key; the values
 # never appear in a workflow file, and the key is never printed. Once sec is
 # wired into steps (#128) these become sec names.
@@ -37,12 +38,12 @@ commands:
     effect: write
     description: "Start a task (type, targets, fields to collect, channel); returns {task_id, status}."
     inputs:
-      task_type: { type: string, required: true, description: "what the service should do, e.g. collect" }
+      task_type: { type: string, required: true, description: "what the service should do: 1-64 of a-z 0-9 . _ -, e.g. collect" }
       targets: { type: string, required: true, description: "JSON array of targets (strings or objects), at most 200" }
       fields: { type: string, required: true, description: "JSON array of the field names to collect, at most 50" }
-      channel: { type: string, required: true, description: "how the service reaches the targets, e.g. whatsapp" }
-      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (http or https)" }
-      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key" }
+      channel: { type: string, required: true, description: "how the service reaches the targets: 1-64 of a-z 0-9 . _ -, e.g. whatsapp" }
+      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (WFX_CONVERSATION_*; https, or http for localhost only)" }
+      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key (WFX_CONVERSATION_*)" }
     steps:
       - id: start
         name: Start the task
@@ -62,8 +63,8 @@ commands:
       task_id: { type: string, required: true, description: "the task_id start_task returned" }
       wait_seconds: { type: string, default: "0", description: "0 to 3600: how long to poll for a terminal status (0 = read once)" }
       poll_seconds: { type: string, default: "10", description: "seconds between reads" }
-      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL" }
-      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key" }
+      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (WFX_CONVERSATION_*)" }
+      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key (WFX_CONVERSATION_*)" }
     steps:
       - id: status
         name: Read the task

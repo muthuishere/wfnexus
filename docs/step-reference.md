@@ -121,26 +121,36 @@ steps:
       targets: '["+15550100", {"phone": "+15550101"}]'
       fields: '["name", "email"]'
       channel: whatsapp
-      service_url_env: CONVERSATION_URL      # NAMES of variables, not values
-      api_key_env: CONVERSATION_KEY
+      service_url_env: WFX_CONVERSATION_URL      # NAMES of variables, not values
+      api_key_env: WFX_CONVERSATION_KEY
   - id: wait
     uses: conversation.task_status@0
     with:
       task_id: '{{ (fromJson .Steps.start.start.stdout).task_id }}'
       wait_seconds: "1800"                   # 0 = read once
       poll_seconds: "30"
-      service_url_env: CONVERSATION_URL
-      api_key_env: CONVERSATION_KEY
+      service_url_env: WFX_CONVERSATION_URL
+      api_key_env: WFX_CONVERSATION_KEY
 ```
 
 - **Credentials:** `service_url_env` and `api_key_env` name environment
-  variables (set with `wfx env`, the key with `--secret`). Neither value is
-  written into a workflow file, and the key is never printed. Once steps read
-  sec directly (#128), these become sec names.
+  variables (set with `wfx env`, the key with `--secret`).
+  - Only names that start with `WFX_CONVERSATION_` are accepted (for example
+    `WFX_CONVERSATION_URL`, `WFX_CONVERSATION_KEY`,
+    `WFX_CONVERSATION_SUPPORT_KEY`). Any other name is refused before the
+    environment is read, so a step can't send another of the machine's
+    credentials.
+  - Neither value is written into a workflow file, and the key is never
+    printed.
+  - Once steps read sec directly (#128), these become sec names.
+- **The URL:** it must be https; plain http is allowed only for localhost,
+  127.0.0.0/8 and ::1. Redirects are never followed, so the key never goes to
+  another origin.
 - **The request:** `start_task` sends `POST {url}/tasks` with
   `{type, targets, fields, channel}`, `Authorization: Bearer <key>` and
   `Idempotency-Key: <run id>:<step id>`. A retried step therefore starts no
-  second task. Output: `{task_id, status}`.
+  second task. Inside a loop the step id names the iteration (`each[1].…`),
+  so each iteration starts its own task. Output: `{task_id, status}`.
 - **Polling:** `task_status` sends `GET {url}/tasks/{id}` until the status is
   `done`, `failed` or `cancelled`, or `wait_seconds` (0–3600) passes. Output:
   `{task_id, status, fields}`. A deadline that passes fails the step with exit
@@ -148,8 +158,9 @@ steps:
 - **Limits:**
   - at most 200 targets, each at most 4 KiB as JSON;
   - 1–50 field names of up to 128 characters;
-  - `task_type` up to 4 KiB, `channel` up to 64 characters;
-  - the URL must be http(s).
+  - `task_type` and `channel` are 1–64 characters of `a-z 0-9 . _ -`;
+  - the service's answer may be at most 1 MiB (a larger one is refused);
+  - a returned field value over 16 KiB is cut and ends in `…[truncated]`.
 - **Exit codes:** 2 means invalid input or configuration; 4 means the service
   refused or could not be reached. Its answer is shown without the key or the
   URL's query string.
