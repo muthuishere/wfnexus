@@ -415,7 +415,8 @@ var (
 	reSuC        = regexp.MustCompile(cmdWord(`su|runuser`) + `\s+(?:[^\s;&|]+\s+)*?(-[A-Za-z]*c[A-Za-z]*|--command)(?:\s|=|$|["'])`)
 	reSubscript  = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
 	reNumTest    = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
-	reSubstr     = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*:(?:[^-=+?}\x01][^}]*)?\x01`)
+	reSubstr     = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*:`)
+	reNameCmd    = regexp.MustCompile(cmdWord(`printf|read|test|\[\[|\[`) + `(?:\s|$)`)
 	reOldArith   = regexp.MustCompile(`\$\[[^\]]*\x01`)
 	reDeclareCmd = regexp.MustCompile(cmdWord(`declare|typeset|local|export|readonly`) + `(?:\s|$)`)
 	reDuration   = regexp.MustCompile(`^[0-9][0-9.]*[smhd]?$`)
@@ -586,7 +587,7 @@ func stdinIsCode(seg string) (string, bool) {
 		case w == "-":
 			return name, true
 		case w == "--":
-			return name, i+1 >= len(words) || words[i+1] == "-"
+			return name, i+1 >= len(words) || stdinPath(words[i+1])
 		case strings.HasPrefix(w, "--"):
 			if w == "--eval" || w == "--print" || w == "--command" || strings.HasPrefix(w, "--eval=") {
 				return name, false
@@ -727,12 +728,18 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 		return false
 	}
 	// ${s:offset:length} (not ${s:-…} and friends) and $[ … ] are arithmetic.
-	for _, re := range []*regexp.Regexp{reSubstr, reOldArith} {
-		for _, m := range re.FindAllStringIndex(s, -1) {
-			if open(m[0]) {
-				return fmt.Errorf("a {{ … }} value is in a substring offset or $[ … ], which the shell evaluates as arithmetic; %s", arithAdvice)
-			}
+	if substrHole(s, hole, open) {
+		return fmt.Errorf("a {{ … }} value is in a substring offset or $[ … ], which the shell evaluates as arithmetic; %s", arithAdvice)
+	}
+	for _, m := range reOldArith.FindAllStringIndex(s, -1) {
+		if open(m[0]) {
+			return fmt.Errorf("a {{ … }} value is in a substring offset or $[ … ], which the shell evaluates as arithmetic; %s", arithAdvice)
 		}
+	}
+	// printf -v, read, test -v and [[ -v ]] take a variable name, whose
+	// subscript the shell evaluates.
+	if w := nameWordHole(s, hole, ctx); w != "" {
+		return fmt.Errorf("a {{ … }} value is the variable name given to %s; the shell evaluates a subscript in it as arithmetic — use a name you write, and the value as data", w)
 	}
 	// declare -n makes a value a variable name; declare "<value>" makes it an
 	// assignment the shell reads (a subscript in it is arithmetic).
@@ -919,6 +926,77 @@ func assignAfter(s string, i int) bool {
 	return j >= 0 && strings.HasPrefix(s[i+j:], "]=")
 }
 
+// substrHole: a hole in the offset or length of a ${name:offset:length}
+// expansion that expands (braces nested inside it are matched).
+func substrHole(s, hole string, open func(int) bool) bool {
+	for _, m := range reSubstr.FindAllStringIndex(s, -1) {
+		if !open(m[0]) || (m[1] < len(s) && strings.IndexByte("-=+?", s[m[1]]) >= 0) {
+			continue
+		}
+		depth, j := 1, m[1]
+		for ; j < len(s) && depth > 0; j++ {
+			switch s[j] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+		}
+		if strings.Contains(s[m[1]:j], hole) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameWordHole names the command when a hole is in a word it takes as a
+// variable name: printf -v NAME, read [opts] NAME…, test/[/[[ -v NAME (-R too).
+func nameWordHole(s, hole string, ctx []byte) string {
+	for _, m := range reNameCmd.FindAllStringSubmatchIndex(s, -1) {
+		if !cmdCtx(ctx[m[2]]) {
+			continue
+		}
+		cmd := bareWord(s[m[2]:m[3]])
+		end := commandEnd(s, ctx, m[3])
+		var words []string
+		for i := m[3]; i < end; {
+			for i < end && (s[i] == ' ' || s[i] == '\t') {
+				i++
+			}
+			j := wordEnd(s, ctx, i)
+			if j <= i {
+				break
+			}
+			words = append(words, s[i:j])
+			i = j
+		}
+		for k, w := range words {
+			name := false
+			switch cmd {
+			case "printf":
+				name = k > 0 && words[k-1] == "-v"
+			case "read":
+				prev := ""
+				if k > 0 {
+					prev = words[k-1]
+				}
+				switch {
+				case strings.HasPrefix(w, "-"):
+				case prev == "-d" || prev == "-n" || prev == "-N" || prev == "-p" || prev == "-t" || prev == "-u" || prev == "-i":
+				default:
+					name = true // a name, or the array name after -a
+				}
+			default: // test, [, [[
+				name = k > 0 && (words[k-1] == "-v" || words[k-1] == "-R")
+			}
+			if name && strings.Contains(w, hole) {
+				return cmd
+			}
+		}
+	}
+	return ""
+}
+
 // cmdCtx: a byte in a context where the shell reads commands — unquoted, or
 // inside backticks (as inside $( … )).
 func cmdCtx(c byte) bool { return c == 'n' || c == 'b' }
@@ -976,6 +1054,7 @@ func scanShell(s, hole string, ctx []byte) string {
 	}
 	var pending []heredoc
 	atWordStart := true
+	dollar := -1 // where the last unescaped single $ in a normal frame was
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		top := &stack[len(stack)-1]
@@ -1034,7 +1113,7 @@ func scanShell(s, hole string, ctx []byte) string {
 		case c == '\\':
 			i++
 			atWordStart = false
-		case c == '\'' && i > 0 && s[i-1] == '$':
+		case c == '\'' && dollar == i-1:
 			stack = append(stack, frame{ansi, 0, false})
 		case c == '\'':
 			stack = append(stack, frame{sq, 0, false})
@@ -1051,6 +1130,12 @@ func scanShell(s, hole string, ctx []byte) string {
 		case c == '$' && i+1 < len(s) && s[i+1] == '(':
 			stack = append(stack, frame{normal, 1, false})
 			i++
+		case c == '$':
+			if dollar == i-1 {
+				dollar = -1 // $$ is the shell's pid
+			} else {
+				dollar = i
+			}
 		case c == '(' && len(stack) > 1:
 			top.depth++
 		case c == ')' && len(stack) > 1:
@@ -1063,7 +1148,9 @@ func scanShell(s, hole string, ctx []byte) string {
 				i++
 			}
 			i-- // let the newline be handled below
-		case c == '<' && strings.HasPrefix(s[i:], "<<") && !strings.HasPrefix(s[i:], "<<<") && !top.arith:
+		case strings.HasPrefix(s[i:], "<<<"):
+			i += 2
+		case c == '<' && strings.HasPrefix(s[i:], "<<") && !top.arith:
 			j := i + 2
 			h := heredoc{}
 			if j < len(s) && s[j] == '-' {
@@ -1084,7 +1171,7 @@ func scanShell(s, hole string, ctx []byte) string {
 				pending = append(pending, h)
 			}
 			i = k - 1
-		case c == '\n' && len(stack) == 1 && len(pending) > 0:
+		case c == '\n' && !top.arith && len(pending) > 0:
 			// Heredoc bodies follow this line, one after another.
 			i++
 			for _, h := range pending {
