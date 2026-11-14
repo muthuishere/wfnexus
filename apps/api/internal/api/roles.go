@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -267,6 +268,14 @@ func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) err
 		return nil
 	case RoleSuperadmin:
 		if u.Role != RoleSuperadmin {
+			return nil
+		}
+		// The host keeps an administrator: a group change never takes the
+		// last one away. It is logged for someone to sort out instead.
+		if n, err := s.store.CountAdminsExcept(ctx, u.Name); err != nil {
+			return err
+		} else if n == 0 {
+			log.Printf("auth: WARNING %s left the group that grants superadmin but is the only superadmin; the role is kept — add another superadmin, then sign in again to have it removed", u.Name)
 			return nil
 		}
 		return s.store.SetUserRole(ctx, u.Name, "")

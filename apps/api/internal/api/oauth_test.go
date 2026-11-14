@@ -209,7 +209,11 @@ func TestAnotherSubjectWithTheSameNameDoesNotGetTheAccount(t *testing.T) {
 // when the group is gone.
 func TestMappedRolesAreResyncedAtEverySignIn(t *testing.T) {
 	op := newMockOP(t, "s3cret-value")
-	h := oidcServer(t, op)
+	h, st := oidcServerStore(t, op)
+	// Another administrator exists, so bob's can go.
+	if err := st.CreateUser(context.Background(), &store.User{Name: "root", Role: RoleSuperadmin}); err != nil {
+		t.Fatal(err)
+	}
 	w, _ := oauthFlow(t, h, "sso", nil)
 	if who := whoami(t, h, w); who["role"] != RoleSuperadmin {
 		t.Fatalf("first: %v", who)
@@ -218,6 +222,28 @@ func TestMappedRolesAreResyncedAtEverySignIn(t *testing.T) {
 	w, _ = oauthFlow(t, h, "sso", nil)
 	if who := whoami(t, h, w); who["name"] != "bob@sso" || who["role"] == RoleSuperadmin {
 		t.Fatalf("after leaving the group: %v", who)
+	}
+}
+
+// The only superadmin, holding it through a group, leaves the group: the role
+// is kept, with a warning in the log, so the host is never left without one.
+func TestRoleSyncNeverRemovesTheLastSuperadmin(t *testing.T) {
+	op := newMockOP(t, "s3cret-value")
+	h := oidcServer(t, op)
+	w, _ := oauthFlow(t, h, "sso", nil)
+	if who := whoami(t, h, w); who["role"] != RoleSuperadmin {
+		t.Fatalf("first: %v", who)
+	}
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	op.userinfo = map[string]any{"preferred_username": "bob", "groups": []string{}}
+	w, _ = oauthFlow(t, h, "sso", nil)
+	if who := whoami(t, h, w); who["role"] != RoleSuperadmin {
+		t.Fatalf("the last superadmin lost the role: %v", who)
+	}
+	if !strings.Contains(logs.String(), "WARNING bob@sso left the group that grants superadmin but is the only superadmin") {
+		t.Fatalf("no warning: %s", logs.String())
 	}
 }
 
