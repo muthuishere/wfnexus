@@ -2,9 +2,11 @@ package workflow
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -83,6 +85,9 @@ func parseRunTemplate(text string, wfxData func(any) string) (*template.Template
 	if err != nil {
 		return nil, err
 	}
+	if len(t.Templates()) > 1 || hasTemplateCall(t.Tree) {
+		return nil, errRunNamedTemplate
+	}
 	if t.Tree != nil {
 		walkActions(t.Tree.Root, func(a *parse.ActionNode) {
 			if isPlatformFact(a.Pipe) {
@@ -93,6 +98,42 @@ func parseRunTemplate(text string, wfxData func(any) string) (*template.Template
 		})
 	}
 	return t, nil
+}
+
+// errRunNamedTemplate: run text may not define or call named templates
+// (define, template, block). Their bodies are separate trees, and a value they
+// print must travel like every other one, so they are refused.
+var errRunNamedTemplate = errors.New("run text may not use define, template or block; write the text in place (prompts may still use them)")
+
+func hasTemplateCall(t *parse.Tree) bool {
+	if t == nil {
+		return false
+	}
+	found := false
+	var walk func(n parse.Node)
+	walk = func(n parse.Node) {
+		switch n := n.(type) {
+		case *parse.ListNode:
+			if n != nil {
+				for _, c := range n.Nodes {
+					walk(c)
+				}
+			}
+		case *parse.TemplateNode:
+			found = true
+		case *parse.IfNode:
+			walk(n.List)
+			walk(n.ElseList)
+		case *parse.RangeNode:
+			walk(n.List)
+			walk(n.ElseList)
+		case *parse.WithNode:
+			walk(n.List)
+			walk(n.ElseList)
+		}
+	}
+	walk(t.Root)
+	return found
 }
 
 // walkActions calls f on every action that prints (not one that only
@@ -146,7 +187,8 @@ func (r RunText) For(shellName, dir string) (string, []string, error) {
 	for i, v := range r.Data {
 		name := "WFX_DATA_" + strconv.Itoa(i+1)
 		total += len(v)
-		if len(v) <= dataInline && total <= dataBudget {
+		// An environment value cannot hold a NUL byte; such a value goes by file.
+		if len(v) <= dataInline && total <= dataBudget && !strings.Contains(v, "\x00") {
 			env = append(env, name+"="+v)
 			if pwsh {
 				refs[i] = "${env:" + name + "}"
@@ -216,6 +258,9 @@ func checkRunText(text, shellName string) error {
 	}
 	const hole = "\x01"
 	t, err := parseRunTemplate(text, func(any) string { return "" })
+	if errors.Is(err, errRunNamedTemplate) {
+		return err
+	}
 	if err != nil {
 		return nil // a bad template is reported where it renders
 	}
@@ -231,7 +276,133 @@ func checkRunText(text, shellName string) error {
 	if where := quotedHole(skel, hole); where != "" {
 		return fmt.Errorf("a {{ … }} value is inside %s; values reach run steps through the environment, so there it would print a variable name instead of the value — move it outside (for example into double quotes: \"{{ … }}\")", where)
 	}
+	ctx := make([]byte, len(skel))
+	scanShell(skel, hole, ctx)
+	return evaluatedAgain(skel, hole, ctx)
+}
+
+var (
+	reLet       = regexp.MustCompile(`(?:^|[\s;&|(])let\s`)
+	reEval      = regexp.MustCompile(`(?:^|[\s;&|(])eval\s`)
+	reSSH       = regexp.MustCompile(`(?:^|[\s;&|(/])ssh\s`)
+	reShellC    = regexp.MustCompile(`(?:^|[\s;&|(/])(sh|bash|zsh|dash|ksh|su)\s+(?:-[A-Za-z-]*\s+)*-[A-Za-z]*c[A-Za-z]*\s`)
+	reSubscript = regexp.MustCompile(`(\$\{[A-Za-z_][A-Za-z0-9_]*|(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*)\[[^\]\n]*\x01`)
+	reNumTest   = regexp.MustCompile(`\s-(eq|ne|lt|le|gt|ge)\s`)
+	arithAdvice = "the shell evaluates what is there as an expression, so a value must be checked first: read it into a variable, check it is a number (for example `case \"$n\" in ''|*[!0-9]*) exit 2;; esac`), then use the variable"
+)
+
+// evaluatedAgain refuses a value in a place where the shell evaluates text a
+// second time: arithmetic ($(( )), (( )), let, a numeric [[ ]] comparison) and
+// the text handed to eval, to `sh -c` and its relatives, or to ssh.
+func evaluatedAgain(s, hole string, ctx []byte) error {
+	plain := func(i int) bool { return i < len(ctx) && ctx[i] == 'n' }
+	open := func(i int) bool { return i < len(ctx) && (ctx[i] == 'n' || ctx[i] == 'd') }
+	// $(( … )) and (( … )): find the matching close by paren depth.
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] != '(' || s[i+1] != '(' {
+			continue
+		}
+		dollar := i > 0 && s[i-1] == '$'
+		if (dollar && !open(i-1)) || (!dollar && !plain(i)) {
+			continue
+		}
+		depth, j := 2, i+2
+		for ; j < len(s) && depth > 0; j++ {
+			switch s[j] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+		}
+		if strings.Contains(s[i:j], hole) {
+			return fmt.Errorf("a {{ … }} value is inside shell arithmetic (( … )); %s", arithAdvice)
+		}
+		i = j - 1
+	}
+	// An array subscript is arithmetic too: ${a[…]} anywhere it expands, and
+	// a[…]=… as an assignment.
+	for _, m := range reSubscript.FindAllStringSubmatchIndex(s, -1) {
+		if s[m[2]] == '$' {
+			if open(m[2]) {
+				return fmt.Errorf("a {{ … }} value is in an array subscript ${…[ … ]}; %s", arithAdvice)
+			}
+			continue
+		}
+		name := m[2] + strings.IndexFunc(s[m[2]:m[3]], func(r rune) bool { return !strings.ContainsRune(" \t\n;&|(", r) })
+		if plain(name) && assignAfter(s, m[1]) {
+			return fmt.Errorf("a {{ … }} value is in an array subscript a[ … ]=; %s", arithAdvice)
+		}
+	}
+	for _, m := range reLet.FindAllStringIndex(s, -1) {
+		if plain(m[1]-4) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
+			return fmt.Errorf("a {{ … }} value is in a let expression; %s", arithAdvice)
+		}
+	}
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] == '[' && s[i+1] == '[' && plain(i) {
+			j := strings.Index(s[i:], "]]")
+			if j < 0 {
+				break
+			}
+			seg := s[i : i+j]
+			if strings.Contains(seg, hole) && reNumTest.MatchString(seg) {
+				return fmt.Errorf("a {{ … }} value is in a numeric [[ … ]] comparison; %s", arithAdvice)
+			}
+			i += j
+		}
+	}
+	for _, m := range reEval.FindAllStringIndex(s, -1) {
+		if plain(m[1]-5) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
+			return fmt.Errorf("a {{ … }} value is in text passed to eval, which runs it as a script; pass it as data instead (for example in an environment variable or a file the script reads)")
+		}
+	}
+	for _, m := range reSSH.FindAllStringIndex(s, -1) {
+		if plain(m[1]-4) && strings.Contains(s[m[0]:commandEnd(s, ctx, m[1])], hole) {
+			return fmt.Errorf("a {{ … }} value is in an ssh command, whose remote shell runs it as a script; copy it over as a file, or check it first")
+		}
+	}
+	for _, m := range reShellC.FindAllStringSubmatchIndex(s, -1) {
+		if !plain(m[2]) {
+			continue
+		}
+		// The script is the word after -c; later words are its arguments
+		// ($0, $1, …) and stay data.
+		if end := wordEnd(s, ctx, m[1]); strings.Contains(s[m[1]:end], hole) {
+			return fmt.Errorf("a {{ … }} value is in the script passed to %s -c, which runs it again as a script; pass it as an argument instead: %s -c 'echo \"$1\"' _ \"{{ … }}\"", s[m[2]:m[3]], s[m[2]:m[3]])
+		}
+	}
 	return nil
+}
+
+// assignAfter: the subscript holding the hole that ends at i closes with "]=".
+func assignAfter(s string, i int) bool {
+	j := strings.IndexByte(s[i:], ']')
+	return j >= 0 && strings.HasPrefix(s[i+j:], "]=")
+}
+
+// commandEnd is where the simple command running from i ends: the first
+// unquoted ;, &, |, or newline.
+func commandEnd(s string, ctx []byte, i int) int {
+	for ; i < len(s); i++ {
+		if ctx[i] == 'n' && strings.IndexByte(";&|\n", s[i]) >= 0 {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// wordEnd is where the shell word starting at i (after spaces) ends.
+func wordEnd(s string, ctx []byte, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	for ; i < len(s); i++ {
+		if ctx[i] == 'n' && strings.IndexByte(" \t;&|\n", s[i]) >= 0 {
+			return i
+		}
+	}
+	return len(s)
 }
 
 // flatten writes the run text with every value-printing action as hole, in
@@ -271,7 +442,12 @@ func flatten(n parse.Node, b *strings.Builder, hole string) {
 // quotedHole scans shell text (POSIX quoting, which pwsh shares for single
 // quotes) and says where a hole sits in a context that does not expand
 // variables: "single quotes" or "a quoted heredoc (<<'EOF')". "" when none.
-func quotedHole(s, hole string) string {
+func quotedHole(s, hole string) string { return scanShell(s, hole, nil) }
+
+// scanShell is quotedHole that also records, when ctx is given, the quoting
+// context of every byte: 'n' unquoted (top level or inside $( … )), 'd' double
+// quotes, 's' single quotes, 'b' backticks, 'h' a heredoc body.
+func scanShell(s, hole string, ctx []byte) string {
 	const (
 		normal = iota
 		dq
@@ -290,6 +466,9 @@ func quotedHole(s, hole string) string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		top := &stack[len(stack)-1]
+		if ctx != nil {
+			ctx[i] = "ndsb"[top.kind]
+		}
 		if strings.HasPrefix(s[i:], hole) && top.kind == sq {
 			return "single quotes"
 		}
@@ -376,6 +555,17 @@ func quotedHole(s, hole string) string {
 			i++
 			for _, h := range pending {
 				for i < len(s) {
+					if ctx != nil {
+						// A quoted heredoc expands nothing ('h'); an unquoted
+						// one expands like double quotes ('d').
+						kind := byte('d')
+						if h.quoted {
+							kind = 'h'
+						}
+						for k := i; k < len(s) && s[k] != '\n'; k++ {
+							ctx[k] = kind
+						}
+					}
 					end := strings.IndexByte(s[i:], '\n')
 					line := s[i:]
 					if end >= 0 {
@@ -393,7 +583,7 @@ func quotedHole(s, hole string) string {
 						}
 						break
 					}
-					if h.quoted && strings.Contains(line, hole) {
+					if h.quoted && strings.Contains(line, hole) && ctx == nil {
 						return "a quoted heredoc (<<'" + h.word + "')"
 					}
 					if end < 0 {

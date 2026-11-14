@@ -111,6 +111,29 @@ echo "{{ .Input.small }}"`, TemplateData{Input: map[string]any{"big": big, "smal
 	}
 }
 
+// An environment value cannot hold a NUL byte, so such a value goes by file.
+func TestANulByteGoesByFile(t *testing.T) {
+	rt, _ := RenderRun(`printf '%s' "{{ .Input.v }}"`, TemplateData{Input: map[string]any{"v": "a\x00b"}})
+	dir := t.TempDir()
+	script, env, err := rt.For("sh", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "WFX_DATA_1_FILE") || env[0] != "WFX_DATA_1_FILE="+filepath.Join(dir, "wfx-data-1") {
+		t.Fatalf("script %q env %q", script, env)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "wfx-data-1")); string(b) != "a\x00b" {
+		t.Fatalf("file = %q", b)
+	}
+}
+
+// RenderRun refuses what checkRunText refuses: named templates.
+func TestRenderRunRefusesNamedTemplates(t *testing.T) {
+	if _, err := RenderRun(`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, TemplateData{}); err == nil {
+		t.Fatal("rendered a named template")
+	}
+}
+
 func TestShellsReferToValuesTheirOwnWay(t *testing.T) {
 	rt, _ := RenderRun(`echo "{{ .Input.v }}"`, TemplateData{Input: map[string]any{"v": "x"}})
 	if s, _, _ := rt.For("pwsh", ""); s != `echo "${env:WFX_DATA_1}"` {
@@ -153,6 +176,32 @@ func TestRunTextCheck(t *testing.T) {
 		{`{{ if .Input.x }}'flag'{{ end }}`, "", ""},
 		{`echo {{ .Input.x }}`, "cmd", "cmd step"},
 		{`echo '{{ .Input.x }}'`, "pwsh", "single quotes"},
+		// named templates are separate trees: refused
+		{`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, "", "define, template or block"},
+		{`{{ block "b" . }}echo "{{ .Input.x }}"{{ end }}`, "", "define, template or block"},
+		// places the shell evaluates text again
+		{`echo $(( {{ .Input.x }} + 1 ))`, "", "arithmetic"},
+		{`echo "$(( {{ .Input.x }} + 1 ))"`, "", "arithmetic"},
+		{`(( {{ .Input.x }} > 1 )) && echo y`, "", "arithmetic"},
+		{"cat <<EOF\n$(( {{ .Input.x }} ))\nEOF", "", "arithmetic"},
+		{`let n={{ .Input.x }}+1`, "", "let"},
+		{`[[ {{ .Input.x }} -eq 1 ]] && echo y`, "", "numeric"},
+		{`[[ "{{ .Input.x }}" -gt 1 ]]`, "", "numeric"},
+		{`echo "${arr[{{ .Input.x }}]}"`, "", "subscript"},
+		{`arr[{{ .Input.x }}]=1`, "", "subscript"},
+		{`sh -c "echo {{ .Input.x }}"`, "", "sh -c"},
+		{`bash -c "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`/bin/bash -lc "echo {{ .Input.x }}"`, "", "bash -c"},
+		{`zsh -c "echo {{ .Input.x }}"`, "", "zsh -c"},
+		{`eval "echo {{ .Input.x }}"`, "", "eval"},
+		{`ssh host "ls {{ .Input.x }}"`, "", "ssh"},
+		// the same words where nothing is evaluated again
+		{`sh -c 'echo "$1"' _ "{{ .Input.x }}"`, "", ""},
+		{`[[ "{{ .Input.x }}" == yes ]] && echo y`, "", ""},
+		{`echo "eval {{ .Input.x }}"`, "", ""},
+		{`echo "sh -c {{ .Input.x }}"`, "", ""},
+		{`n=$(( 1 + 2 )); echo "{{ .Input.x }}"`, "", ""},
+		{`grep "a[{{ .Input.x }}]" f`, "", ""},
 	} {
 		err := checkRunText(c.run, c.shell)
 		switch {

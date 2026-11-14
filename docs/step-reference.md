@@ -36,12 +36,24 @@ What this means when you write a step:
   because neither expands variables. Such a workflow does not load, and the
   error names the step. Use double quotes, a bare word, or an unquoted
   heredoc (`<<EOF`).
+- **Quote references:** write `"{{ .Input.x }}"`. An unquoted one splits on
+  spaces and expands globs like any unquoted variable.
+- **Places that evaluate text again are refused at load:** shell arithmetic
+  (`$(( ))`, `(( ))`, `let`, a numeric `[[ … -eq … ]]`, an array subscript)
+  and the text given to `eval`, `sh`/`bash`/`zsh -c` or `ssh`. For a number,
+  read it into a variable, check it (`case "$n" in ''|*[!0-9]*) exit 2;; esac`),
+  then use the variable. For `sh -c`, pass the value as an argument:
+  `sh -c 'echo "$1"' _ "{{ .Input.x }}"`. A program that runs its own argument
+  as code (`python -c`, `node -e`) cannot be checked for you: pass values to it
+  as arguments, environment or files, never inside its code.
+- **`define`, `template` and `block` are not used in `run:` text** (they are
+  refused at load); write the text in place.
 - **Conditions are unchanged.** `{{ if eq .Input.mode "fast" }}--fast{{ end }}`
   still branches on the value; only printed values move to the environment.
 - **The run's own facts print as they are:** `.RunID`, `.WorkDir`, `.BaseRef`
   and `.Index`, so `cd '{{ .WorkDir }}'` keeps working.
 - **Large values go to a file.** A value over 64 KiB (or once a step's values
-  pass 256 KiB together) is written to a 0600 file. `WFX_DATA_<n>_FILE` names
+  pass 256 KiB together, or one holding a NUL byte) is written to a 0600 file. `WFX_DATA_<n>_FILE` names
   it, and the reference becomes `$(cat "${WFX_DATA_<n>_FILE}")`, which drops
   trailing newlines as command substitution does. A script can also read the
   file itself.

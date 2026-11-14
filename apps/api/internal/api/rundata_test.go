@@ -116,3 +116,46 @@ func TestRunStepValuesArriveUnchangedAndNothingElseRuns(t *testing.T) {
 		}
 	}
 }
+
+// Shapes where the shell would evaluate a value a second time, and named
+// templates whose bodies are separate trees, are refused when the workflow
+// loads: it cannot be started, and nothing runs.
+func TestRunTextThatWouldEvaluateAValueAgainIsRefusedAtLoad(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh")
+	}
+	marker := filepath.Join(t.TempDir(), "ran")
+	shapes := map[string]string{
+		"named":     `{{ define "t" }}echo "{{ .Input.v }}"{{ end }}{{ template "t" . }}`,
+		"arith":     `echo $(( {{ .Input.v }} + 1 ))`,
+		"arithcmd":  `(( {{ .Input.v }} > 1 )) && echo big`,
+		"let":       `let n={{ .Input.v }}+1`,
+		"numtest":   `[[ {{ .Input.v }} -eq 1 ]] && echo one`,
+		"subscript": `a=(x y); echo "${a[{{ .Input.v }}]}"`,
+		"shc":       `sh -c "echo {{ .Input.v }}"`,
+		"bashc":     `bash -c "echo {{ .Input.v }}"`,
+		"eval":      `eval "echo {{ .Input.v }}"`,
+	}
+	files := map[string]string{"ok.yaml": "name: ok\nsteps:\n  - id: s\n    run: echo fine\n"}
+	for name, run := range shapes {
+		b, _ := json.Marshal(run)
+		files[name+".yaml"] = "name: " + name + "\ninput_schema: {type: object, properties: {v: {type: string}}}\nsteps:\n  - id: s\n    shell: bash\n    run: " + string(b) + "\n"
+	}
+	f := dataServer(t, files)
+	if r := f.runToEnd(t, "demo%2Fok", nil); r.Status != "done" {
+		t.Fatalf("a plain workflow beside them did not run: %s", r.Status)
+	}
+	value := "a[$(touch " + marker + ")]"
+	for name := range shapes {
+		t.Run(name, func(t *testing.T) {
+			b, _ := json.Marshal(map[string]any{"v": value})
+			code, out, _ := f.call(t, "POST", "/api/workflows/demo%2F"+name+"/runs", b, nil)
+			if code == 201 {
+				t.Fatalf("the workflow loaded and started: %v", out)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatal("part of the value ran as a command")
+			}
+		})
+	}
+}
