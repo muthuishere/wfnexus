@@ -165,6 +165,15 @@ func main() {
 	log.Printf("storage: %s %s", cfg.StorageDriver, cfg.DatabaseURL)
 	defer st.Close()
 
+	// `wfx-server link …` is a console command against this database: it
+	// serves nothing.
+	if len(os.Args) > 1 && os.Args[1] == "link" {
+		if err := linkCmd(ctx, st, os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	// Which artifact store runs is one line of config. A laptop writes files
 	// into a folder and needs nothing running; a deployment writes to a bucket
 	// because artifacts outlive the machine.

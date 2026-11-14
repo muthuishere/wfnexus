@@ -148,13 +148,13 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	access, _, err := s.refreshAccess(r.Context(), b.RefreshToken)
 	if err != nil {
 		if viaCookie {
-			clearSessionCookie(w, r)
+			s.clearSessionCookie(w, r)
 		}
 		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated: sign in again"))
 		return
 	}
 	if viaCookie {
-		setSessionCookie(w, r, access)
+		s.setSessionCookie(w, r, access)
 		writeJSON(w, http.StatusOK, map[string]any{"status": "refreshed"})
 		return
 	}

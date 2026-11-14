@@ -108,66 +108,22 @@ func TestMockLDAPIsRefusedOffLoopbackUnlessForced(t *testing.T) {
 	}
 }
 
-// fakeIssuer is a minimal OpenID Provider: discovery, token, userinfo.
-func fakeIssuer(t *testing.T, secret string) *httptest.Server {
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"issuer": srv.URL, "authorization_endpoint": srv.URL + "/authorize",
-				"token_endpoint": srv.URL + "/token", "userinfo_endpoint": srv.URL + "/userinfo",
-			})
-		case "/token":
-			_ = r.ParseForm()
-			if r.Form.Get("code") != "good" || r.Form.Get("client_secret") != secret || r.Form.Get("client_id") != "wfx" {
-				w.WriteHeader(400)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "at-123", "token_type": "Bearer"})
-		case "/userinfo":
-			if r.Header.Get("Authorization") != "Bearer at-123" {
-				w.WriteHeader(401)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"sub": "42", "preferred_username": "bob", "groups": []string{"admins"}})
-		default:
-			w.WriteHeader(404)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 func TestOIDCSignInThroughAFakeIssuer(t *testing.T) {
-	t.Setenv("TEST_SSO_SECRET", "s3cret-value")
-	iss := fakeIssuer(t, "s3cret-value")
-	h, _ := testServerAuth(t, remoteAddr, config.Auth{Providers: []config.AuthProvider{{
-		Name: "sso", Type: "oidc", Issuer: iss.URL, ClientID: "wfx", ClientSecretEnv: "TEST_SSO_SECRET",
-		GroupRoles: map[string]string{"admins": "superadmin"},
-	}}})
+	op := newMockOP(t, "s3cret-value")
+	h := oidcServer(t, op)
 
+	// A forged state is refused before the provider is asked anything.
 	start := httptest.NewRecorder()
 	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/sso/start", nil))
-	if start.Code != 302 {
-		t.Fatalf("start: %d %s", start.Code, start.Body)
-	}
 	loc, _ := url.Parse(start.Header().Get("Location"))
-	state := loc.Query().Get("state")
-	if !strings.HasPrefix(loc.String(), iss.URL+"/authorize") || state == "" || loc.Query().Get("client_id") != "wfx" {
+	if !strings.HasPrefix(loc.String(), op.URL()+"/authorize") || loc.Query().Get("state") == "" || loc.Query().Get("client_id") != "wfx" {
 		t.Fatalf("authorize redirect: %s", loc)
 	}
-	var stateCookie *http.Cookie
-	for _, c := range start.Result().Cookies() {
-		if c.Name == oauthStateCookie {
-			stateCookie = c
-		}
-	}
-
 	callback := func(code, st string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/api/auth/oauth/sso/callback?code="+code+"&state="+st, nil)
-		req.AddCookie(stateCookie)
+		for _, c := range start.Result().Cookies() {
+			req.AddCookie(c)
+		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		return w
@@ -175,20 +131,17 @@ func TestOIDCSignInThroughAFakeIssuer(t *testing.T) {
 	if w := callback("good", "forged-state"); w.Code != 400 {
 		t.Fatalf("a forged state: %d", w.Code)
 	}
-	if w := callback("bad", state); w.Code != 401 {
+	if res, err := http.Get(loc.String()); err == nil {
+		res.Body.Close()
+	}
+	if w := callback("bad", loc.Query().Get("state")); w.Code != 401 {
 		t.Fatalf("a bad code: %d %s", w.Code, w.Body)
 	}
-	w := callback("good", state)
+	w, _ := oauthFlow(t, h, "sso", nil)
 	if w.Code != 303 {
 		t.Fatalf("callback: %d %s", w.Code, w.Body)
 	}
-	var session string
-	for _, c := range w.Result().Cookies() {
-		if c.Name == sessionCookieName {
-			session = c.Value
-		}
-	}
-	who := decode(t, withCookie(h, "GET", "/api/whoami", session, nil))
+	who := decode(t, withCookie(h, "GET", "/api/whoami", oauthSession(w), nil))
 	if who["name"] != "bob@sso" || who["role"] != RoleSuperadmin {
 		t.Fatalf("whoami after OIDC: %v", who)
 	}

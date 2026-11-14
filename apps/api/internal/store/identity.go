@@ -73,6 +73,108 @@ func (s *Store) UserByName(ctx context.Context, name string) (*User, error) {
 	return scanUser(s.qrow(ctx, `SELECT `+userCols+` FROM users WHERE name=$1`, name))
 }
 
+// ---- external sign-in: users keyed by (provider, subject) ----
+
+// Link states of a user (users.link_state).
+const (
+	LinkLegacy  = "legacy"  // made by an external sign-in before subjects were kept: bound once, on the next sign-in
+	LinkConfirm = "confirm" // bound, but it held roles: signs in only after an admin confirms
+)
+
+// UserBySubject is the user an external provider's subject is bound to;
+// ErrNotFound when none is.
+func (s *Store) UserBySubject(ctx context.Context, provider, subject string) (*User, error) {
+	return scanUser(s.qrow(ctx, `SELECT `+userCols+` FROM users WHERE auth_provider=$1 AND auth_subject=$2 AND auth_subject <> ''`, provider, subject))
+}
+
+// LinkState is a user's link state ("" when nothing is pending).
+func (s *Store) LinkState(ctx context.Context, id uuid.UUID) (string, error) {
+	var st string
+	err := s.qrow(ctx, `SELECT link_state FROM users WHERE id=$1`, id).Scan(&st)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return st, err
+}
+
+// SetSubject records the subject on a user that has none (a user just made
+// by an external sign-in). A user that already has a subject is never
+// re-bound. It reports whether it bound.
+func (s *Store) SetSubject(ctx context.Context, id uuid.UUID, provider, subject string) (bool, error) {
+	return s.bind(ctx, `UPDATE users SET auth_provider=$2, auth_subject=$3
+		WHERE id=$1 AND auth_subject=''`, id, provider, subject)
+}
+
+// BindLegacy binds a legacy row to the subject that signed in with its name —
+// once: only while the row is still legacy — and leaves it in state ("" or
+// LinkConfirm). It reports whether it bound.
+func (s *Store) BindLegacy(ctx context.Context, id uuid.UUID, provider, subject, state string) (bool, error) {
+	return s.bind(ctx, `UPDATE users SET auth_provider=$2, auth_subject=$3, link_state=$4
+		WHERE id=$1 AND auth_subject='' AND link_state='`+LinkLegacy+`'`, id, provider, subject, state)
+}
+
+func (s *Store) bind(ctx context.Context, q string, args ...any) (bool, error) {
+	tag, err := s.exec(ctx, q, args...)
+	if err != nil {
+		return false, err
+	}
+	n, _ := tag.RowsAffected()
+	return n == 1, nil
+}
+
+// RevokeAllUserTokens ends every session, refresh token and API token of a
+// user (an account whose link waits for confirmation keeps none).
+func (s *Store) RevokeAllUserTokens(ctx context.Context, id uuid.UUID) error {
+	_, err := s.exec(ctx, `DELETE FROM user_tokens WHERE user_id=$1`, id)
+	return err
+}
+
+// HasGrants says whether a user holds any role: superadmin, or a project or
+// workflow membership.
+func (s *Store) HasGrants(ctx context.Context, id uuid.UUID) (bool, error) {
+	var n int
+	err := s.qrow(ctx, `SELECT (CASE WHEN role <> '' THEN 1 ELSE 0 END) +
+		(SELECT count(*) FROM members WHERE user_id=$1) FROM users WHERE id=$1`, id).Scan(&n)
+	return n > 0, err
+}
+
+// PendingLink is an account bound on its first sign-in after the upgrade
+// that held roles, waiting for an admin to confirm it.
+type PendingLink struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Subject  string `json:"subject"`
+}
+
+func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
+	rows, err := s.query(ctx, `SELECT name, auth_provider, auth_subject FROM users WHERE link_state=$1 ORDER BY name`, LinkConfirm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PendingLink{}
+	for rows.Next() {
+		var p PendingLink
+		if err := rows.Scan(&p.Name, &p.Provider, &p.Subject); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ConfirmLink confirms a pending link; ErrNotFound when the user has none.
+func (s *Store) ConfirmLink(ctx context.Context, name string) error {
+	tag, err := s.exec(ctx, `UPDATE users SET link_state='' WHERE name=$1 AND link_state=$2`, name, LinkConfirm)
+	if err != nil {
+		return err
+	}
+	if n, _ := tag.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.query(ctx, `SELECT `+userCols+` FROM users ORDER BY name`)
 	if err != nil {

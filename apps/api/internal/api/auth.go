@@ -143,7 +143,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			if err != nil && viaCookie {
 				if rc := refreshCookie(r); rc != "" {
 					if access, rsub, rerr := s.refreshAccess(r.Context(), rc); rerr == nil {
-						setSessionCookie(w, r, access)
+						s.setSessionCookie(w, r, access)
 						sub, err = rsub, nil
 					}
 				}
@@ -157,7 +157,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			// dead session cookie is also cleared, so the next load of the
 			// UI is a clean sign-in rather than the same 401 forever.
 			if viaCookie {
-				clearSessionCookie(w, r)
+				s.clearSessionCookie(w, r)
 			}
 			writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
 			return
@@ -199,7 +199,7 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	// A browser signing out: the cookie goes whether or not the row does.
 	if bearer(r) == "" && (sessionCookie(r) != "" || refreshCookie(r) != "") {
-		clearSessionCookie(w, r)
+		s.clearSessionCookie(w, r)
 	}
 	if err := s.store.RevokeUserToken(r.Context(), sub.SessionID); err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("token not found"))
