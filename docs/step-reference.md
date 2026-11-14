@@ -69,6 +69,9 @@ file, delivered as a carry file for example: `$WFX_BROWSER_CONFIG`, default
   `user:pass@`): such a profile is refused. Point it at a local proxy instead.
 - `read_actions` lists the actions `browser.read` may run with this profile.
   If no list is given, the profile allows no reads.
+  Only the action word is checked; its arguments are not. List only actions that
+  cannot change a site whatever their arguments; anything that can submit, post
+  or run a scripted sequence belongs in `browser.act`.
 - `wfx doctor` lists the profiles with their read actions and says which are
   usable: the command is found and the folder is present.
 
