@@ -13,7 +13,7 @@ import (
 )
 
 // Every command of every module in modules/ is called the way `wfx module
-// call` calls it (each input as `{{ or .Input.<name> "" }}`) with values that
+// call` calls it (each input as `{{ .Input.<name> }}`) with values that
 // hold quotes, a line equal to a heredoc delimiter, backticks, $( ), and a
 // leading '-'. Each step renders and runs with fake CLIs on PATH: nothing in a
 // value may run, and every in.* file a step writes must hold one of the values
@@ -61,7 +61,7 @@ func TestModuleCommandsCarryValuesUnchanged(t *testing.T) {
 				sort.Strings(keys)
 				with := map[string]string{}
 				for _, k := range keys {
-					with[k] = fmt.Sprintf(`{{ or .Input.%s "" }}`, k)
+					with[k] = fmt.Sprintf(`{{ .Input.%s }}`, k)
 				}
 				dir := t.TempDir()
 				wj, _ := json.Marshal(with)

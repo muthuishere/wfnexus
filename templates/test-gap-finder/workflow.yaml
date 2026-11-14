@@ -147,7 +147,7 @@ steps:
     run: |
       printf '*\n' > .wfx-test-gap/.gitignore
       cat > .wfx-test-gap/style.json <<WFX_STYLE_EOF
-      {{ json .Steps.style }}
+      {{ .Steps.style }}
       WFX_STYLE_EOF
       PR_PREFIX="{{ .Input.pr_prefix }}" ALLOW_RED="{{ .Input.allow_red_baseline }}" SCOPE="{{ .Input.scope }}" \
       BRANCH="wfx/test-gap-$(printf %.8s "{{ .RunID }}")" \
@@ -364,7 +364,7 @@ steps:
     timeout_sec: 3600
     run: |
       cat > .wfx-test-gap/write.json <<WFX_WRITE_EOF
-      {{ json .Steps.write }}
+      {{ .Steps.write }}
       WFX_WRITE_EOF
       cat > .wfx-test-gap/human.txt <<WFX_HUMAN_EOF
       {{ .Input.extra_context }}
@@ -426,7 +426,7 @@ steps:
     timeout_sec: 300
     run: |
       cat > .wfx-test-gap/review.json <<WFX_REVIEW_EOF
-      {{ json .Steps.review }}
+      {{ .Steps.review }}
       WFX_REVIEW_EOF
       PR_PREFIX="{{ .Input.pr_prefix }}" python3 .wfx-test-gap/prbody.py || exit 70
     gates:
@@ -489,5 +489,6 @@ steps:
       [ -f $D/verify.json ] && python3 -c "import json;v=json.load(open('$D/verify.json'));print('--- proof: before', v['before'], 'after', v['after'], 'coverage', v['coverage_before'], '->', v['coverage_after'], 'mutation', v['mutation'], 'findings', v['findings'])"
       echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/pr-body.md ] && echo "--- PR body: $(pwd)/$D/pr-body.md"
-      {{ if .Steps.publish }}echo "--- PR: {{ .Steps.publish.pr_url }}"{{ end }}
+      publish="{{ .Steps.publish }}"; pr_url="{{ .Steps.publish.pr_url }}"
+      [ -n "$publish" ] && echo "--- PR: $pr_url"
       exit 0

@@ -55,7 +55,7 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := defs["wf"].Steps[0]; got.ID != "s.run" || filled(t, got.Run, nil) != `echo summarise "ops"` {
+	if got := defs["wf"].Steps[0]; got.ID != "s.run" || filledStep(t, got, nil) != `echo summarise "ops"` {
 		t.Fatalf("step = %+v", got)
 	}
 
@@ -69,7 +69,7 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := defs["wf"].Steps[0]; got.ID != "s.p" || filled(t, got.Run, nil) != `echo ping "ops"` || got.Module != "watcher" {
+	if got := defs["wf"].Steps[0]; got.ID != "s.p" || filledStep(t, got, nil) != `echo ping "ops"` || got.Module != "watcher" {
 		t.Fatalf("command step = %+v", got)
 	}
 }

@@ -42,6 +42,7 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if err := workflow.CheckRunText(step.Run, step.Shell); err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
 	}
+	data.Const = step.RunConst
 	rt, err := workflow.RenderRun(step.Run, data)
 	if err != nil {
 		return nil, fmt.Errorf("render run: %w", err)

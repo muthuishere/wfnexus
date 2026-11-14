@@ -45,7 +45,7 @@ steps:
 		t.Fatalf("source view modules = %v", rep.Source.Modules)
 	}
 	d := e.Definitions()["wf"]
-	if d == nil || d.Steps[0].Run != `echo hi "{{ "ops" }}"` {
+	if d == nil || d.Steps[0].Run != `echo hi "{{ .Const.who }}"` || d.Steps[0].RunConst["who"] != "ops" {
 		t.Fatalf("wf = %+v (skips %+v)", d, e.sourceSkips)
 	}
 	views, errs := e.ModuleViews(context.Background())

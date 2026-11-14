@@ -31,7 +31,7 @@ steps:
 	if !reflect.DeepEqual(ids, []string{"first", "hello.say", "after"}) {
 		t.Fatalf("ids = %v", ids)
 	}
-	if !strings.Contains(filled(t, st[1].Run, nil), "ops x2 plain") {
+	if !strings.Contains(filledStep(t, st[1], nil), "ops x2 plain") {
 		t.Fatalf("run = %q", st[1].Run)
 	}
 	if !reflect.DeepEqual(st[1].Needs, []string{"first"}) || !reflect.DeepEqual(st[2].Needs, []string{"hello.say"}) {
@@ -55,7 +55,7 @@ jobs:
 		t.Fatal(err)
 	}
 	st := defs["wf"].Steps
-	if len(st) != 2 || st[1].ID != "j.g.say" || !reflect.DeepEqual(st[1].Needs, []string{"j.a"}) || !strings.Contains(filled(t, st[1].Run, nil), "dev x1") {
+	if len(st) != 2 || st[1].ID != "j.g.say" || !reflect.DeepEqual(st[1].Needs, []string{"j.a"}) || !strings.Contains(filledStep(t, st[1], nil), "dev x1") {
 		t.Fatalf("steps = %+v", st)
 	}
 }

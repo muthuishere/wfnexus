@@ -76,7 +76,8 @@ steps:
     timeout_sec: 900
     run: |
       printf '*\n' > .wfx-docs-drift/.gitignore
-      SINCE="{{ if .Input.since }}{{ .Input.since }}{{ else }}{{ .Workflow.last_sha }}{{ end }}" \
+      since="{{ .Input.since }}"; last_sha="{{ .Workflow.last_sha }}"
+      SINCE="${since:-$last_sha}" \
       LOOKBACK_DAYS="{{ .Input.lookback_days }}" DOCS="{{ .Input.docs }}" EXCLUDE="{{ .Input.exclude }}" \
       MAX_FINDINGS="{{ .Input.max_findings }}" BRANCH="wfx/docs-drift-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-docs-drift/collect.py
@@ -151,7 +152,7 @@ steps:
     timeout_sec: 900
     run: |
       cat > .wfx-docs-drift/sync.json <<WFX_SYNC_EOF
-      {{ json .Steps.sync }}
+      {{ .Steps.sync }}
       WFX_SYNC_EOF
       python3 .wfx-docs-drift/verify.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac

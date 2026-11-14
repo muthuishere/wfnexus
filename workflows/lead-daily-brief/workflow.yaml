@@ -221,7 +221,7 @@ steps:
         # file (3 failed runs, 2026-10-12); the submitted object IS the draft.
         if [ ! -s draft.json ]; then
         cat > draft.json <<WFX_DRAFT_EOF
-        {{ json .Steps.draft }}
+        {{ .Steps.draft }}
         WFX_DRAFT_EOF
         fi
         python3 verify.py --name daily-brief --save-dir "{{ .Input.save_dir }}" --private
@@ -276,9 +276,10 @@ steps:
       timeout_sec: 120
       requires_approval: true
       run: |
+        day="{{ .Input.day }}"
         DRY_RUN="{{ .Input.dry_run }}" python3 deliver.py --md brief.md --channel "{{ .Input.deliver }}" \
           --handle "{{ .Input.deliver_handle }}" --to "{{ .Input.deliver_to }}" \
-          --subject "Daily brief {{ if .Input.day }}{{ .Input.day }}{{ else }}$(date +%F){{ end }}"
+          --subject "Daily brief ${day:-$(date +%F)}"
     - id: finish
       name: Success numbers
       prompt: ""

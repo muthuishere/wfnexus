@@ -118,7 +118,7 @@ steps:
         equals: false
     run: |
       cat > diagnosis.json <<WFX_JSON
-      {{ json .Steps.diagnose }}
+      {{ .Steps.diagnose }}
       WFX_JSON
       python3 ./prepare.py
     timeout_sec: 300
@@ -214,10 +214,10 @@ steps:
     needs: [fix]
     run: |
       cat > diagnosis.json <<WFX_JSON
-      {{ json .Steps.diagnose }}
+      {{ .Steps.diagnose }}
       WFX_JSON
       cat > fixes.json <<WFX_JSON
-      {{ json .Steps.fix }}
+      {{ .Steps.fix }}
       WFX_JSON
       python3 ./verify.py
     timeout_sec: 1200
@@ -318,7 +318,7 @@ steps:
         equals: true   # an empty list of PRs is not something to merge
     run: &merge |
       cat > prs.json <<WFX_JSON
-      {{ json .Steps.publish }}
+      {{ .Steps.publish }}
       WFX_JSON
       python3 ./merge.py
     timeout_sec: 300
@@ -366,13 +366,13 @@ steps:
     needs: [collect, diagnose, prepare, fix, verify, review, publish, merge_auto, merge_gated]
     run: |
       cat > review.json <<WFX_JSON
-      {{ json .Steps.review }}
+      {{ .Steps.review }}
       WFX_JSON
       cat > prs.json <<WFX_JSON
-      {{ json .Steps.publish }}
+      {{ .Steps.publish }}
       WFX_JSON
       cat > diagnosis.json <<WFX_JSON
-      {{ json .Steps.diagnose }}
+      {{ .Steps.diagnose }}
       WFX_JSON
       DRY_RUN="{{ .Input.dry_run }}" COLLECT_EXIT="{{ .Steps.collect.exitCode }}" python3 ./report.py
     timeout_sec: 120

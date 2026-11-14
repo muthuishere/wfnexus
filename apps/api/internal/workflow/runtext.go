@@ -1,11 +1,12 @@
 package workflow
 
 import (
-	"bytes"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,19 +26,11 @@ import (
 // newlines and any NUL byte; the file itself is exact),
 // and the script's text is only what the workflow author wrote.
 //
-// What still prints into the text: only .RunID (a UUID) and .Index (an
-// integer), which the engine generates and which cannot hold shell syntax —
-// and only where the dot is the run's own data: at the top level, or written
-// $.RunID anywhere. Every other value, .WorkDir and .BaseRef included, is data
-// (a working folder can be a path the caller gave). Inside a `range` or `with`
-// the dot is a value (a loop item, an input object), so a field of it named
-// RunID is that value's and travels as data like any other. `$` itself may not
-// be declared or assigned in run text, so $.RunID always means the run's.
-// Conditions (`{{ if … }}`,
-// `{{ range … }}`) still read the values directly, so branching is unchanged.
+// Only plain references are allowed in run text (see parseRunText); a
+// template's logic belongs in the script.
 //
-// Prompts, gate messages and every other non-shell text keep plain
-// substitution (Render).
+// Prompts, gate messages and every other non-shell text keep full templates
+// (Render).
 
 const (
 	// dataInline is the largest value passed as an environment variable;
@@ -58,178 +51,197 @@ type RunText struct {
 	Data   []string `json:"data,omitempty"`
 }
 
-// platformFacts are the fields printed into run text as they are.
-var platformFacts = map[string]bool{"RunID": true, "Index": true}
+// What `run:` text may contain: plain references to values and nothing else.
+// A reference is one action holding one field path on the root dot —
+// {{ .Input.name }}, {{ .Steps.a.output.y }}, {{ .Item.z }}, {{ .RunID }},
+// {{ .WorkDir }}, a state key — with optional trim markers ({{- … -}}).
+// Comments are dropped. Every other construct — if, else, range, with,
+// define, template, block, break, continue, variables, pipes, function calls,
+// parentheses, literals — is refused at load: the logic belongs in the script,
+// working on the value the script receives in its environment.
+//
+// Every reference, the run's own facts included, becomes a reference to an
+// environment variable and its value travels beside the command. A string
+// value arrives as it is; any other value (an object, a list, a number, a
+// boolean) arrives as JSON, so a script parses it with jq or its own language.
+//
+// Prompts, gate messages and every other non-shell text keep full templates
+// (Render).
 
-// RenderRun renders a `run:` step's text with every printed value replaced by
-// a mark (see RunText.For).
-func RenderRun(text string, data TemplateData) (RunText, error) {
-	var vals []string
-	t, err := parseRunTemplate(text, func(v any) string {
-		s := ""
-		if v != nil {
-			s = fmt.Sprint(v)
-		}
-		if s == "<no value>" {
-			s = ""
-		}
-		vals = append(vals, s)
-		return dataMark + strconv.Itoa(len(vals)) + dataEnd
-	})
-	if err != nil {
-		return RunText{}, err
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return RunText{}, err
-	}
-	return RunText{Script: strings.ReplaceAll(buf.String(), "<no value>", ""), Data: vals}, nil
+// runPart is one piece of run text: literal text, or a reference (path).
+type runPart struct {
+	text string
+	path string
 }
 
-// parseRunTemplate parses run text and routes every value-printing action
-// through wfxData.
-func parseRunTemplate(text string, wfxData func(any) string) (*template.Template, error) {
-	t, err := template.New("run").Funcs(funcs).Funcs(template.FuncMap{"wfxData": wfxData}).
-		Option("missingkey=zero").Parse(rewriteStatePaths(rewriteStepPaths(text)))
-	if err != nil {
-		return nil, err
+// refPath is a field path on the root dot. Keys of steps and of the state
+// scopes may hold a hyphen (and a state key a dot), as elsewhere.
+var refPath = regexp.MustCompile(`^\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+)*$`)
+
+// rootFields are the names a reference may start with: TemplateData's fields.
+var rootFields = func() map[string]bool {
+	m := map[string]bool{}
+	t := reflect.TypeOf(TemplateData{})
+	for i := 0; i < t.NumField(); i++ {
+		m[t.Field(i).Name] = true
 	}
-	if len(t.Templates()) > 1 || hasTemplateCall(t.Tree) {
-		return nil, errRunNamedTemplate
-	}
-	if t.Tree != nil && assignsDollar(t.Tree.Root) {
-		return nil, errRunDollar
-	}
-	if t.Tree != nil {
-		walkActions(t.Tree.Root, true, func(a *parse.ActionNode, root bool) {
-			if isPlatformFact(a.Pipe, root) {
-				return
+	m["Inputs"] = true // a task's or module's own inputs, substituted at load (inputs.go)
+	return m
+}()
+
+// hyphenRoots are the roots whose keys may hold a hyphen (step ids, state keys).
+var hyphenRoots = map[string]bool{"Steps": true, "Step": true, "Workflow": true, "Project": true, "Global": true}
+
+const runTextAdvice = "run: text may only reference values, like {{ .Input.x }}; do the logic in the script using the env value"
+
+// parseRunText splits run text into literal text and references, refusing
+// every construct that is not a plain reference.
+func parseRunText(text string) ([]runPart, error) {
+	var parts []runPart
+	trimNext := false
+	for {
+		i := strings.Index(text, "{{")
+		if i < 0 {
+			if trimNext {
+				text = strings.TrimLeft(text, " \t\r\n")
 			}
-			id := parse.NewIdentifier("wfxData").SetTree(t.Tree).SetPos(a.Pos)
-			a.Pipe.Cmds = append(a.Pipe.Cmds, &parse.CommandNode{NodeType: parse.NodeCommand, Pos: a.Pos, Args: []parse.Node{id}})
-		})
+			parts = append(parts, runPart{text: text})
+			return parts, nil
+		}
+		lit := text[:i]
+		if trimNext {
+			lit = strings.TrimLeft(lit, " \t\r\n")
+		}
+		j := strings.Index(text[i:], "}}")
+		if j < 0 {
+			return nil, fmt.Errorf("an unclosed {{ in run text")
+		}
+		inner := text[i+2 : i+j]
+		text = text[i+j+2:]
+		if strings.HasPrefix(inner, "- ") || inner == "-" || strings.HasPrefix(inner, "-\t") || strings.HasPrefix(inner, "-\n") {
+			lit = strings.TrimRight(lit, " \t\r\n")
+			inner = inner[1:]
+		}
+		trimNext = false
+		if strings.HasSuffix(inner, " -") || strings.HasSuffix(inner, "\t-") || strings.HasSuffix(inner, "\n-") {
+			trimNext = true
+			inner = inner[:len(inner)-1]
+		}
+		parts = append(parts, runPart{text: lit})
+		inner = strings.TrimSpace(inner)
+		if strings.HasPrefix(inner, "/*") && strings.HasSuffix(inner, "*/") {
+			continue // a comment
+		}
+		if err := checkRef(inner); err != nil {
+			return nil, err
+		}
+		parts = append(parts, runPart{path: inner})
 	}
-	return t, nil
 }
 
-// errRunNamedTemplate: run text may not define or call named templates
-// (define, template, block). Their bodies are separate trees, and a value they
-// print must travel like every other one, so they are refused.
-var errRunNamedTemplate = errors.New("run text may not use define, template or block; write the text in place (prompts may still use them)")
-
-// errRunDollar: run text may not declare or assign `$`. $.RunID is trusted as
-// the run's own id only because `$` always holds the run's data.
-var errRunDollar = errors.New("run text may not declare or assign $ ({{ $ := … }}, {{ $ = … }}, range $ := …, with $ := …); use a variable of another name")
-
-// assignsDollar: some pipeline anywhere in the tree declares or assigns `$`.
-func assignsDollar(n parse.Node) bool {
-	pipe := func(p *parse.PipeNode) bool {
-		if p == nil {
-			return false
+// checkRef refuses anything but a plain reference, naming what it found.
+func checkRef(inner string) error {
+	if refPath.MatchString(inner) {
+		segs := strings.Split(inner[1:], ".")
+		if !rootFields[segs[0]] {
+			return fmt.Errorf("{{ %s }}: .%s is not a value a step can see; %s", inner, segs[0], runTextAdvice)
 		}
-		for _, v := range p.Decl {
-			if len(v.Ident) > 0 && v.Ident[0] == "$" {
-				return true
-			}
-		}
-		return false
-	}
-	switch n := n.(type) {
-	case *parse.ListNode:
-		if n == nil {
-			return false
-		}
-		for _, c := range n.Nodes {
-			if assignsDollar(c) {
-				return true
-			}
-		}
-	case *parse.ActionNode:
-		return pipe(n.Pipe)
-	case *parse.IfNode:
-		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
-	case *parse.RangeNode:
-		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
-	case *parse.WithNode:
-		return pipe(n.Pipe) || assignsDollar(n.List) || assignsDollar(n.ElseList)
-	}
-	return false
-}
-
-func hasTemplateCall(t *parse.Tree) bool {
-	if t == nil {
-		return false
-	}
-	found := false
-	var walk func(n parse.Node)
-	walk = func(n parse.Node) {
-		switch n := n.(type) {
-		case *parse.ListNode:
-			if n != nil {
-				for _, c := range n.Nodes {
-					walk(c)
+		if !hyphenRoots[segs[0]] {
+			for _, s := range segs[1:] {
+				if strings.Contains(s, "-") {
+					return fmt.Errorf("{{ %s }}: the key %q can only be reached with index; reference the whole value instead (it arrives as JSON) and read the key in the script, for example with jq", inner, s)
 				}
 			}
-		case *parse.TemplateNode:
-			found = true
-		case *parse.IfNode:
-			walk(n.List)
-			walk(n.ElseList)
-		case *parse.RangeNode:
-			walk(n.List)
-			walk(n.ElseList)
-		case *parse.WithNode:
-			walk(n.List)
-			walk(n.ElseList)
 		}
+		return nil
 	}
-	walk(t.Root)
-	return found
+	word := strings.Fields(inner)
+	first := ""
+	if len(word) > 0 {
+		first = word[0]
+	}
+	var what string
+	switch {
+	case inner == "":
+		what = "an empty action"
+	case map[string]bool{"if": true, "else": true, "end": true, "range": true, "with": true, "define": true,
+		"template": true, "block": true, "break": true, "continue": true}[first]:
+		what = "`" + first + "`"
+	case strings.Contains(inner, ":=") || strings.Contains(inner, "="):
+		what = "a variable assignment"
+	case strings.Contains(inner, "$"):
+		what = "a variable"
+	case strings.Contains(inner, "|"):
+		what = "a pipe"
+	case strings.Contains(inner, "("):
+		what = "parentheses"
+	case first == "index":
+		what = "index (" + inner + "); reference the whole value instead (it arrives as JSON) and read the key in the script, for example with jq —"
+	case strings.HasPrefix(inner, "."):
+		what = "a key that only index can reach (" + inner + "); reference the whole value instead (it arrives as JSON) and read the key in the script, for example with jq —"
+	case strings.ContainsAny(first[:1], `"'`+"`0123456789-") || first == "true" || first == "false" || first == "nil":
+		what = "a literal"
+	default:
+		what = "the function `" + first + "`"
+	}
+	return fmt.Errorf("{{ %s }}: %s is not allowed; %s", inner, what, runTextAdvice)
 }
 
-// walkActions calls f on every action that prints (not one that only
-// declares a variable), inside conditions, loops and withs too. root says
-// whether the dot there is still the run's own data: the body of a range or
-// with moves the dot onto a value; their else branches keep it.
-func walkActions(n parse.Node, root bool, f func(*parse.ActionNode, bool)) {
-	switch n := n.(type) {
-	case *parse.ListNode:
-		if n == nil {
-			return
-		}
-		for _, c := range n.Nodes {
-			walkActions(c, root, f)
-		}
-	case *parse.ActionNode:
-		if len(n.Pipe.Decl) == 0 {
-			f(n, root)
-		}
-	case *parse.IfNode:
-		walkActions(n.List, root, f)
-		walkActions(n.ElseList, root, f)
-	case *parse.RangeNode:
-		walkActions(n.List, false, f)
-		walkActions(n.ElseList, root, f)
-	case *parse.WithNode:
-		walkActions(n.List, false, f)
-		walkActions(n.ElseList, root, f)
+// refValue is the value a reference names, as the script receives it: a
+// string as it is, anything else as JSON, nothing as "".
+func refValue(path string, data TemplateData) (string, error) {
+	var got any
+	t, err := template.New("ref").Funcs(funcs).Funcs(template.FuncMap{"wfxRef": func(v any) string { got = v; return "" }}).
+		Option("missingkey=zero").Parse(rewriteStatePaths(rewriteStepPaths("{{ " + path + " }}")))
+	if err != nil {
+		return "", err
 	}
+	if t.Tree != nil && len(t.Tree.Root.Nodes) == 1 {
+		if a, ok := t.Tree.Root.Nodes[0].(*parse.ActionNode); ok {
+			id := parse.NewIdentifier("wfxRef").SetTree(t.Tree).SetPos(a.Pos)
+			a.Pipe.Cmds = append(a.Pipe.Cmds, &parse.CommandNode{NodeType: parse.NodeCommand, Pos: a.Pos, Args: []parse.Node{id}})
+		}
+	}
+	if err := t.Execute(io.Discard, data); err != nil {
+		return "", err
+	}
+	switch v := got.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return v, nil
+	}
+	// The same JSON the `json` template function writes, so `{{ json .X }}`
+	// and `{{ .X }}` give a script the same bytes for an object or a list.
+	b, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		return fmt.Sprint(got), nil
+	}
+	return string(b), nil
 }
 
-// isPlatformFact: the action prints exactly one of the run's own facts — .RunID
-// (and the others) where the dot is the run's data, or $.RunID anywhere. A
-// field of that name under any other dot belongs to a value.
-func isPlatformFact(p *parse.PipeNode, root bool) bool {
-	if p == nil || len(p.Cmds) != 1 || len(p.Cmds[0].Args) != 1 {
-		return false
+// RenderRun renders a `run:` step's text with every reference replaced by a
+// mark (see RunText.For) and its value kept beside it.
+func RenderRun(text string, data TemplateData) (RunText, error) {
+	parts, err := parseRunText(text)
+	if err != nil {
+		return RunText{}, err
 	}
-	switch a := p.Cmds[0].Args[0].(type) {
-	case *parse.FieldNode:
-		return root && len(a.Ident) == 1 && platformFacts[a.Ident[0]]
-	case *parse.VariableNode:
-		return len(a.Ident) == 2 && a.Ident[0] == "$" && platformFacts[a.Ident[1]]
+	var b strings.Builder
+	var vals []string
+	for _, p := range parts {
+		if p.path == "" {
+			b.WriteString(p.text)
+			continue
+		}
+		v, err := refValue(p.path, data)
+		if err != nil {
+			return RunText{}, err
+		}
+		vals = append(vals, v)
+		b.WriteString(dataMark + strconv.Itoa(len(vals)) + dataEnd)
 	}
-	return false
+	return RunText{Script: b.String(), Data: vals}, nil
 }
 
 // For produces the script for one shell and the environment that carries its
@@ -318,15 +330,18 @@ func checkRunText(text, shellName string) error {
 		return nil
 	}
 	const hole = "\x01"
-	t, err := parseRunTemplate(text, func(any) string { return "" })
-	if errors.Is(err, errRunNamedTemplate) || errors.Is(err, errRunDollar) {
+	parts, err := parseRunText(text)
+	if err != nil {
 		return err
 	}
-	if err != nil {
-		return nil // a bad template is reported where it renders
-	}
 	var b strings.Builder
-	flatten(t.Tree.Root, true, &b, hole)
+	for _, p := range parts {
+		if p.path == "" {
+			b.WriteString(p.text)
+		} else {
+			b.WriteString(hole)
+		}
+	}
 	skel := b.String()
 	if !strings.Contains(skel, hole) {
 		return nil
@@ -423,9 +438,16 @@ var cmdWrappers = map[string][]string{
 // after assignments, wrappers and their options (and those options'
 // arguments), without quotes, escape, parentheses or directory, lower-cased.
 func commandName(seg string) string {
+	name, _ := commandSplit(seg)
+	return name
+}
+
+// commandSplit is commandName plus the words that follow the command.
+func commandSplit(seg string) (string, []string) {
 	var argOpts []string
 	skip := false
-	for _, w := range strings.Fields(seg) {
+	words := strings.Fields(seg)
+	for i, w := range words {
 		if skip {
 			skip = false
 			continue
@@ -450,9 +472,128 @@ func commandName(seg string) string {
 			argOpts = opts
 			continue
 		}
-		return w
+		return w, words[i+1:]
 	}
-	return ""
+	return "", nil
+}
+
+// readerFlags says, per reader of a script, which short option letters give
+// it its code as an argument (so stdin is data), which take a separate
+// argument of their own, and which make it read its commands from stdin.
+var readerFlags = map[string]struct{ code, withArg, stdin string }{
+	"sh": {"c", "oO", "s"}, "bash": {"c", "oO", "s"}, "zsh": {"c", "oO", "s"}, "dash": {"c", "oO", "s"}, "ksh": {"c", "oO", "s"},
+	"mksh": {"c", "oO", "s"}, "ash": {"c", "oO", "s"}, "fish": {"c", "", ""}, "csh": {"c", "", "s"}, "tcsh": {"c", "", "s"},
+	"$bash": {"c", "oO", "s"}, "${bash}": {"c", "oO", "s"}, "$shell": {"c", "oO", "s"}, "${shell}": {"c", "oO", "s"},
+	"python": {"cm", "WX", ""}, "python2": {"cm", "WX", ""}, "python3": {"cm", "WX", ""},
+	"node": {"ep", "r", ""}, "perl": {"eE", "", ""}, "ruby": {"e", "Ir", ""}, "php": {"r", "dc", ""},
+}
+
+// isRedirect: a shell word that redirects (<f, >f, 2>&1, <<EOF, <<<"…", <( … ))
+// rather than being an argument; the bare operators take the next word.
+func isRedirect(w string) (redirect, takesNext bool) {
+	t := strings.TrimLeft(w, "0123456789&")
+	if t == "" || (t[0] != '<' && t[0] != '>') {
+		return false, false
+	}
+	return true, strings.Trim(t, "<>&|") == ""
+}
+
+// stdinIsCode: the simple command seg runs what it reads on stdin as a script.
+// That is so only when the reader has no script file and no code argument
+// (-c, -e, …), or the argument is `-`; given a script or code, what it reads
+// on stdin is data.
+func stdinIsCode(seg string) (string, bool) {
+	name, args := commandSplit(seg)
+	if !scriptReaders[name] {
+		return "", false
+	}
+	var words []string
+	for i := 0; i < len(args); i++ {
+		w := bareWord(args[i])
+		if w == "" {
+			continue // a line continuation
+		}
+		if strings.HasPrefix(w, "<(") {
+			return name, true // its script is what <( … ) prints
+		}
+		if r, next := isRedirect(w); r {
+			if next {
+				i++
+			}
+			continue
+		}
+		words = append(words, w)
+	}
+	switch name {
+	case "iex", "invoke-expression":
+		return name, true
+	case "source", ".":
+		return name, len(words) == 0 || words[0] == "-" || words[0] == "/dev/stdin" || words[0] == "/proc/self/fd/0"
+	case "ssh":
+		// options, then the host; any word after the host is the remote
+		// command, and stdin is its data.
+		host := false
+		for i := 0; i < len(words); i++ {
+			w := words[i]
+			if strings.HasPrefix(w, "-") {
+				if len(w) == 2 && strings.ContainsRune("bcDEeFIiJLlmOopQRSWw", rune(w[1])) {
+					i++
+				}
+				continue
+			}
+			if host {
+				return name, false
+			}
+			host = true
+		}
+		return name, true
+	case "su", "runuser":
+		for _, w := range words {
+			if w == "-c" || w == "--command" || strings.HasPrefix(w, "--command=") {
+				return name, false
+			}
+		}
+		return name, true
+	case "pwsh", "powershell":
+		for i := 0; i < len(words); i++ {
+			w := strings.ToLower(words[i])
+			switch w {
+			case "-command", "-c", "-file", "-f", "-encodedcommand", "-ec", "-e":
+				return name, i+1 >= len(words) || words[i+1] == "-"
+			}
+			if !strings.HasPrefix(w, "-") {
+				return name, w == "-"
+			}
+		}
+		return name, true
+	}
+	flags, known := readerFlags[name]
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case w == "-":
+			return name, true
+		case w == "--":
+			return name, i+1 >= len(words) || words[i+1] == "-"
+		case strings.HasPrefix(w, "--"):
+			if w == "--eval" || w == "--print" || w == "--command" || strings.HasPrefix(w, "--eval=") {
+				return name, false
+			}
+		case strings.HasPrefix(w, "-") || strings.HasPrefix(w, "+"):
+			if known && strings.ContainsAny(w[1:], flags.code) {
+				return name, false
+			}
+			if known && flags.stdin != "" && strings.ContainsAny(w[1:], flags.stdin) {
+				return name, true // -s: commands come from stdin, whatever follows
+			}
+			if known && flags.withArg != "" && strings.ContainsAny(w[len(w)-1:], flags.withArg) {
+				i++
+			}
+		default:
+			return name, false // a script file
+		}
+	}
+	return name, true
 }
 
 // afterPipe is where the command that a pipe at i feeds begins: past `|&`,
@@ -475,8 +616,8 @@ func afterPipe(s string, i int) int {
 	return i
 }
 
-// lineCommands are the names of the commands in the pipeline or list on the
-// line around i (split at unquoted |, ;, &).
+// lineCommands are the simple commands (their text) in the pipeline or list
+// on the line around i (split at unquoted |, ;, &).
 func lineCommands(s string, ctx []byte, i int) []string {
 	start := strings.LastIndexByte(s[:i], '\n') + 1
 	// A line continued from the one before (a trailing backslash) belongs to
@@ -494,8 +635,8 @@ func lineCommands(s string, ctx []byte, i int) []string {
 	from := start
 	for k := start; k <= end; k++ {
 		if k == end || (ctx[k] == 'n' && strings.IndexByte("|;&", s[k]) >= 0) {
-			if name := commandName(s[from:k]); name != "" {
-				out = append(out, name)
+			if strings.TrimSpace(s[from:k]) != "" {
+				out = append(out, s[from:k])
 			}
 			from = k + 1
 		}
@@ -503,10 +644,11 @@ func lineCommands(s string, ctx []byte, i int) []string {
 	return out
 }
 
-func readsScript(names []string) string {
-	for _, n := range names {
-		if scriptReaders[n] {
-			return n
+// readsScript names the first of the commands that runs its stdin as code.
+func readsScript(segs []string) string {
+	for _, seg := range segs {
+		if name, ok := stdinIsCode(seg); ok {
+			return name
 		}
 	}
 	return ""
@@ -642,7 +784,7 @@ func evaluatedAgain(s, hole string, ctx []byte) error {
 		switch {
 		case s[i] == '|' && !strings.HasPrefix(s[i:], "||") && (i == 0 || s[i-1] != '|'):
 			at := afterPipe(s, i)
-			if r := commandName(s[at:commandEnd(s, ctx, at)]); scriptReaders[r] {
+			if r, code := stdinIsCode(s[at:commandEnd(s, ctx, at)]); code {
 				start := i
 				for start > 0 && !(plain(start-1) && strings.IndexByte(";&\n", s[start-1]) >= 0) {
 					start--
@@ -746,40 +888,6 @@ func wordEnd(s string, ctx []byte, i int) int {
 		}
 	}
 	return len(s)
-}
-
-// flatten writes the run text with every value-printing action as hole, in
-// source order (both branches of a condition).
-func flatten(n parse.Node, root bool, b *strings.Builder, hole string) {
-	switch n := n.(type) {
-	case *parse.ListNode:
-		if n == nil {
-			return
-		}
-		for _, c := range n.Nodes {
-			flatten(c, root, b, hole)
-		}
-	case *parse.TextNode:
-		b.Write(n.Text)
-	case *parse.ActionNode:
-		if len(n.Pipe.Decl) > 0 {
-			return
-		}
-		if isPlatformFact(n.Pipe, root) {
-			b.WriteString("x")
-		} else {
-			b.WriteString(hole)
-		}
-	case *parse.IfNode:
-		flatten(n.List, root, b, hole)
-		flatten(n.ElseList, root, b, hole)
-	case *parse.RangeNode:
-		flatten(n.List, false, b, hole)
-		flatten(n.ElseList, root, b, hole)
-	case *parse.WithNode:
-		flatten(n.List, false, b, hole)
-		flatten(n.ElseList, root, b, hole)
-	}
 }
 
 // quotedHole scans shell text (POSIX quoting, which pwsh shares for single

@@ -72,7 +72,7 @@ steps:
     when: [{ path: input.mode, equals: review }]
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       python3 ./collect.py
     timeout_sec: 180
@@ -192,7 +192,7 @@ steps:
     when: [{ path: input.mode, equals: review }]
     run: |
       cat > analysis.json <<WFX_ANALYSIS_EOF
-      {{ json .Steps.analyze }}
+      {{ .Steps.analyze }}
       WFX_ANALYSIS_EOF
       python3 ./check.py
     timeout_sec: 30
@@ -226,7 +226,7 @@ steps:
     when: [{ path: input.mode, equals: apply }]
     run: |
       cat <<WFX_PROPOSAL_EOF
-      {{ json .Input.proposal }}
+      {{ .Input.proposal }}
       WFX_PROPOSAL_EOF
     timeout_sec: 10
     output_schema:
@@ -245,7 +245,7 @@ steps:
     requires_approval: true
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       python3 ./apply.py
     timeout_sec: 120

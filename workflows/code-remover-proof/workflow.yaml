@@ -298,7 +298,7 @@ steps:
           skip_to: report
       run: |
         cat > .wfx-code-remover/prove.json <<WFX_PROVE_EOF
-        {{ json .Steps.prove }}
+        {{ .Steps.prove }}
         WFX_PROVE_EOF
         MAX_REMOVALS="{{ .Input.max_removals }}" python3 .wfx-code-remover/plan.py
         c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac

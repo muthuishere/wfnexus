@@ -208,11 +208,11 @@ func substInputs(text string, vals map[string]any) string {
 }
 
 // substRunInputs is substInputs for `run:` text. A value that is itself a
-// template (`{{ or .Input.x "" }}`, as `with:` passes on) is placed as is and
-// rendered when the step runs; a literal value becomes a template constant, so
-// it too reaches the script through the environment (runtext.go) rather than
-// as part of its text.
-func substRunInputs(text string, vals map[string]any) string {
+// reference (`{{ .Input.x }}`, as `with:` passes on) is placed as is and
+// rendered when the step runs; a literal value becomes one of the step's
+// constants, referenced as {{ .Const.<name> }}, so it too reaches the script
+// through the environment (runtext.go) rather than as part of its text.
+func substRunInputs(text string, vals map[string]any, consts map[string]string) string {
 	if !strings.Contains(text, ".Inputs.") {
 		return text
 	}
@@ -226,7 +226,9 @@ func substRunInputs(text string, vals map[string]any) string {
 		if strings.Contains(t, "{{") {
 			return t
 		}
-		return "{{ " + strconv.Quote(t) + " }}"
+		key := strings.ReplaceAll(name, "-", "_")
+		consts[key] = t
+		return "{{ .Const." + key + " }}"
 	})
 }
 
@@ -239,7 +241,16 @@ func applyInputs(s *Step, vals map[string]any) {
 	s.Description = substInputs(s.Description, vals)
 	s.Prompt = substInputs(s.Prompt, vals)
 	s.System = substInputs(s.System, vals)
-	s.Run = substRunInputs(s.Run, vals)
+	consts := map[string]string{}
+	s.Run = substRunInputs(s.Run, vals, consts)
+	if len(consts) > 0 {
+		if s.RunConst == nil {
+			s.RunConst = map[string]string{}
+		}
+		for k, v := range consts {
+			s.RunConst[k] = v
+		}
+	}
 	s.RunsOn = substInputs(s.RunsOn, vals)
 	if len(s.Env) > 0 {
 		env := make(map[string]string, len(s.Env))

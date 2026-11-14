@@ -32,7 +32,7 @@ steps:
   - id: review
     foreach: input.files
     parallel: 2
-    run: echo "{{ .Item }}" {{ .Index }}
+    run: echo "{{ .Item }}" "{{ .Index }}"
 `)
 	if err != nil {
 		t.Fatal(err)

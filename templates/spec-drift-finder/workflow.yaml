@@ -208,7 +208,7 @@ steps:
     timeout_sec: 1800
     run: |
       cat > .wfx-spec-drift/gaps.json <<WFX_GAPS_EOF
-      {{ json .Steps.map_gaps }}
+      {{ .Steps.map_gaps }}
       WFX_GAPS_EOF
       python3 .wfx-spec-drift/coverage.py --final >/dev/null; [ $? -eq 70 ] && exit 70
       python3 .wfx-spec-drift/judge.py
@@ -266,13 +266,13 @@ steps:
     timeout_sec: 300
     run: |
       cat > .wfx-spec-drift/recommend.json <<WFX_REC_EOF
-      {{ json .Steps.recommend }}
+      {{ .Steps.recommend }}
       WFX_REC_EOF
       cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      {{ .Input.answers }}
       WFX_ANS_EOF
       cat > .wfx-spec-drift/decisions.txt <<WFX_DEC_EOF
-      {{ if .Input.decisions }}{{ .Input.decisions }}{{ end }}
+      {{ .Input.decisions }}
       WFX_DEC_EOF
       python3 .wfx-spec-drift/gate.py
       c=$?; case $c in 0|20|78) exit $c;; *) exit 70;; esac
@@ -346,7 +346,7 @@ steps:
     timeout_sec: 3600
     run: |
       cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      {{ .Input.answers }}
       WFX_ANS_EOF
       python3 .wfx-spec-drift/verify.py
       c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
@@ -413,7 +413,7 @@ steps:
     timeout_sec: 900
     run: |
       cat > .wfx-spec-drift/answers.txt <<WFX_ANS_EOF
-      {{ if .Input.answers }}{{ .Input.answers }}{{ end }}
+      {{ .Input.answers }}
       WFX_ANS_EOF
       python3 .wfx-spec-drift/claims.py
       c=$?; case $c in 0|20) exit $c;; *) exit 70;; esac
