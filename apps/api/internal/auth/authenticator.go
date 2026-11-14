@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
@@ -28,8 +30,23 @@ type Local struct{ Store *store.Store }
 
 // ApprovingUser gives a first local user the superadmin role: on loopback the
 // machine is the trust boundary, and the person at it owns the install.
+//
+// It is for loopback-only accounts: the one it creates, signed into again
+// later. An account with a password, or one an external provider signs in
+// (`name@provider`), has a credential of its own; a loopback approval does not
+// stand in for it, or anyone at the machine could take that person's session
+// (and with it their say as an approver). They sign in with their credential.
 func (l Local) ApprovingUser(ctx context.Context, name string) (*store.User, error) {
+	if strings.Contains(name, "@") {
+		return nil, fmt.Errorf("%s signs in through its login provider, not with a loopback approval", name)
+	}
 	if u, err := l.Store.UserByName(ctx, name); err == nil {
+		if u.Disabled {
+			return nil, fmt.Errorf("user %s is disabled", name)
+		}
+		if u.HasPassword {
+			return nil, fmt.Errorf("user %s has a password: sign in with it (wfx login --user %s), not with a loopback approval", name, name)
+		}
 		return u, nil
 	}
 	u := &store.User{Name: name, DisplayName: name, Role: "superadmin"}
