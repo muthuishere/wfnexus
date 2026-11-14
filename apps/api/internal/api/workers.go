@@ -101,7 +101,7 @@ func (s *Server) finishJob(w http.ResponseWriter, r *http.Request) {
 	// The report is scrubbed of the run's secret values before it is stored:
 	// the job row is kept, and the step reads its output from it.
 	if job, err := s.store.GetJob(r.Context(), id); err == nil {
-		res = s.eng.ScrubJobResult(r.Context(), job.RunID, res)
+		res = s.eng.ScrubJobResult(r.Context(), job.RunID, job.Payload, res)
 	}
 	raw, _ := json.Marshal(res)
 	if err := s.store.FinishJob(r.Context(), id, wk.ID, raw); err != nil {

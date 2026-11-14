@@ -290,6 +290,9 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 	}
 	res.Output = scrubOutput(res.Output, e.redactions.get(runID))
 	if res.Pending != nil {
+		// The question an agent asks can quote what it saw; it is scrubbed
+		// before it is stored, shown or sent to a notifier.
+		res.Pending = scrubPending(res.Pending, e.redactions.get(runID))
 		// Request.URL is the field an answer-here link belongs in, and it was
 		// stored empty until now. It is a POINTER at our own UI — never a link
 		// that resolves the pause by itself (ADR 0021).
@@ -454,6 +457,8 @@ func exitFailed(step *workflow.Step, out map[string]any) (int, bool) {
 }
 
 // stderrTail is the last line of a command's stderr, for the failure message.
+// out is a step output that executeNode has already scrubbed, so the cut
+// below never shortens a raw secret.
 func stderrTail(out map[string]any) string {
 	s, _ := out["stderr"].(string)
 	s = strings.TrimSpace(s)

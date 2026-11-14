@@ -268,7 +268,10 @@ func (e *Engine) settleOutcome(ctx context.Context, runID uuid.UUID, status, err
 		log.Printf("engine: outcome: %v", err)
 		return
 	}
-	if err := e.store.SetRunOutcome(ctx, runID, redactText(DeriveOutcome(status, errMsg, steps), e.redactions.get(runID))); err != nil {
+	// The error is scrubbed before the outcome line is cut from it, and the
+	// line again after (the steps it reads were stored scrubbed already).
+	secrets := e.redactions.get(runID)
+	if err := e.store.SetRunOutcome(ctx, runID, redactTextCut(DeriveOutcome(status, redactText(errMsg, secrets), steps), secrets)); err != nil {
 		log.Printf("engine: outcome: %v", err)
 	}
 }

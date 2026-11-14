@@ -114,9 +114,13 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 			return nil, fmt.Errorf("could not run %q: %w", cmd, runErr)
 		}
 	}
+	// Scrubbed as text BEFORE it is shortened: a cut can fall inside a secret,
+	// and a prefix no longer matches any whole form.
+	secrets := e.redactions.get(runID)
 	out := map[string]any{
 		"ok": exitCode == 0, "exitCode": exitCode,
-		"stdout": trim(stdout.String(), maxEventOutput), "stderr": trim(stderr.String(), maxEventOutput),
+		"stdout": trim(redactText(stdout.String(), secrets), maxEventOutput),
+		"stderr": trim(redactText(stderr.String(), secrets), maxEventOutput),
 	}
 	if oc := e.collectStory(ctx, runID, step.ID, story, out); oc != "" && e.store != nil {
 		// Live: the headline moves the moment a step says what it found.

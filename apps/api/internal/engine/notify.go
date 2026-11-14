@@ -57,6 +57,11 @@ func (e *Engine) pauseURL(runID uuid.UUID) string {
 // A pause that cannot be delivered is STILL a pause: the run has already parked
 // by the time this runs, and a failure here never changes that.
 func (e *Engine) notifyPause(ctx context.Context, runID uuid.UUID, stepID, kind, prompt string, req *tn.Request) {
+	// What leaves the platform (webhooks, a chat channel) is scrubbed here too,
+	// whichever caller built the prompt.
+	secrets := e.redactions.get(runID)
+	prompt = redactTextCut(prompt, secrets)
+	req = scrubPending(req, secrets)
 	ns := e.notifiers()
 	// No early return when there are no notifiers: the default CHANNEL is
 	// the other place a pause goes (ADR 0023), and returning here meant a

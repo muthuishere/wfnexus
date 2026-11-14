@@ -29,21 +29,45 @@ import (
 const scrubCanary = "canary/7f3e+9b1c=5d2a&91"
 
 // echoForms prints the secret raw, base64, hex and URL-encoded, to stdout and
-// to stderr: what a careless step might do.
-const echoForms = `python3 -c 'import os,sys,base64,urllib.parse
+// to stderr: what a careless step might do. It also prints the shapes a real
+// credential leaves: a JSON document holding a secret with quote, backslash,
+// ampersand, angle brackets and a newline (a service-account file), a PEM key
+// with LF and with CRLF line endings, and Basic-auth headers whose user names
+// put the secret at each of the three base64 byte offsets.
+const echoForms = `python3 -c 'import os,sys,json,base64,urllib.parse
 v=os.environ["CANARY_KEY"]
 forms=[v, base64.b64encode(v.encode()).decode(), v.encode().hex(), urllib.parse.quote(v, safe="")]
+for u in ["u", "us", "use"]:
+    forms.append("Authorization: Basic " + base64.b64encode((u + ":" + v).encode()).decode())
+forms.append(json.dumps({"type": "service_account", "private_key": os.environ["JSON_KEY"]}))
+pem=os.environ["PEM_KEY"]
+forms.append(pem)
+forms.append(pem.replace("\n", "\r\n"))
 for f in forms:
     print("out", f)
     print("err", f, file=sys.stderr)'`
 
+// scrubJSONKey has every character JSON escapes; scrubPEM spans lines. Their
+// alphanumeric runs (scrubMarkers) cannot be changed by any escaping, so a
+// marker found anywhere means some spelling of the value got through.
+const (
+	scrubJSONKey = "Jz9Qk2\"\\&<x>\nWm4Ry8"
+	scrubPEM     = "-----BEGIN TEST KEY-----\nQm9vZ2xlTW9vZ2xlMTIz\nTWFya2VyNDU2Nzg5MDEy\n-----END TEST KEY-----"
+)
+
+var scrubMarkers = []string{"Jz9Qk2", "Wm4Ry8", "Qm9vZ2xlTW9vZ2xlMTIz", "TWFya2VyNDU2Nzg5MDEy"}
+
 func scrubForms() map[string]string {
-	return map[string]string{
+	f := map[string]string{
 		"raw":    scrubCanary,
 		"base64": base64.StdEncoding.EncodeToString([]byte(scrubCanary)),
 		"hex":    hex.EncodeToString([]byte(scrubCanary)),
 		"url":    url.QueryEscape(scrubCanary),
 	}
+	for _, u := range []string{"u", "us", "use"} {
+		f["basic auth as "+u] = base64.StdEncoding.EncodeToString([]byte(u + ":" + scrubCanary))
+	}
+	return f
 }
 
 func TestAStepThatPrintsASecretStoresNoFormOfIt(t *testing.T) {
@@ -77,8 +101,10 @@ func TestAStepThatPrintsASecretStoresNoFormOfIt(t *testing.T) {
 	}
 	f := exposeFixture{h: New(eng, st, nil, cfg.Addr, "", nil), st: st, eng: eng}
 	ctx := context.Background()
-	if err := eng.SetEnvVar(ctx, store.ScopeSystem, "", "CANARY_KEY", scrubCanary, true); err != nil {
-		t.Fatal(err)
+	for k, v := range map[string]string{"CANARY_KEY": scrubCanary, "JSON_KEY": scrubJSONKey, "PEM_KEY": scrubPEM} {
+		if err := eng.SetEnvVar(ctx, store.ScopeSystem, "", k, v, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var logs bytes.Buffer
@@ -180,7 +206,17 @@ func TestAStepThatPrintsASecretStoresNoFormOfIt(t *testing.T) {
 			if !strings.Contains(places["step rows"], "[redacted:CANARY_KEY]") {
 				t.Errorf("the step did not print the secret, so nothing was tested: %s", places["step rows"])
 			}
+			for _, name := range []string{"JSON_KEY", "PEM_KEY"} {
+				if !strings.Contains(places["step rows"], "[redacted:"+name+"]") {
+					t.Errorf("%s was not redacted in the step rows", name)
+				}
+			}
 			for where, text := range places {
+				for _, m := range scrubMarkers {
+					if strings.Contains(text, m) {
+						t.Errorf("%s holds part of a multi-line or JSON-escaped secret (%s)", where, m)
+					}
+				}
 				for form, v := range scrubForms() {
 					esc, _ := json.Marshal(v) // as it is spelled inside JSON (& → \u0026)
 					if strings.Contains(text, v) || strings.Contains(text, string(esc[1:len(esc)-1])) {
