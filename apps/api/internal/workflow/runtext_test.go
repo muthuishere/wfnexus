@@ -13,7 +13,13 @@ import (
 // place: what a test about substitution compares.
 func filled(t *testing.T, run string, input map[string]any) string {
 	t.Helper()
-	rt, err := RenderRun(run, TemplateData{Input: input})
+	return filledStep(t, Step{Run: run}, input)
+}
+
+// filledStep is filled for a loaded step, with its own constants.
+func filledStep(t *testing.T, s Step, input map[string]any) string {
+	t.Helper()
+	rt, err := RenderRun(s.Run, TemplateData{Input: input, Const: s.RunConst})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +29,7 @@ func filled(t *testing.T, run string, input map[string]any) string {
 const awkward = "a \"b\" 'c'\n$(touch x) `id` ${HOME} \\ \nWFX_V\nend"
 
 func TestRunValuesTravelAsDataNotText(t *testing.T) {
-	rt, err := RenderRun(`echo "{{ .Input.who }}" {{ .Steps.a.out }} {{ json .Input.list }}`,
+	rt, err := RenderRun(`echo "{{ .Input.who }}" {{ .Steps.a.out }} {{ .Input.list }}`,
 		TemplateData{Input: map[string]any{"who": awkward, "list": []any{"x"}}, Steps: map[string]any{"a": map[string]any{"out": "o"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -58,11 +64,11 @@ func TestEveryRuntimeSourceIsData(t *testing.T) {
 		Step: map[string]string{"v": "ST"}, Workflow: map[string]string{"v": "W"},
 		Project: map[string]string{"v": "P"}, Global: map[string]string{"v": "G"}, Memory: "M",
 	}
-	rt, err := RenderRun(`{{ .Input.v }}{{ .Steps.s.v }}{{ .Output.v }}{{ .Decide.v }}{{ .Item }}{{ .Step.v }}{{ .Workflow.v }}{{ .Project.v }}{{ .Global.v }}{{ .Memory }}{{ range $k, $x := .Input }}{{ $x }}{{ end }}{{ with .Input.v }}{{ . }}{{ end }}`, data)
+	rt, err := RenderRun(`{{ .Input.v }}{{ .Steps.s.v }}{{ .Output.v }}{{ .Decide.v }}{{ .Item }}{{ .Step.v }}{{ .Workflow.v }}{{ .Project.v }}{{ .Global.v }}{{ .Memory }}`, data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"I", "S", "O", "D", "IT", "ST", "W", "P", "G", "M", "I", "I"}; strings.Join(rt.Data, ",") != strings.Join(want, ",") {
+	if want := []string{"I", "S", "O", "D", "IT", "ST", "W", "P", "G", "M"}; strings.Join(rt.Data, ",") != strings.Join(want, ",") {
 		t.Fatalf("data = %q", rt.Data)
 	}
 	if strings.Trim(rt.Display(), "${}WFX_DATA_0123456789") != "" {
@@ -70,16 +76,15 @@ func TestEveryRuntimeSourceIsData(t *testing.T) {
 	}
 }
 
-// Conditions read the values themselves, so branching is unchanged. Only the
-// run id and the loop index print as text; the working folder and base ref
-// are data like every other value.
-func TestConditionsAndPlatformFactsAreUnchanged(t *testing.T) {
-	rt, err := RenderRun(`{{ if eq .Input.mode "fast" }}--fast{{ end }} cd "{{ .WorkDir }}" && git log "{{ .BaseRef }}" && echo {{ .RunID }} {{ .Index }}{{ $x := .Input.mode }}`,
-		TemplateData{Input: map[string]any{"mode": "fast"}, WorkDir: "/w", BaseRef: "main", RunID: "r1"})
+// The run's own facts are data like every other value, and a missing value
+// is empty.
+func TestTheRunsOwnFactsAreDataToo(t *testing.T) {
+	rt, err := RenderRun(`cd "{{ .WorkDir }}" && git log "{{ .BaseRef }}" && echo "{{ .RunID }}" "{{ .Index }}"`,
+		TemplateData{WorkDir: "/w", BaseRef: "main", RunID: "r1", Index: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(rt.Data, ",") != "/w,main" || rt.Display() != `--fast cd "${WFX_DATA_1}" && git log "${WFX_DATA_2}" && echo r1 0` {
+	if strings.Join(rt.Data, ",") != "/w,main,r1,2" || rt.Display() != `cd "${WFX_DATA_1}" && git log "${WFX_DATA_2}" && echo "${WFX_DATA_3}" "${WFX_DATA_4}"` {
 		t.Fatalf("script %q data %q", rt.Display(), rt.Data)
 	}
 	if rt, _ := RenderRun(`x{{ .Input.missing }}y`, TemplateData{Input: map[string]any{}}); filled(t, `x{{ .Input.missing }}y`, nil) != "xy" || len(rt.Data) != 1 {
@@ -130,31 +135,6 @@ func TestANulByteGoesByFile(t *testing.T) {
 	}
 }
 
-// A field named like a platform fact under a dot that range or with moved
-// onto a value is that value's: it travels as data. $.RunID stays the run's.
-func TestPlatformFactNamesUnderAMovedDotAreData(t *testing.T) {
-	evil := "x\"; touch /tmp/p; echo \""
-	data := TemplateData{RunID: "r1", Input: map[string]any{
-		"o":    map[string]any{"RunID": evil, "WorkDir": evil},
-		"objs": []any{map[string]any{"Index": evil}},
-	}}
-	for _, c := range []struct{ run, script string }{
-		{`{{ with .Input.o }}echo "{{ .RunID }}"{{ end }}`, `echo "${WFX_DATA_1}"`},
-		{`{{ range .Input.objs }}echo "{{ .Index }}"; {{ end }}`, `echo "${WFX_DATA_1}"; `},
-		{`{{ with .Input.o }}cd "{{ .WorkDir }}"{{ end }}`, `cd "${WFX_DATA_1}"`},
-		{`{{ with .Input.o }}echo "{{ $.RunID }}"{{ end }}`, `echo "r1"`},
-		{`{{ with .Input.none }}x{{ else }}echo "{{ .RunID }}"{{ end }}`, `echo "r1"`},
-	} {
-		rt, err := RenderRun(c.run, data)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(rt.Script, "touch") || rt.Display() != c.script {
-			t.Errorf("%s: script %q", c.run, rt.Display())
-		}
-	}
-}
-
 // RenderRun refuses what checkRunText refuses: named templates.
 func TestRenderRunRefusesNamedTemplates(t *testing.T) {
 	if _, err := RenderRun(`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, TemplateData{}); err == nil {
@@ -178,8 +158,8 @@ func TestShellsReferToValuesTheirOwnWay(t *testing.T) {
 // Variable names are positional (WFX_DATA_<n>), so no input name has to map
 // onto one: names that would clash as variables never meet.
 func TestVariableNamesDoNotDependOnInputNames(t *testing.T) {
-	rt, _ := RenderRun(`{{ index .Input "pr-number" }} {{ .Input.PR_NUMBER }} {{ index .Input "pr number" }}`,
-		TemplateData{Input: map[string]any{"pr-number": "1", "PR_NUMBER": "2", "pr number": "3"}})
+	rt, _ := RenderRun(`"{{ .Input.pr_number }}" "{{ .Input.PR_NUMBER }}" "{{ .Input.PrNumber }}"`,
+		TemplateData{Input: map[string]any{"pr_number": "1", "PR_NUMBER": "2", "PrNumber": "3"}})
 	_, env, _ := rt.For("sh", "")
 	if strings.Join(env, ",") != "WFX_DATA_1=1,WFX_DATA_2=2,WFX_DATA_3=3" {
 		t.Fatalf("env = %q", env)
@@ -198,7 +178,8 @@ func TestRunTextCheck(t *testing.T) {
 		{"cat > f <<EOF\n{{ .Input.x }}\nEOF", "", ""},
 		{`echo '{{ .WorkDir }}'`, "", "single quotes"},
 		{`cd "{{ .WorkDir }}" && git log "{{ .BaseRef }}..HEAD"`, "", ""},
-		{`echo {{ .RunID }} {{ .Index }}`, "", ""},
+		{`echo "{{ .RunID }}" "{{ .Index }}"`, "", ""},
+		{`echo {{ .RunID }}`, "", "bare word"},
 		{`echo '{{ .Input.x }}'`, "", "single quotes"},
 		{`echo "$(echo '{{ .Input.x }}')"`, "", "single quotes"},
 		{"cat > f <<'EOF'\n{{ .Input.x }}\nEOF", "", "quoted heredoc"},
@@ -206,12 +187,12 @@ func TestRunTextCheck(t *testing.T) {
 		{"cat > f <<'EOF'\nstatic\nEOF\necho \"{{ .Input.x }}\"", "", ""},
 		{"# it's a comment\necho \"{{ .Input.x }}\"", "", ""},
 		{`echo 'a' "{{ .Input.x }}" 'b'`, "", ""},
-		{`{{ if .Input.x }}'flag'{{ end }}`, "", ""},
+		{`{{ if .Input.x }}'flag'{{ end }}`, "", "is not allowed"},
 		{`echo {{ .Input.x }}`, "cmd", "cmd step"},
 		{`echo '{{ .Input.x }}'`, "pwsh", "single quotes"},
 		// named templates are separate trees: refused
-		{`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, "", "define, template or block"},
-		{`{{ block "b" . }}echo "{{ .Input.x }}"{{ end }}`, "", "define, template or block"},
+		{`{{ define "t" }}echo "{{ .Input.x }}"{{ end }}{{ template "t" . }}`, "", "is not allowed"},
+		{`{{ block "b" . }}echo "{{ .Input.x }}"{{ end }}`, "", "is not allowed"},
 		// places the shell evaluates text again
 		{`echo $(( {{ .Input.x }} + 1 ))`, "", "arithmetic"},
 		{`echo "$(( {{ .Input.x }} + 1 ))"`, "", "arithmetic"},
@@ -229,11 +210,11 @@ func TestRunTextCheck(t *testing.T) {
 		{`eval "echo {{ .Input.x }}"`, "", "eval"},
 		{`ssh host "ls {{ .Input.x }}"`, "", "ssh"},
 		// a platform fact's name under a dot moved onto a value is that value's
-		{`{{ with .Item }}echo {{ .RunID }}{{ end }}`, "", "bare word"},
-		{`{{ range .Input.objs }}echo {{ .Index }}; {{ end }}`, "", "bare word"},
-		{`{{ with .Input.o }}echo "{{ .RunID }}"{{ end }}`, "", ""},
-		{`{{ with .Input.o }}echo {{ $.RunID }}{{ end }}`, "", ""},
-		{`{{ with .Input.o }}x{{ else }}echo {{ .RunID }}{{ end }}`, "", ""},
+		{`{{ with .Item }}echo {{ .RunID }}{{ end }}`, "", "is not allowed"},
+		{`{{ range .Input.objs }}echo {{ .Index }}; {{ end }}`, "", "is not allowed"},
+		{`{{ with .Input.o }}echo "{{ .RunID }}"{{ end }}`, "", "is not allowed"},
+		{`{{ with .Input.o }}echo {{ $.RunID }}{{ end }}`, "", "is not allowed"},
+		{`{{ with .Input.o }}x{{ else }}echo {{ .RunID }}{{ end }}`, "", "is not allowed"},
 		// trap actions, integer variables, quoted or escaped command words
 		{`trap "echo {{ .Input.x }}" EXIT`, "", "trap"},
 		{`trap 'echo "$v"' EXIT; v="{{ .Input.x }}"`, "", ""},
@@ -278,15 +259,15 @@ func TestRunTextCheck(t *testing.T) {
 		{`cd {{ .WorkDir }} && echo "{{ .Input.x }}"`, "", "bare word"},
 		{`git log {{ .BaseRef }}..HEAD`, "", "bare word"},
 		// $ is never declared or assigned, so $.RunID is always the run's
-		{`{{ $ = .Input.o }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
-		{`{{ $ := .Input.o }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
-		{`{{ range $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
-		{`{{ range $i, $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
-		{`{{ with $ := .Input.o }}echo "{{ $.RunID }}"{{ end }}`, "", "may not declare or assign $"},
-		{`{{ if $ = .Input.o }}x{{ end }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
-		{`{{ range .Input.objs }}{{ $ = . }}{{ end }}echo "{{ $.RunID }}"`, "", "may not declare or assign $"},
-		{`{{ if .Input.x }}{{ with .Input.o }}{{ $ = . }}{{ end }}{{ end }}echo {{ $.RunID }}`, "", "may not declare or assign $"},
-		{`{{ $o := .Input.o }}{{ range $i, $v := .Input.objs }}echo "{{ $v }}" {{ $.RunID }}{{ end }}`, "", ""},
+		{`{{ $ = .Input.o }}echo "{{ $.RunID }}"`, "", "is not allowed"},
+		{`{{ $ := .Input.o }}echo "{{ $.RunID }}"`, "", "is not allowed"},
+		{`{{ range $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "is not allowed"},
+		{`{{ range $i, $ := .Input.objs }}echo "{{ $.RunID }}"{{ end }}`, "", "is not allowed"},
+		{`{{ with $ := .Input.o }}echo "{{ $.RunID }}"{{ end }}`, "", "is not allowed"},
+		{`{{ if $ = .Input.o }}x{{ end }}echo "{{ $.RunID }}"`, "", "is not allowed"},
+		{`{{ range .Input.objs }}{{ $ = . }}{{ end }}echo "{{ $.RunID }}"`, "", "is not allowed"},
+		{`{{ if .Input.x }}{{ with .Input.o }}{{ $ = . }}{{ end }}{{ end }}echo {{ $.RunID }}`, "", "is not allowed"},
+		{`{{ $o := .Input.o }}{{ range $i, $v := .Input.objs }}echo "{{ $v }}" {{ $.RunID }}{{ end }}`, "", "is not allowed"},
 		// more ways to hand a value to a shell as its script
 		{`bash -o pipefail -c "echo {{ .Input.x }}"`, "", "bash -c"},
 		{`bash --norc -o errexit -c "echo {{ .Input.x }}"`, "", "bash -c"},
@@ -375,6 +356,7 @@ func TestShippedRunTextPassesTheCheck(t *testing.T) {
 		}
 		return nil
 	})
+	t.Logf("%d run blocks, all load", n)
 	if n == 0 {
 		t.Fatal("found no run steps to check")
 	}

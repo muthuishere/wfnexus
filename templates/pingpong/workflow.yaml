@@ -63,7 +63,7 @@ steps:
     continue-on-error: true
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       cat > memory.md <<WFX_MEMORY_EOF
       {{ .Workflow.pongs }}
@@ -108,7 +108,7 @@ steps:
         equals: 0
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       cat > sent.json <<WFX_SENT_EOF
       {{ .Steps.send.output.stdout }}

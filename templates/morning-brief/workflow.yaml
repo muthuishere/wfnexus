@@ -108,7 +108,7 @@ steps:
     needs: [brief]
     run: |
       cat > brief.json <<WFX_BRIEF_EOF
-      {{ json .Steps.brief }}
+      {{ .Steps.brief }}
       WFX_BRIEF_EOF
       python3 ./check.py
     timeout_sec: 30

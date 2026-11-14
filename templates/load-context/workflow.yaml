@@ -51,7 +51,7 @@ steps:
     description: context.json for the caller's agent; the chat text stays data in a file, never part of a command.
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       WFX_POLICY="{{ .Inputs.default_policy }}" WFX_OUT="{{ .Inputs.out }}" python3 - <<PY
       import json, os

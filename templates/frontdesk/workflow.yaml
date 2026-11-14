@@ -87,7 +87,7 @@ steps:
     needs: [ctx.gather]
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       python3 ./engine.py
     timeout_sec: 60
@@ -157,7 +157,7 @@ steps:
     continue-on-error: true
     run: |
       cat > answer.json <<WFX_ANSWER_EOF
-      {{ json .Steps.answer }}
+      {{ .Steps.answer }}
       WFX_ANSWER_EOF
       python3 ./decide.py
     timeout_sec: 30
@@ -266,7 +266,7 @@ steps:
     continue-on-error: true
     run: |
       cat > diagnosis.json <<WFX_DIAG_EOF
-      {{ json .Steps.diagnose }}
+      {{ .Steps.diagnose }}
       WFX_DIAG_EOF
       python3 ./explain.py
     timeout_sec: 30

@@ -39,7 +39,7 @@ uses:
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := filled(t, defs["wf"].Steps[0].Run, map[string]any{"raw": "R"})
+	got := filledStep(t, defs["wf"].Steps[0], map[string]any{"raw": "R"})
 	want := `echo "ops x1 plain ["a","b"] R"`
 	if got != want {
 		t.Fatalf("run = %s\nwant  %s", got, want)
@@ -61,7 +61,7 @@ jobs:
 		t.Fatal(err)
 	}
 	s := defs["wf"].Steps[0]
-	if !strings.Contains(filled(t, s.Run, nil), "dev x3 loud") || s.Model != "tiny" {
+	if !strings.Contains(filledStep(t, s, nil), "dev x3 loud") || s.Model != "tiny" {
 		t.Fatalf("run=%q model=%q", s.Run, s.Model)
 	}
 }
@@ -131,10 +131,10 @@ uses:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := filled(t, defs["caller"].Steps[0].Run, nil); got != `echo > "mine.json"` {
+	if got := filledStep(t, defs["caller"].Steps[0], nil); got != `echo > "mine.json"` {
 		t.Fatalf("caller run = %q", got)
 	}
-	if got := filled(t, defs["callee"].Steps[0].Run, nil); got != `echo > "ctx.json"` {
+	if got := filledStep(t, defs["callee"].Steps[0], nil); got != `echo > "ctx.json"` {
 		t.Fatalf("stand-alone run = %q", got)
 	}
 }

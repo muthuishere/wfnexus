@@ -415,9 +415,10 @@ func TestWhatsAppTemplatesDryRun(t *testing.T) {
 	}
 	// load-context's typed inputs (#82) resolve to their defaults in both forms.
 	for _, n := range []string{"frontdesk", "load-context"} {
-		run := defs[n].Steps[0].Run
-		if strings.Contains(run, ".Inputs.") || !strings.Contains(run, `WFX_OUT="{{ "context.json" }}"`) || !strings.Contains(run, `WFX_POLICY="{{ "draft" }}"`) {
-			t.Fatalf("%s: load-context inputs not substituted:\n%s", n, run)
+		s := defs[n].Steps[0]
+		if strings.Contains(s.Run, ".Inputs.") || !strings.Contains(s.Run, `WFX_OUT="{{ .Const.out }}"`) || !strings.Contains(s.Run, `WFX_POLICY="{{ .Const.default_policy }}"`) ||
+			s.RunConst["out"] != "context.json" || s.RunConst["default_policy"] != "draft" {
+			t.Fatalf("%s: load-context inputs not substituted:\n%s %v", n, s.Run, s.RunConst)
 		}
 	}
 	h := waHarness(t, defs, "frontdesk")

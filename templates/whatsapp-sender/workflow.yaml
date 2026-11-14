@@ -65,7 +65,7 @@ steps:
     continue-on-error: true
     run: |
       cat > input.json <<WFX_INPUT_EOF
-      {{ json .Input }}
+      {{ .Input }}
       WFX_INPUT_EOF
       python3 ./sender.py plan
     timeout_sec: 30
@@ -148,7 +148,7 @@ steps:
     needs: [plan, send]
     run: |
       cat > sent.json <<WFX_SENT_EOF
-      {{ json .Steps.send }}
+      {{ .Steps.send }}
       WFX_SENT_EOF
       python3 ./sender.py deliver
     timeout_sec: 30
