@@ -278,7 +278,27 @@ func checkRunText(text, shellName string) error {
 	}
 	ctx := make([]byte, len(skel))
 	scanShell(skel, hole, ctx)
-	return evaluatedAgain(skel, hole, ctx)
+	if err := evaluatedAgain(skel, hole, ctx); err != nil {
+		return err
+	}
+	return bareValue(skel, hole, ctx)
+}
+
+// bareValue refuses a value used as a bare word: outside double quotes (or an
+// unquoted heredoc) the shell splits it on spaces, expands globs in it, and a
+// value starting with '-' becomes an option of the command.
+func bareValue(s, hole string, ctx []byte) error {
+	for i := strings.Index(s, hole); i >= 0; {
+		if ctx[i] == 'n' || ctx[i] == 'b' {
+			return fmt.Errorf("a {{ … }} value is a bare word; wrap it in double quotes (\"{{ … }}\"): unquoted, the shell splits it on spaces, expands globs in it, and a value starting with '-' becomes an option")
+		}
+		j := strings.Index(s[i+len(hole):], hole)
+		if j < 0 {
+			break
+		}
+		i += len(hole) + j
+	}
+	return nil
 }
 
 var (

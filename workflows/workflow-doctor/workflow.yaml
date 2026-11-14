@@ -374,7 +374,7 @@ steps:
       cat > diagnosis.json <<WFX_JSON
       {{ json .Steps.diagnose }}
       WFX_JSON
-      DRY_RUN={{ .Input.dry_run }} COLLECT_EXIT={{ .Steps.collect.exitCode }} python3 ./report.py
+      DRY_RUN="{{ .Input.dry_run }}" COLLECT_EXIT="{{ .Steps.collect.exitCode }}" python3 ./report.py
     timeout_sec: 120
     gates:
       - field: ok

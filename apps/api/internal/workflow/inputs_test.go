@@ -118,7 +118,7 @@ inputs:
   out: { type: string, default: ctx.json }
 steps:
   - id: gather
-    run: echo > {{ .Inputs.out }}
+    run: echo > "{{ .Inputs.out }}"
 `)
 	write(t, filepath.Join(dir, "caller.yaml"), `
 name: caller
@@ -131,10 +131,10 @@ uses:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := filled(t, defs["caller"].Steps[0].Run, nil); got != "echo > mine.json" {
+	if got := filled(t, defs["caller"].Steps[0].Run, nil); got != `echo > "mine.json"` {
 		t.Fatalf("caller run = %q", got)
 	}
-	if got := filled(t, defs["callee"].Steps[0].Run, nil); got != "echo > ctx.json" {
+	if got := filled(t, defs["callee"].Steps[0].Run, nil); got != `echo > "ctx.json"` {
 		t.Fatalf("stand-alone run = %q", got)
 	}
 }

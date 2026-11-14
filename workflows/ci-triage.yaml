@@ -20,7 +20,10 @@ jobs:
     timeout_sec: 900
     steps:
       - id: test
-        run: "{{ .Input.test_command }}"
+        # The command is an input: written to a file as data, then run as a
+        # script on purpose.
+        run: |
+          f=$(mktemp) && printf '%s\n' "{{ .Input.test_command }}" > "$f" && sh "$f"
         # A red suite is the ANSWER the judge routes on, not a failed run.
         continue-on-error: true
 

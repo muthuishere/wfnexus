@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // filled is a run text as the script receives it once its values are in
@@ -163,7 +165,10 @@ func TestRunTextCheck(t *testing.T) {
 		run, shell, want string
 	}{
 		{`echo "{{ .Input.x }}"`, "", ""},
-		{`echo {{ .Input.x }}`, "", ""},
+		{`echo {{ .Input.x }}`, "", "bare word"},
+		{`gh pr view {{ .Input.n }}`, "", "bare word"},
+		{"echo `{{ .Input.x }}`", "", "bare word"},
+		{`x={{ .Input.x }}; echo "$x"`, "", "bare word"},
 		{"cat > f <<EOF\n{{ .Input.x }}\nEOF", "", ""},
 		{`echo '{{ .WorkDir }}'`, "", ""},
 		{`echo '{{ .Input.x }}'`, "", "single quotes"},
@@ -202,6 +207,7 @@ func TestRunTextCheck(t *testing.T) {
 		{`echo "sh -c {{ .Input.x }}"`, "", ""},
 		{`n=$(( 1 + 2 )); echo "{{ .Input.x }}"`, "", ""},
 		{`grep "a[{{ .Input.x }}]" f`, "", ""},
+		{`cd {{ .WorkDir }} && echo "{{ .Input.x }}"`, "", ""},
 	} {
 		err := checkRunText(c.run, c.shell)
 		switch {
@@ -224,65 +230,62 @@ func TestAQuotedValueRefusesTheWorkflowAtLoad(t *testing.T) {
 	}
 }
 
-// Every workflow, template and module shipped in this repository passes the
-// check, so none of them is refused after this change.
+// Every workflow, template, module and example shipped in this repository
+// passes the check, so none of them is refused after this change.
 func TestShippedRunTextPassesTheCheck(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..")
 	n := 0
-	for _, glob := range []string{"workflows/*/workflow.yaml", "workflows/*.yaml", "templates/*/workflow.yaml", "modules/*/module.yaml", ".wfx/workflows/*.yaml"} {
-		files, _ := filepath.Glob(filepath.Join(root, glob))
-		for _, f := range files {
-			b, _ := os.ReadFile(f)
-			for _, run := range runBlocks(string(b)) {
-				n++
-				if err := checkRunText(run, ""); err != nil {
-					t.Errorf("%s: %v\n%s", f, err, run)
-				}
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if name == "node_modules" || (strings.HasPrefix(name, ".") && name != "." && name != ".." && name != ".wfx") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".yaml") && !strings.HasSuffix(p, ".yml") {
+			return nil
+		}
+		b, _ := os.ReadFile(p)
+		var doc any
+		if yaml.Unmarshal(b, &doc) != nil {
+			return nil
+		}
+		for _, r := range runValues(doc) {
+			n++
+			if err := checkRunText(r.run, r.shell); err != nil {
+				t.Errorf("%s: %v\n%s", p, err, r.run)
 			}
 		}
-	}
+		return nil
+	})
 	if n == 0 {
 		t.Fatal("found no run steps to check")
 	}
 }
 
-// runBlocks pulls every `run:` value out of a YAML file without the loader
-// (a module or a template is not a loadable workflow on its own).
-func runBlocks(doc string) []string {
-	var out []string
-	lines := strings.Split(doc, "\n")
-	for i := 0; i < len(lines); i++ {
-		l := lines[i]
-		k := strings.Index(l, "run:")
-		if k < 0 || strings.TrimSpace(l[:k]) != "" && strings.TrimSpace(l[:k]) != "-" {
-			continue
+type runValue struct{ run, shell string }
+
+// runValues is every `run:` string anywhere in a YAML document, with the
+// `shell:` beside it.
+func runValues(v any) []runValue {
+	var out []runValue
+	switch x := v.(type) {
+	case map[string]any:
+		if r, ok := x["run"].(string); ok {
+			sh, _ := x["shell"].(string)
+			out = append(out, runValue{r, sh})
 		}
-		rest := strings.TrimSpace(l[k+4:])
-		if rest != "|" && rest != "|-" && rest != ">" {
-			if rest != "" {
-				out = append(out, strings.Trim(rest, `'`))
-			}
-			continue
+		for _, c := range x {
+			out = append(out, runValues(c)...)
 		}
-		ind := -1
-		var body []string
-		for i++; i < len(lines); i++ {
-			s := lines[i]
-			if strings.TrimSpace(s) == "" {
-				body = append(body, "")
-				continue
-			}
-			w := len(s) - len(strings.TrimLeft(s, " "))
-			if ind < 0 {
-				ind = w
-			}
-			if w < ind {
-				i--
-				break
-			}
-			body = append(body, s[ind:])
+	case []any:
+		for _, c := range x {
+			out = append(out, runValues(c)...)
 		}
-		out = append(out, strings.Join(body, "\n"))
 	}
 	return out
 }

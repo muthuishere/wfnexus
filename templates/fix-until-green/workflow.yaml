@@ -40,7 +40,10 @@ input_schema:
 steps:
   - id: baseline
     name: Run the suite once
-    run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+    # The command is an input: written to a file as data, then run as a script.
+    run: |
+      f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"
+      bash "$f" 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}
     shell: bash
     continue-on-error: true
 
@@ -75,7 +78,9 @@ steps:
             test_was_wrong: { type: boolean }
       - id: check
         name: Re-run the suite
-        run: "{{ .Input.test_command }} 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}"
+        run: |
+          f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"
+          bash "$f" 2>&1 | tail -n 80; exit ${PIPESTATUS[0]}
         shell: bash
 
   - id: commit

@@ -257,7 +257,7 @@ steps:
     when:
       - path: collect.exitCode
         equals: 3
-    run: DRY_RUN={{ .Input.dry_run }} python3 ./file_issues.py
+    run: DRY_RUN="{{ .Input.dry_run }}" python3 ./file_issues.py
     timeout_sec: 120
     gates:
       - field: exitCode

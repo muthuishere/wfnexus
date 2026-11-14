@@ -89,6 +89,8 @@ func TestRunStepValuesArriveUnchangedAndNothingElseRuns(t *testing.T) {
 		"quote": "x\"; touch " + marker + "; echo \"",
 		// a line equal to the heredoc's delimiter
 		"delimiter": "x\nWFX_V\ntouch " + marker + "\ncat > /dev/null <<WFX_V",
+		// a leading '-': must stay data, never become an option
+		"dash": "--help -rf /nonexistent",
 		// newlines, backticks and $( )
 		"mixed": "line1\n`touch " + marker + "`\n$(touch " + marker + ")\n${HOME} \\ 'single' \"double\"\n",
 	}

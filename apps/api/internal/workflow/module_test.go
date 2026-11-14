@@ -24,7 +24,7 @@ requires:
 name: summarise
 steps:
   - id: run
-    run: echo summarise {{ .Inputs.chat }}
+    run: echo summarise "{{ .Inputs.chat }}"
 `)
 	write(t, filepath.Join(reg, "svc", "module.yaml"), `
 name: watcher
@@ -32,7 +32,7 @@ version: 1
 services:
   watch: { command: wfx-wa-monitor }
 commands:
-  ping: { steps: [{ id: p, run: "echo ping {{ .Inputs.who }}" }], inputs: { who: { type: string, required: true } } }
+  ping: { steps: [{ id: p, run: 'echo ping "{{ .Inputs.who }}"' }], inputs: { who: { type: string, required: true } } }
 `)
 	write(t, filepath.Join(reg, "bad", "module.yaml"), "name: bad\n")
 	mods, errs := FindModules("reg", reg)
@@ -55,7 +55,7 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := defs["wf"].Steps[0]; got.ID != "s.run" || filled(t, got.Run, nil) != "echo summarise ops" {
+	if got := defs["wf"].Steps[0]; got.ID != "s.run" || filled(t, got.Run, nil) != `echo summarise "ops"` {
 		t.Fatalf("step = %+v", got)
 	}
 
@@ -69,7 +69,7 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := defs["wf"].Steps[0]; got.ID != "s.p" || filled(t, got.Run, nil) != "echo ping ops" || got.Module != "watcher" {
+	if got := defs["wf"].Steps[0]; got.ID != "s.p" || filled(t, got.Run, nil) != `echo ping "ops"` || got.Module != "watcher" {
 		t.Fatalf("command step = %+v", got)
 	}
 }

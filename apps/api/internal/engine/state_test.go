@@ -26,7 +26,8 @@ func counterHarness(t *testing.T) (*harness, string) {
 			ID: "bump",
 			// `default` takes the fallback first. An unwritten key renders
 			// empty, so the first run counts from zero.
-			Run: `printf %s "$(( {{ default "0" .Workflow.counter }} + 1 ))"`,
+			// A number from state is checked before arithmetic uses it.
+			Run: `n="{{ default "0" .Workflow.counter }}"; case "$n" in ''|*[!0-9]*) exit 2;; esac; printf %s "$((n + 1))"`,
 			OutputSchema: map[string]any{"type": "object", "properties": map[string]any{
 				"stdout": map[string]any{"type": "string"},
 			}},

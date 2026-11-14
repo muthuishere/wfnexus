@@ -32,7 +32,7 @@ steps:
   - id: review
     foreach: input.files
     parallel: 2
-    run: echo {{ .Item }} {{ .Index }}
+    run: echo "{{ .Item }}" {{ .Index }}
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ steps:
     run: "true"
     needs: [list]
   - id: each
-    run: echo {{ .Item }}
+    run: echo "{{ .Item }}"
     foreach: list.items
     needs: [%s]
 `
@@ -276,7 +276,7 @@ steps:
     foreach: [a, b]
     steps:
       - id: deploy
-        run: echo {{ .Item }}
+        run: echo "{{ .Item }}"
         requires_approval: true
         approvers: [alice]
 `)
