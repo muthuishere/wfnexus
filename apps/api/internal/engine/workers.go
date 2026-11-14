@@ -240,6 +240,9 @@ type JobResult struct {
 
 // runRemote queues a command for a worker holding `label` and waits for it.
 func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, rt workflow.RunText, label string, data workflow.TemplateData) (map[string]any, error) {
+	if step.WriteEffect {
+		return nil, fmt.Errorf("step %s would run on a worker (%s): write commands run on the server's runner only for now", step.ID, label)
+	}
 	cmd := rt.Display()
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {

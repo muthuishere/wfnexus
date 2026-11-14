@@ -50,6 +50,9 @@ func TestEveryWriteCommandPausesBeforeAnythingRuns(t *testing.T) {
 		}
 	}
 	sort.Strings(writes)
+	// Write commands whose steps run on a worker (runs-on the machine named in
+	// their input) are refused at load until workers check a call's files.
+	onWorker := map[string]bool{"aos.file-write": true, "aos.shell": true}
 	if len(writes) == 0 {
 		t.Fatal("no shipped write commands found")
 	}
@@ -74,6 +77,13 @@ func TestEveryWriteCommandPausesBeforeAnythingRuns(t *testing.T) {
 				t.Fatal(err)
 			}
 			defs, err := workflow.LoadDirWithTasks(dir, "", nil, workflow.WithModules(mods))
+			if onWorker[name] {
+				// Its steps run on a worker, where a write call may not run yet.
+				if err == nil || !strings.Contains(err.Error(), "write commands run on the server's runner only for now") {
+					t.Fatalf("a write command on a worker loaded: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

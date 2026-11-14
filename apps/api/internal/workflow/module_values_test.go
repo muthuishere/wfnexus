@@ -67,7 +67,9 @@ func TestModuleCommandsCarryValuesUnchanged(t *testing.T) {
 				wj, _ := json.Marshal(with)
 				major := strings.TrimPrefix(strings.SplitN(m.Version, ".", 2)[0], "v")
 				write(t, filepath.Join(dir, "call.yaml"), fmt.Sprintf("name: call\nsteps:\n  - id: call\n    uses: %s@%s\n    with: %s\n", name, major, wj))
-				defs, err := LoadDirWithTasks(dir, "", catalog(), WithModules(mods))
+				// Rendering only: a write command that runs on a worker is
+				// checked here too, though it may not load for a run yet.
+				defs, err := LoadDirWithTasks(dir, "", catalog(), WithModules(mods), func(o *loadOptions) { o.anyRunner = true })
 				if err != nil {
 					t.Fatalf("load: %v", err)
 				}
