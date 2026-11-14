@@ -1379,7 +1379,14 @@ func doctor() error {
 			OS, Arch, Using, Path, Problem string
 			Available                      []string
 		} `json:"shell"`
-		Carry    bool     `json:"carry"`
+		Carry   bool `json:"carry"`
+		Browser struct {
+			Path, Error string
+			Profiles    []struct {
+				Name, Command, Folder, Proxy, Problem string
+				Default, Usable                       bool
+			}
+		} `json:"browser"`
 		Problems []string `json:"problems"`
 		Probe    *struct {
 			Provider, Model, Reply, Error string
@@ -1428,6 +1435,26 @@ func doctor() error {
 	}
 
 	fmt.Printf("carry            %s\n", tick(d.Carry, "configured (CARRY_REPO set)", "not configured (CARRY_REPO unset)"))
+	if len(d.Browser.Profiles) == 0 {
+		msg := "no browser profiles configured"
+		if d.Browser.Error != "" && d.Browser.Error != msg {
+			msg = d.Browser.Error
+		}
+		fmt.Printf("browser          %s  (%s)\n", msg, d.Browser.Path)
+	} else {
+		fmt.Printf("browser          %d profile(s)  (%s)\n", len(d.Browser.Profiles), d.Browser.Path)
+		for _, p := range d.Browser.Profiles {
+			name := p.Name
+			if p.Default {
+				name += " (default)"
+			}
+			detail := p.Command + "  " + p.Folder
+			if p.Proxy != "" {
+				detail += "  via " + p.Proxy
+			}
+			printEntry(doctorEntry{Name: name, Kind: "", Detail: detail, Problem: p.Problem, Ready: p.Usable})
+		}
+	}
 
 	fmt.Printf("\nproviders (%d)\n", len(d.Providers))
 	for _, p := range d.Providers {

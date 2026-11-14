@@ -1,0 +1,69 @@
+# browser — run the machine's configured browser command with a named profile
+# (core). The profiles live in a runner-local file, delivered as a carry file
+# for example: $WFX_BROWSER_CONFIG or ~/.config/wfx/browser.json
+#
+#   {"default": "us",
+#    "profiles": {"us": {"command": ["some-browser-cli"], "folder": "/data/profiles/us",
+#                        "proxy": "http://127.0.0.1:8881"}}}
+#
+# In a workflow:
+#   - id: look
+#     uses: browser.read@0
+#     with: { profile: us, action: open, args: '["https://example.com"]' }
+#
+# A named profile that is not configured fails the step; the default is used
+# only when no profile is named. `act` changes something on a site, so it is
+# an action: the step pauses for approval. `wfx doctor` lists the profiles.
+name: browser
+version: 0.1.0
+description: Run the configured browser command with a named profile (folder + proxy) — read, or act with approval.
+requires:
+  env: []
+  cli:
+    - name: node
+      check: node --version
+
+commands:
+  read:
+    description: "Run a read-only browser action with a profile (open, read, search …)."
+    inputs:
+      profile: { type: string, default: "", description: "profile name (default: the configured default)" }
+      action: { type: string, required: true, description: "the action passed to the browser command" }
+      args: { type: string, default: "", description: "the action's arguments: a JSON array string, or one argument" }
+    steps:
+      - id: act
+        name: "Through the browser"
+        timeout_sec: 600
+        run: |
+          cat > in.profile <<'WFX_V'
+          {{ .Inputs.profile }}
+          WFX_V
+          cat > in.action <<'WFX_V'
+          {{ .Inputs.action }}
+          WFX_V
+          cat > in.args <<'WFX_V'
+          {{ .Inputs.args }}
+          WFX_V
+          node "$WFX_MODULE_DIR/browser.mjs"
+  act:
+    effect: write
+    description: "Run a browser action that changes something on a site; pauses for approval."
+    inputs:
+      profile: { type: string, default: "", description: "profile name (default: the configured default)" }
+      action: { type: string, required: true, description: "the action passed to the browser command" }
+      args: { type: string, default: "", description: "the action's arguments: a JSON array string, or one argument" }
+    steps:
+      - id: act
+        name: "Through the browser"
+        timeout_sec: 600
+        run: |
+          cat > in.profile <<'WFX_V'
+          {{ .Inputs.profile }}
+          WFX_V
+          cat > in.action <<'WFX_V'
+          {{ .Inputs.action }}
+          WFX_V
+          cat > in.args <<'WFX_V'
+          {{ .Inputs.args }}
+          WFX_V
+          node "$WFX_MODULE_DIR/browser.mjs"
