@@ -207,6 +207,30 @@ func substInputs(text string, vals map[string]any) string {
 	})
 }
 
+// substRunInputs is substInputs for `run:` text. A value that is itself a
+// reference (`{{ .Input.x }}`, as `with:` passes on) is placed as is and
+// rendered when the step runs; a literal value becomes one of the step's
+// constants, referenced as {{ .Const.<name> }}, so it too reaches the script
+// through the environment (runtext.go) rather than as part of its text.
+func substRunInputs(text string, vals map[string]any, consts map[string]string) string {
+	if !strings.Contains(text, ".Inputs.") {
+		return text
+	}
+	return inputRef.ReplaceAllStringFunc(text, func(m string) string {
+		name := inputRef.FindStringSubmatch(m)[1]
+		v, ok := vals[name]
+		if !ok {
+			return m
+		}
+		t := inputText(v)
+		if strings.Contains(t, "{{") {
+			return t
+		}
+		consts[name] = t
+		return "{{ .Const." + name + " }}"
+	})
+}
+
 // applyInputs writes the values into every text a step renders.
 func applyInputs(s *Step, vals map[string]any) {
 	if len(vals) == 0 {
@@ -216,7 +240,16 @@ func applyInputs(s *Step, vals map[string]any) {
 	s.Description = substInputs(s.Description, vals)
 	s.Prompt = substInputs(s.Prompt, vals)
 	s.System = substInputs(s.System, vals)
-	s.Run = substInputs(s.Run, vals)
+	consts := map[string]string{}
+	s.Run = substRunInputs(s.Run, vals, consts)
+	if len(consts) > 0 {
+		if s.RunConst == nil {
+			s.RunConst = map[string]string{}
+		}
+		for k, v := range consts {
+			s.RunConst[k] = v
+		}
+	}
 	s.RunsOn = substInputs(s.RunsOn, vals)
 	if len(s.Env) > 0 {
 		env := make(map[string]string, len(s.Env))

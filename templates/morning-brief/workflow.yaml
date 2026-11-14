@@ -107,8 +107,8 @@ steps:
     description: Drops lines citing nothing or ids not in facts.json; prints the typed brief. Exit 2 on a malformed brief.
     needs: [brief]
     run: |
-      cat > brief.json <<'WFX_BRIEF_EOF'
-      {{ json .Steps.brief }}
+      cat > brief.json <<WFX_BRIEF_EOF
+      {{ .Steps.brief }}
       WFX_BRIEF_EOF
       python3 ./check.py
     timeout_sec: 30

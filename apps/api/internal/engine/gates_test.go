@@ -128,7 +128,7 @@ func TestAnswerToAGateReachesTheStepAsExtraContextOnly(t *testing.T) {
 	def := &workflow.Definition{Name: "gatereply", Steps: []workflow.Step{
 		{
 			ID: "decide", OutputSchema: workflow.RunOutputSchema(),
-			Run: `printf '%s' '{{ .Input.extra_context }}' | grep -q . || exit 20; echo "reply=[{{ .Input.extra_context }}]"`,
+			Run: `printf '%s' "{{ .Input.extra_context }}" | grep -q . || exit 20; echo "reply=[{{ .Input.extra_context }}]"`,
 			Gates: []workflow.Gate{{Field: "exitCode", Equals: 20, Action: "needs_input",
 				Message: "Decide S1 and S2. Reply like: approve S9"}},
 		},
