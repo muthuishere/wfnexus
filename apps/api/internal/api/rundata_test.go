@@ -94,21 +94,25 @@ func TestRunStepValuesArriveUnchangedAndNothingElseRuns(t *testing.T) {
 	}
 	for name, v := range values {
 		for wf, file := range map[string]string{"demo%2Fquoted": "quoted", "demo%2Fheredoc": "heredoc"} {
-			r := f.runToEnd(t, wf, map[string]any{"v": v})
-			if r.Status != "done" {
-				t.Fatalf("%s/%s: run %s (%s)", name, file, r.Status, r.Error)
-			}
-			got, err := os.ReadFile(filepath.Join(dir, file))
-			want := v
-			if file == "heredoc" {
-				want = v + "\n"
-			}
-			if err != nil || string(got) != want {
-				t.Errorf("%s/%s: got %q, want %q (%v)", name, file, got, want, err)
-			}
-			if _, err := os.Stat(marker); err == nil {
-				t.Fatalf("%s/%s: part of the value ran as a command", name, file)
-			}
+			t.Run(name+"/"+file, func(t *testing.T) {
+				_ = os.Remove(marker)
+				_ = os.Remove(filepath.Join(dir, file))
+				r := f.runToEnd(t, wf, map[string]any{"v": v})
+				if r.Status != "done" {
+					t.Fatalf("run %s (%s)", r.Status, r.Error)
+				}
+				got, err := os.ReadFile(filepath.Join(dir, file))
+				want := v
+				if file == "heredoc" {
+					want = v + "\n"
+				}
+				if err != nil || string(got) != want {
+					t.Errorf("got %q, want %q (%v)", got, want, err)
+				}
+				if _, err := os.Stat(marker); err == nil {
+					t.Errorf("part of the value ran as a command")
+				}
+			})
 		}
 	}
 }
