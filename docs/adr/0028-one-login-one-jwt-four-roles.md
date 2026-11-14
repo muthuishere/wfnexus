@@ -92,8 +92,9 @@ auth:
     minutes) travel in one HttpOnly, SameSite=Lax cookie signed with a key
     only the server holds. Over https it is `__Host-wfx_oauth` (Path=/,
     Secure); over http (a local install) `wfx_oauth` on `/api/auth/oauth/`.
-    The Secure flag follows the public URL's scheme. It is cleared at the
-    callback.
+    The Secure flag of this cookie and of the session cookies follows the
+    public URL's scheme (with none configured, whether the connection is
+    TLS), never `X-Forwarded-Proto`. It is cleared at the callback.
   - Every provider uses PKCE (S256).
   - An OIDC provider (`oidc`, `google`) needs an `issuer`, and discovery must
     name exactly that issuer. Its token response must carry an `id_token`,
@@ -111,10 +112,15 @@ auth:
     at every sign-in, granted and revoked. Roles the provider config does not
     mention are left alone.
 
-  Upgrade note: accounts created by an external sign-in before this change
-  are bound, once, to the subject that next signs in with their name, and the
-  server log says so (`AUDIT account … linked to … on first sign-in after
-  upgrade; review`). Accounts that hold roles are re-linked on first sign-in
+  Upgrade note: the upgrade marks accounts that existed before it and look
+  external (`<user>@<provider>`, no password) and ends their sessions,
+  refresh tokens and API tokens; each signs in again. What happens then
+  depends on the provider whose name the account carries: an LDAP provider
+  binds it from the LDAP username, as it always matched. A redirect provider
+  (oidc, google, github) binds it, once, to the subject that next signs in
+  with that name, and the server log says so (`AUDIT account … linked to … on
+  first sign-in after upgrade; review`). Accounts created after the upgrade
+  are never bound by name, whatever they are called. Accounts that hold roles are re-linked on first sign-in
   but keep no roles until an admin confirms with
   `wfx-server link confirm NAME` (on the server, no sign-in needed;
   `wfx-server link list` shows them), or a superadmin confirms with

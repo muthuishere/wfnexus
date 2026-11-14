@@ -288,9 +288,18 @@ func TestALegacyAccountWithRolesWaitsForConfirmation(t *testing.T) {
 	a.Providers[0].GroupRoles = nil
 	h, st := testServerPublic(t, a, testPublicURL)
 	markLegacy(t, st, "carol@sso", RoleSuperadmin)
+	// A token it holds (issued after the upgrade by some other path) ends
+	// when the link goes pending.
+	carol, _ := st.UserByName(context.Background(), "carol@sso")
+	if _, err := st.IssueUserToken(context.Background(), carol.ID, "hash-carol", "refresh:browser", ""); err != nil {
+		t.Fatal(err)
+	}
 	w, _ := oauthFlow(t, h, "sso", nil)
 	if w.Code != http.StatusForbidden || oauthSession(w) != "" || !strings.Contains(w.Body.String(), "pending confirmation") {
 		t.Fatalf("before confirmation: %d %s", w.Code, w.Body)
+	}
+	if toks, _ := st.ListUserTokens(context.Background(), carol.ID); len(toks) != 0 {
+		t.Fatalf("a pending account kept %d tokens", len(toks))
 	}
 	links, _ := st.PendingLinks(context.Background())
 	if len(links) != 1 || links[0].Name != "carol@sso" || links[0].Subject != "42" {

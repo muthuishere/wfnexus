@@ -101,7 +101,7 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, err
 	default:
-		if u, err = s.bindOrCreate(ctx, provider, id); err != nil {
+		if u, err = s.bindOrCreate(ctx, p, id); err != nil {
 			return nil, err
 		}
 	}
@@ -118,27 +118,48 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 }
 
 // bindOrCreate handles a (provider, subject) seen for the first time.
-func (s *Server) bindOrCreate(ctx context.Context, provider string, id *login.Identity) (*store.User, error) {
+//
+// A legacy row named <user>@<provider> (one that existed before subjects were
+// kept) is bound according to the provider that carries its name:
+//   - an LDAP provider binds it directly: its subject is the LDAP username,
+//     which is what it always matched on;
+//   - a redirect provider (oidc, google, github) binds it once, to the
+//     subject that signs in with that name, with an audit line; if it held
+//     roles its tokens are revoked and it waits for an admin's confirmation.
+func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.Identity) (*store.User, error) {
+	provider := p.Config.Name
 	name := id.Username + "@" + provider
 	if legacy, err := s.store.UserByName(ctx, name); err == nil {
 		if st, _ := s.store.LinkState(ctx, legacy.ID); st == store.LinkLegacy {
-			grants, err := s.store.HasGrants(ctx, legacy.ID)
-			if err != nil {
-				return nil, err
-			}
-			state := ""
-			if grants {
-				state = store.LinkConfirm
-			}
-			if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, state); err != nil {
-				return nil, err
-			} else if ok {
-				note := "review"
-				if grants {
-					note = "it held roles, so it signs in only after `wfx-server link confirm " + name + "`"
+			if p.Redirect == nil {
+				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, ""); err != nil {
+					return nil, err
+				} else if ok {
+					return legacy, nil
 				}
-				log.Printf("auth: AUDIT account %s linked to %s subject %s on first sign-in after upgrade; %s", name, provider, id.Subject, note)
-				return legacy, nil
+			} else {
+				grants, err := s.store.HasGrants(ctx, legacy.ID)
+				if err != nil {
+					return nil, err
+				}
+				state := ""
+				if grants {
+					state = store.LinkConfirm
+				}
+				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, state); err != nil {
+					return nil, err
+				} else if ok {
+					note := "review"
+					if grants {
+						// Nothing it held before keeps it signed in meanwhile.
+						if err := s.store.RevokeAllUserTokens(ctx, legacy.ID); err != nil {
+							return nil, err
+						}
+						note = "it held roles, so it signs in only after `wfx-server link confirm " + name + "`"
+					}
+					log.Printf("auth: AUDIT account %s linked to %s subject %s on first sign-in after upgrade; %s", name, provider, id.Subject, note)
+					return legacy, nil
+				}
 			}
 		}
 		// The name is taken by an account that is not this person's: this

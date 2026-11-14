@@ -122,6 +122,13 @@ func (s *Store) bind(ctx context.Context, q string, args ...any) (bool, error) {
 	return n == 1, nil
 }
 
+// RevokeAllUserTokens ends every session, refresh token and API token of a
+// user (an account whose link waits for confirmation keeps none).
+func (s *Store) RevokeAllUserTokens(ctx context.Context, id uuid.UUID) error {
+	_, err := s.exec(ctx, `DELETE FROM user_tokens WHERE user_id=$1`, id)
+	return err
+}
+
 // HasGrants says whether a user holds any role: superadmin, or a project or
 // workflow membership.
 func (s *Store) HasGrants(ctx context.Context, id uuid.UUID) (bool, error) {
