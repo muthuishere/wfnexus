@@ -141,10 +141,10 @@ task: contact these targets on this channel and collect these fields.
 ```yaml
 steps:
   - id: start
-    uses: conversation.start_task@0          # a write: the run pauses for approval
+    uses: conversation.start_task@0          # effect: write, so the run pauses for approval first
     with:
       task_type: collect
-      targets: '["+15550100", {"phone": "+15550101"}]'
+      targets: '["+15550100", {"id": "c-42", "phone": "+15550101", "name": "Ada"}]'
       fields: '["name", "email"]'
       channel: whatsapp
       service_url_env: WFX_CONVERSATION_URL      # NAMES of variables, not values
@@ -177,20 +177,44 @@ steps:
   `Idempotency-Key: <run id>:<step id>`. A retried step therefore starts no
   second task. Inside a loop the step id names the iteration (`each[1].…`),
   so each iteration starts its own task. Output: `{task_id, status}`.
+- **Approval:** `start_task` is marked `effect: write`. The engine therefore
+  pauses the run for approval before it, every time: it starts contacting
+  people.
 - **Polling:** `task_status` sends `GET {url}/tasks/{id}` until the status is
   `done`, `failed` or `cancelled`, or `wait_seconds` (0–3600) passes. Output:
-  `{task_id, status, fields}`. A deadline that passes fails the step with exit
-  3 and `deadline reached: last status <status>`.
+  `{task_id, status, fields, truncated}`.
+  - A task that ends `failed` or `cancelled` prints its result and fails the
+    step with exit 5.
+  - A deadline that passes fails the step with exit 3 and
+    `deadline reached: last status <status>`.
+  - Each request has its own 30 s limit, which covers its body: a server
+    that trickles its answer is cut off. `WFX_CONVERSATION_REQUEST_TIMEOUT`
+    in the env store sets 1–120 s.
 - **Limits:**
-  - at most 200 targets, each at most 4 KiB as JSON;
-  - 1–50 field names of up to 128 characters;
+  - at most 50 targets per call. Each is an E.164 phone (`+15550100`), an
+    identifier (`A-Z a-z 0-9 . _ : -`, 1–128), or an object holding only
+    `id` (an identifier), `phone` (E.164) and `name` (up to 128 printable
+    characters);
+  - 1–50 field names matching `^[a-z][a-z0-9_]{0,63}$`;
   - `task_type` and `channel` are 1–64 characters of `a-z 0-9 . _ -`;
-  - the service's answer may be at most 1 MiB (a larger one is refused);
-  - a returned field value over 16 KiB is cut and ends in `…[truncated]`.
-- **Exit codes:** 2 means invalid input or configuration; 4 means the service
-  refused or could not be reached. Its answer is shown without the key or the
-  URL's query string.
-||||||| 7bdd4e3
+  - the key is at least 16 characters;
+  - the service's answer may be at most 1 MiB; a larger one, or a larger
+    declared `Content-Length`, is refused;
+  - a returned field value over 16 KiB is cut, ends in `…[truncated]`, and
+    sets `truncated: true`.
+- **Untrusted text:** targets and the collected fields come from outside, the
+  fields from the people contacted. Treat them as untrusted text: don't put
+  them into a prompt as instructions or into a script as code. Pass them on
+  as data.
+- **The key is never printed,** in any form a service might echo it back in
+  (raw, JSON-escaped, base64, hex, URL-encoded).
+- **Exit codes:**
+  - 2: invalid input or configuration;
+  - 3: deadline reached;
+  - 4: the service refused, could not be reached, or answered too much or
+    too slowly; its answer is shown without the key or the URL's query
+    string;
+  - 5: the task failed or was cancelled.
 
 ## A module command marked `effect: write` always pauses the run for approval
 

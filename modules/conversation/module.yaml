@@ -21,8 +21,8 @@
 # never appear in a workflow file, and the key is never printed. Once sec is
 # wired into steps (#128) these become sec names.
 #
-# start_task changes the world (it starts contacting people), so it is a write
-# and pauses for approval. It sends Idempotency-Key: <run id>:<step id>, so a
+# start_task changes the world (it starts contacting people), so it is marked
+# effect: write, and the engine pauses the run for approval before it. It sends Idempotency-Key: <run id>:<step id>, so a
 # retried step does not start a second task.
 name: conversation
 version: 0.1.0
@@ -39,8 +39,8 @@ commands:
     description: "Start a task (type, targets, fields to collect, channel); returns {task_id, status}."
     inputs:
       task_type: { type: string, required: true, description: "what the service should do: 1-64 of a-z 0-9 . _ -, e.g. collect" }
-      targets: { type: string, required: true, description: "JSON array of targets (strings or objects), at most 200" }
-      fields: { type: string, required: true, description: "JSON array of the field names to collect, at most 50" }
+      targets: { type: string, required: true, description: "JSON array of at most 50 targets: E.164 phones, identifiers, or {id, phone, name} objects" }
+      fields: { type: string, required: true, description: "JSON array of 1-50 field names (^[a-z][a-z0-9_]{0,63}$)" }
       channel: { type: string, required: true, description: "how the service reaches the targets: 1-64 of a-z 0-9 . _ -, e.g. whatsapp" }
       service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (WFX_CONVERSATION_*; https, or http for localhost only)" }
       api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key (WFX_CONVERSATION_*)" }

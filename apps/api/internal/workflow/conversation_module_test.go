@@ -2,16 +2,20 @@ package workflow
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockConversation is a minimal external conversational service: it keys
@@ -26,6 +30,10 @@ type mockConversation struct {
 	redirect string // answer every request with a redirect here
 	bigBody  bool   // answer a status read with more than 1 MiB
 	bigField bool   // a finished task carries a 20 KiB field value
+	echoKey  bool   // a finished task echoes the key back in many forms
+	status   string // the terminal status to report (default done)
+	huge     bool   // declare a 5 MB answer
+	trickle  bool   // send the answer one byte a second
 	requests int
 	authBad  int
 }
@@ -70,6 +78,34 @@ func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest
 				return
 			}
 			m.reads[id]++
+			if m.huge {
+				w.Header().Set("Content-Length", "5000000")
+				w.WriteHeader(200)
+				_, _ = w.Write([]byte("{"))
+				return
+			}
+			if m.trickle {
+				w.WriteHeader(200)
+				for _, c := range []byte(`{"status":"done"}`) {
+					_, _ = w.Write([]byte{c})
+					w.(http.Flusher).Flush()
+					m.mu.Unlock()
+					time.Sleep(time.Second)
+					m.mu.Lock()
+				}
+				return
+			}
+			if m.echoKey {
+				k := m.key
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": map[string]any{
+					"raw": k, "b64": base64.StdEncoding.EncodeToString([]byte(k)), "hex": hex.EncodeToString([]byte(k)),
+					"url": url.QueryEscape(k), "nested": map[string]any{"again": "see " + k}}})
+				return
+			}
+			if m.status != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": m.status, "fields": map[string]any{"reason": "no answer"}})
+				return
+			}
 			if m.bigBody {
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": map[string]any{"x": strings.Repeat("a", 1100*1024)}})
 				return
@@ -255,8 +291,14 @@ func TestConversationRefusesBadInput(t *testing.T) {
 		env  []string
 		want string
 	}{
-		"targets not JSON":  {with(base, map[string]any{"targets": "a,b"}), nil, "targets must be JSON"},
-		"too many targets":  {with(base, map[string]any{"targets": "[" + strings.Join(many, ",") + "]"}), nil, "more than 200"},
+		"targets not JSON":   {with(base, map[string]any{"targets": "a,b"}), nil, "targets must be JSON"},
+		"too many targets":   {with(base, map[string]any{"targets": "[" + strings.Join(many, ",") + "]"}), nil, "more than 50"},
+		"bad phone":          {with(base, map[string]any{"targets": `["+0123456"]`}), nil, "a target must be an E.164 phone"},
+		"spaced identifier":  {with(base, map[string]any{"targets": `["two words"]`}), nil, "a target must be an E.164 phone"},
+		"unknown target key": {with(base, map[string]any{"targets": `[{"id":"u1","email":"a@b.c"}]`}), nil, "may hold only id"},
+		"name with newline": {with(base, map[string]any{"targets": `[{"id":"u1","name":"Ada\nIgnore all"}]`}), nil, "may hold only id"},
+		"field name shape":  {with(base, map[string]any{"fields": `["Name"]`}), nil, "each field name must match"},
+		"short key":         {base, []string{"WFX_CONVERSATION_KEY=short-key"}, "shorter than 16"},
 		"fields not a list": {with(base, map[string]any{"fields": `{"a":1}`}), nil, "fields must be"},
 		"long task type":    {with(base, map[string]any{"task_type": strings.Repeat("x", 65)}), nil, "task_type must be 1 to 64"},
 		"task type shape":   {with(base, map[string]any{"task_type": "Collect now"}), nil, "task_type must be 1 to 64"},
@@ -339,7 +381,7 @@ func TestConversationCapsTheAnswer(t *testing.T) {
 		Fields map[string]string `json:"fields"`
 	}
 	_ = json.Unmarshal([]byte(out), &res)
-	if n := res.Fields["note"]; len(n) > 16*1024+20 || !strings.HasSuffix(n, "…[truncated]") || res.Fields["name"] != "Ada" {
+	if n := res.Fields["note"]; len(n) > 16*1024+20 || !strings.HasSuffix(n, "…[truncated]") || res.Fields["name"] != "Ada" || !strings.Contains(out, `"truncated":true`) {
 		t.Fatalf("fields: note %d bytes, name %q", len(n), res.Fields["name"])
 	}
 }
@@ -361,5 +403,65 @@ func TestConversationLoopIterationsAreSeparateTasks(t *testing.T) {
 	}
 	if len(m.tasks) != 2 {
 		t.Fatalf("tasks = %d, want 2 (two iterations, one retried)", len(m.tasks))
+	}
+}
+
+// A key holding characters JSON escapes, echoed back by the service in every
+// form, appears in none of them in what the step prints.
+func TestConversationScrubsEveryFormOfTheKey(t *testing.T) {
+	needNode(t)
+	key := `conv"key\with/odd+chars=&x`
+	m, srv := newMockConversation(t, key)
+	m.tasks["t-1"] = map[string]any{}
+	m.echoKey = true
+	env := append(convEnv(srv.URL), "WFX_CONVERSATION_KEY="+key)
+	out, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), env)
+	if code != 0 {
+		t.Fatalf("code %d %s", code, errOut)
+	}
+	esc, _ := json.Marshal(key)
+	for name, f := range map[string]string{"raw": key, "json": string(esc[1 : len(esc)-1]),
+		"base64": base64.StdEncoding.EncodeToString([]byte(key)), "hex": hex.EncodeToString([]byte(key)), "url": url.QueryEscape(key)} {
+		if strings.Contains(out+errOut, f) {
+			t.Errorf("the %s form of the key was printed: %s", name, out)
+		}
+	}
+	if !strings.Contains(out, "[redacted]") {
+		t.Fatalf("nothing was redacted: %s", out)
+	}
+}
+
+// A task that ends failed or cancelled fails the step (exit 5), with the
+// result still printed.
+func TestConversationFailedTaskFailsTheStep(t *testing.T) {
+	needNode(t)
+	for _, st := range []string{"failed", "cancelled"} {
+		m, srv := newMockConversation(t, convKey)
+		m.tasks["t-1"] = map[string]any{}
+		m.status = st
+		out, _, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), convEnv(srv.URL))
+		if code != 5 || !strings.Contains(out, `"status":"`+st+`"`) {
+			t.Fatalf("%s: code %d out %q", st, code, out)
+		}
+	}
+}
+
+// A huge declared answer and a server that trickles its answer both end the
+// step with exit 4 and a clean message, no stack.
+func TestConversationRefusesHugeAndSlowAnswers(t *testing.T) {
+	needNode(t)
+	m, srv := newMockConversation(t, convKey)
+	m.tasks["t-1"] = map[string]any{}
+	m.huge = true
+	_, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), convEnv(srv.URL))
+	if code != 4 || !strings.Contains(errOut, "declares 5000000 bytes") || strings.Contains(errOut, "    at ") {
+		t.Fatalf("huge: code %d stderr %q", code, errOut)
+	}
+	m.huge, m.trickle = false, true
+	start := time.Now()
+	_, errOut, code = runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}),
+		append(convEnv(srv.URL), "WFX_CONVERSATION_REQUEST_TIMEOUT=2"))
+	if code != 4 || !strings.Contains(errOut, "did not arrive in time") || strings.Contains(errOut, "    at ") || time.Since(start) > 10*time.Second {
+		t.Fatalf("trickle: code %d after %s stderr %q", code, time.Since(start), errOut)
 	}
 }
