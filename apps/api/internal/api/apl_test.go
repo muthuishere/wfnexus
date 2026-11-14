@@ -199,6 +199,11 @@ steps:
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// The run finishes before the test moves on (and before its temp
+	// directories are removed under a run still writing to them).
+	if st := waitStatus(t, h, created.Run.ID, "done"); st != "done" {
+		t.Fatalf("notify-ops ended %s", st)
+	}
 
 	// A profile whose account has no running service: refused, nothing sent.
 	if w := do(h, "PUT", "/api/modules/apl/profiles/personal", "", map[string]any{"account": "me"}); w.Code != 200 {

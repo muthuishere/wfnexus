@@ -102,12 +102,23 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	// A module command's step runs in its own call directory, so two calls
 	// running at once never share their in.* files. It is under the run's
 	// own directory, not the checkout, so nothing there is ever committed.
+	callDir := ""
 	if step.Module != "" && e.cfg.WorkDir != "" {
-		dir := filepath.Join(e.cfg.WorkDir, runID.String(), "calls", CallKey(step.ID))
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		callDir = filepath.Join(e.cfg.WorkDir, runID.String(), "calls", CallKey(step.ID))
+		if err := os.MkdirAll(callDir, 0o700); err != nil {
 			return nil, fmt.Errorf("step %s: call directory: %w", step.ID, err)
 		}
-		c.Dir = dir
+		c.Dir = callDir
+		if e.testHookBeforeCallStep != nil {
+			e.testHookBeforeCallStep(step, callDir)
+		}
+		// The files a call's earlier steps wrote (in.*, plan.json) are what
+		// this write step acts on; they must be exactly what those steps
+		// left, after the approval (callgate.go).
+		if err := e.checkCallFiles(runID, step, callDir); err != nil {
+			return nil, err
+		}
+		defer e.recordCallFiles(runID, step, callDir)
 	}
 	// The whole cascade — system, project, then the file — resolved against
 	// THIS machine. A reference to a variable nobody set is an error naming the
@@ -195,7 +206,7 @@ func CallKey(stepID string) string {
 	if i := strings.LastIndex(stepID, "."); i >= 0 {
 		call = stepID[:i]
 	}
-	return strings.Map(func(r rune) rune {
+	key := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
 			return r
@@ -203,4 +214,13 @@ func CallKey(stepID string) string {
 			return '_'
 		}
 	}, call)
+	// Never a path step of its own: no "..", no leading dot.
+	for strings.Contains(key, "..") {
+		key = strings.ReplaceAll(key, "..", "_")
+	}
+	key = strings.TrimLeft(key, ".")
+	if key == "" {
+		key = "_"
+	}
+	return key
 }

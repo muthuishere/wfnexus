@@ -137,6 +137,13 @@ type Step struct {
 	// not overridable (task.go).
 	WriteEffect bool `yaml:"-" json:"writeEffect,omitempty"`
 	WriteEntry  bool `yaml:"-" json:"writeEntry,omitempty"`
+	// CallHead is the expanded id of the first step of the call this step
+	// came from, and CallSelf this step's own expanded id. The engine reads
+	// the head's row (relative to this step's row, so loop iterations work)
+	// before running any other step of the call: a skipped head skips the
+	// call, and a write step runs only after an approved, finished head.
+	CallHead string `yaml:"-" json:"callHead,omitempty"`
+	CallSelf string `yaml:"-" json:"callSelf,omitempty"`
 	// JobID is the job this step was flattened out of, when the workflow used
 	// the jobs form. Empty for a flat step list.
 	JobID string `yaml:"-" json:"jobId,omitempty"`
