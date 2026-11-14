@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -148,10 +149,39 @@ func Migrate(driver, dsn string) error {
 		return err
 	}
 	defer m.Close()
+	stored := countStoredJobEnv(driver, dsn)
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return err
 	}
+	if stored > 0 && countStoredJobEnv(driver, dsn) == 0 {
+		log.Printf("store: blanked stored env values in %d job rows (names kept)", stored)
+	}
 	return nil
+}
+
+// countStoredJobEnv is how many job rows still hold an env value (the format
+// before values were delivered at claim). Counts only; 0 when the table is
+// not there yet.
+func countStoredJobEnv(driver, dsn string) int {
+	ctx := context.Background()
+	s, err := Open(ctx, driver, dsn)
+	if err != nil {
+		return 0
+	}
+	defer s.Close()
+	q := `select count(*) from worker_jobs where
+	  exists (select 1 from jsonb_each_text(coalesce(payload->'env', '{}'::jsonb)) e where e.value <> '')
+	  or exists (select 1 from jsonb_each_text(case when jsonb_typeof(payload->'agent'->'step'->'env') = 'object' then payload->'agent'->'step'->'env' else '{}'::jsonb end) e where e.value <> '')`
+	if s.d.isSQLite() {
+		q = `SELECT count(*) FROM worker_jobs WHERE
+		  EXISTS (SELECT 1 FROM json_each(payload, '$.env') WHERE value <> '')
+		  OR EXISTS (SELECT 1 FROM json_each(payload, '$.agent.step.env') WHERE value <> '')`
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, q).Scan(&n); err != nil {
+		return 0
+	}
+	return n
 }
 
 // ---- runs ----

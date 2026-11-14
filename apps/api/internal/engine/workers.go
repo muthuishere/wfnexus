@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,8 +156,13 @@ func (e *Engine) Claim(ctx context.Context, w *model.Worker, wait time.Duration)
 	deadline := time.Now().Add(wait)
 	for {
 		job, err := e.store.ClaimJob(ctx, w)
-		if err != nil || job != nil {
-			return job, err
+		if err != nil {
+			return nil, err
+		}
+		if job != nil {
+			// Values are resolved now, into the response only: a job
+			// reclaimed after a worker restart gets them again here.
+			return job, e.deliverAtClaim(ctx, job)
 		}
 		if time.Now().After(deadline) {
 			return nil, nil
@@ -196,6 +202,13 @@ type JobPayload struct {
 	RepoURL    string            `json:"repoUrl,omitempty"`
 	Ref        string            `json:"ref,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
+	// Deliver names the variables whose values come from the env store (and a
+	// module's token). The job row keeps only these NAMES; the values are put
+	// into Env in the claim response, for the worker that holds the job, and
+	// are never stored (Claim, deliverAtClaim).
+	Deliver []string `json:"deliver,omitempty"`
+	// Module is the module a step came from, for its token at claim.
+	Module string `json:"module,omitempty"`
 	TimeoutSec int               `json:"timeoutSec,omitempty"`
 	// Mount and Files are the workflow's attachments. The mount SPEC travels,
 	// never the folder: the worker resolves each line against its OWN disk, so
@@ -234,10 +247,11 @@ func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.
 		return nil, err
 	}
 	mounts, files := e.attachmentsOf(runID)
+	env, deliver := e.withoutDelivered(ctx, runID, step, env)
 	payload := JobPayload{
 		RunID: runID.String(), StepID: step.ID, Command: cmd,
 		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
-		Mount: mounts, Files: files,
+		Mount: mounts, Files: files, Deliver: deliver, Module: step.Module,
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project
@@ -436,4 +450,75 @@ func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, evs []
 		}
 		e.emit(ctx, runID, ev.StepID, kind, ev.Payload)
 	}
+}
+
+// withoutDelivered splits a step's resolved env for a job row: what came from
+// the env store, and a module's token, leaves the map and is listed by name
+// to be delivered at claim. What the workflow itself wrote (literals and
+// references) and the run's own facts stay.
+func (e *Engine) withoutDelivered(ctx context.Context, runID uuid.UUID, step *workflow.Step, env map[string]string) (map[string]string, []string) {
+	base, _ := e.platformEnv(ctx, e.projectOfRun(ctx, runID))
+	out := make(map[string]string, len(env))
+	var deliver []string
+	for k, v := range env {
+		_, written := step.Env[k]
+		fromStore := !written && base != nil && base[k] == v && v != ""
+		if fromStore || k == "WFX_MODULE_TOKEN" {
+			deliver = append(deliver, k)
+			continue
+		}
+		out[k] = v
+	}
+	sort.Strings(deliver)
+	return out, deliver
+}
+
+// deliverAtClaim puts the values a job's row names (Deliver) into the claim
+// response, resolved now against the env store and the module's token. The
+// row itself is not touched.
+func (e *Engine) deliverAtClaim(ctx context.Context, job *model.Job) error {
+	var p JobPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil {
+		return err
+	}
+	names, module, env := p.Deliver, p.Module, p.Env
+	if p.Agent != nil {
+		names, module, env = p.Agent.Deliver, p.Agent.Step.Module, p.Agent.Step.Env
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	base, err := e.platformEnv(ctx, p.Project)
+	if err != nil {
+		return err
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	var me map[string]string
+	for _, n := range names {
+		if n == "WFX_MODULE_TOKEN" {
+			if me == nil {
+				me = e.moduleEnv(ctx, module)
+			}
+			if v := me[n]; v != "" {
+				env[n] = v
+			}
+			continue
+		}
+		if v, ok := base[n]; ok {
+			env[n] = v
+		}
+	}
+	if p.Agent != nil {
+		p.Agent.Step.Env = env
+	} else {
+		p.Env = env
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	job.Payload = raw
+	return nil
 }

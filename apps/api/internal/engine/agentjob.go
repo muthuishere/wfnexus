@@ -58,6 +58,9 @@ type AgentJob struct {
 	RunID    string        `json:"runId"`
 	Workflow string        `json:"workflow"`
 	Step     workflow.Step `json:"step"`
+	// Deliver names the Step.Env variables whose values are put in at claim
+	// and never stored (JobPayload.Deliver).
+	Deliver []string `json:"deliver,omitempty"`
 	// Prompt is already rendered: the worker never sees a template, the run's
 	// input, or another step's output beyond what this prompt quotes.
 	Prompt   string            `json:"prompt"`
@@ -105,16 +108,17 @@ func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflo
 	// last word: the worker has no access to this platform's env store, so
 	// what it is not sent, it does not have.
 	placed := *step
+	var deliver []string
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
-	placed.Env = env
+	placed.Env, deliver = e.withoutDelivered(ctx, runID, step, env)
 
 	mounts, wfFiles := e.attachmentsOf(runID)
 	job := &AgentJob{
 		RunID: runID.String(), Workflow: def.Name, Step: placed, Prompt: prompt, BaseRef: baseRef,
-		Mount: mounts, Files: wfFiles,
+		Mount: mounts, Files: wfFiles, Deliver: deliver,
 		Defaults: LLMDefaults{
 			BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			Model: e.cfg.Model, APIKeyEnv: e.cfg.LLMAPIKeyEnv,
