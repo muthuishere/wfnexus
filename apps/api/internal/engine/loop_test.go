@@ -288,7 +288,7 @@ func TestFixUntilGreenTemplateDryRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs, _, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat))
+	defs, _, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat), shippedModules(t))
 	if err != nil {
 		t.Fatal(err)
 	}

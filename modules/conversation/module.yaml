@@ -1,0 +1,77 @@
+# conversation — start a task on an external conversational service (for
+# example "contact these people and collect these fields") and read its status.
+#
+#   wfx module call conversation.task_status --input task_id=t-1 \
+#       --input service_url_env=CONVERSATION_URL --input api_key_env=CONVERSATION_KEY --wait
+#
+# In a workflow (see templates/conversation-task):
+#   - id: ask
+#     uses: conversation.start_task@0
+#     with:
+#       task_type: collect
+#       targets: '["+15550100"]'
+#       fields: '["name","email"]'
+#       channel: whatsapp
+#       service_url_env: CONVERSATION_URL
+#       api_key_env: CONVERSATION_KEY
+#
+# service_url_env / api_key_env are the NAMES of environment variables (set in
+# the env store, `wfx env`) that hold the service URL and API key; the values
+# never appear in a workflow file, and the key is never printed. Once sec is
+# wired into steps (#128) these become sec names.
+#
+# start_task changes the world (it starts contacting people), so it is a write
+# and pauses for approval. It sends Idempotency-Key: <run id>:<step id>, so a
+# retried step does not start a second task.
+name: conversation
+version: 0.1.0
+description: Start a task on an external conversational service and read its status and collected fields.
+requires:
+  env: []
+  cli:
+    - name: node
+      check: node --version
+
+commands:
+  start_task:
+    effect: write
+    description: "Start a task (type, targets, fields to collect, channel); returns {task_id, status}."
+    inputs:
+      task_type: { type: string, required: true, description: "what the service should do, e.g. collect" }
+      targets: { type: string, required: true, description: "JSON array of targets (strings or objects), at most 200" }
+      fields: { type: string, required: true, description: "JSON array of the field names to collect, at most 50" }
+      channel: { type: string, required: true, description: "how the service reaches the targets, e.g. whatsapp" }
+      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (http or https)" }
+      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key" }
+    steps:
+      - id: start
+        name: Start the task
+        timeout_sec: 60
+        run: |
+          printf '%s\n' "{{ .Inputs.task_type }}" > in.task_type
+          printf '%s\n' "{{ .Inputs.targets }}" > in.targets
+          printf '%s\n' "{{ .Inputs.fields }}" > in.fields
+          printf '%s\n' "{{ .Inputs.channel }}" > in.channel
+          printf '%s\n' "{{ .Inputs.service_url_env }}" > in.service_url_env
+          printf '%s\n' "{{ .Inputs.api_key_env }}" > in.api_key_env
+          node "$WFX_MODULE_DIR/conversation.mjs" start
+
+  task_status:
+    description: "Read a task's status and collected fields; with wait_seconds, poll until it is done, failed or cancelled."
+    inputs:
+      task_id: { type: string, required: true, description: "the task_id start_task returned" }
+      wait_seconds: { type: string, default: "0", description: "0 to 3600: how long to poll for a terminal status (0 = read once)" }
+      poll_seconds: { type: string, default: "10", description: "seconds between reads" }
+      service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL" }
+      api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key" }
+    steps:
+      - id: status
+        name: Read the task
+        timeout_sec: 3700
+        run: |
+          printf '%s\n' "{{ .Inputs.task_id }}" > in.task_id
+          printf '%s\n' "{{ .Inputs.wait_seconds }}" > in.wait_seconds
+          printf '%s\n' "{{ .Inputs.poll_seconds }}" > in.poll_seconds
+          printf '%s\n' "{{ .Inputs.service_url_env }}" > in.service_url_env
+          printf '%s\n' "{{ .Inputs.api_key_env }}" > in.api_key_env
+          node "$WFX_MODULE_DIR/conversation.mjs" status

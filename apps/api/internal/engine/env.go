@@ -122,6 +122,10 @@ func (e *Engine) stepEnv(ctx context.Context, runID uuid.UUID, step *workflow.St
 		if u := e.SelfURL(); u != "" {
 			run = workflow.MergeEnv(run, map[string]string{"WFX_API": u})
 		}
+	} else {
+		// No workspace (a worker sets its own, cmd/wfx-runner): the run and
+		// step ids still reach the step, e.g. as an idempotency key.
+		run = workflow.MergeEnv(run, map[string]string{"WFX_RUN_ID": runID.String(), "WFX_STEP_ID": step.ID})
 	}
 	env := workflow.MergeEnv(workflow.MergeEnv(base, run), step.Env)
 	// A step from a module's command reaches that module's door (modulecalls.go).

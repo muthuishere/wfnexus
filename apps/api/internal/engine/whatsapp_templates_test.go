@@ -82,7 +82,7 @@ func loadWATemplates(t *testing.T, env map[string]string, names ...string) map[s
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs, skips, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat))
+	defs, skips, err := workflow.LoadSources([]workflow.Source{{Name: "templates", Dir: repoPath(t, "templates")}}, catalog.NewValidator(reg, cat), shippedModules(t))
 	if err != nil {
 		t.Fatal(err)
 	}

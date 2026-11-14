@@ -104,3 +104,52 @@ steps:
 - A gate whose condition matches the output routes instead of failing.
 
 Prefer `exit-codes` when you know which codes are answers.
+
+## The `conversation` module: tasks on an external conversational service
+
+`conversation.start_task` asks an external conversational service to run a
+task: contact these targets on this channel and collect these fields.
+`conversation.task_status` reads the task back. The template
+`templates/conversation-task` does both.
+
+```yaml
+steps:
+  - id: start
+    uses: conversation.start_task@0          # a write: the run pauses for approval
+    with:
+      task_type: collect
+      targets: '["+15550100", {"phone": "+15550101"}]'
+      fields: '["name", "email"]'
+      channel: whatsapp
+      service_url_env: CONVERSATION_URL      # NAMES of variables, not values
+      api_key_env: CONVERSATION_KEY
+  - id: wait
+    uses: conversation.task_status@0
+    with:
+      task_id: '{{ (fromJson .Steps.start.start.stdout).task_id }}'
+      wait_seconds: "1800"                   # 0 = read once
+      poll_seconds: "30"
+      service_url_env: CONVERSATION_URL
+      api_key_env: CONVERSATION_KEY
+```
+
+- **Credentials:** `service_url_env` and `api_key_env` name environment
+  variables (set with `wfx env`, the key with `--secret`). Neither value is
+  written into a workflow file, and the key is never printed. Once steps read
+  sec directly (#128), these become sec names.
+- **The request:** `start_task` sends `POST {url}/tasks` with
+  `{type, targets, fields, channel}`, `Authorization: Bearer <key>` and
+  `Idempotency-Key: <run id>:<step id>`. A retried step therefore starts no
+  second task. Output: `{task_id, status}`.
+- **Polling:** `task_status` sends `GET {url}/tasks/{id}` until the status is
+  `done`, `failed` or `cancelled`, or `wait_seconds` (0–3600) passes. Output:
+  `{task_id, status, fields}`. A deadline that passes fails the step with exit
+  3 and `deadline reached: last status <status>`.
+- **Limits:**
+  - at most 200 targets, each at most 4 KiB as JSON;
+  - 1–50 field names of up to 128 characters;
+  - `task_type` up to 4 KiB, `channel` up to 64 characters;
+  - the URL must be http(s).
+- **Exit codes:** 2 means invalid input or configuration; 4 means the service
+  refused or could not be reached. Its answer is shown without the key or the
+  URL's query string.
