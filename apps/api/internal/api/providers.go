@@ -2,8 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"crypto/subtle"
 	"errors"
 	"log"
 	"net/http"
@@ -16,7 +15,17 @@ import (
 // Login providers (ADR 0028): password (local), oidc, google, github, ldap,
 // mock-ldap. They authenticate only; every one ends in issueSession.
 
-const oauthStateCookie = "wfx_oauth_state"
+// The single-use values of one sign-in, kept in the browser between start and
+// callback: the state, the PKCE verifier and the OpenID nonce.
+const (
+	oauthStateCookie    = "wfx_oauth_state"
+	oauthVerifierCookie = "wfx_oauth_verifier"
+	oauthNonceCookie    = "wfx_oauth_nonce"
+	oauthCookiePath     = "/api/auth/oauth/"
+	oauthCookieMaxAge   = 600
+)
+
+var oauthCookies = []string{oauthStateCookie, oauthVerifierCookie, oauthNonceCookie}
 
 // buildProviders reads the server config. A provider that cannot be built —
 // mock-ldap off loopback without force, a missing clientId — is NOT enabled,
@@ -85,43 +94,56 @@ func (s *Server) oauthRedirectURI(r *http.Request, name string) string {
 	return s.externalBase(r) + "/api/auth/oauth/" + name + "/callback"
 }
 
-// oauthStart is GET /api/auth/oauth/{provider}/start: a state cookie, then
-// off to the provider.
+// oauthStart is GET /api/auth/oauth/{provider}/start: the sign-in's state,
+// PKCE verifier and nonce in cookies, then off to the provider.
 func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	p := s.oauthProvider(w, r)
 	if p == nil {
 		return
 	}
-	raw := make([]byte, 24)
-	_, _ = rand.Read(raw)
-	state := hex.EncodeToString(raw)
-	u, err := p.Redirect.AuthCodeURL(r.Context(), state, s.oauthRedirectURI(r, p.Config.Name))
+	a := login.NewAuthRequest()
+	u, err := p.Redirect.AuthCodeURL(r.Context(), a, s.oauthRedirectURI(r, p.Config.Name))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: oauthStateCookie, Value: state, Path: "/api/auth/oauth/", MaxAge: 600,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureRequest(r),
-	})
+	for name, v := range map[string]string{oauthStateCookie: a.State, oauthVerifierCookie: a.Verifier, oauthNonceCookie: a.Nonce} {
+		http.SetCookie(w, &http.Cookie{
+			Name: name, Value: v, Path: oauthCookiePath, MaxAge: oauthCookieMaxAge,
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureRequest(r),
+		})
+	}
 	http.Redirect(w, r, u, http.StatusFound)
 }
 
 // oauthCallback is where the provider sends the browser back: the state must
-// match the cookie, the code is exchanged, and the browser is signed in.
+// match the cookie, the code is exchanged with the PKCE verifier (and, for an
+// OpenID provider, its id_token checked against the nonce), and the browser is
+// signed in. The sign-in's cookies are cleared whatever the outcome: each is
+// good for one attempt.
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	p := s.oauthProvider(w, r)
 	if p == nil {
 		return
 	}
-	c, err := r.Cookie(oauthStateCookie)
+	cookie := func(name string) string {
+		if c, err := r.Cookie(name); err == nil {
+			return c.Value
+		}
+		return ""
+	}
+	a := login.AuthRequest{State: cookie(oauthStateCookie), Verifier: cookie(oauthVerifierCookie), Nonce: cookie(oauthNonceCookie)}
+	for _, name := range oauthCookies {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: oauthCookiePath, MaxAge: -1,
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureRequest(r)})
+	}
 	q := r.URL.Query()
-	if err != nil || c.Value == "" || q.Get("state") != c.Value || q.Get("code") == "" {
+	if a.State == "" || a.Verifier == "" || q.Get("code") == "" ||
+		subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(a.State)) != 1 {
 		writeErr(w, http.StatusBadRequest, errors.New("sign-in state did not match; start again"))
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Value: "", Path: "/api/auth/oauth/", MaxAge: -1})
-	id, err := p.Redirect.Exchange(r.Context(), q.Get("code"), s.oauthRedirectURI(r, p.Config.Name))
+	id, err := p.Redirect.Exchange(r.Context(), q.Get("code"), s.oauthRedirectURI(r, p.Config.Name), a)
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, err)
 		return

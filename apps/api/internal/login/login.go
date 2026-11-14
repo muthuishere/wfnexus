@@ -31,10 +31,12 @@ type PasswordProvider interface {
 	Authenticate(ctx context.Context, username, password string) (*Identity, error)
 }
 
-// RedirectProvider is a browser round trip (oidc, google, github).
+// RedirectProvider is a browser round trip (oidc, google, github). The
+// AuthRequest made at start (state, PKCE verifier, nonce) is handed back at
+// the callback.
 type RedirectProvider interface {
-	AuthCodeURL(ctx context.Context, state, redirectURI string) (string, error)
-	Exchange(ctx context.Context, code, redirectURI string) (*Identity, error)
+	AuthCodeURL(ctx context.Context, a AuthRequest, redirectURI string) (string, error)
+	Exchange(ctx context.Context, code, redirectURI string, a AuthRequest) (*Identity, error)
 }
 
 // Provider is one configured provider: exactly one of Password/Redirect set.

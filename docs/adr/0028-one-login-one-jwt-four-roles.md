@@ -82,8 +82,15 @@ auth:
 - `oidc` uses the authorization-code flow with discovery. The identity is
   read from the userinfo endpoint. `google` is an OIDC preset. `github` is an
   OAuth 2.0 preset that reads `/user`.
-  The browser goes to `/api/auth/oauth/{name}/start`, and a state cookie
-  guards the callback.
+  The browser goes to `/api/auth/oauth/{name}/start`. The state, a PKCE
+  verifier and (for OIDC) a nonce are kept in HttpOnly cookies scoped to
+  `/api/auth/oauth/` for 10 minutes, and cleared at the callback. Every
+  provider uses PKCE (S256). An OIDC provider (`oidc`, `google`) needs an
+  `issuer`: its token response must carry an `id_token` signed with RS256 or
+  ES256 by a key in the issuer's `jwks_uri`, with matching `iss`, `aud` (and
+  `azp` when there are several audiences), `exp`, `iat` and `nonce`, and
+  userinfo must name the same `sub`. `github` issues no `id_token`.
+  (Updated 2026-11: PKCE, nonce and id_token verification added.)
 - `ldap`: a service bind, a search, then a bind as the user. Groups come from
   `memberOf`. `mock-ldap` is an in-process fake directory read from a YAML
   file, for dev and tests. It is refused off loopback unless `force: true`.
