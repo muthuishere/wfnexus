@@ -298,6 +298,11 @@ func cmdRun(args []string) error {
 		// stop with it (#103).
 		go serviceSupervisor(cfg).Run(ctx)
 	}
+	// Secret files a previous run of this worker left when it was killed
+	// mid-job (its deferred cleanup never ran).
+	if n := engine.SweepStaleSecrets(); n > 0 {
+		fmt.Printf("removed %d stale job secret folder(s)\n", n)
+	}
 	backoff := time.Second
 	for ctx.Err() == nil {
 		job, err := claim(ctx, cfg)
@@ -386,6 +391,11 @@ type payload struct {
 	Ref        string            `json:"ref"`
 	Env        map[string]string `json:"env"`
 	TimeoutSec int               `json:"timeoutSec"`
+	// Deliver names the variables in Env whose values the platform handed
+	// over at claim (env-store values, a module's token). They are sealed:
+	// they go into the step's environment and nowhere else — this runner
+	// never logs them and never writes them to disk.
+	Deliver []string `json:"deliver"`
 	// Mount is the workflow's `mount:` lines, resolved against THIS machine's
 	// disk — the platform's folders were never sent and could not be. Files are
 	// the workflow's own scripts, which did travel, and are staged into the

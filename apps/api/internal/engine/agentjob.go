@@ -58,6 +58,9 @@ type AgentJob struct {
 	RunID    string        `json:"runId"`
 	Workflow string        `json:"workflow"`
 	Step     workflow.Step `json:"step"`
+	// Deliver names the Step.Env variables whose values are put in at claim
+	// and never stored (JobPayload.Deliver).
+	Deliver []string `json:"deliver,omitempty"`
 	// Prompt is already rendered: the worker never sees a template, the run's
 	// input, or another step's output beyond what this prompt quotes.
 	Prompt   string            `json:"prompt"`
@@ -105,16 +108,17 @@ func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflo
 	// last word: the worker has no access to this platform's env store, so
 	// what it is not sent, it does not have.
 	placed := *step
+	var deliver []string
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
 		return nil, err
 	}
-	placed.Env = env
+	placed.Env, deliver = e.withoutDelivered(ctx, runID, step, env)
 
 	mounts, wfFiles := e.attachmentsOf(runID)
 	job := &AgentJob{
 		RunID: runID.String(), Workflow: def.Name, Step: placed, Prompt: prompt, BaseRef: baseRef,
-		Mount: mounts, Files: wfFiles,
+		Mount: mounts, Files: wfFiles, Deliver: deliver,
 		Defaults: LLMDefaults{
 			BaseURL: e.cfg.LLMBaseURL, Style: e.cfg.LLMStyle,
 			Model: e.cfg.Model, APIKeyEnv: e.cfg.LLMAPIKeyEnv,
@@ -280,6 +284,19 @@ func (e *Engine) RunAgentJob(ctx context.Context, job *AgentJob, workdir string)
 
 	runID, _ := uuid.Parse(job.RunID)
 	step := job.Step
+	// The values delivered at claim are sealed here as on the platform: they
+	// reach the agent's shell through the per-job secrets file, never a
+	// command line, and are scrubbed from everything this machine reports.
+	if len(job.Deliver) > 0 {
+		vals := map[string]string{}
+		for _, n := range job.Deliver {
+			if v, ok := step.Env[n]; ok {
+				vals[n] = v
+			}
+		}
+		e.registerDelivered(runID, vals)
+		defer e.redactions.forget(runID)
+	}
 	// The workflow's folders are attached HERE, against this machine. Nothing
 	// was copied over the wire but the workflow's own files; a `mount:` line
 	// names a folder that must exist on this box, and says so by name if it

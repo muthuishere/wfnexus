@@ -288,7 +288,11 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.failStep(ctx, runID, step.ID, err)
 		return nil, stepHalted
 	}
+	res.Output = scrubOutput(res.Output, e.redactions.get(runID))
 	if res.Pending != nil {
+		// The question an agent asks can quote what it saw; it is scrubbed
+		// before it is stored, shown or sent to a notifier.
+		res.Pending = scrubPending(res.Pending, e.redactions.get(runID))
 		// Request.URL is the field an answer-here link belongs in, and it was
 		// stored empty until now. It is a POINTER at our own UI — never a link
 		// that resolves the pause by itself (ADR 0021).
@@ -325,7 +329,14 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 
 // executeNode runs the non-agent kinds, with the step's retry policy applied
 // exactly as it is to an agent — a flaky command deserves the same treatment.
+// executeNode runs a command, judge or send node; what it produced is scrubbed
+// of the run's secret values before anything keeps it.
 func (e *Engine) executeNode(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
+	out, err := e.executeNodeRaw(ctx, runID, step, data)
+	return scrubOutput(out, e.redactions.get(runID)), err
+}
+
+func (e *Engine) executeNodeRaw(ctx context.Context, runID uuid.UUID, step *workflow.Step, data workflow.TemplateData) (map[string]any, error) {
 	attempts := 1
 	if step.Retry != nil && step.Retry.MaxAttempts > attempts {
 		attempts = step.Retry.MaxAttempts
@@ -446,6 +457,8 @@ func exitFailed(step *workflow.Step, out map[string]any) (int, bool) {
 }
 
 // stderrTail is the last line of a command's stderr, for the failure message.
+// out is a step output that executeNode has already scrubbed, so the cut
+// below never shortens a raw secret.
 func stderrTail(out map[string]any) string {
 	s, _ := out["stderr"].(string)
 	s = strings.TrimSpace(s)
