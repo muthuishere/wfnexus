@@ -1385,6 +1385,7 @@ func doctor() error {
 			Profiles    []struct {
 				Name, Command, Folder, Proxy, Problem string
 				Default, Usable                       bool
+				ReadActions                           []string
 			}
 		} `json:"browser"`
 		Problems []string `json:"problems"`
@@ -1451,6 +1452,11 @@ func doctor() error {
 			detail := p.Command + "  " + p.Folder
 			if p.Proxy != "" {
 				detail += "  via " + p.Proxy
+			}
+			if len(p.ReadActions) > 0 {
+				detail += "  reads: " + strings.Join(p.ReadActions, ",")
+			} else {
+				detail += "  reads: none"
 			}
 			printEntry(doctorEntry{Name: name, Kind: "", Detail: detail, Problem: p.Problem, Ready: p.Usable})
 		}

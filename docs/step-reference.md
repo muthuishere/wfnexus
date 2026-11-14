@@ -58,13 +58,18 @@ file, delivered as a carry file for example: `$WFX_BROWSER_CONFIG`, default
 ```json
 {"default": "us",
  "profiles": {
-   "us": {"command": ["some-browser-cli"], "folder": "/data/profiles/us", "proxy": "http://127.0.0.1:8881"},
+   "us": {"command": ["some-browser-cli"], "folder": "/data/profiles/us", "proxy": "http://127.0.0.1:8881",
+          "read_actions": ["open", "snapshot", "text"]},
    "de": {"command": "some-browser-cli --json", "folder": "/data/profiles/de"}}}
 ```
 
 - `command` is an argv array, or a string split on spaces. It can be any
   browser tool that reads its profile folder and proxy from the environment.
-- `proxy` is optional. `wfx doctor` lists the profiles and says which are
+- `proxy` is optional. It must not carry credentials (`user@` or
+  `user:pass@`): such a profile is refused. Point it at a local proxy instead.
+- `read_actions` lists the actions `browser.read` may run with this profile.
+  If no list is given, the profile allows no reads.
+- `wfx doctor` lists the profiles with their read actions and says which are
   usable: the command is found and the folder is present.
 
 The core `browser` module runs that command with one profile:
@@ -82,5 +87,7 @@ The core `browser` module runs that command with one profile:
   a proxy.
 - Leaving `profile` empty uses the default. A profile that is named but not
   configured fails the step, and the default is never used in its place.
-- `browser.act` is for actions that change something on a site. It is marked
-  as a write, so the step pauses for approval.
+- `browser.read` refuses any action the profile does not list in
+  `read_actions` (exit 2), before the command runs.
+- `browser.act` runs any action. It is marked as a write, so the step pauses
+  for approval.

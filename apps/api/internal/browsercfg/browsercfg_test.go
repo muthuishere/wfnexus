@@ -62,3 +62,33 @@ func TestCheckReportsCommandFolderAndUsable(t *testing.T) {
 		t.Fatalf("nofolder = %+v", s)
 	}
 }
+
+// A proxy with user or user:pass@ is a profile error, and the error does not
+// repeat the credential.
+func TestLoadRefusesProxyCredentials(t *testing.T) {
+	for _, proxy := range []string{"http://bob:hunter2@127.0.0.1:8881", "http://bob@127.0.0.1:8881", "socks5://bob:hunter2@h:1", "bob:hunter2@127.0.0.1:8881"} {
+		_, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","proxy":"`+proxy+`"}}}`))
+		if err == nil || !strings.Contains(err.Error(), "proxy carries credentials") || strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "bob") {
+			t.Fatalf("%s: err = %v", proxy, err)
+		}
+	}
+	if _, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","proxy":"http://127.0.0.1:8881"}}}`)); err != nil {
+		t.Fatalf("plain proxy refused: %v", err)
+	}
+}
+
+func TestLoadReadActions(t *testing.T) {
+	if _, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","read_actions":["open",""]}}}`)); err == nil || !strings.Contains(err.Error(), "empty read_actions") {
+		t.Fatalf("empty entry: %v", err)
+	}
+	if _, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","read_actions":"open"}}}`)); err == nil {
+		t.Fatal("a string read_actions was accepted")
+	}
+	c, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","read_actions":["open","text"]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Check(); len(st) != 1 || strings.Join(st[0].ReadActions, ",") != "open,text" {
+		t.Fatalf("status = %+v", st)
+	}
+}

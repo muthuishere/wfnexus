@@ -6,9 +6,11 @@
 //
 //	{"default": "us",
 //	 "profiles": {"us": {"command": ["some-browser-cli"], "folder": "/data/profiles/us",
-//	                     "proxy": "http://127.0.0.1:8881"}}}
+//	                     "proxy": "http://127.0.0.1:8881", "read_actions": ["open", "text"]}}}
 //
-// command is an argv (a plain string is split on spaces); proxy is optional.
+// command is an argv (a plain string is split on spaces); proxy is optional
+// and must not carry credentials; read_actions lists the actions browser.read
+// may run with this profile (none listed = no reads).
 // The browser module (modules/browser) runs the command with a profile.
 package browsercfg
 
@@ -16,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,22 +28,24 @@ import (
 
 // Profile is one named browser profile.
 type Profile struct {
-	Command []string `json:"command"`
-	Folder  string   `json:"folder"`
-	Proxy   string   `json:"proxy,omitempty"`
+	Command     []string `json:"command"`
+	Folder      string   `json:"folder"`
+	Proxy       string   `json:"proxy,omitempty"`
+	ReadActions []string `json:"read_actions,omitempty"`
 }
 
 // UnmarshalJSON accepts command as an argv array or a space-separated string.
 func (p *Profile) UnmarshalJSON(b []byte) error {
 	var raw struct {
-		Command json.RawMessage `json:"command"`
-		Folder  string          `json:"folder"`
-		Proxy   string          `json:"proxy"`
+		Command     json.RawMessage `json:"command"`
+		Folder      string          `json:"folder"`
+		Proxy       string          `json:"proxy"`
+		ReadActions []string        `json:"read_actions"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
 	}
-	p.Folder, p.Proxy, p.Command = raw.Folder, raw.Proxy, nil
+	p.Folder, p.Proxy, p.ReadActions, p.Command = raw.Folder, raw.Proxy, raw.ReadActions, nil
 	if len(raw.Command) == 0 {
 		return nil
 	}
@@ -95,8 +100,36 @@ func Load(path string) (*Config, error) {
 		if len(p.Command) == 0 {
 			return nil, fmt.Errorf("%s: profile %q has no command", path, n)
 		}
+		for _, a := range p.ReadActions {
+			if strings.TrimSpace(a) == "" {
+				return nil, fmt.Errorf("%s: profile %q has an empty read_actions entry", path, n)
+			}
+		}
+		if HasUserinfo(p.Proxy) {
+			// The message never repeats the URL: it holds the credential.
+			return nil, fmt.Errorf("%s: profile %q proxy carries credentials (user@ or user:pass@); use a local proxy without them", path, n)
+		}
 	}
 	return &c, nil
+}
+
+// HasUserinfo is whether a proxy address carries a user or user:pass part.
+func HasUserinfo(proxy string) bool {
+	if proxy == "" {
+		return false
+	}
+	if u, err := url.Parse(proxy); err == nil && u.User != nil {
+		return true
+	}
+	// No scheme ("user:pass@host:port") parses without User: check by hand.
+	host := proxy
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	return strings.Contains(host, "@")
 }
 
 // Names are the profile names, sorted.
@@ -111,15 +144,16 @@ func (c *Config) Names() []string {
 
 // Status is one profile as found on this machine.
 type Status struct {
-	Name          string `json:"name"`
-	Default       bool   `json:"default"`
-	Command       string `json:"command"`
-	CommandFound  bool   `json:"commandFound"`
-	Folder        string `json:"folder"`
-	FolderPresent bool   `json:"folderPresent"`
-	Proxy         string `json:"proxy,omitempty"`
-	Usable        bool   `json:"usable"`
-	Problem       string `json:"problem,omitempty"`
+	Name          string   `json:"name"`
+	Default       bool     `json:"default"`
+	Command       string   `json:"command"`
+	CommandFound  bool     `json:"commandFound"`
+	Folder        string   `json:"folder"`
+	FolderPresent bool     `json:"folderPresent"`
+	Proxy         string   `json:"proxy,omitempty"`
+	ReadActions   []string `json:"readActions"`
+	Usable        bool     `json:"usable"`
+	Problem       string   `json:"problem,omitempty"`
 }
 
 // Check reports every profile: command on PATH, folder present.
@@ -127,7 +161,8 @@ func (c *Config) Check() []Status {
 	var out []Status
 	for _, n := range c.Names() {
 		p := c.Profiles[n]
-		s := Status{Name: n, Default: n == c.Default, Command: strings.Join(p.Command, " "), Folder: p.Folder, Proxy: p.Proxy}
+		s := Status{Name: n, Default: n == c.Default, Command: strings.Join(p.Command, " "), Folder: p.Folder, Proxy: p.Proxy,
+			ReadActions: append([]string{}, p.ReadActions...)}
 		_, err := exec.LookPath(p.Command[0])
 		s.CommandFound = err == nil
 		if fi, err := os.Stat(p.Folder); err == nil && fi.IsDir() {
