@@ -120,7 +120,13 @@ commands:
                       return json.loads(r.read())
               except urllib.error.HTTPError as e:
                   print("wfnexus refused: " + e.read().decode()[:300]); sys.exit(1)
-          it = call("POST", "/outbox", {"service": "whatsapp", "profile": p["profile"], "id": p["key"],
+          prof = p["profile"]
+          if os.environ.get("WFX_MODULE_PROFILE") is not None:
+              pinned = json.loads(os.environ["WFX_MODULE_PROFILE"] or "{}")
+              if pinned.get("error"):
+                  print("no profile: " + pinned["error"]); sys.exit(1)
+              prof = pinned.get("name", prof)
+          it = call("POST", "/outbox", {"service": "whatsapp", "profile": prof, "id": p["key"],
                                         "request": {"chat": p["chat"], "text": p["text"], "replyTo": p["replyTo"]}})
           deadline = time.time() + 150
           while it.get("status") == "queued" and time.time() < deadline:

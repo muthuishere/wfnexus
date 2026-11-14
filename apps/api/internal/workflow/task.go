@@ -241,6 +241,10 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			}
 			if t.Module != "" {
 				step.Module = t.Module
+				if _, ok := t.Inputs["profile"]; ok {
+					p := inputText(vals["profile"])
+					step.CallProfile = &p
+				}
 			}
 			// A module command marked `effect: write` changes something
 			// outside the run, so the run pauses for approval before it, on
