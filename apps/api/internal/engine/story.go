@@ -88,28 +88,35 @@ func (f *storyFiles) env() map[string]string {
 
 func (f *storyFiles) close() { os.RemoveAll(f.dir) }
 
-func readCapped(path string, n int) string {
+// readCapped reads a step's story file, scrubbed of the run's secrets BEFORE
+// it is cut to n bytes, so a cut cannot leave half a secret behind.
+func readCapped(path string, n int, secrets []secretValue) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	if len(b) > n {
-		b = append([]byte(runeCut(string(b), n)), []byte("\n\n…(truncated)")...)
+	s := redactText(string(b), secrets)
+	if len(s) > n {
+		s = runeCut(s, n) + summaryCutMarker
 	}
-	return string(b)
+	return s
 }
+
+// summaryCutMarker ends a story file that was cut (cutMarkers knows it).
+const summaryCutMarker = "\n\n…(truncated)"
 
 // collect folds what the step wrote into its output map, and publishes its
 // state. Returns the outcome line, normalised, or "".
 func (e *Engine) collectStory(ctx context.Context, runID uuid.UUID, stepID string, f *storyFiles, out map[string]any) string {
-	if s := strings.TrimSpace(readCapped(f.summary, maxSummaryBytes)); s != "" {
+	secrets := e.redactions.get(runID)
+	if s := strings.TrimSpace(readCapped(f.summary, maxSummaryBytes, secrets)); s != "" {
 		out["summary"] = s
 	}
-	oc := NormalizeOutcome(readCapped(f.outcome, 4096))
+	oc := NormalizeOutcome(readCapped(f.outcome, 4096, secrets))
 	if oc != "" {
 		out["outcome"] = oc
 	}
-	if raw := strings.TrimSpace(readCapped(f.state, maxSummaryBytes)); raw != "" {
+	if raw := strings.TrimSpace(readCapped(f.state, maxSummaryBytes, nil)); raw != "" {
 		if err := e.publishState(ctx, e.workflowOfRun(ctx, runID), raw); err != nil {
 			e.emit(ctx, runID, stepID, "log", map[string]any{"message": fmt.Sprintf("%s: %v", EnvState, err)})
 		}
@@ -268,7 +275,10 @@ func (e *Engine) settleOutcome(ctx context.Context, runID uuid.UUID, status, err
 		log.Printf("engine: outcome: %v", err)
 		return
 	}
-	if err := e.store.SetRunOutcome(ctx, runID, DeriveOutcome(status, errMsg, steps)); err != nil {
+	// The error is scrubbed before the outcome line is cut from it, and the
+	// line again after (the steps it reads were stored scrubbed already).
+	secrets := e.redactions.get(runID)
+	if err := e.store.SetRunOutcome(ctx, runID, redactTextCut(DeriveOutcome(status, redactText(errMsg, secrets), steps), secrets)); err != nil {
 		log.Printf("engine: outcome: %v", err)
 	}
 }

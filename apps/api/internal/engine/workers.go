@@ -402,10 +402,12 @@ func (e *Engine) saveRemoteArtifacts(ctx context.Context, runID uuid.UUID, stepI
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
+	secrets := e.redactions.get(runID)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
 			return
 		}
+		body = []byte(redactText(string(body), secrets))
 		key := fmt.Sprintf("runs/%s/%s/%s", runID, stepID, name)
 		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
 			return
@@ -436,4 +438,35 @@ func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, evs []
 		}
 		e.emit(ctx, runID, ev.StepID, kind, ev.Payload)
 	}
+}
+
+// ScrubJobResult removes the run's secret values, in every form secretForms
+// knows, from a worker's report before the platform stores it. So that this
+// holds after a server restart too, the values are registered again first:
+// the run's env-store values, and the job's own env as it was sent (the
+// step's env block and a module's door token), whose credential-named or
+// env-store values count as secret. Values a worker resolves on its own
+// machine never reach the platform, so they cannot be scrubbed here.
+func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload json.RawMessage, res JobResult) JobResult {
+	_ = e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
+	var p JobPayload
+	if len(payload) > 0 && json.Unmarshal(payload, &p) == nil && len(p.Env) > 0 {
+		e.redactions.add(runID, p.Env, nil)
+	}
+	secrets := e.redactions.get(runID)
+	if len(secrets) == 0 {
+		return res
+	}
+	if res.Agent != nil {
+		ag := *res.Agent
+		// Bytes travel as base64 in JSON, where a value cannot be found: the
+		// diff is scrubbed as text first.
+		ag.Diff = []byte(redactText(string(ag.Diff), secrets))
+		res.Agent = &ag
+	}
+	var out JobResult
+	if json.Unmarshal(scrubJSON(mustJSON(res), secrets), &out) != nil {
+		return JobResult{Error: "the worker's report carried a secret value and could not be scrubbed safely"}
+	}
+	return out
 }
