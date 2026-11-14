@@ -36,15 +36,9 @@ commands:
         name: "Through the browser"
         timeout_sec: 600
         run: |
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.action <<'WFX_V'
-          {{ .Inputs.action }}
-          WFX_V
-          cat > in.args <<'WFX_V'
-          {{ .Inputs.args }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.action }}" > in.action
+          printf '%s\n' "{{ .Inputs.args }}" > in.args
           node "$WFX_MODULE_DIR/browser.mjs" read
   act:
     effect: write
@@ -58,13 +52,7 @@ commands:
         name: "Through the browser"
         timeout_sec: 600
         run: |
-          cat > in.profile <<'WFX_V'
-          {{ .Inputs.profile }}
-          WFX_V
-          cat > in.action <<'WFX_V'
-          {{ .Inputs.action }}
-          WFX_V
-          cat > in.args <<'WFX_V'
-          {{ .Inputs.args }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.profile }}" > in.profile
+          printf '%s\n' "{{ .Inputs.action }}" > in.action
+          printf '%s\n' "{{ .Inputs.args }}" > in.args
           node "$WFX_MODULE_DIR/browser.mjs" act
