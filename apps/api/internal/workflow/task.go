@@ -208,7 +208,7 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 		for _, s := range t.Steps {
 			own[s.ID] = true
 		}
-		for _, s := range t.Steps {
+		for i, s := range t.Steps {
 			step := s // copy; a task is used by many workflows
 			step.ID = prefix + "." + s.ID
 			step.Needs = prefixAll(prefix, s.Needs)
@@ -231,6 +231,15 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			}
 			if t.Module != "" {
 				step.Module = t.Module
+			}
+			// A module command marked `effect: write` changes something
+			// outside the run, so the run pauses for approval before it:
+			// once per call, on the command's first step, before anything
+			// of it has run. There is no opt-out. A later approval step of
+			// the command's own (a response policy of "approval") would ask
+			// the same question twice, so it no longer pauses.
+			if t.Effect == "write" {
+				step.RequiresApproval = i == 0
 			}
 			expanded = append(expanded, step)
 		}

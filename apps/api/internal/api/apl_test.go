@@ -137,6 +137,7 @@ steps:
 		}
 		var res struct {
 			Run struct {
+				ID     string `json:"id"`
 				Status string `json:"status"`
 				Error  string `json:"error"`
 			} `json:"run"`
@@ -145,6 +146,11 @@ steps:
 			} `json:"output"`
 		}
 		_ = json.Unmarshal(w.Body.Bytes(), &res)
+		// whatsapp-send is a write: the run pauses once for a person first.
+		st, out := approveOnce(t, h, res.Run.ID, res.Run.Status, res.Output.Stdout)
+		if st != res.Run.Status {
+			return st + " ", out
+		}
 		return res.Run.Status + " " + res.Run.Error, res.Output.Stdout
 	}
 
@@ -181,6 +187,8 @@ steps:
 		} `json:"run"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	// The send is a write: the run pauses for a person before it.
+	approveOnce(t, h, created.Run.ID, waitStatus(t, h, created.Run.ID, "awaiting_approval"), "")
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if s := sends(); len(s) == 2 && s[1]["target"] == "ops@g.us" && s[1]["text"] == "deployed" {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -374,6 +375,7 @@ func TestWhatsAppMonitorAlertsWhenDeaf(t *testing.T) {
 	}
 	defs := loadWATemplates(t, env, "whatsapp-monitor", "whatsapp-sender")
 	h := waHarness(t, defs, "whatsapp-monitor")
+	pointAPIAt(t, h, env["WFX_API"])
 	useWAChannel(t, h, cmd, "")
 	for i := 0; i < 2; i++ {
 		id := h.start("whatsapp-monitor", map[string]any{"owner_chat": "owner@s.whatsapp.net", "dry_run": false})
@@ -475,4 +477,15 @@ func TestFrontdeskDecides(t *testing.T) {
 			t.Errorf("%s → exit %d %q, want %d %q", c.answer, cmd.ProcessState.ExitCode(), out, c.code, c.out)
 		}
 	}
+}
+
+// pointAPIAt makes a fake server the platform's own address, so a step's
+// WFX_API (the platform's, which a workflow cannot set) reaches it.
+func pointAPIAt(t *testing.T, h *harness, apiURL string) {
+	t.Helper()
+	u, err := url.Parse(apiURL)
+	if err != nil || u.Host == "" {
+		t.Fatalf("api url %q", apiURL)
+	}
+	h.eng.cfg.Addr = u.Host
 }

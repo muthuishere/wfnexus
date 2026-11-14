@@ -53,6 +53,7 @@ func callCmd(t *testing.T, h http.Handler, name string, inputs map[string]any) (
 	}
 	var res struct {
 		Run struct {
+			ID     string `json:"id"`
 			Status string `json:"status"`
 			Error  string `json:"error"`
 		} `json:"run"`
@@ -61,7 +62,8 @@ func callCmd(t *testing.T, h http.Handler, name string, inputs map[string]any) (
 		} `json:"output"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &res)
-	return res.Run.Status, res.Output.Stdout
+	// A write command pauses for approval first (engine); a person says yes.
+	return approveOnce(t, h, res.Run.ID, res.Run.Status, res.Output.Stdout)
 }
 
 func argsOf(c map[string]any) string {
@@ -138,7 +140,7 @@ func TestAplCommandWrappers(t *testing.T) {
 		t.Fatalf("calendar-list: %s", st)
 	}
 	expect(6, "GET https://www.googleapis.com/calendar/v3/calendars/primary/events?")
-	if st, _ = callCmd(t, h, "apl.calendar-create", map[string]any{"subject": "Sync", "start": "2026-11-09T10:00:00Z", "end": "2026-11-09T10:30:00Z", "responsePolicy": "approval"}); st != "awaiting_approval" {
+	if st = callPaused(t, h, "apl.calendar-create", map[string]any{"subject": "Sync", "start": "2026-11-09T10:00:00Z", "end": "2026-11-09T10:30:00Z", "responsePolicy": "approval"}); st != "awaiting_approval" {
 		t.Fatalf("calendar-create approval: %s", st)
 	}
 	expect(6) // nothing created before a person says yes
