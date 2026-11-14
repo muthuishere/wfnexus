@@ -272,23 +272,11 @@ func (s *Server) removeWorker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// publicURL is the address a worker can reach this server on. Configured
-// (WFX_PUBLIC_URL) when the server sits behind an ingress, inferred otherwise —
-// so the join command shown in the dashboard is one that actually works.
-func (s *Server) publicURL(r *http.Request) string {
-	if u := s.eng.PublicURL(); u != "" {
-		return u
-	}
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = fwd
-	}
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
+// publicURL is the address a worker can reach this server on: the configured
+// public URL (WFX_PUBLIC_URL), or this server's own listen address — never
+// the request's Host or X-Forwarded-* headers, which the caller chooses. Set
+// the public URL when the server sits behind an ingress.
+func (s *Server) publicURL(r *http.Request) string { return s.externalBase(r) }
 
 // joinCommand is the line an operator copies onto a machine. One command, a URL
 // and a token: everything else the runner works out for itself.

@@ -16,11 +16,18 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 )
 
-// Identity is who a provider says the person is.
+// Identity is who a provider says the person is. (Provider, Subject) is the
+// stable key a local user is matched on; Username is only the name shown and
+// the start of a new user's name, never a key.
 type Identity struct {
 	Provider string
-	Username string
-	Groups   []string
+	Subject  string // the provider's id for the person: the verified id_token sub, GitHub's numeric user id, the LDAP entry's stable id
+	// LegacySubject is the subject an older binding of this same person used
+	// (for LDAP, the username before stable ids were kept); a binding found
+	// under it is re-keyed to Subject.
+	LegacySubject string
+	Username      string
+	Groups        []string
 }
 
 // ErrBadCredentials is the one refusal a password provider gives.
@@ -31,10 +38,12 @@ type PasswordProvider interface {
 	Authenticate(ctx context.Context, username, password string) (*Identity, error)
 }
 
-// RedirectProvider is a browser round trip (oidc, google, github).
+// RedirectProvider is a browser round trip (oidc, google, github). The
+// AuthRequest made at start (state, PKCE verifier, nonce) is handed back at
+// the callback.
 type RedirectProvider interface {
-	AuthCodeURL(ctx context.Context, state, redirectURI string) (string, error)
-	Exchange(ctx context.Context, code, redirectURI string) (*Identity, error)
+	AuthCodeURL(ctx context.Context, a AuthRequest, redirectURI string) (string, error)
+	Exchange(ctx context.Context, code, redirectURI string, a AuthRequest) (*Identity, error)
 }
 
 // Provider is one configured provider: exactly one of Password/Redirect set.

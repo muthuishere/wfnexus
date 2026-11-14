@@ -82,8 +82,87 @@ auth:
 - `oidc` uses the authorization-code flow with discovery. The identity is
   read from the userinfo endpoint. `google` is an OIDC preset. `github` is an
   OAuth 2.0 preset that reads `/user`.
-  The browser goes to `/api/auth/oauth/{name}/start`, and a state cookie
-  guards the callback.
+  The browser goes to `/api/auth/oauth/{name}/start`.
+  (Updated 2026-11.)
+  - Redirect providers need the server's public URL (`WFX_PUBLIC_URL` /
+    `publicUrl`): the callback address is built from it, never from the
+    request's Host or `X-Forwarded-*` headers. Without it they are not
+    enabled.
+  - The sign-in's state, PKCE verifier, nonce, provider and expiry (10
+    minutes) travel in one HttpOnly, SameSite=Lax cookie signed with a key
+    only the server holds. Over https it is `__Host-wfx_oauth` (Path=/,
+    Secure); over http (a local install) `wfx_oauth` on `/api/auth/oauth/`.
+    The Secure flag of this cookie and of the session cookies follows the
+    public URL's scheme (with none configured, whether the connection is
+    TLS), never `X-Forwarded-Proto`. It is cleared at the callback.
+  - Every provider uses PKCE (S256).
+  - An OIDC provider (`oidc`, `google`) needs an `issuer`, and discovery must
+    name exactly that issuer. Its token response must carry an `id_token`,
+    verified with go-oidc: RS256 or ES256 only, against the issuer's keys,
+    with `iss`, `aud` and `exp` checked. On top of that, `iat` must be present
+    and not in the future, `azp` must equal the client id when present (and is
+    required when there are several audiences), the `nonce` must match, and
+    userinfo must name the same `sub`. `github` issues no `id_token`.
+  - Errors from the provider are logged; the browser sees "sign-in failed".
+  - Accounts are keyed on (provider, subject): the verified `sub` for OIDC,
+    GitHub's numeric user id, the LDAP username. A name never finds or links
+    an account; a new subject whose name is taken gets its own account. An
+    email names an account only when the provider says it is verified.
+  - Roles mapped by `defaultRole` and `groupRoles` follow the person's groups
+    at every sign-in, granted and revoked, each change written to the audit
+    log. Roles the provider config does not mention are left alone. The last
+    superadmin is never removed this way, even when several leave the group
+    and sign in at once (the check and the change are one transaction that
+    holds the superadmin rows): the role is kept and a warning is logged.
+    The same locked check covers every way a superadmin can be removed: role
+    sync, and an admin demoting, disabling or deleting one. When every
+    remaining superadmin waits on an account link, a warning says nobody can
+    sign in as an administrator until one is confirmed.
+  - LDAP accounts are keyed on the entry's stable id (`entryUUID`, or
+    `objectGUID` on Active Directory), else the entry's own username attribute
+    (`usernameClaim`, default `uid`), never what was typed. The username
+    attribute is required only when an entry has no stable id. A binding made
+    under the typed username is re-keyed on the next sign-in, with an audit
+    line (`account … re-keyed to directory id … on sign-in as …`). The
+    directory is the source of truth: if a username was reassigned in the
+    directory before the upgrade, the old account is re-keyed to whoever
+    holds that username now. Check the audit lines after the upgrade.
+    Matching an older binding, or a legacy account by name, ignores case as
+    the directory does (`Ana@corp` is found for `ana`), with an audit line.
+    When several accounts match that way, the sign-in is refused, the audit
+    line names them all, `wfx-server link list` shows them as ambiguous, and
+    none is changed: an admin removes or renames all but one.
+  - Discovery runs on its own context with a timeout; a failure is retried
+    after a pause that grows with each failure (from 1 s to 5 min), and a
+    success is kept.
+  - An account an admin creates after the upgrade (say `alice@sso`) is not
+    picked up by a sign-in of the same name: that sign-in gets an account of
+    its own. To hand an existing account to an external sign-in, the person
+    signs in first and the admin grants roles to the account it made.
+
+  Upgrade note: the upgrade marks accounts that existed before it and look
+  external (`<user>@<provider>`, no password) and ends their sessions,
+  refresh tokens and API tokens; each signs in again. What happens then
+  depends on the provider whose name the account carries: an LDAP provider
+  binds it from the LDAP username, as it always matched. A redirect provider
+  (oidc, google, github) binds it, once, to the subject that next signs in
+  with that name, and the server log says so (`AUDIT account … linked to … on
+  first sign-in after upgrade; review`). Accounts created after the upgrade
+  are never bound by name, whatever they are called. Accounts that hold roles are re-linked on first sign-in
+  but keep no roles until an admin confirms with
+  `wfx-server link confirm NAME` (on the server, no sign-in needed;
+  `wfx-server link list` shows every binding open to review, with the name
+  the person signed in as and the subject), or a superadmin confirms with
+  `POST /api/users/{name}/link/confirm`. Until then that sign-in is refused
+  with "your account link is pending confirmation". A binding to the wrong
+  person is undone with `wfx-server link reject NAME` (or
+  `POST /api/users/{name}/link/reject`): the account is unbound and signed
+  out, no subject ever rejected for it can bind it again, and the rightful
+  owner signs in to bind it.
+
+  Without `WFX_PUBLIC_URL` the server logs a warning at startup: worker join
+  commands, hook and MCP addresses and device links then use the listen
+  address, which other machines may not reach.
 - `ldap`: a service bind, a search, then a bind as the user. Groups come from
   `memberOf`. `mock-ldap` is an in-process fake directory read from a YAML
   file, for dev and tests. It is refused off loopback unless `force: true`.

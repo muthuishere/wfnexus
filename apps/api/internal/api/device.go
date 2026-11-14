@@ -187,16 +187,17 @@ func (s *Server) deviceAuthorize(w http.ResponseWriter, r *http.Request) {
 // externalBase is the URL a human should open. The Host header is what the
 // client reached us on, which is the only address we can know is routable from
 // where the caller is.
-func (s *Server) externalBase(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
+func (s *Server) externalBase(_ *http.Request) string {
+	// The configured public URL, never the request's Host or
+	// X-Forwarded-* headers, which whoever sends the request chooses.
+	if u := s.configuredPublicURL(); u != "" {
+		return u
 	}
-	host := r.Host
-	if host == "" {
-		host = s.addr
+	host := s.addr
+	if strings.HasPrefix(host, ":") {
+		host = "localhost" + host
 	}
-	return scheme + "://" + host
+	return "http://" + host
 }
 
 // deviceToken is §3.4–3.5: the client polls here until a human decides.

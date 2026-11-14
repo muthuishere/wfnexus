@@ -65,34 +65,40 @@ func refreshCookie(r *http.Request) string {
 	return c.Value
 }
 
-func setRefreshCookie(w http.ResponseWriter, r *http.Request, value string) {
+func (s *Server) setRefreshCookie(w http.ResponseWriter, r *http.Request, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: refreshCookieName, Value: value, Path: "/api/",
 		MaxAge: int(sessionMaxAge / time.Second), HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+		SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r),
 	})
 }
 
-func secureRequest(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// secureCookies says whether the session cookies are Secure: what the public
+// URL's scheme says when one is configured, otherwise whether this very
+// connection is TLS. A request header (X-Forwarded-Proto) does not decide it.
+func (s *Server) secureCookies(r *http.Request) bool {
+	if u := s.configuredPublicURL(); u != "" {
+		return strings.HasPrefix(u, "https://")
+	}
+	return r.TLS != nil
 }
 
-func setSessionCookie(w http.ResponseWriter, r *http.Request, value string) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: value, Path: "/",
 		MaxAge: int(sessionMaxAge / time.Second), HttpOnly: true,
-		SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+		SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r),
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r),
 	})
 	http.SetCookie(w, &http.Cookie{
 		Name: refreshCookieName, Value: "", Path: "/api/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: secureRequest(r),
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r),
 	})
 }
 
@@ -131,8 +137,8 @@ func (s *Server) startSession(ctx context.Context, w http.ResponseWriter, r *htt
 	if err != nil {
 		return err
 	}
-	setSessionCookie(w, r, sess.Access)
-	setRefreshCookie(w, r, sess.Refresh)
+	s.setSessionCookie(w, r, sess.Access)
+	s.setRefreshCookie(w, r, sess.Refresh)
 	return nil
 }
 

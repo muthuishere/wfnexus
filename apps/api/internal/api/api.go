@@ -171,6 +171,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/users/{name}", s.updateUser)
 		r.Post("/users/{name}/password", s.setUserPassword)
 		r.Delete("/users/{name}", s.deleteUser)
+		// Account links pending an admin's confirmation (providers.go).
+		r.Get("/users/links", s.listPendingLinks)
+		r.Post("/users/{name}/link/confirm", s.confirmLink)
+		r.Post("/users/{name}/link/reject", s.rejectLink)
 		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
 		// be attributed and stored — see publishingEnabled. On a default
 		// single-machine install these paths 404, which is what "absent, not
