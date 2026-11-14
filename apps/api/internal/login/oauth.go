@@ -49,8 +49,14 @@ type OAuth struct {
 	cfg  config.AuthProvider
 	http *http.Client
 
-	once                     sync.Once
-	discErr                  error
+	// Discovery: done once it succeeds; a failure is retried after a
+	// growing pause (discoverBackoff, doubling to discoverMaxBackoff), never
+	// remembered for good.
+	mu                       sync.Mutex
+	ready                    bool
+	lastErr                  error
+	nextTry                  time.Time
+	backoff                  time.Duration
 	authURL, tokenURL, uiURL string
 	verifier                 *oidc.IDTokenVerifier
 }
@@ -143,38 +149,77 @@ func or(a, b string) string {
 	return b
 }
 
-// discover runs once. An OpenID provider is discovered with go-oidc, which
-// requires the discovery document's issuer to equal the configured issuer
-// exactly; endpoints in the config still win over discovered ones. A provider
-// with all three endpoints configured and no id_token (github) needs none.
-func (o *OAuth) discover(ctx context.Context) error {
-	o.once.Do(func() {
-		if !o.oidc() {
-			if o.authURL != "" && o.tokenURL != "" && o.uiURL != "" {
-				return
-			}
+// Discovery pacing. Vars so a test can shorten them.
+var (
+	discoverTimeout    = 10 * time.Second
+	discoverBackoff    = time.Second
+	discoverMaxBackoff = 5 * time.Minute
+)
+
+// discover fills the endpoints (and, for an OpenID provider, the token
+// verifier) once it succeeds. An OpenID provider is discovered with go-oidc,
+// which requires the discovery document's issuer to equal the configured
+// issuer exactly; endpoints in the config still win over discovered ones. A
+// provider with all three endpoints configured and no id_token (github) needs
+// none.
+//
+// It runs on its own context with a timeout, not the request's, so a sign-in
+// that gave up does not count as a failure; and a failure is not kept: the
+// next call after a pause (growing with each failure) tries again.
+func (o *OAuth) discover(context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ready {
+		return nil
+	}
+	if o.lastErr != nil && time.Now().Before(o.nextTry) {
+		return o.lastErr
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
+	defer cancel()
+	err := o.discoverOnce(ctx)
+	if err == nil {
+		o.ready, o.lastErr, o.backoff = true, nil, 0
+		return nil
+	}
+	if o.backoff == 0 {
+		o.backoff = discoverBackoff
+	} else if o.backoff *= 2; o.backoff > discoverMaxBackoff {
+		o.backoff = discoverMaxBackoff
+	}
+	o.lastErr, o.nextTry = err, time.Now().Add(o.backoff)
+	return err
+}
+
+func (o *OAuth) discoverOnce(ctx context.Context) error {
+	authURL, tokenURL, uiURL := o.cfg.AuthURL, o.cfg.TokenURL, o.cfg.UserInfoURL
+	var verifier *oidc.IDTokenVerifier
+	if !o.oidc() {
+		if authURL == "" || tokenURL == "" || uiURL == "" {
 			var d struct {
 				Auth     string `json:"authorization_endpoint"`
 				Token    string `json:"token_endpoint"`
 				UserInfo string `json:"userinfo_endpoint"`
 			}
-			o.discErr = o.getJSON(ctx, strings.TrimRight(o.cfg.Issuer, "/")+"/.well-known/openid-configuration", "", &d)
-			o.authURL, o.tokenURL, o.uiURL = or(o.authURL, d.Auth), or(o.tokenURL, d.Token), or(o.uiURL, d.UserInfo)
-		} else {
-			p, err := oidc.NewProvider(oidc.ClientContext(ctx, o.http), o.cfg.Issuer)
-			if err != nil {
-				o.discErr = err
-				return
+			if err := o.getJSON(ctx, strings.TrimRight(o.cfg.Issuer, "/")+"/.well-known/openid-configuration", "", &d); err != nil {
+				return err
 			}
-			ep := p.Endpoint()
-			o.authURL, o.tokenURL, o.uiURL = or(o.authURL, ep.AuthURL), or(o.tokenURL, ep.TokenURL), or(o.uiURL, p.UserInfoEndpoint())
-			o.verifier = p.Verifier(&oidc.Config{ClientID: o.cfg.ClientID, SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256}})
+			authURL, tokenURL, uiURL = or(authURL, d.Auth), or(tokenURL, d.Token), or(uiURL, d.UserInfo)
 		}
-		if o.discErr == nil && (o.authURL == "" || o.tokenURL == "" || o.uiURL == "") {
-			o.discErr = errors.New("discovery document is missing an endpoint")
+	} else {
+		p, err := oidc.NewProvider(oidc.ClientContext(ctx, o.http), o.cfg.Issuer)
+		if err != nil {
+			return err
 		}
-	})
-	return o.discErr
+		ep := p.Endpoint()
+		authURL, tokenURL, uiURL = or(authURL, ep.AuthURL), or(tokenURL, ep.TokenURL), or(uiURL, p.UserInfoEndpoint())
+		verifier = p.Verifier(&oidc.Config{ClientID: o.cfg.ClientID, SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256}})
+	}
+	if authURL == "" || tokenURL == "" || uiURL == "" {
+		return errors.New("discovery document is missing an endpoint")
+	}
+	o.authURL, o.tokenURL, o.uiURL, o.verifier = authURL, tokenURL, uiURL, verifier
+	return nil
 }
 
 func (o *OAuth) AuthCodeURL(ctx context.Context, a AuthRequest, redirectURI string) (string, error) {

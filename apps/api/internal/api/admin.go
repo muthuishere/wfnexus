@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +36,20 @@ func (s *Server) listPendingLinks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, links)
 }
 
-// confirmLink is POST /api/users/{name}/link/confirm (a superadmin; the
-// server-side `wfx-server link confirm NAME` does the same with no sign-in).
+// confirmLink is POST /api/users/{name}/link/confirm and rejectLink POST
+// /api/users/{name}/link/reject (a superadmin; the server-side `wfx-server
+// link confirm|reject NAME` does the same with no sign-in).
 func (s *Server) confirmLink(w http.ResponseWriter, r *http.Request) {
+	s.reviewLink(w, r, s.store.ConfirmLink, "confirmed")
+}
+
+func (s *Server) rejectLink(w http.ResponseWriter, r *http.Request) {
+	s.reviewLink(w, r, s.store.RejectLink, "rejected")
+}
+
+func (s *Server) reviewLink(w http.ResponseWriter, r *http.Request, do func(context.Context, string) error, verb string) {
 	name := urlName(r, "name")
-	if err := s.store.ConfirmLink(r.Context(), name); err != nil {
+	if err := do(r.Context(), name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			notFound(w)
 			return
@@ -47,7 +57,7 @@ func (s *Server) confirmLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	log.Printf("auth: AUDIT account link for %s confirmed by %s", name, actorOf(r, stepBody{}).ID)
+	log.Printf("auth: AUDIT account link for %s %s by %s", name, verb, actorOf(r, stepBody{}).ID)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

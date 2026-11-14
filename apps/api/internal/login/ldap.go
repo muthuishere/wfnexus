@@ -3,6 +3,8 @@ package login
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +19,12 @@ import (
 // UserFilter ({username} is replaced, escaped), then bind as that DN with the
 // person's password. Groups come from GroupAttr (default memberOf); a group DN
 // is reduced to its first RDN value (cn=ops,ou=… -> ops).
+//
+// The person is identified by the entry's stable id — entryUUID, or
+// objectGUID on Active Directory — and, failing both, by the entry's own
+// username attribute (UsernameClaim, default uid), never by what was typed:
+// a directory matches names loosely (case), and a username can be reassigned
+// to someone else.
 type LDAP struct{ cfg config.AuthProvider }
 
 func (l *LDAP) Authenticate(_ context.Context, username, password string) (*Identity, error) {
@@ -43,7 +51,7 @@ func (l *LDAP) Authenticate(_ context.Context, username, password string) (*Iden
 	}
 	res, err := conn.Search(ldap.NewSearchRequest(l.cfg.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
 		2, 10, false, strings.ReplaceAll(filter, "{username}", ldap.EscapeFilter(username)),
-		[]string{"dn", groupAttr}, nil))
+		[]string{"dn", groupAttr, "entryUUID", "objectGUID", l.uidAttr()}, nil))
 	if err != nil || len(res.Entries) != 1 {
 		return nil, ErrBadCredentials
 	}
@@ -55,8 +63,21 @@ func (l *LDAP) Authenticate(_ context.Context, username, password string) (*Iden
 	for _, g := range e.GetAttributeValues(groupAttr) {
 		groups = append(groups, firstRDN(g))
 	}
-	return &Identity{Provider: l.cfg.Name, Subject: username, Username: username, Groups: groups}, nil
+	canonical := e.GetAttributeValue(l.uidAttr())
+	if canonical == "" {
+		return nil, errors.New("ldap: the entry has no " + l.uidAttr() + " attribute to name the person")
+	}
+	subject := "uid:" + canonical
+	if v := e.GetAttributeValue("entryUUID"); v != "" {
+		subject = "entryUUID:" + strings.ToLower(v)
+	} else if raw := e.GetRawAttributeValue("objectGUID"); len(raw) > 0 {
+		subject = "objectGUID:" + hex.EncodeToString(raw)
+	}
+	return &Identity{Provider: l.cfg.Name, Subject: subject, LegacySubject: canonical, Username: canonical, Groups: groups}, nil
 }
+
+// uidAttr is the entry attribute that holds the person's username.
+func (l *LDAP) uidAttr() string { return or(l.cfg.UsernameClaim, "uid") }
 
 func firstRDN(dn string) string {
 	if d, err := ldap.ParseDN(dn); err == nil && len(d.RDNs) > 0 && len(d.RDNs[0].Attributes) > 0 {
@@ -78,6 +99,8 @@ type MockLDAP struct {
 		Username string   `yaml:"username"`
 		Password string   `yaml:"password"`
 		Groups   []string `yaml:"groups"`
+		// ID is the entry's stable id (entryUUID); empty: the username is.
+		ID string `yaml:"id"`
 	} `yaml:"users"`
 }
 
@@ -95,9 +118,15 @@ func LoadMockLDAP(path string) (*MockLDAP, error) {
 
 func (m *MockLDAP) Authenticate(_ context.Context, username, password string) (*Identity, error) {
 	for _, u := range m.Users {
-		if u.Username == username && password != "" &&
+		// A directory matches names regardless of case; the account is the
+		// entry's, named as the entry spells it.
+		if strings.EqualFold(u.Username, username) && password != "" &&
 			subtle.ConstantTimeCompare([]byte(u.Password), []byte(password)) == 1 {
-			return &Identity{Provider: m.provider, Subject: username, Username: username, Groups: u.Groups}, nil
+			subject := "uid:" + u.Username
+			if u.ID != "" {
+				subject = "entryUUID:" + strings.ToLower(u.ID)
+			}
+			return &Identity{Provider: m.provider, Subject: subject, LegacySubject: u.Username, Username: u.Username, Groups: u.Groups}, nil
 		}
 	}
 	return nil, ErrBadCredentials

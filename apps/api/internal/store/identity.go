@@ -78,6 +78,7 @@ func (s *Store) UserByName(ctx context.Context, name string) (*User, error) {
 // Link states of a user (users.link_state).
 const (
 	LinkLegacy  = "legacy"  // made by an external sign-in before subjects were kept: bound once, on the next sign-in
+	LinkLinked  = "linked"  // bound that way, held no roles: signs in, open to review (confirm or reject)
 	LinkConfirm = "confirm" // bound, but it held roles: signs in only after an admin confirms
 )
 
@@ -106,11 +107,36 @@ func (s *Store) SetSubject(ctx context.Context, id uuid.UUID, provider, subject 
 }
 
 // BindLegacy binds a legacy row to the subject that signed in with its name —
-// once: only while the row is still legacy — and leaves it in state ("" or
-// LinkConfirm). It reports whether it bound.
-func (s *Store) BindLegacy(ctx context.Context, id uuid.UUID, provider, subject, state string) (bool, error) {
-	return s.bind(ctx, `UPDATE users SET auth_provider=$2, auth_subject=$3, link_state=$4
-		WHERE id=$1 AND auth_subject='' AND link_state='`+LinkLegacy+`'`, id, provider, subject, state)
+// once: only while the row is still legacy, and never to a subject an admin
+// rejected for it — leaving it in state ("", LinkLinked or LinkConfirm) with
+// the name the person claimed. It reports whether it bound.
+func (s *Store) BindLegacy(ctx context.Context, id uuid.UUID, provider, subject, claim, state string) (bool, error) {
+	return s.bind(ctx, `UPDATE users SET auth_provider=$2, auth_subject=$3, auth_claim=$4, link_state=$5
+		WHERE id=$1 AND auth_subject='' AND link_state='`+LinkLegacy+`' AND link_rejected<>$3`, id, provider, subject, claim, state)
+}
+
+// ReKeySubject moves a user's binding from an old subject to a new one for
+// the same person (an LDAP binding re-keyed from the username to the entry's
+// stable id). It reports whether it moved.
+func (s *Store) ReKeySubject(ctx context.Context, provider, from, to string) (bool, error) {
+	return s.bind(ctx, `UPDATE users SET auth_subject=$3 WHERE auth_provider=$1 AND auth_subject=$2 AND $2<>''`, provider, from, to)
+}
+
+// RejectLink undoes a binding made on first sign-in after the upgrade: the
+// account is unbound, back to legacy, its sessions and tokens end, and the
+// rejected subject may not bind it again. ErrNotFound when it has no such
+// binding.
+func (s *Store) RejectLink(ctx context.Context, name string) error {
+	var id uuid.UUID
+	err := s.qrow(ctx, `UPDATE users SET link_rejected=auth_subject, auth_provider='', auth_subject='', auth_claim='', link_state=$2
+		WHERE name=$1 AND link_state IN ($3, $4) RETURNING id`, name, LinkLegacy, LinkLinked, LinkConfirm).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return s.RevokeAllUserTokens(ctx, id)
 }
 
 func (s *Store) bind(ctx context.Context, q string, args ...any) (bool, error) {
@@ -138,16 +164,21 @@ func (s *Store) HasGrants(ctx context.Context, id uuid.UUID) (bool, error) {
 	return n > 0, err
 }
 
-// PendingLink is an account bound on its first sign-in after the upgrade
-// that held roles, waiting for an admin to confirm it.
+// PendingLink is an account bound on its first sign-in after the upgrade,
+// open to review: State is LinkConfirm (held roles; signs in only once
+// confirmed) or LinkLinked (held none; signs in). Claim is the username or
+// email the person signed in with.
 type PendingLink struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider"`
 	Subject  string `json:"subject"`
+	Claim    string `json:"claim"`
+	State    string `json:"state"`
 }
 
 func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
-	rows, err := s.query(ctx, `SELECT name, auth_provider, auth_subject FROM users WHERE link_state=$1 ORDER BY name`, LinkConfirm)
+	rows, err := s.query(ctx, `SELECT name, auth_provider, auth_subject, auth_claim, link_state FROM users
+		WHERE link_state IN ($1, $2) ORDER BY name`, LinkConfirm, LinkLinked)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +186,7 @@ func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
 	out := []PendingLink{}
 	for rows.Next() {
 		var p PendingLink
-		if err := rows.Scan(&p.Name, &p.Provider, &p.Subject); err != nil {
+		if err := rows.Scan(&p.Name, &p.Provider, &p.Subject, &p.Claim, &p.State); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -163,9 +194,10 @@ func (s *Store) PendingLinks(ctx context.Context) ([]PendingLink, error) {
 	return out, rows.Err()
 }
 
-// ConfirmLink confirms a pending link; ErrNotFound when the user has none.
+// ConfirmLink confirms a link under review; ErrNotFound when the user has
+// none.
 func (s *Store) ConfirmLink(ctx context.Context, name string) error {
-	tag, err := s.exec(ctx, `UPDATE users SET link_state='' WHERE name=$1 AND link_state=$2`, name, LinkConfirm)
+	tag, err := s.exec(ctx, `UPDATE users SET link_state='' WHERE name=$1 AND link_state IN ($2, $3)`, name, LinkConfirm, LinkLinked)
 	if err != nil {
 		return err
 	}

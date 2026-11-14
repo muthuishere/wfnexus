@@ -96,6 +96,14 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	}
 	provider := p.Config.Name
 	u, err := s.store.UserBySubject(ctx, provider, id.Subject)
+	if errors.Is(err, store.ErrNotFound) && id.LegacySubject != "" && id.LegacySubject != id.Subject {
+		// The same person bound under the subject an older version used (an
+		// LDAP username): moved to the stable one, once.
+		if ok, rerr := s.store.ReKeySubject(ctx, provider, id.LegacySubject, id.Subject); rerr == nil && ok {
+			log.Printf("auth: AUDIT %s binding %q re-keyed to %s", provider, id.LegacySubject, id.Subject)
+			u, err = s.store.UserBySubject(ctx, provider, id.Subject)
+		}
+	}
 	switch {
 	case err == nil:
 	case !errors.Is(err, store.ErrNotFound):
@@ -132,7 +140,7 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 	if legacy, err := s.store.UserByName(ctx, name); err == nil {
 		if st, _ := s.store.LinkState(ctx, legacy.ID); st == store.LinkLegacy {
 			if p.Redirect == nil {
-				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, ""); err != nil {
+				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, id.Username, ""); err != nil {
 					return nil, err
 				} else if ok {
 					return legacy, nil
@@ -142,14 +150,14 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 				if err != nil {
 					return nil, err
 				}
-				state := ""
+				state := store.LinkLinked
 				if grants {
 					state = store.LinkConfirm
 				}
-				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, state); err != nil {
+				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, id.Username, state); err != nil {
 					return nil, err
 				} else if ok {
-					note := "review"
+					note := "review with `wfx-server link list`; `wfx-server link reject " + name + "` undoes it"
 					if grants {
 						// Nothing it held before keeps it signed in meanwhile.
 						if err := s.store.RevokeAllUserTokens(ctx, legacy.ID); err != nil {
@@ -192,6 +200,7 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 // role the provider config can grant (defaultRole and every groupRoles value)
 // is granted when the person's groups call for it now and revoked when they
 // no longer do. Roles the provider config does not mention are left alone.
+// Each grant and revoke that changes something is written to the audit log.
 func (s *Server) syncRoles(ctx context.Context, p *login.Provider, u *store.User, groups []string) {
 	want := map[string]bool{}
 	if p.Config.DefaultRole != "" {
@@ -203,26 +212,60 @@ func (s *Server) syncRoles(ctx context.Context, p *login.Provider, u *store.User
 		}
 	}
 	managed := map[string]bool{}
-	if p.Config.DefaultRole != "" {
-		managed[p.Config.DefaultRole] = true
+	for r := range want {
+		managed[r] = true
 	}
 	for _, r := range p.Config.GroupRoles {
 		if r != "" {
 			managed[r] = true
 		}
 	}
+	held := s.heldSpecs(ctx, u)
 	for spec := range managed {
-		if !want[spec] {
-			if err := s.revokeSpec(ctx, u, spec); err != nil {
-				log.Printf("auth: %s: revoke %s: %v", p.Config.Name, spec, err)
-			}
+		if want[spec] || !held[specKey(spec)] {
+			continue
+		}
+		if changed, err := s.revokeSpec(ctx, u, spec); err != nil {
+			log.Printf("auth: %s: revoke %s from %s: %v", p.Config.Name, spec, u.Name, err)
+		} else if changed {
+			log.Printf("auth: AUDIT role sync (%s): revoked %s from %s", p.Config.Name, spec, u.Name)
 		}
 	}
 	for spec := range want {
+		if held[specKey(spec)] {
+			continue
+		}
 		if err := s.grantSpec(ctx, u, spec); err != nil {
-			log.Printf("auth: %s: %v", p.Config.Name, err)
+			log.Printf("auth: %s: grant %s to %s: %v", p.Config.Name, spec, u.Name, err)
+		} else {
+			log.Printf("auth: AUDIT role sync (%s): granted %s to %s", p.Config.Name, spec, u.Name)
 		}
 	}
+}
+
+// heldSpecs is what the user holds, in specKey form.
+func (s *Server) heldSpecs(ctx context.Context, u *store.User) map[string]bool {
+	held := map[string]bool{}
+	if u.Role == RoleSuperadmin {
+		held[RoleSuperadmin] = true
+	}
+	if ms, err := s.store.GrantsOf(ctx, u.ID); err == nil {
+		for _, m := range ms {
+			held[m.Role+":"+m.Name] = true
+		}
+	}
+	return held
+}
+
+// specKey is a role spec as heldSpecs writes it: "superadmin", or
+// "<role>:<name>".
+func specKey(spec string) string {
+	role, name, _ := strings.Cut(strings.TrimSpace(spec), ":")
+	role = normalizeRole(role)
+	if role == RoleSuperadmin {
+		return role
+	}
+	return role + ":" + name
 }
 
 func (s *Server) oauthProvider(w http.ResponseWriter, r *http.Request) *login.Provider {

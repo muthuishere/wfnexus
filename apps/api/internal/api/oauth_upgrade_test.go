@@ -36,7 +36,7 @@ func TestALegacyLDAPAccountBindsFromItsUsername(t *testing.T) {
 	if w := providerSignIn(h, "corp", "ana", "ana-long-password"); w.Code != 200 {
 		t.Fatalf("ldap sign-in: %d %s", w.Code, w.Body)
 	}
-	u, err := st.UserBySubject(context.Background(), "corp", "ana")
+	u, err := st.UserBySubject(context.Background(), "corp", "uid:ana")
 	if err != nil || u.Name != "ana@corp" || u.Role != RoleSuperadmin {
 		t.Fatalf("bound = %+v %v", u, err)
 	}

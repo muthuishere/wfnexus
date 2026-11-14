@@ -32,11 +32,11 @@ func TestServerConsoleConfirmsAPendingLink(t *testing.T) {
 	if _, err := st.DB().Exec(`UPDATE users SET link_state='legacy' WHERE name='carol@sso'`); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := st.BindLegacy(ctx, u.ID, "sso", "42", store.LinkConfirm); err != nil || !ok {
+	if ok, err := st.BindLegacy(ctx, u.ID, "sso", "42", "carol", store.LinkConfirm); err != nil || !ok {
 		t.Fatalf("bind: %v %v", ok, err)
 	}
 	// A second subject cannot re-bind it.
-	if ok, _ := st.BindLegacy(ctx, u.ID, "sso", "99", ""); ok {
+	if ok, _ := st.BindLegacy(ctx, u.ID, "sso", "99", "carol", ""); ok {
 		t.Fatal("a bound account was bound again")
 	}
 	if ok, _ := st.SetSubject(ctx, uuid.New(), "sso", "42"); ok {

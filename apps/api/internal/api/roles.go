@@ -259,30 +259,37 @@ func (s *Server) grantSpec(ctx context.Context, u *store.User, spec string) erro
 	return errors.New("unknown role " + spec)
 }
 
-// revokeSpec takes away what grantSpec gives for the same spec.
-func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) error {
+// revokeSpec takes away what grantSpec gives for the same spec, and says
+// whether anything changed.
+func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) (bool, error) {
 	role, name, _ := strings.Cut(strings.TrimSpace(spec), ":")
 	role = normalizeRole(role)
 	switch role {
 	case "":
-		return nil
+		return false, nil
 	case RoleSuperadmin:
 		if u.Role != RoleSuperadmin {
-			return nil
+			return false, nil
 		}
 		// The host keeps an administrator: a group change never takes the
 		// last one away. It is logged for someone to sort out instead.
 		if n, err := s.store.CountAdminsExcept(ctx, u.Name); err != nil {
-			return err
+			return false, err
 		} else if n == 0 {
 			log.Printf("auth: WARNING %s left the group that grants superadmin but is the only superadmin; the role is kept — add another superadmin, then sign in again to have it removed", u.Name)
-			return nil
+			return false, nil
 		}
-		return s.store.SetUserRole(ctx, u.Name, "")
-	case store.ProjectAdmin:
-		return s.store.RemoveMember(ctx, store.MemberProject, name, u.ID)
-	case store.WorkflowAdmin, store.WorkflowRunner:
-		return s.store.RemoveMember(ctx, store.MemberWorkflow, name, u.ID)
+		return true, s.store.SetUserRole(ctx, u.Name, "")
+	case store.ProjectAdmin, store.WorkflowAdmin, store.WorkflowRunner:
+		scope := store.MemberWorkflow
+		if role == store.ProjectAdmin {
+			scope = store.MemberProject
+		}
+		err := s.store.RemoveMember(ctx, scope, name, u.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		return err == nil, err
 	}
-	return errors.New("unknown role " + spec)
+	return false, errors.New("unknown role " + spec)
 }
