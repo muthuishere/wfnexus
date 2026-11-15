@@ -252,13 +252,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		if reached || !failed || ctx.Err() != nil || i == len(chain)-1 {
 			break
 		}
-		why := e.clipScrubbed(runID, a.res.Text, 300)
-		if a.err != nil {
-			why = e.clipScrubbed(runID, a.err.Error(), len(a.err.Error()))
-		}
-		e.emit(ctx, runID, step.ID, "log", map[string]any{
-			"text": fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, chain[i+1]),
-		})
+		e.emit(ctx, runID, step.ID, "log", map[string]any{"text": e.fallbackLine(runID, name, chain[i+1], a.res.Text, a.err)})
 	}
 	if a.err != nil {
 		return stepResult{}, a.err
@@ -305,9 +299,24 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 	default:
 		// The runtime reports no structured limit, so the reason is stated in
 		// full rather than guessed at (spikes/15).
-		return stepResult{}, fmt.Errorf("step %s stopped as %q without a valid result: %s",
-			step.ID, res.Status, e.clipScrubbed(runID, res.Text, 500))
+		return stepResult{}, e.stoppedError(runID, step.ID, res.Status, res.Text)
 	}
+}
+
+// fallbackLine is the log line for a provider that failed: its reply (or
+// error) quoted, scrubbed whole and then cut.
+func (e *Engine) fallbackLine(runID uuid.UUID, name, next, reply string, err error) string {
+	why := e.clipScrubbed(runID, reply, 300)
+	if err != nil {
+		why = e.clipScrubbed(runID, err.Error(), len(err.Error()))
+	}
+	return fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, next)
+}
+
+// stoppedError is the error of an agent step that stopped without a valid
+// result: its last reply quoted, scrubbed whole and then cut.
+func (e *Engine) stoppedError(runID uuid.UUID, stepID, status, reply string) error {
+	return fmt.Errorf("step %s stopped as %q without a valid result: %s", stepID, status, e.clipScrubbed(runID, reply, 500))
 }
 
 // askHumanGranted reports whether this step may interrupt a person: the tool
