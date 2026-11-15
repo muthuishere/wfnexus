@@ -55,8 +55,9 @@ A step gets its secrets as environment variables: env-store values, and any
 credential-shaped name (`*_TOKEN`, `*_KEY`, …). If a step prints one, the
 platform removes it **before anything is stored**: stdout and stderr, the
 step's output and raw text, its error, the run's outcome, events, artifacts,
-a paused step's question (and what notifiers send of it), and a worker's
-report and live log. Text is scrubbed before it is shortened, and where a
+a paused step's question (and what notifiers send of it), what it writes to
+`$WFX_STATE` (kept as workflow state beyond the run), and a worker's report
+and live log. Text is scrubbed before it is shortened, and where a
 worker shortened it first, a piece of a value left at the cut is removed too.
 
 What is matched:
@@ -68,11 +69,18 @@ What is matched:
 - hex (either case) and URL-encoded (query and path) forms;
 - inside JSON: every JSON string is decoded before it is scrubbed, so any
   escape spelling is caught (`\/` as PHP writes it, `\uXXXX` as Python's
-  `json.dumps` or `jq --ascii-output` write it, `&` for `&`). A string
+  `json.dumps` or `jq --ascii-output` write it, `\u0026` for `&`). A string
   whose text is itself a JSON document (a step that printed JSON) is decoded
-  and scrubbed the same way, up to 4 levels deep;
-- in text that is not a JSON document (a log line), each of the forms above
-  JSON-escaped once, with and without `& < >` escaped.
+  and scrubbed the same way, up to 4 levels deep. Deeper than that, a JSON
+  value holding a secret anywhere inside is replaced whole by
+  `[redacted:nested JSON]`;
+- in text that is not one JSON document — a JSON output cut to size, NDJSON,
+  JSON inside a log line, JSON Go cannot parse, an error message — the text
+  is also read with its JSON escapes decoded (`\/`, `\uXXXX`, `\"`, `\\`,
+  `\n` and the rest), so the same spellings are caught there.
+
+Numbers in a scrubbed JSON document keep their digits (a 20-digit id is not
+rounded), and a document with nothing to redact is stored exactly as it was.
 
 In its place, stored text shows `[redacted:NAME]`.
 
@@ -81,17 +89,19 @@ carries a secret. To hand a credential to a later step, give that step the
 same environment variable; don't print it and read it back.
 
 Limits (not caught):
-- Values shorter than 6 characters are never redacted (too many false hits).
+- Values shorter than 6 characters are never redacted (too many false hits);
+  the server log warns, naming the variable, when one is registered.
 - A value split across lines (other than wrapped base64) or across separate
   strings, e.g. printed in two halves.
 - A value printed as a JSON number, or numeric text a tool reformats.
-- JSON nested deeper than 4 levels of JSON-in-a-string: below that, strings
-  are scrubbed as text only, so an escaped spelling there survives.
-- A JSON fragment inside a log line (not a whole document) is only matched in
-  the common escape spellings, not `\/` or `\uXXXX`.
+- Other encodings: base32, URL encoding with lowercase `%xx`, hex in mixed
+  case, HTML entities (`&#47;`, `&amp;`).
+- At a cut, a piece of a value is removed when it sits right before the
+  truncation marker and is at least 4 characters long (6 before a bare `…`,
+  which also ends ordinary sentences); a shorter piece stays.
 - The marker names the variable. Whoever can get a value printed can see that
   it matched; don't let outside input choose what a step prints.
-- `wfx state set` values are stored as given, not scrubbed: never put a
-  secret in state.
+- `wfx state set` values (set from the CLI or API, not by a step) are stored
+  as given, not scrubbed: never put a secret in state.
 - A value a worker resolves on its own machine never reaches the platform, so
   the platform cannot scrub it from that worker's report.
