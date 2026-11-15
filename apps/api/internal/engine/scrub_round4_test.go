@@ -110,9 +110,9 @@ func TestClipScrubsTheWholeTextBeforeItCuts(t *testing.T) {
 	if got := clip("short "+r4Secret, 1000, secrets, moreBytes); got != "short [redacted:R4_TOKEN]" {
 		t.Fatalf("an uncut text is still scrubbed: %q", got)
 	}
-	// A piece already cut by someone else (a worker), cut again right after
-	// it: removed at the new cut too.
-	got := clip(pad+r4Secret[:8]+"\n… truncated", len(pad)+8, secrets, moreBytes)
+	// A piece of a value printed apart from the rest (no whole form to
+	// match), cut right after it: removed at the cut.
+	got := clip(pad+r4Secret[:8]+" and the rest later", len(pad)+8, secrets, moreBytes)
 	if strings.Contains(got, r4Secret[:8]) {
 		t.Fatalf("a piece at the cut survived: %q", got)
 	}

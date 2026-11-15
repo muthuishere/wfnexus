@@ -332,7 +332,7 @@ func TestARemoteStepsOutputIsScrubbedBeforeItIsCut(t *testing.T) {
 			}
 		}
 		res := eventTexts(t, h.store, run.ID)
-		if n := pieceBefore(res, "\n… (", r4Secret); n > 0 {
+		if n := pieceBefore(res, `\n… (`, r4Secret); n > 0 { // as JSON spells it
 			t.Fatalf("off=%d an event keeps %d characters", off, n)
 		}
 	}
