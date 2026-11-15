@@ -252,9 +252,9 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		if reached || !failed || ctx.Err() != nil || i == len(chain)-1 {
 			break
 		}
-		why := scrub(trim(a.res.Text, 300))
+		why := e.clipScrubbed(runID, a.res.Text, 300)
 		if a.err != nil {
-			why = scrub(a.err.Error())
+			why = e.clipScrubbed(runID, a.err.Error(), len(a.err.Error()))
 		}
 		e.emit(ctx, runID, step.ID, "log", map[string]any{
 			"text": fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, chain[i+1]),
@@ -301,12 +301,12 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		spent.Output = ensureConfidence(submitted)
 		return spent, nil
 	case res.IsError || res.Status == "error":
-		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, scrub(res.Text))
+		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, e.clipScrubbed(runID, res.Text, len(res.Text)))
 	default:
 		// The runtime reports no structured limit, so the reason is stated in
 		// full rather than guessed at (spikes/15).
 		return stepResult{}, fmt.Errorf("step %s stopped as %q without a valid result: %s",
-			step.ID, res.Status, scrub(trim(res.Text, 500)))
+			step.ID, res.Status, e.clipScrubbed(runID, res.Text, 500))
 	}
 }
 
@@ -495,7 +495,7 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 		AfterTool: func(_ context.Context, ev tn.AfterToolEvent) (*tn.ToolOverride, error) {
 			e.emit(ctx, runID, stepID, "tool_result", map[string]any{
 				"name": ev.Name, "id": ev.ID, "isError": ev.Result.IsError,
-				"output": trim(scrub(ev.Result.Output), maxEventOutput),
+				"output": e.clipScrubbed(runID, ev.Result.Output, maxEventOutput),
 			})
 			return nil, nil
 		},
@@ -523,12 +523,18 @@ func lastTurnsWarning(turns int) int {
 	return n
 }
 
-func trim(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := runeCut(s, n)
-	return cut + fmt.Sprintf("\n… (%d more bytes)", len(s)-len(cut))
+// trim shortens a text that holds no run's secrets (an authoring preview).
+// Anything from a run is shortened by clipRun or clipScrubbed instead, which
+// scrub the whole text before the cut.
+func trim(s string, n int) string { return clip(s, n, nil, moreBytes) }
+
+// clipScrubbed is clipRun for text that may also carry provider account
+// identifiers (scrub): the run's secrets are removed first, so the
+// identifier patterns cannot take part of a secret and leave the rest; then
+// the identifiers; then the cut.
+func (e *Engine) clipScrubbed(runID uuid.UUID, text string, n int) string {
+	secrets := e.redactions.get(runID)
+	return clip(scrub(redactText(text, secrets)), n, secrets, moreBytes)
 }
 
 // assistantText pulls the visible assistant text out of a raw provider response.

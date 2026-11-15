@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -371,6 +373,10 @@ func (e *Engine) runSend(ctx context.Context, runID uuid.UUID, step *workflow.St
 	if err != nil {
 		return nil, err
 	}
+	// What leaves the platform is scrubbed of the run's secret values: the
+	// text and a file attachment (scrubAttachment).
+	secrets := e.redactions.get(runID)
+	text = redactText(text, secrets)
 	attach, err := render("attachment", s.Attachment)
 	if err != nil {
 		return nil, err
@@ -393,6 +399,14 @@ func (e *Engine) runSend(ctx context.Context, runID uuid.UUID, step *workflow.St
 		a, err := sendAttachment(attach, data.WorkDir)
 		if err != nil {
 			return nil, err
+		}
+		if a.Path != "" {
+			clean, done, err := scrubAttachment(a.Path, secrets)
+			if err != nil {
+				return nil, err
+			}
+			defer done()
+			a.Path = clean
 		}
 		if a.Kind, err = render("attachment_kind", s.AttachmentKind); err != nil {
 			return nil, err
@@ -554,6 +568,39 @@ func sendAttachment(attach, workDir string) (*notify.Attachment, error) {
 		return nil, fmt.Errorf("send.attachment %q is outside the run's workspace; refused", attach)
 	}
 	return &notify.Attachment{Path: p, Filename: filepath.Base(p)}, nil
+}
+
+// scrubAttachment returns the file to send in place of path: path itself when
+// it holds none of the run's secret values, else a scrubbed copy in a
+// temporary directory (removed by done). The workspace file is not changed.
+// A file that is not text cannot be scrubbed without breaking it, so one that
+// holds a secret value is refused.
+func scrubAttachment(path string, secrets []secretValue) (clean string, done func(), err error) {
+	done = func() {}
+	if len(secrets) == 0 {
+		return path, done, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("send.attachment: %w", err)
+	}
+	s := redactText(string(b), secrets)
+	if s == string(b) {
+		return path, done, nil
+	}
+	if !utf8.Valid(b) {
+		return "", nil, fmt.Errorf("send.attachment %s holds a secret value of this run and is not text, so it cannot be scrubbed; refused", filepath.Base(path))
+	}
+	dir, err := os.MkdirTemp("", "wfx-send-")
+	if err != nil {
+		return "", nil, err
+	}
+	clean = filepath.Join(dir, filepath.Base(path))
+	if err := os.WriteFile(clean, []byte(s), 0o600); err != nil {
+		os.RemoveAll(dir)
+		return "", nil, err
+	}
+	return clean, func() { os.RemoveAll(dir) }, nil
 }
 
 // ---- receiving ----

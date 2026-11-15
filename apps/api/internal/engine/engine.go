@@ -533,8 +533,13 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 	e.afterRunStatus(ctx, runID, status)
 	if status == "done" || status == "failed" || status == "cancelled" {
 		// The run is over: the redactor built from its secrets leaves the
-		// cache (runSecrets.dropRedactor says why the secrets stay).
+		// cache, and the secrets themselves leave memory endedSecretsGrace
+		// later (runSecrets.markEnded).
 		e.redactions.dropRedactor(runID)
+		e.redactions.markEnded(runID)
+	} else {
+		// Running again (resumed, answered, retried) or parked: not ended.
+		e.redactions.markRunning(runID)
 	}
 }
 

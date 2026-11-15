@@ -95,11 +95,7 @@ func readCapped(path string, n int, secrets []secretValue) string {
 	if err != nil {
 		return ""
 	}
-	s := redactText(string(b), secrets)
-	if len(s) > n {
-		s = runeCut(s, n) + summaryCutMarker
-	}
-	return s
+	return clip(string(b), n, secrets, func(int) string { return summaryCutMarker })
 }
 
 // summaryCutMarker ends a story file that was cut (cutMarkers knows it).

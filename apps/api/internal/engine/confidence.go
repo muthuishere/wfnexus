@@ -69,10 +69,8 @@ func ensureConfidence(out map[string]any) map[string]any {
 	if out == nil {
 		return out
 	}
-	if _, ok := out["confidence"].(float64); !ok {
-		if _, isInt := out["confidence"].(int); !isInt {
-			out["confidence"] = 0.0
-		}
+	if _, ok := confidenceOf(out); !ok {
+		out["confidence"] = 0.0
 	}
 	if s, _ := out["why"].(string); s == "" {
 		out["why"] = "not reported"
