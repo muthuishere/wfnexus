@@ -99,9 +99,6 @@ func (f *fakeLLM) writeTurn(w http.ResponseWriter, tn turn, n int) {
 			})
 		}
 		msg["content"] = nil
-		if tn.text != "" {
-			msg["content"] = tn.text // text alongside the calls
-		}
 		msg["tool_calls"] = tcs
 	} else {
 		msg["content"] = tn.text

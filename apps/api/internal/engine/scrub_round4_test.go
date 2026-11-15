@@ -86,7 +86,7 @@ func TestCutHandlesEveryMarkerWhereItIs(t *testing.T) {
 func TestClipScrubsTheWholeTextBeforeItCuts(t *testing.T) {
 	secrets := r4Secrets()
 	pad := strings.Repeat(".", 100)
-	oldLeaks := 0
+	oldKept := 0
 	for off := 1; off < len(r4Secret); off++ {
 		for _, lead := range []string{"", "x\n… truncated y "} {
 			text := lead + pad + r4Secret + " tail"
@@ -100,11 +100,11 @@ func TestClipScrubsTheWholeTextBeforeItCuts(t *testing.T) {
 			}
 			// The cut-first order, for comparison: it keeps a piece.
 			if old := redactText(trim(text, n), secrets); pieceBefore(old, "\n… (", r4Secret) > 0 {
-				oldLeaks++
+				oldKept++
 			}
 		}
 	}
-	if oldLeaks == 0 {
+	if oldKept == 0 {
 		t.Fatal("the cut-first order kept nothing; this test cannot tell the orders apart")
 	}
 	if got := clip("short "+r4Secret, 1000, secrets, moreBytes); got != "short [redacted:R4_TOKEN]" {
@@ -618,5 +618,31 @@ func TestAWorkersDiffIsScrubbed(t *testing.T) {
 		Agent: &AgentOutcome{Diff: []byte("+token = \"" + r4Secret + "\"\n")}})
 	if res.Agent == nil || strings.Contains(string(res.Agent.Diff), r4Secret) || !strings.Contains(string(res.Agent.Diff), "[redacted:R4_TOKEN]") {
 		t.Fatalf("diff %q", res.Agent.Diff)
+	}
+}
+
+// A quoted error is scrubbed whole and never cut, even when the marker is
+// longer than the value it replaces.
+func TestAQuotedErrorIsNotCutByItsRedaction(t *testing.T) {
+	e, _ := sinkEngine(t)
+	runID := uuid.New()
+	e.redactions.add(runID, map[string]string{"DB_PASSWORD": "pw-12345"}, nil)
+	line := e.fallbackLine(runID, "dead", "mock", "", errors.New("dial: auth pw-12345 refused by host"))
+	if strings.Contains(line, "pw-12345") || strings.Contains(line, "more bytes") || !strings.HasSuffix(line, "refused by host) — falling back to mock") {
+		t.Fatalf("line = %q", line)
+	}
+}
+
+// scrubResult scrubs both what an agent step submitted and the question it
+// paused on (every field: the kind is sent to notifiers as it is).
+func TestScrubResultScrubsOutputAndQuestion(t *testing.T) {
+	e, _ := sinkEngine(t)
+	runID := uuid.New()
+	e.redactions.add(runID, map[string]string{"R4_TOKEN": r4Secret}, nil)
+	res := stepResult{Output: map[string]any{"finding": "saw " + r4Secret},
+		Pending: &tn.Request{ID: "q", Kind: "input " + r4Secret, Prompt: "is " + r4Secret + " right?"}}
+	e.scrubResult(runID, &res)
+	if s := fmt.Sprint(res.Output, *res.Pending); strings.Contains(s, r4Secret) {
+		t.Fatalf("kept: %s", s)
 	}
 }

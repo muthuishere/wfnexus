@@ -288,13 +288,8 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.failStep(ctx, runID, step.ID, err)
 		return nil, stepHalted
 	}
-	res.Output = scrubOutput(res.Output, e.redactions.get(runID))
+	e.scrubResult(runID, &res)
 	if res.Pending != nil {
-		// The question an agent asks can quote what it saw. Each place it
-		// goes scrubs it, and each of those is tested on its own: the step
-		// row (setStep: Pending, Error), the run row (setRun) and what is
-		// sent (notifyPause).
-		//
 		// Request.URL is the field an answer-here link belongs in, and it was
 		// stored empty until now. It is a POINTER at our own UI — never a link
 		// that resolves the pause by itself (ADR 0021).
@@ -327,6 +322,15 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	return res.Output, stepDone
+}
+
+// scrubResult removes the run's secret values from what an agent step
+// produced, before anything keeps it, sends it or hands it to a later step:
+// its output, and the question it paused on (which can quote what it saw).
+func (e *Engine) scrubResult(runID uuid.UUID, res *stepResult) {
+	secrets := e.redactions.get(runID)
+	res.Output = scrubOutput(res.Output, secrets)
+	res.Pending = scrubPending(res.Pending, secrets)
 }
 
 // executeNode runs the non-agent kinds, with the step's retry policy applied

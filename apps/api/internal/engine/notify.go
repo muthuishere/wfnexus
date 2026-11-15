@@ -61,6 +61,7 @@ func (e *Engine) notifyPause(ctx context.Context, runID uuid.UUID, stepID, kind,
 	// whichever caller built the prompt.
 	secrets := e.redactions.get(runID)
 	prompt = redactTextCut(prompt, secrets)
+	kind = redactText(kind, secrets)
 	req = scrubPending(req, secrets)
 	ns := e.notifiers()
 	// No early return when there are no notifiers: the default CHANNEL is

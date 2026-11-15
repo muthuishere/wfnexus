@@ -138,13 +138,13 @@ func TestNotifyPauseScrubsWhatItSends(t *testing.T) {
 		var p notify.Pause
 		_ = json.NewDecoder(r.Body).Decode(&p)
 		mu.Lock()
-		got = append(got, p.Prompt+" | "+p.URL)
+		got = append(got, p.Kind+" | "+p.Prompt+" | "+p.URL)
 		mu.Unlock()
 		w.WriteHeader(204)
 	}))
 	defer sink.Close()
 	h.eng.catalog.Notifiers.Add(catalog.Notifier{Name: "r4sink", Kind: "webhook", URL: sink.URL}, "test")
-	h.eng.notifyPause(context.Background(), id, "s", "input", "is "+r4Secret+" right?",
+	h.eng.notifyPause(context.Background(), id, "s", "input "+r4Secret, "is "+r4Secret+" right?",
 		&tn.Request{ID: "q", Kind: "input", URL: "https://example.test/answer?t=" + r4Secret})
 	mu.Lock()
 	defer mu.Unlock()

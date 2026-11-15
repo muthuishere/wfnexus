@@ -295,7 +295,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		spent.Output = ensureConfidence(submitted)
 		return spent, nil
 	case res.IsError || res.Status == "error":
-		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, e.clipScrubbed(runID, res.Text, len(res.Text)))
+		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, e.scrubQuoted(runID, res.Text))
 	default:
 		// The runtime reports no structured limit, so the reason is stated in
 		// full rather than guessed at (spikes/15).
@@ -308,7 +308,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 func (e *Engine) fallbackLine(runID uuid.UUID, name, next, reply string, err error) string {
 	why := e.clipScrubbed(runID, reply, 300)
 	if err != nil {
-		why = e.clipScrubbed(runID, err.Error(), len(err.Error()))
+		why = e.scrubQuoted(runID, err.Error())
 	}
 	return fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, next)
 }
@@ -536,6 +536,13 @@ func lastTurnsWarning(turns int) int {
 // Anything from a run is shortened by clipRun or clipScrubbed instead, which
 // scrub the whole text before the cut.
 func trim(s string, n int) string { return clip(s, n, nil, moreBytes) }
+
+// scrubQuoted is a quoted reply or error, not cut: the run's secrets removed
+// first, then provider identifiers (scrub), so a pattern cannot take part of
+// a secret and leave the rest.
+func (e *Engine) scrubQuoted(runID uuid.UUID, text string) string {
+	return scrub(redactText(text, e.redactions.get(runID)))
+}
 
 // clipScrubbed is clipRun for text that may also carry provider account
 // identifiers (scrub): the run's secrets are removed first, so the
