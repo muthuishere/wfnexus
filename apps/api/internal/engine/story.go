@@ -116,7 +116,9 @@ func (e *Engine) collectStory(ctx context.Context, runID uuid.UUID, stepID strin
 	if oc != "" {
 		out["outcome"] = oc
 	}
-	if raw := strings.TrimSpace(readCapped(f.state, maxSummaryBytes, nil)); raw != "" {
+	// What a step writes to WFX_STATE is kept beyond the run (workflow state),
+	// so it is scrubbed like the summary.
+	if raw := strings.TrimSpace(readCapped(f.state, maxSummaryBytes, secrets)); raw != "" {
 		if err := e.publishState(ctx, e.workflowOfRun(ctx, runID), raw); err != nil {
 			e.emit(ctx, runID, stepID, "log", map[string]any{"message": fmt.Sprintf("%s: %v", EnvState, err)})
 		}

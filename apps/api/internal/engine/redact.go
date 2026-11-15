@@ -7,15 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 	tn "github.com/muthuishere/toolnexus/golang"
@@ -58,6 +61,7 @@ type runSecrets struct {
 	mu     sync.Mutex
 	byID   map[uuid.UUID][]secretValue
 	sealed map[uuid.UUID]map[string]bool
+	warned map[string]bool // short-value warnings already logged, by name
 }
 
 // sealedNames are the variable names this run got from the platform's sealed
@@ -86,7 +90,19 @@ func (r *runSecrets) add(runID uuid.UUID, env map[string]string, sealed map[stri
 		have[s.value] = true
 	}
 	for k, v := range env {
-		if len(v) < minRedactLen || have[v] || !(sealed[k] || workflow.SecretName(k)) {
+		if !(sealed[k] || workflow.SecretName(k)) || have[v] {
+			continue
+		}
+		if len(v) < minRedactLen {
+			// Too short to redact without destroying ordinary text; said once
+			// per name, never with the value.
+			if v != "" && !r.warned[k] {
+				if r.warned == nil {
+					r.warned = map[string]bool{}
+				}
+				r.warned[k] = true
+				log.Printf("engine: WARNING secret %s is shorter than %d characters and is not redacted from output", k, minRedactLen)
+			}
 			continue
 		}
 		r.byID[runID] = append(r.byID[runID], secretValue{k, v})
@@ -96,16 +112,45 @@ func (r *runSecrets) add(runID uuid.UUID, env map[string]string, sealed map[stri
 	sort.Slice(r.byID[runID], func(i, j int) bool { return len(r.byID[runID][i].value) > len(r.byID[runID][j].value) })
 }
 
+// get is a copy of the run's secrets: add sorts the stored slice in place, so
+// handing that slice out would race with a concurrent add.
 func (r *runSecrets) get(runID uuid.UUID) []secretValue {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.byID[runID]
+	return append([]secretValue(nil), r.byID[runID]...)
 }
 
+// forget drops a run's secrets, and the cached redactor built from them, so
+// no plaintext of a finished run stays in memory.
 func (r *runSecrets) forget(runID uuid.UUID) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	secrets := r.byID[runID]
 	delete(r.byID, runID)
+	delete(r.sealed, runID)
+	r.mu.Unlock()
+	if len(secrets) > 0 {
+		k := redactorKey(secrets)
+		redactorMu.Lock()
+		delete(redactorCache, k)
+		redactorMu.Unlock()
+	}
+}
+
+// dropRedactor drops the cached redactor built from a run's secrets, when the
+// run ends. The secrets themselves stay: a cancelled run's step, a parallel
+// branch or a retry can still write after the terminal status, and must still
+// be scrubbed (a dropped redactor is rebuilt on demand).
+func (r *runSecrets) dropRedactor(runID uuid.UUID) {
+	r.mu.Lock()
+	secrets := r.byID[runID]
+	r.mu.Unlock()
+	if len(secrets) == 0 {
+		return
+	}
+	k := redactorKey(secrets)
+	redactorMu.Lock()
+	delete(redactorCache, k)
+	redactorMu.Unlock()
 }
 
 // redactText replaces every sensitive value of the run in a plain string —
@@ -133,8 +178,8 @@ func redactEvent(payload any, secrets []secretValue) any {
 	if err != nil {
 		return payload
 	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeNumbers(raw)
+	if err != nil {
 		return payload
 	}
 	out, changed := redactorFor(secrets).tree(v, 0)
@@ -144,9 +189,32 @@ func redactEvent(payload any, secrets []secretValue) any {
 	return out
 }
 
-// maxJSONDepth is how many levels of JSON-inside-a-string are decoded and
-// scrubbed. Deeper than that, a string is scrubbed as text only.
+// decodeNumbers decodes JSON keeping numbers as written (json.Number), so a
+// large integer is not rounded through float64 on its way back out.
+func decodeNumbers(raw []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	if dec.More() {
+		return nil, errors.New("trailing data")
+	}
+	return v, nil
+}
+
+// maxJSONDepth is how many levels of JSON-inside-a-string are decoded,
+// scrubbed and written back. Deeper than that, a JSON value is searched for
+// secrets to further levels and, if one is found, replaced whole by a marker.
 const maxJSONDepth = 4
+
+// maxSearchDepth bounds that search.
+const maxSearchDepth = 16
+
+// deepMarker replaces a JSON value nested beyond maxJSONDepth that holds a
+// secret.
+const deepMarker = "[redacted:nested JSON]"
 
 // truncation markers the platform appends when it shortens a text (the
 // engine's trim, the worker's 64 KB cap, an outcome line, the step summary
@@ -176,7 +244,11 @@ var (
 	redactorCache = map[string]*redactor{}
 )
 
-func redactorFor(secrets []secretValue) *redactor {
+// redactorCacheMax caps how many sets of secrets are held at once; a run's set
+// is also dropped when the run ends (runSecrets.forget).
+const redactorCacheMax = 64
+
+func redactorKey(secrets []secretValue) string {
 	var key strings.Builder
 	for _, sv := range secrets {
 		key.WriteString(sv.name)
@@ -184,13 +256,17 @@ func redactorFor(secrets []secretValue) *redactor {
 		key.WriteString(sv.value)
 		key.WriteByte(0)
 	}
-	k := key.String()
+	return key.String()
+}
+
+func redactorFor(secrets []secretValue) *redactor {
+	k := redactorKey(secrets)
 	redactorMu.Lock()
 	defer redactorMu.Unlock()
 	if r := redactorCache[k]; r != nil {
 		return r
 	}
-	if len(redactorCache) >= 256 {
+	if len(redactorCache) >= redactorCacheMax {
 		redactorCache = map[string]*redactor{}
 	}
 	r := newRedactor(secrets)
@@ -226,12 +302,127 @@ func newRedactor(secrets []secretValue) *redactor {
 	return r
 }
 
-// text scrubs a plain text: every form in one pass, base64 wrapped across
-// lines, and a secret's prefix left at a cut.
+// text scrubs a plain text: every form in one pass, forms written with JSON
+// escapes (a JSON fragment in a log line, NDJSON, a cut or unparseable JSON
+// document), base64 wrapped across lines, and a secret's prefix left at a cut.
 func (r *redactor) text(text string) string {
 	text = r.rep.Replace(text)
+	text = r.escaped(text)
 	text = r.wrapped(text)
 	return r.cut(text)
+}
+
+// escaped finds secrets written with JSON escapes (\/ \uXXXX \" \\ \n …)
+// anywhere in a text: the text is read with its escape sequences decoded,
+// and each hit is mapped back to the span of the original text.
+func (r *redactor) escaped(text string) string {
+	if len(r.forms) == 0 || !strings.Contains(text, `\`) {
+		return text
+	}
+	flat, start, end, changed := unescapeJSON(text)
+	if !changed {
+		return text
+	}
+	type span struct {
+		start, end int
+		name       string
+	}
+	var hits []span
+	taken := make([]bool, len(text))
+	for _, sf := range r.forms { // longest first; any character may be escaped (\u0041)
+		for at := 0; ; {
+			i := strings.Index(flat[at:], sf.form)
+			if i < 0 {
+				break
+			}
+			s, e := start[at+i], end[at+i+len(sf.form)-1]
+			free := true
+			for k := s; k < e; k++ {
+				free = free && !taken[k]
+			}
+			if free {
+				for k := s; k < e; k++ {
+					taken[k] = true
+				}
+				hits = append(hits, span{s, e, sf.name})
+			}
+			at += i + len(sf.form)
+		}
+	}
+	if len(hits) == 0 {
+		return text
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].start < hits[j].start })
+	var b strings.Builder
+	at := 0
+	for _, h := range hits {
+		b.WriteString(text[at:h.start])
+		b.WriteString("[redacted:" + h.name + "]")
+		at = h.end
+	}
+	b.WriteString(text[at:])
+	return b.String()
+}
+
+// unescapeJSON decodes JSON string escapes wherever they appear in a text,
+// returning the decoded text and, for each of its bytes, the span [start,
+// end) of the original it came from. Invalid escapes are kept as written.
+func unescapeJSON(text string) (flat string, start, end []int, changed bool) {
+	var b strings.Builder
+	start = make([]int, 0, len(text))
+	end = make([]int, 0, len(text))
+	put := func(s string, from, to int) {
+		b.WriteString(s)
+		for range len(s) {
+			start = append(start, from)
+			end = append(end, to)
+		}
+	}
+	hex4 := func(i int) (rune, bool) {
+		if i+6 > len(text) || text[i] != '\\' || text[i+1] != 'u' {
+			return 0, false
+		}
+		v, err := strconv.ParseUint(text[i+2:i+6], 16, 32)
+		return rune(v), err == nil
+	}
+	for i := 0; i < len(text); {
+		if text[i] != '\\' || i+1 >= len(text) {
+			put(text[i:i+1], i, i+1)
+			i++
+			continue
+		}
+		switch c := text[i+1]; c {
+		case '"', '\\', '/':
+			put(string(c), i, i+2)
+			i += 2
+			changed = true
+		case 'b', 'f', 'n', 'r', 't':
+			put(string("\b\f\n\r\t"[strings.IndexByte("bfnrt", c)]), i, i+2)
+			i += 2
+			changed = true
+		case 'u':
+			r1, ok := hex4(i)
+			if !ok {
+				put(text[i:i+1], i, i+1)
+				i++
+				continue
+			}
+			n := 6
+			if utf16.IsSurrogate(r1) {
+				if r2, ok := hex4(i + 6); ok {
+					r1 = utf16.DecodeRune(r1, r2)
+					n = 12
+				}
+			}
+			put(string(r1), i, i+n)
+			i += n
+			changed = true
+		default:
+			put(text[i:i+1], i, i+1)
+			i++
+		}
+	}
+	return b.String(), start, end, changed
 }
 
 // tree scrubs every string (keys included) of a decoded JSON value.
@@ -265,10 +456,16 @@ func (r *redactor) tree(v any, depth int) (any, bool) {
 // is decoded and scrubbed as a tree (its strings decoded in turn) and written
 // back; otherwise it is scrubbed as text.
 func (r *redactor) str(s string, depth int) string {
+	if t := strings.TrimSpace(s); depth >= maxJSONDepth && len(t) > 1 && strings.ContainsAny(t[:1], "{[\"") {
+		// Too deep to write back level by level: searched further, and
+		// replaced whole if a secret is anywhere inside.
+		if inner, err := decodeNumbers([]byte(t)); err == nil && r.holds(inner, depth) {
+			return deepMarker
+		}
+	}
 	if depth < maxJSONDepth {
 		if t := strings.TrimSpace(s); len(t) > 1 && strings.ContainsAny(t[:1], "{[\"") {
-			var inner any
-			if json.Unmarshal([]byte(t), &inner) == nil {
+			if inner, err := decodeNumbers([]byte(t)); err == nil {
 				out, changed := r.tree(inner, depth+1)
 				if !changed {
 					return r.text(s) // nothing inside: still scrub the text around it
@@ -288,6 +485,38 @@ func (r *redactor) str(s string, depth int) string {
 		}
 	}
 	return r.text(s)
+}
+
+// holds says whether a decoded JSON value carries a secret anywhere, its
+// strings decoded as JSON in turn up to maxSearchDepth. A string that still
+// decodes as JSON at maxSearchDepth counts as holding one.
+func (r *redactor) holds(v any, depth int) bool {
+	switch t := v.(type) {
+	case string:
+		if r.text(t) != t {
+			return true
+		}
+		if tt := strings.TrimSpace(t); len(tt) > 1 && strings.ContainsAny(tt[:1], "{[\"") {
+			if inner, err := decodeNumbers([]byte(tt)); err == nil {
+				// Still JSON at the end of the search: it cannot be cleared,
+				// so it is taken to hold one.
+				return depth >= maxSearchDepth || r.holds(inner, depth+1)
+			}
+		}
+	case []any:
+		for _, x := range t {
+			if r.holds(x, depth) {
+				return true
+			}
+		}
+	case map[string]any:
+		for k, x := range t {
+			if r.text(k) != k || r.holds(x, depth) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reWrapped finds runs of base64 broken into lines (a PEM body, `base64` at its
@@ -373,8 +602,14 @@ func (r *redactor) cut(text string) string {
 			continue
 		}
 		head := text[:i]
+		// A bare "…" also ends ordinary sentences: there the tail must be
+		// longer before it is taken for a cut secret.
+		least := minCutPrefix
+		if m == "…" {
+			least = minRedactLen
+		}
 		for _, sf := range r.forms {
-			for k := min(len(sf.form)-1, len(head)); k >= minCutPrefix; k-- {
+			for k := min(len(sf.form)-1, len(head)); k >= least; k-- {
 				if strings.HasSuffix(head, sf.form[:k]) {
 					head = head[:len(head)-k] + "[redacted:" + sf.name + "]"
 					break
@@ -473,12 +708,19 @@ func scrubJSON(raw []byte, secrets []secretValue) []byte {
 	if len(raw) == 0 || len(secrets) == 0 {
 		return raw
 	}
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
+	v, err := decodeNumbers(raw)
+	if err != nil {
 		return []byte(redactText(string(raw), secrets))
 	}
-	out, _ := json.Marshal(redactEvent(v, secrets))
-	return out
+	out, changed := redactorFor(secrets).tree(v, 0)
+	if !changed {
+		return raw // nothing redacted: the stored bytes stay exactly as they were
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return []byte(redactText(string(raw), secrets))
+	}
+	return b
 }
 
 // scrubOutput is scrubJSON for a step output as the engine holds it, so the

@@ -531,6 +531,11 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 	// AFTER the status landed: a waiting parent re-reads its children, and the
 	// next message of a conversation may start (start.go, conversation.go).
 	e.afterRunStatus(ctx, runID, status)
+	if status == "done" || status == "failed" || status == "cancelled" {
+		// The run is over: the redactor built from its secrets leaves the
+		// cache (runSecrets.dropRedactor says why the secrets stay).
+		e.redactions.dropRedactor(runID)
+	}
 }
 
 // failureLine is the ERROR line a failed run writes to the server log.
