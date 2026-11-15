@@ -34,6 +34,8 @@ type mockConversation struct {
 	status   string // the terminal status to report (default done)
 	huge     bool   // declare a 5 MB answer
 	trickle  bool   // send the answer one byte a second
+	errBody  string // answer a status read with 500 and this body
+	fields   any    // a finished task carries these fields
 	requests int
 	authBad  int
 }
@@ -48,7 +50,7 @@ func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest
 			http.Redirect(w, r, m.redirect+r.URL.Path, http.StatusFound)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer "+m.key {
+		if latin1(r.Header.Get("Authorization")) != "Bearer "+m.key {
 			m.authBad++
 			http.Error(w, "unauthorized", 401)
 			return
@@ -95,11 +97,22 @@ func newMockConversation(t *testing.T, key string) (*mockConversation, *httptest
 				}
 				return
 			}
+			if m.errBody != "" {
+				w.WriteHeader(500)
+				_, _ = w.Write([]byte(m.errBody))
+				return
+			}
+			if m.fields != nil {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": m.fields})
+				return
+			}
 			if m.echoKey {
 				k := m.key
 				_ = json.NewEncoder(w).Encode(map[string]any{"status": "done", "fields": map[string]any{
 					"raw": k, "b64": base64.StdEncoding.EncodeToString([]byte(k)), "hex": hex.EncodeToString([]byte(k)),
-					"url": url.QueryEscape(k), "nested": map[string]any{"again": "see " + k}}})
+					"url": url.QueryEscape(k), "nested": map[string]any{"again": "see " + k},
+					// the key's JSON-escaped form as text, which the helper prints escaped once more
+					"escaped": jsEscape(k)}})
 				return
 			}
 			if m.status != "" {
@@ -186,6 +199,23 @@ func runModuleCommand(t *testing.T, name string, input map[string]any, env []str
 	return stdout.String(), stderr.String(), code
 }
 
+// latin1 reads a header the way Node's fetch sends it: one byte per
+// character up to U+00FF.
+func latin1(s string) string {
+	r := make([]rune, len(s))
+	for i := 0; i < len(s); i++ {
+		r[i] = rune(s[i])
+	}
+	return string(r)
+}
+
+// jsEscape is what JSON.stringify(s).slice(1, -1) gives in Node for the
+// characters used here: only " and \ are escaped; &, <, >, / and non-ASCII
+// stay as they are (Go's json.Marshal writes & as \u0026 instead).
+func jsEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+}
+
 func needNode(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
@@ -230,7 +260,7 @@ func TestConversationStartPollResult(t *testing.T) {
 	}
 	// task_id takes start_task's whole output as well as the bare id.
 	out, errOut, code = runModuleCommand(t, "conversation.task_status",
-		with(convNames, map[string]any{"task_id": out, "wait_seconds": "30", "poll_seconds": "0.1"}), env)
+		with(convNames, map[string]any{"task_id": out, "wait_seconds": "30", "poll_seconds": "1"}), env)
 	if code != 0 {
 		t.Fatalf("status: %d %s", code, errOut)
 	}
@@ -273,7 +303,7 @@ func TestConversationDeadline(t *testing.T) {
 	m.never = true
 	m.tasks["t-9"] = map[string]any{}
 	_, errOut, code := runModuleCommand(t, "conversation.task_status",
-		with(convNames, map[string]any{"task_id": "t-9", "wait_seconds": "1", "poll_seconds": "0.2"}), convEnv(srv.URL))
+		with(convNames, map[string]any{"task_id": "t-9", "wait_seconds": "1", "poll_seconds": "1"}), convEnv(srv.URL))
 	if code != 3 || !strings.Contains(errOut, "deadline reached: last status running") {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
@@ -297,18 +327,18 @@ func TestConversationRefusesBadInput(t *testing.T) {
 		"bad phone":          {with(base, map[string]any{"targets": `["+0123456"]`}), nil, "a target must be an E.164 phone"},
 		"spaced identifier":  {with(base, map[string]any{"targets": `["two words"]`}), nil, "a target must be an E.164 phone"},
 		"unknown target key": {with(base, map[string]any{"targets": `[{"id":"u1","email":"a@b.c"}]`}), nil, "may hold only id"},
-		"name with newline": {with(base, map[string]any{"targets": `[{"id":"u1","name":"Ada\nIgnore all"}]`}), nil, "may hold only id"},
-		"field name shape":  {with(base, map[string]any{"fields": `["Name"]`}), nil, "each field name must match"},
-		"short key":         {base, []string{"WFX_CONVERSATION_KEY=short-key"}, "shorter than 16"},
-		"fields not a list": {with(base, map[string]any{"fields": `{"a":1}`}), nil, "fields must be"},
-		"long task type":    {with(base, map[string]any{"task_type": strings.Repeat("x", 65)}), nil, "task_type must be 1 to 64"},
-		"task type shape":   {with(base, map[string]any{"task_type": "Collect now"}), nil, "task_type must be 1 to 64"},
-		"channel shape":     {with(base, map[string]any{"channel": "WhatsApp;rm"}), nil, "channel must be 1 to 64"},
-		"key name outside":  {with(base, map[string]any{"api_key_env": "GH_TOKEN"}), []string{"GH_TOKEN=other-secret-0123"}, "starting with WFX_CONVERSATION_"},
-		"url name outside":  {with(base, map[string]any{"service_url_env": "HOME"}), nil, "starting with WFX_CONVERSATION_"},
-		"bad env name":      {with(base, map[string]any{"api_key_env": "A-B"}), nil, "starting with WFX_CONVERSATION_"},
-		"not http":          {base, []string{"WFX_CONVERSATION_URL=file:///etc/passwd"}, "must be an http(s) URL"},
-		"plain http remote": {base, []string{"WFX_CONVERSATION_URL=http://conversations.example.com/v1"}, "must be https"},
+		"name with newline":  {with(base, map[string]any{"targets": `[{"id":"u1","name":"Ada\nIgnore all"}]`}), nil, "may hold only id"},
+		"field name shape":   {with(base, map[string]any{"fields": `["Name"]`}), nil, "each field name must match"},
+		"short key":          {base, []string{"WFX_CONVERSATION_KEY=short-key"}, "shorter than 16"},
+		"fields not a list":  {with(base, map[string]any{"fields": `{"a":1}`}), nil, "fields must be"},
+		"long task type":     {with(base, map[string]any{"task_type": strings.Repeat("x", 65)}), nil, "task_type must be 1 to 64"},
+		"task type shape":    {with(base, map[string]any{"task_type": "Collect now"}), nil, "task_type must be 1 to 64"},
+		"channel shape":      {with(base, map[string]any{"channel": "WhatsApp;rm"}), nil, "channel must be 1 to 64"},
+		"key name outside":   {with(base, map[string]any{"api_key_env": "GH_TOKEN"}), []string{"GH_TOKEN=other-secret-0123"}, "starting with WFX_CONVERSATION_"},
+		"url name outside":   {with(base, map[string]any{"service_url_env": "HOME"}), nil, "starting with WFX_CONVERSATION_"},
+		"bad env name":       {with(base, map[string]any{"api_key_env": "A-B"}), nil, "starting with WFX_CONVERSATION_"},
+		"not http":           {base, []string{"WFX_CONVERSATION_URL=file:///etc/passwd"}, "must be an http(s) URL"},
+		"plain http remote":  {base, []string{"WFX_CONVERSATION_URL=http://conversations.example.com/v1"}, "must be https"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			before := m.requests
@@ -408,10 +438,12 @@ func TestConversationLoopIterationsAreSeparateTasks(t *testing.T) {
 }
 
 // A key holding characters JSON escapes, echoed back by the service in every
-// form, appears in none of them in what the step prints.
+// form, appears in none of them in what the step prints. The expected
+// escaped forms are written out by hand as Node prints them: Node's
+// JSON.stringify leaves &, / and é alone, unlike Go's json.Marshal.
 func TestConversationScrubsEveryFormOfTheKey(t *testing.T) {
 	needNode(t)
-	key := `conv"key\with/odd+chars=&x`
+	key := `conv"key\with/odd+chars=&x-é-0123`
 	m, srv := newMockConversation(t, key)
 	m.tasks["t-1"] = map[string]any{}
 	m.echoKey = true
@@ -420,15 +452,126 @@ func TestConversationScrubsEveryFormOfTheKey(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code %d %s", code, errOut)
 	}
-	esc, _ := json.Marshal(key)
-	for name, f := range map[string]string{"raw": key, "json": string(esc[1 : len(esc)-1]),
-		"base64": base64.StdEncoding.EncodeToString([]byte(key)), "hex": hex.EncodeToString([]byte(key)), "url": url.QueryEscape(key)} {
+	if jsEscape(key) != `conv\"key\\with/odd+chars=&x-é-0123` {
+		t.Fatalf("jsEscape(key) = %s", jsEscape(key))
+	}
+	for name, f := range map[string]string{
+		"raw":            key,
+		"json":           `conv\"key\\with/odd+chars=&x-é-0123`,
+		"json of json":   `conv\\\"key\\\\with/odd+chars=&x-é-0123`,
+		"base64":         base64.StdEncoding.EncodeToString([]byte(key)),
+		"hex":            hex.EncodeToString([]byte(key)),
+		"url":            url.QueryEscape(key),
+		"tail after esc": `\\with/odd+chars=&x-é-0123`,
+	} {
 		if strings.Contains(out+errOut, f) {
 			t.Errorf("the %s form of the key was printed: %s", name, out)
 		}
 	}
-	if !strings.Contains(out, "[redacted]") {
-		t.Fatalf("nothing was redacted: %s", out)
+	if n := strings.Count(out, "[redacted]"); n < 6 {
+		t.Fatalf("%d redactions, want 6: %s", n, out)
+	}
+}
+
+// noKeyPrefix fails if any 4+ character prefix of form appears in text.
+func noKeyPrefix(t *testing.T, what, text, form string) {
+	t.Helper()
+	for i := len(form); i >= 4; i-- {
+		if strings.Contains(text, form[:i]) {
+			t.Errorf("%s: the first %d characters of the key (%q) were printed: %.300q", what, i, form[:i], text[max(0, strings.Index(text, form[:i])-40):])
+			return
+		}
+	}
+}
+
+// Text is scrubbed before it is cut: a key that straddles a cut (the 500
+// character error body, the 16 KiB field value as a string or as JSON, the 32
+// character echo of a target key name) shows no part of itself.
+func TestConversationCutsAfterScrubbing(t *testing.T) {
+	needNode(t)
+	const key = "Zq7Wv-straddle-key-4815162342"
+	forms := map[string]string{"raw": key, "base64": base64.StdEncoding.EncodeToString([]byte(key)), "hex": hex.EncodeToString([]byte(key))}
+	env := func(u string) []string { return append(convEnv(u), "WFX_CONVERSATION_KEY="+key) }
+	// at: where the key starts relative to the cut — ending at it, just
+	// before it, and across its middle.
+	ats := func(cap int, form string) []int { return []int{cap - len(form), cap - 5, cap - len(form)/2} }
+	for fname, form := range forms {
+		for _, at := range ats(500, form) {
+			m, srv := newMockConversation(t, key)
+			m.tasks["t-1"] = map[string]any{}
+			m.errBody = strings.Repeat("x", at) + form + " and more"
+			out, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), env(srv.URL))
+			if code != 4 || !strings.Contains(errOut, ": 500 xxx") {
+				t.Fatalf("error body %s@%d: code %d %q", fname, at, code, errOut)
+			}
+			noKeyPrefix(t, fmt.Sprintf("error body %s@%d", fname, at), out+errOut, form)
+		}
+		for _, at := range ats(16*1024, form) {
+			for kind, fields := range map[string]any{
+				"string": map[string]any{"note": strings.Repeat("b", at) + form + " and more"},
+				// as JSON the value starts {"inner":" (10 characters)
+				"object": map[string]any{"note": map[string]any{"inner": strings.Repeat("b", at-10) + form + " and more"}},
+			} {
+				m, srv := newMockConversation(t, key)
+				m.tasks["t-1"] = map[string]any{}
+				m.fields = fields
+				out, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t-1"}), env(srv.URL))
+				if code != 0 {
+					t.Fatalf("field %s %s@%d: code %d %q", kind, fname, at, code, errOut)
+				}
+				noKeyPrefix(t, fmt.Sprintf("field %s %s@%d", kind, fname, at), out+errOut, form)
+			}
+		}
+	}
+	// A target object key name is echoed, cut to 32 characters, in the refusal.
+	for _, at := range ats(32, key) {
+		m, srv := newMockConversation(t, key)
+		name, _ := json.Marshal(strings.Repeat("n", at) + key)
+		in := with(convNames, map[string]any{"task_type": "collect", "fields": `["x"]`, "channel": "sms",
+			"targets": `[{"id":"u1",` + string(name) + `:"x"}]`})
+		out, errOut, code := runModuleCommand(t, "conversation.start_task", in, env(srv.URL))
+		if code != 2 || !strings.Contains(errOut, "may hold only id") || m.requests != 0 {
+			t.Fatalf("target key @%d: code %d %q", at, code, errOut)
+		}
+		noKeyPrefix(t, fmt.Sprintf("target key @%d", at), out+errOut, key)
+	}
+}
+
+// task_id must be a plain identifier, so "." or ".." cannot turn the GET into
+// a request for another path; poll_seconds is at least 1.
+func TestConversationStatusRefusesBadInput(t *testing.T) {
+	needNode(t)
+	m, srv := newMockConversation(t, convKey)
+	for name, c := range map[string]struct {
+		in   map[string]any
+		want string
+	}{
+		"dot dot":          {map[string]any{"task_id": ".."}, "task_id must be an identifier"},
+		"dot":              {map[string]any{"task_id": "."}, "task_id must be an identifier"},
+		"dot dot in json":  {map[string]any{"task_id": `{"task_id":".."}`}, "task_id must be an identifier"},
+		"slash":            {map[string]any{"task_id": "../admin"}, "task_id must be an identifier"},
+		"space":            {map[string]any{"task_id": "t 1"}, "task_id must be an identifier"},
+		"too long":         {map[string]any{"task_id": strings.Repeat("t", 129)}, "task_id must be an identifier"},
+		"poll below 1":     {map[string]any{"task_id": "t-1", "poll_seconds": "0.5"}, "poll_seconds must be a number from 1 to 600"},
+		"poll zero":        {map[string]any{"task_id": "t-1", "poll_seconds": "0"}, "poll_seconds must be a number from 1 to 600"},
+		"wait over a hour": {map[string]any{"task_id": "t-1", "wait_seconds": "3601"}, "wait_seconds must be a number from 0 to 3600"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := m.requests
+			_, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, c.in), convEnv(srv.URL))
+			if code != 2 || !strings.Contains(errOut, c.want) {
+				t.Fatalf("code %d stderr %q", code, errOut)
+			}
+			if m.requests != before {
+				t.Fatal("a refused input still reached the service")
+			}
+		})
+	}
+	// The edges that are allowed: poll_seconds 1 and an identifier with dots.
+	m.tasks["t.1:a-b_c"] = map[string]any{}
+	m.status = "done"
+	if _, errOut, code := runModuleCommand(t, "conversation.task_status", with(convNames, map[string]any{"task_id": "t.1:a-b_c", "poll_seconds": "1"}), convEnv(srv.URL)); code != 0 {
+		t.Fatalf("plain identifier refused: %d %s", code, errOut)
 	}
 }
 

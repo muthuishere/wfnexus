@@ -207,6 +207,9 @@ steps:
 - **The URL:** it must be https; plain http is allowed only for localhost,
   127.0.0.0/8 and ::1. Redirects are never followed, so the key never goes to
   another origin.
+  - Known: https to an internal or private address is allowed. Only the
+    operator sets the URL (in the env store); a workflow names the variable
+    and cannot choose the address.
 - **The request:** `start_task` sends `POST {url}/tasks` with
   `{type, targets, fields, channel}`, `Authorization: Bearer <key>` and
   `Idempotency-Key: <run id>:<step id>`. A retried step therefore starts no
@@ -222,6 +225,11 @@ steps:
     step with exit 5.
   - A deadline that passes fails the step with exit 3 and
     `deadline reached: last status <status>`.
+  - `task_id` is an identifier (`A-Z a-z 0-9 . _ : -`, 1–128, not `.` or
+    `..`) or start_task's whole JSON output; `poll_seconds` is 1–600
+    (default 10).
+  - The step's own limit is 3900 s: the helper stops itself at
+    `wait_seconds` plus one request timeout (at most 3600 + 120 s).
   - Each request has its own 30 s limit, which covers its body: a server
     that trickles its answer is cut off. `WFX_CONVERSATION_REQUEST_TIMEOUT`
     in the env store sets 1–120 s.
@@ -236,7 +244,10 @@ steps:
   - the service's answer may be at most 1 MiB; a larger one, or a larger
     declared `Content-Length`, is refused;
   - a returned field value over 16 KiB is cut, ends in `…[truncated]`, and
-    sets `truncated: true`.
+    sets `truncated: true`;
+  - a service error body is shown up to 500 characters. Text is always
+    scrubbed of the key before it is cut, so a cut never leaves part of the
+    key behind.
 - **Untrusted text:** targets and the collected fields come from outside, the
   fields from the people contacted. Treat them as untrusted text: don't put
   them into a prompt as instructions or into a script as code. Pass them on

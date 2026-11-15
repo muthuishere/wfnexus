@@ -46,6 +46,25 @@ function scrub(s) {
   return s;
 }
 
+// safeCut is the only way text is shortened before it is printed: it scrubs
+// first and cuts after, so a cut can never split the key into a part the
+// scrub no longer recognises. If the cut text ends in the first 4 or more
+// characters of any form of the key, those are dropped too.
+function safeCut(s, n) {
+  s = scrub(s);
+  if (s.length <= n) return s;
+  let cut = s.slice(0, n);
+  for (const f of forms) {
+    for (let k = Math.min(f.length - 1, cut.length); k >= 4; k--) {
+      if (cut.endsWith(f.slice(0, k))) {
+        cut = cut.slice(0, -k);
+        break;
+      }
+    }
+  }
+  return cut;
+}
+
 function keyForms(key) {
   const b = Buffer.from(key, "utf8");
   const all = [
@@ -146,7 +165,7 @@ async function call(svc, method, path, body, extra = {}) {
     fail(4, `${where}: the answer did not arrive in time (${e?.name ?? "error"})`);
   }
   if (text === null) fail(4, `${where}: the answer is larger than ${MAX_BODY} bytes`);
-  if (!res.ok) fail(4, `${where}: ${res.status} ${text.slice(0, 500)}`);
+  if (!res.ok) fail(4, `${where}: ${res.status} ${safeCut(text, 500)}`);
   try {
     return JSON.parse(text);
   } catch {
@@ -173,9 +192,9 @@ function capFields(fields) {
   let truncated = false;
   if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return { out, truncated };
   for (const [k, v] of Object.entries(fields)) {
-    const s = typeof v === "string" ? v : JSON.stringify(v);
+    const s = scrub(typeof v === "string" ? v : JSON.stringify(v));
     if (s.length > MAX_VALUE) {
-      out[k] = s.slice(0, MAX_VALUE) + "…[truncated]";
+      out[k] = safeCut(s, MAX_VALUE) + "…[truncated]";
       truncated = true;
     } else {
       out[k] = v;
@@ -201,11 +220,12 @@ function checkTarget(t) {
     if (k === "id" && typeof v === "string" && IDENT.test(v)) continue;
     if (k === "phone" && typeof v === "string" && PHONE.test(v)) continue;
     if (k === "name" && printable(v)) continue;
-    fail(2, `a target object may hold only id (identifier), phone (E.164) and name (up to 128 printable characters); "${String(k).slice(0, 32)}" is not one of them or is not valid`);
+    fail(2, `a target object may hold only id (identifier), phone (E.164) and name (up to 128 printable characters); "${safeCut(k, 32)}" is not one of them or is not valid`);
   }
 }
 
 async function start() {
+  const svc = service(); // first: the key's forms are known before any message is printed
   const type = input("task_type", { required: true, max: 4096 });
   const channel = input("channel", { required: true, max: 4096 });
   if (!WORD.test(type)) fail(2, "task_type must be 1 to 64 characters of a-z 0-9 . _ -");
@@ -223,7 +243,6 @@ async function start() {
   const run = process.env.WFX_RUN_ID || "";
   const step = process.env.WFX_STEP_ID || "";
   if (!run || !step) fail(2, "WFX_RUN_ID and WFX_STEP_ID are not set; the idempotency key needs them");
-  const svc = service();
   const r = await call(svc, "POST", "/tasks", { type, targets, fields, channel }, { "Idempotency-Key": `${run}:${step}` });
   const id = r.task_id ?? r.id;
   if (!id) fail(4, "the service answered without a task id");
@@ -241,11 +260,14 @@ function taskId() {
       fail(2, "task_id must be an id or start_task's JSON output");
     }
   }
-  if (id === "" || Buffer.byteLength(id) > 256) fail(2, "task_id must be an id of at most 256 bytes");
+  // A plain identifier only: "." or ".." in the path would turn the GET into
+  // a request for another path on the service.
+  if (!IDENT.test(id) || id === "." || id === "..") fail(2, "task_id must be an identifier of A-Z a-z 0-9 . _ : - (1-128), not . or ..");
   return id;
 }
 
 async function status() {
+  const svc = service(); // first: the key's forms are known before any message is printed
   const id = taskId();
   const num = (name, def, lo, hi) => {
     const raw = input(name).trim();
@@ -255,8 +277,7 @@ async function status() {
     return n;
   };
   const wait = num("wait_seconds", 0, 0, 3600);
-  const poll = num("poll_seconds", 10, 0.1, 600);
-  const svc = service();
+  const poll = num("poll_seconds", 10, 1, 600);
   const deadline = Date.now() + wait * 1000;
   let last = "unknown";
   if (wait > 0) {

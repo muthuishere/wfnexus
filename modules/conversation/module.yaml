@@ -47,7 +47,8 @@ commands:
     steps:
       - id: start
         name: Start the task
-        timeout_sec: 60
+        # one request of at most 120 s (WFX_CONVERSATION_REQUEST_TIMEOUT) + margin
+        timeout_sec: 180
         run: |
           printf '%s\n' "{{ .Inputs.task_type }}" > in.task_type
           printf '%s\n' "{{ .Inputs.targets }}" > in.targets
@@ -60,15 +61,17 @@ commands:
   task_status:
     description: "Read a task's status and collected fields; with wait_seconds, poll until it is done, failed or cancelled."
     inputs:
-      task_id: { type: string, required: true, description: "the task_id start_task returned, or start_task's whole JSON output" }
+      task_id: { type: string, required: true, description: "the task_id start_task returned (an identifier of A-Z a-z 0-9 . _ : -, 1-128, not . or ..), or start_task's whole JSON output" }
       wait_seconds: { type: string, default: "0", description: "0 to 3600: how long to poll for a terminal status (0 = read once)" }
-      poll_seconds: { type: string, default: "10", description: "seconds between reads" }
+      poll_seconds: { type: string, default: "10", description: "1 to 600: seconds between reads" }
       service_url_env: { type: string, required: true, description: "NAME of the env var holding the service base URL (WFX_CONVERSATION_*)" }
       api_key_env: { type: string, required: true, description: "NAME of the env var holding the API key (WFX_CONVERSATION_*)" }
     steps:
       - id: status
         name: Read the task
-        timeout_sec: 3700
+        # the helper stops itself at wait_seconds (max 3600) + one request
+        # timeout (max 120) = 3720 s; this leaves margin above that
+        timeout_sec: 3900
         run: |
           printf '%s\n' "{{ .Inputs.task_id }}" > in.task_id
           printf '%s\n' "{{ .Inputs.wait_seconds }}" > in.wait_seconds
