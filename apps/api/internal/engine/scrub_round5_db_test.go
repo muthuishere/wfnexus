@@ -193,3 +193,27 @@ func TestAMemoryNoteIsScrubbed(t *testing.T) {
 	}
 	r4Clean(t, "MEMORY.md", string(b))
 }
+
+// Values registered again for a worker's late event on a run that is parked
+// in the store get the grace period too: they do not stay in memory for good.
+func TestValuesRegisteredForAParkedRunAreDropped(t *testing.T) {
+	h, id := r4Run(t)
+	clk := &fakeClock{t: time.Now()}
+	h.eng.redactions.mu.Lock()
+	h.eng.redactions.now = clk.now
+	h.eng.redactions.mu.Unlock()
+	ctx := context.Background()
+	h.eng.setRun(ctx, id, "awaiting_approval", "s", "")
+	clk.add(endedSecretsGrace + time.Second)
+	h.eng.redactions.sweep()
+	payload, _ := json.Marshal(JobPayload{Env: map[string]string{"R4_TOKEN": r4Secret}})
+	h.eng.IngestWorkerEvents(ctx, id, payload, []WorkerEvent{{StepID: "s", Payload: map[string]any{"text": "late " + r4Secret}}})
+	if r4Clean(t, "late event", eventTexts(t, h.store, id)); len(h.eng.redactions.get(id)) == 0 {
+		t.Fatal("not registered again for the late event")
+	}
+	clk.add(endedSecretsGrace + time.Second)
+	h.eng.redactions.sweep()
+	if len(h.eng.redactions.get(id)) != 0 {
+		t.Fatal("values registered for a parked run stay in memory")
+	}
+}

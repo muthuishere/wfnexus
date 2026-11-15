@@ -75,6 +75,7 @@ type runSecrets struct {
 	byID   map[uuid.UUID][]secretValue
 	sealed map[uuid.UUID]map[string]bool
 	ended  map[uuid.UUID]time.Time // runs that reached an end state, and when
+	busy   map[uuid.UUID]int       // steps of a run still in flight
 	warned map[string]bool         // short-value warnings already logged, by name
 	now    func() time.Time        // the clock; nil is time.Now (tests set it)
 }
@@ -208,6 +209,37 @@ func (r *runSecrets) markEnded(runID uuid.UUID) {
 	time.AfterFunc(endedSecretsGrace+time.Second, r.sweep)
 }
 
+// stepStarted and stepFinished bracket one step of a run (runOneStep). A run
+// with a step still in flight is never dropped: when a step parks the run, a
+// sibling of its wave keeps running to its end. The grace period of a run
+// that ended or parked meanwhile starts again when its last step finishes,
+// so the writes of that step are still scrubbed.
+func (r *runSecrets) stepStarted(runID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.busy == nil {
+		r.busy = map[uuid.UUID]int{}
+	}
+	r.busy[runID]++
+}
+
+func (r *runSecrets) stepFinished(runID uuid.UUID) {
+	r.mu.Lock()
+	if r.busy[runID]--; r.busy[runID] > 0 {
+		r.mu.Unlock()
+		return
+	}
+	delete(r.busy, runID)
+	_, ended := r.ended[runID]
+	if ended {
+		r.ended[runID] = r.clock()
+	}
+	r.mu.Unlock()
+	if ended {
+		time.AfterFunc(endedSecretsGrace+time.Second, r.sweep)
+	}
+}
+
 // markRunning says a run is active again (resumed, answered, retried): it is
 // no longer ended, so its secrets are not dropped.
 func (r *runSecrets) markRunning(runID uuid.UUID) {
@@ -218,21 +250,24 @@ func (r *runSecrets) markRunning(runID uuid.UUID) {
 
 // sweep drops the secrets of every run that ended endedSecretsGrace ago or
 // more, then the oldest ended runs beyond maxEndedSecrets. A run that has not
-// ended or parked is never dropped.
+// ended or parked, or has a step still in flight, is never dropped.
 func (r *runSecrets) sweep() {
 	r.mu.Lock()
 	now := r.clock()
 	var gone [][]secretValue
 	for id, at := range r.ended {
-		if now.Sub(at) >= endedSecretsGrace {
+		if now.Sub(at) >= endedSecretsGrace && r.busy[id] == 0 {
 			gone = append(gone, r.dropLocked(id))
 		}
 	}
 	if over := len(r.ended) - maxEndedSecrets; over > 0 {
 		ids := make([]uuid.UUID, 0, len(r.ended))
 		for id := range r.ended {
-			ids = append(ids, id)
+			if r.busy[id] == 0 {
+				ids = append(ids, id)
+			}
 		}
+		over = min(over, len(ids))
 		sort.Slice(ids, func(i, j int) bool { return r.ended[ids[i]].Before(r.ended[ids[j]]) })
 		for _, id := range ids[:over] {
 			gone = append(gone, r.dropLocked(id))
@@ -844,8 +879,24 @@ func (r *redactor) stripPartial(head string, least int) string {
 // it. It counts when the span it takes, as written, is at least `least`
 // bytes: an every-byte %xx form spends 3 of them per byte of the secret.
 func (r *redactor) partialDecoded(head string, least int) (int, string) {
+	if len(r.forms) == 0 {
+		return len(head), ""
+	}
+	// Only the end of head can hold the piece: a window wide enough for the
+	// longest form written with an escape per byte, layered, keeps the work
+	// per marker bounded however long the text is.
+	longest := 0
+	for _, sf := range r.forms {
+		longest = max(longest, len(sf.form))
+	}
+	base := max(0, len(head)-12*longest)
+	at, name := r.partialDecodedIn(head[base:], least)
+	return base + at, name
+}
+
+func (r *redactor) partialDecodedIn(head string, least int) (int, string) {
 	at, name := len(head), ""
-	if len(r.forms) == 0 || !strings.ContainsAny(head, `\%`) {
+	if !strings.ContainsAny(head, `\%`) {
 		return at, name
 	}
 	flat := head

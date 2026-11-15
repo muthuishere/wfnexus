@@ -102,10 +102,11 @@ stored exactly as it was.
 
 The values are held in the server's memory while a step of the run is
 running, and for 10 minutes after the run ends or parks on a person
-(`needs_input`, `awaiting_approval`), so a late write (a cancelled step, a
+(`needs_input`, `awaiting_approval`) or, when a step was still in flight
+then (a sibling in the same wave), after that step finishes, so a late write (a cancelled step, a
 parallel branch, a worker's report, the pause's notification) is still
 scrubbed; at most 256 ended or parked runs' values are held, the oldest
-dropped first. A parked run that resumes registers its values again when its
+dropped first, never one with a step in flight. A parked run that resumes registers its values again when its
 next step starts, from that step's environment: a literal value only an
 earlier step's `env:` named is not known to the steps after the pause. A
 worker's report or live log that arrives later than that is scrubbed with

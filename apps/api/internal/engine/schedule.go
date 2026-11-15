@@ -205,6 +205,10 @@ const (
 // policy and gates, and records the terminal run status itself when it halts.
 // Shared by the sequential and the DAG paths so the two cannot drift.
 func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) (map[string]any, stepOutcome) {
+	// The run's secrets stay while this step is in flight, even when a
+	// sibling parks or ends the run meanwhile (runSecrets.stepStarted).
+	e.redactions.stepStarted(runID)
+	defer e.redactions.stepFinished(runID)
 	if step.IsLoop() {
 		return e.runLoop(ctx, runID, def, step, data)
 	}

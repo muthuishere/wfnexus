@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -166,5 +167,39 @@ func TestAValueInsideURLAlphabetBase64IsFound(t *testing.T) {
 				t.Errorf("lead %d: %q", lead, got)
 			}
 		}
+	}
+}
+
+// A step parks the run while a sibling of its wave is still running: the
+// sibling's writes come later than the park. A run with a step in flight is
+// never dropped, by the grace period or by the cap, and its grace period
+// starts again when that step finishes.
+func TestAStepInFlightKeepsItsRunsSecrets(t *testing.T) {
+	clk := &fakeClock{t: time.Now()}
+	r := runSecrets{now: clk.now}
+	id := uuid.New()
+	r.add(id, map[string]string{"R5_TOKEN": r5Secret}, nil)
+	r.stepStarted(id)
+	r.markEnded(id) // a sibling parked the run
+	clk.add(endedSecretsGrace + time.Second)
+	for i := 0; i < maxEndedSecrets+10; i++ { // and many runs ended since
+		other := uuid.New()
+		r.add(other, map[string]string{"O_TOKEN": fmt.Sprintf("other-value-%06d", i)}, nil)
+		r.markEnded(other)
+	}
+	r.sweep()
+	if len(r.get(id)) == 0 {
+		t.Fatal("dropped while a step of the run was in flight")
+	}
+	r.stepFinished(id)
+	clk.add(endedSecretsGrace - time.Second)
+	r.sweep()
+	if len(r.get(id)) == 0 {
+		t.Fatal("dropped before a grace period passed since its last step finished")
+	}
+	clk.add(2 * time.Second)
+	r.sweep()
+	if len(r.get(id)) != 0 {
+		t.Fatal("still held a grace period after its last step finished")
 	}
 }
