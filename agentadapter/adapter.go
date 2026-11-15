@@ -86,6 +86,10 @@ type Options struct {
 	Repairs int
 	// KeepPromptFiles leaves the rendered prompt files on disk for inspection.
 	KeepPromptFiles bool
+	// Scrub, when non-nil, removes sensitive values from the agent's rejected
+	// reply before it is shortened for the turn's error. It runs on the whole
+	// reply: a value the shortening cuts in two can no longer be found whole.
+	Scrub func(string) string
 	// Trace, when non-nil, receives every exchange — the prompt file path, the
 	// prompt, and the raw reply. The hook for debugging and for tests.
 	Trace func(Exchange)
@@ -222,6 +226,10 @@ func (a *Adapter) call(ctx context.Context, requestBody []byte, model string) (t
 	}
 	// The rejected reply itself, clipped, is what makes this debuggable: "invalid
 	// json" alone does not say whether the model truncated, narrated, or wrapped.
+	// It is scrubbed whole first, then clipped.
+	if a.opts.Scrub != nil {
+		lastText = a.opts.Scrub(lastText)
+	}
 	return toolnexus.InProcessResponse{}, fmt.Errorf("agentadapter: %s gave no valid reply after %d attempts: %w; last reply (%d chars): %s",
 		a.opts.Agent.Name(), a.opts.Repairs+1, lastErr, len(lastText), clipEnds(lastText, 300))
 }
