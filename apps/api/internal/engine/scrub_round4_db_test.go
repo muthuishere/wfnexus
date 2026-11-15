@@ -93,6 +93,39 @@ func TestSetRunScrubsItsErrorAndEndsTheRunsSecrets(t *testing.T) {
 	if len(h.eng.redactions.get(parked.ID)) == 0 {
 		t.Fatal("a parked run's secrets were dropped")
 	}
+
+	// A run that ended and then runs again (a retry) is not dropped.
+	again, _ := h.store.CreateRun(ctx, "local", h.currentWorkflow(), json.RawMessage(`{}`))
+	h.eng.redactions.add(again.ID, map[string]string{"R4_TOKEN": r4Secret}, nil)
+	h.eng.setRun(ctx, again.ID, "failed", "s", "")
+	h.eng.setRun(ctx, again.ID, "running", "s", "")
+	clk.add(endedSecretsGrace + time.Second)
+	h.eng.redactions.sweep()
+	if len(h.eng.redactions.get(again.ID)) == 0 {
+		t.Fatal("a run running again was dropped")
+	}
+}
+
+// Values registered again for a worker's late report on a run that already
+// ended get the grace period too: they do not stay in memory for good.
+func TestValuesRegisteredForAnEndedRunAreDropped(t *testing.T) {
+	h, id := r4Run(t)
+	clk := &fakeClock{t: time.Now()}
+	h.eng.redactions.now = clk.now
+	ctx := context.Background()
+	h.eng.setRun(ctx, id, "done", "s", "")
+	clk.add(endedSecretsGrace + time.Second)
+	h.eng.redactions.sweep()
+	payload, _ := json.Marshal(JobPayload{Env: map[string]string{"R4_TOKEN": r4Secret}})
+	h.eng.IngestWorkerEvents(ctx, id, payload, []WorkerEvent{{StepID: "s", Payload: map[string]any{"text": "late " + r4Secret}}})
+	if r4Clean(t, "late event", eventTexts(t, h.store, id)); len(h.eng.redactions.get(id)) == 0 {
+		t.Fatal("not registered again for the late report")
+	}
+	clk.add(endedSecretsGrace + time.Second)
+	h.eng.redactions.sweep()
+	if len(h.eng.redactions.get(id)) != 0 {
+		t.Fatal("values registered for an ended run stay in memory")
+	}
 }
 
 // notifyPause: the prompt and the request's link are scrubbed before they

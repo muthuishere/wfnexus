@@ -110,6 +110,12 @@ func TestClipScrubsTheWholeTextBeforeItCuts(t *testing.T) {
 	if got := clip("short "+r4Secret, 1000, secrets, moreBytes); got != "short [redacted:R4_TOKEN]" {
 		t.Fatalf("an uncut text is still scrubbed: %q", got)
 	}
+	// A piece already cut by someone else (a worker), cut again right after
+	// it: removed at the new cut too.
+	got := clip(pad+r4Secret[:8]+"\n… truncated", len(pad)+8, secrets, moreBytes)
+	if strings.Contains(got, r4Secret[:8]) {
+		t.Fatalf("a piece at the cut survived: %q", got)
+	}
 }
 
 // sinkEngine is a worker engine (no store) whose events are collected after
@@ -600,5 +606,17 @@ func TestQuotedRepliesAreScrubbedBeforeTheyAreCut(t *testing.T) {
 				t.Fatalf("part of the secret kept: %q", got)
 			}
 		}
+	}
+}
+
+// A worker's diff travels as base64 in JSON, where no form of a value can be
+// found: it is scrubbed as text first.
+func TestAWorkersDiffIsScrubbed(t *testing.T) {
+	e := &Engine{}
+	payload, _ := json.Marshal(JobPayload{Env: map[string]string{"R4_TOKEN": r4Secret}})
+	res := e.ScrubJobResult(context.Background(), uuid.New(), payload, JobResult{OK: true,
+		Agent: &AgentOutcome{Diff: []byte("+token = \"" + r4Secret + "\"\n")}})
+	if res.Agent == nil || strings.Contains(string(res.Agent.Diff), r4Secret) || !strings.Contains(string(res.Agent.Diff), "[redacted:R4_TOKEN]") {
+		t.Fatalf("diff %q", res.Agent.Diff)
 	}
 }
