@@ -22,6 +22,9 @@ import (
 // scrubbed of the run's env-store values, loaded again from the store.
 func TestAfterARestartAWorkersEventsAndReportAreScrubbed(t *testing.T) {
 	const canary = "restart-canary-7f3e9b1c5d2a"
+	// A step-level credential: in the job's env as sent, not in the env store.
+	// Only the job's payload, handed to IngestWorkerEvents, names it.
+	const stepCred = "step-level-cred-998877"
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "w.db")
 	if err := store.Migrate("sqlite", path); err != nil {
@@ -43,7 +46,7 @@ func TestAfterARestartAWorkersEventsAndReportAreScrubbed(t *testing.T) {
 		t.Fatal(err)
 	}
 	label := "restartbox-" + uuid.NewString()[:8]
-	job, err := st.EnqueueJob(ctx, run.ID, "echo", label, json.RawMessage(`{"runId":"`+run.ID.String()+`","command":"env"}`))
+	job, err := st.EnqueueJob(ctx, run.ID, "echo", label, json.RawMessage(`{"runId":"`+run.ID.String()+`","command":"env","env":{"STEP_TOKEN":"`+stepCred+`"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +73,14 @@ func TestAfterARestartAWorkersEventsAndReportAreScrubbed(t *testing.T) {
 	}
 
 	ev, _ := json.Marshal(map[string]any{"events": []map[string]any{{"stepId": "echo", "kind": "log",
-		"payload": map[string]any{"stdout": "CANARY_KEY=" + canary}}}})
+		"payload": map[string]any{"stdout": "CANARY_KEY=" + canary + " STEP_TOKEN=" + stepCred}}}})
 	if code, out, _ := f.call(t, "POST", "/api/workers/jobs/"+job.ID.String()+"/events", ev, auth); code != 200 {
 		t.Fatalf("events = %d %v", code, out)
+	}
+	// Read before the report: the report registers the job's env as well.
+	live, _ := st.ListEvents(ctx, run.ID, 0, 100)
+	if lb, _ := json.Marshal(live); strings.Contains(string(lb), stepCred) || !strings.Contains(string(lb), "[redacted:STEP_TOKEN]") {
+		t.Fatalf("live events keep the job's step-level credential: %s", lb)
 	}
 	res, _ := json.Marshal(engine.JobResult{OK: true, Stdout: "CANARY_KEY=" + canary})
 	if code, out, _ := f.call(t, "POST", "/api/workers/jobs/"+job.ID.String()+"/result", res, auth); code != 200 {

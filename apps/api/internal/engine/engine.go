@@ -531,14 +531,16 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 	// AFTER the status landed: a waiting parent re-reads its children, and the
 	// next message of a conversation may start (start.go, conversation.go).
 	e.afterRunStatus(ctx, runID, status)
-	if status == "done" || status == "failed" || status == "cancelled" {
-		// The run is over: the redactor built from its secrets leaves the
-		// cache, and the secrets themselves leave memory endedSecretsGrace
-		// later (runSecrets.markEnded).
+	if runStatusEnded[status] || runStatusParked[status] {
+		// The run is over, or parked on a person for as long as they take:
+		// the redactor built from its secrets leaves the cache, and the
+		// secrets themselves leave memory endedSecretsGrace later, under the
+		// same cap (runSecrets.markEnded). A parked run that resumes
+		// registers them again when its step starts (stepEnv).
 		e.redactions.dropRedactor(runID)
 		e.redactions.markEnded(runID)
 	} else {
-		// Running again (resumed, answered, retried) or parked: not ended.
+		// Running again (resumed, answered, retried): not ended.
 		e.redactions.markRunning(runID)
 	}
 }

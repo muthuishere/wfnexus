@@ -69,7 +69,8 @@ func TestSetStepScrubsOutputAndPending(t *testing.T) {
 }
 
 // setRun: the run's error is scrubbed; a run that ends starts the grace
-// period, after which its secrets leave memory; a parked run keeps them.
+// period, after which its secrets leave memory; a parked run gets the same
+// grace period (it can wait for days; its next step registers them again).
 func TestSetRunScrubsItsErrorAndEndsTheRunsSecrets(t *testing.T) {
 	h, id := r4Run(t)
 	clk := &fakeClock{t: time.Now()}
@@ -90,8 +91,8 @@ func TestSetRunScrubsItsErrorAndEndsTheRunsSecrets(t *testing.T) {
 	if len(h.eng.redactions.get(id)) != 0 {
 		t.Fatal("an ended run's secrets are still held after the grace period")
 	}
-	if len(h.eng.redactions.get(parked.ID)) == 0 {
-		t.Fatal("a parked run's secrets were dropped")
+	if len(h.eng.redactions.get(parked.ID)) != 0 {
+		t.Fatal("a parked run's secrets are still held after the grace period")
 	}
 
 	// A run that ended and then runs again (a retry) is not dropped.

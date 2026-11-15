@@ -159,7 +159,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		// The provider is resolved BEFORE the metric sink because the sink needs
 		// its price: cost is computed as the tokens arrive, not reconstructed
 		// afterwards from a log nobody reads back.
-		prov, err := e.resolveLLMWithEnv(step, workdir, env)
+		prov, err := e.resolveLLMWithEnv(step, workdir, env, func(s string) string { return e.scrubQuoted(runID, s) })
 		if err != nil {
 			return attempt{err: fmt.Errorf("step %s: %w", step.ID, err)}
 		}

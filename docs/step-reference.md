@@ -59,7 +59,9 @@ a paused step's question (and what notifiers send of it), what it writes to
 `$WFX_STATE` and a `state:` value (kept beyond the run), a `send:` step's
 text and file attachment, and a worker's report and live log (also after a
 server restart). Whenever the platform shortens a text, the whole text is
-scrubbed first and then cut, so no piece of a value is left at the cut.
+scrubbed first and then cut, so no piece of a value is left at the cut. A
+local agent CLI's rejected reply, quoted in the step's error by its two
+ends, is scrubbed whole before it is shortened too.
 
 What is matched:
 - the value itself, and with CRLF line endings when it spans lines (a PEM key);
@@ -68,7 +70,11 @@ What is matched:
   after it, every character that encodes the value's bytes alone is
   replaced, so a Basic-auth header (`curl -u user:secret`, `curl -u
   "$KEY:"`) is caught whatever the user name. Up to one character at each
-  edge also encodes a neighbouring byte and is left in place. Also caught
+  edge is left in place: at the start, the one that also encodes the byte
+  before the value; at the end, the one that also encodes the byte after
+  it, or, when nothing follows the value and it does not end on a 3-byte
+  boundary, the last character, which holds at most 4 bits of the value
+  (`lG[redacted:B64]Q==`). Also caught
   when the base64 is wrapped across lines (a PEM body, `base64` at 76
   columns) and the value crosses a line break;
 - hex (all lower or all upper case);
@@ -94,11 +100,16 @@ Numbers in a scrubbed JSON document keep their digits (a 20-digit id is not
 rounded, 1000000 stays 1000000), and a document with nothing to redact is
 stored exactly as it was.
 
-The values are held in the server's memory while the run is active, and for
-10 minutes after it ends, so a late write (a cancelled step, a parallel
-branch, a worker's report) is still scrubbed; at most 256 ended runs' values
-are held. A worker's report or live log that arrives later than that is
-scrubbed with the values loaded again from the env store and the job.
+The values are held in the server's memory while a step of the run is
+running, and for 10 minutes after the run ends or parks on a person
+(`needs_input`, `awaiting_approval`), so a late write (a cancelled step, a
+parallel branch, a worker's report, the pause's notification) is still
+scrubbed; at most 256 ended or parked runs' values are held, the oldest
+dropped first. A parked run that resumes registers its values again when its
+next step starts, from that step's environment: a literal value only an
+earlier step's `env:` named is not known to the steps after the pause. A
+worker's report or live log that arrives later than that is scrubbed with
+the values loaded again from the env store and the job.
 
 In its place, stored text shows `[redacted:NAME]`.
 
@@ -115,12 +126,21 @@ Limits (not caught):
 - Other encodings: base32, hex in mixed case, HTML entities (`&#47;`,
   `&amp;`), JSON escaped more than 4 times inside plain text.
 - A text cut BEFORE the platform sees it. At a worker's 64 KB cap (the
-  worker holds no secrets), a piece of a value right before the marker is
-  removed when it is at least 4 characters long (6 before a bare `…` that
-  ends a text, which also ends ordinary sentences); a shorter piece stays.
-  A provider error body that the model library shortens with `…` in the
+  worker holds no secrets), the piece of a value right before the
+  `… truncated` marker is removed, in every form listed above (as itself,
+  base64 at each byte offset, hex, percent-encoded in any case or spelling,
+  JSON-escaped, both in turn), together with an escape the cut split in two
+  (`%3`, `\u00`), when that piece is at least 4 characters long as
+  written. A shorter piece stays: at most 3 characters, which is 3 bytes of
+  the value as itself, or 1 byte when every byte is `%xx`; so does an
+  escape cut before the value's first byte (`\u00`), which holds none of
+  it. Before a bare `…` that ends a text (which also ends ordinary
+  sentences) the piece must be 6 characters long.
+- A provider error body that the model library shortens with `…` in the
   middle of its message is not treated as cut: a piece of a value there
-  stays.
+  stays. The same holds for the last 4 KB of an agent CLI's stderr that the
+  adapter keeps when the CLI dies: a value cut at the start of that window
+  leaves its end.
 - The marker names the variable. Whoever can get a value printed can see that
   it matched; don't let outside input choose what a step prints.
 - `wfx state set` values (set from the CLI or API, not by a step) are stored

@@ -60,9 +60,11 @@ type secretValue struct{ name, value string }
 // runs' secrets are kept at most. The grace period is for the writes that can
 // still arrive after the terminal status (a cancelled step, a parallel branch,
 // a retry, a worker's late report): they are scrubbed with the run's own
-// values. After it, the values leave memory. The cap bounds memory however
-// many runs end inside one grace period; the oldest ended runs go first, and a
-// run that has not ended is never dropped.
+// values. After it, the values leave memory. A run parked on a person
+// (needs_input, awaiting_approval) counts as ended here: it can wait for
+// days, and its next step registers its values again when it resumes. The cap
+// bounds memory however many runs end or park inside one grace period; the
+// oldest go first, and a run with a step running is never dropped.
 const (
 	endedSecretsGrace = 10 * time.Minute
 	maxEndedSecrets   = 256
@@ -216,7 +218,7 @@ func (r *runSecrets) markRunning(runID uuid.UUID) {
 
 // sweep drops the secrets of every run that ended endedSecretsGrace ago or
 // more, then the oldest ended runs beyond maxEndedSecrets. A run that has not
-// ended is never dropped.
+// ended or parked is never dropped.
 func (r *runSecrets) sweep() {
 	r.mu.Lock()
 	now := r.clock()
@@ -812,7 +814,11 @@ func (r *redactor) cut(text string) string {
 }
 
 // stripPartial replaces the longest prefix (at least `least` bytes) of any
-// secret form that head ends with: what a cut leaves of a secret.
+// secret form that head ends with: what a cut leaves of a secret. A prefix
+// written with JSON escapes or percent-encoding in a spelling r.forms does not
+// hold (lowercase %xx, every byte encoded, encodeURIComponent, `\/`) is found
+// in the decoded head, the way decoded finds a whole one, and an escape the
+// cut split (`%3`, `\u00`) goes with it.
 func (r *redactor) stripPartial(head string, least int) string {
 	best, name := 0, ""
 	for _, sf := range r.forms {
@@ -823,10 +829,102 @@ func (r *redactor) stripPartial(head string, least int) string {
 			}
 		}
 	}
+	if at, n := r.partialDecoded(head, least); n != "" && len(head)-at > best {
+		best, name = len(head)-at, n
+	}
 	if best == 0 {
 		return head
 	}
 	return head[:len(head)-best] + "[redacted:" + name + "]"
+}
+
+// partialDecoded is where, in head, the longest prefix of a secret form
+// starts that head ends with once read decoded, layer by layer as decoded
+// does; a trailing escape cut in two is left out of the match and goes with
+// it. It counts when the span it takes, as written, is at least `least`
+// bytes: an every-byte %xx form spends 3 of them per byte of the secret.
+func (r *redactor) partialDecoded(head string, least int) (int, string) {
+	at, name := len(head), ""
+	if len(r.forms) == 0 || !strings.ContainsAny(head, `\%`) {
+		return at, name
+	}
+	flat := head
+	var ostart []int // for each byte of flat, where it starts in head
+	check := func() {
+		n := len(flat) - splitEscape(flat)
+		for _, sf := range r.forms {
+			for k := min(len(sf.form)-1, n); k >= 1; k-- {
+				if !strings.HasSuffix(flat[:n], sf.form[:k]) {
+					continue
+				}
+				st := n - k
+				if ostart != nil {
+					st = ostart[st]
+				}
+				if len(head)-st >= least && st < at {
+					at, name = st, sf.name
+				}
+				break
+			}
+		}
+	}
+	check()
+	quiet := 0
+	for step := 0; step < 2*maxDecodeDepth && quiet < 2; step++ {
+		decode := unescapeJSON
+		if step%2 == 1 {
+			decode = unescapePercent
+		}
+		f, s, _, changed := decode(flat)
+		if !changed {
+			quiet++
+			continue
+		}
+		quiet = 0
+		if ostart == nil {
+			ostart = s
+		} else {
+			ns := make([]int, len(s))
+			for j := range s {
+				ns[j] = ostart[s[j]]
+			}
+			ostart = ns
+		}
+		flat = f
+		check()
+	}
+	if name != "" && !strings.ContainsAny(head[at:], `\%`) {
+		// No escape in it: the plain prefix match above already decided.
+		return len(head), ""
+	}
+	return at, name
+}
+
+// splitEscape is how many bytes at the end of s are an escape the cut split:
+// `%`, `%h`, `\`, `\u`, `\uh`, `\uhh` or `\uhhh`.
+func splitEscape(s string) int {
+	n := len(s)
+	for k := 3; k >= 0; k-- {
+		if n >= k+2 && s[n-k-2:n-k] == `\u` && allHex(s[n-k:]) {
+			return k + 2
+		}
+	}
+	switch {
+	case n >= 2 && s[n-2] == '%' && isHex(s[n-1]):
+		return 2
+	case n >= 1 && (s[n-1] == '%' || s[n-1] == '\\'):
+		return 1
+	}
+	return 0
+}
+
+func allHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // redactTextCut is redactText; the cut handling is part of every text scrub.

@@ -447,9 +447,9 @@ func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, payloa
 // report or live log: the run's env-store values, and the job's own env as it
 // was sent (the step's env block and a module's door token), whose
 // credential-named or env-store values count as secret. After a server
-// restart nothing else would be registered. A run that has already ended in
-// the store gets the usual grace period, so these values do not stay in
-// memory for good.
+// restart nothing else would be registered. A run that has already ended, or
+// is parked on a person, in the store gets the usual grace period, so these
+// values do not stay in memory for good.
 func (e *Engine) registerJobSecrets(ctx context.Context, runID uuid.UUID, payload json.RawMessage) {
 	_ = e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
 	var p JobPayload
@@ -457,7 +457,7 @@ func (e *Engine) registerJobSecrets(ctx context.Context, runID uuid.UUID, payloa
 		e.redactions.add(runID, p.Env, nil)
 	}
 	if e.store != nil {
-		if run, err := e.store.GetRun(ctx, runID); err == nil && run != nil && runStatusEnded[run.Status] {
+		if run, err := e.store.GetRun(ctx, runID); err == nil && run != nil && (runStatusEnded[run.Status] || runStatusParked[run.Status]) {
 			e.redactions.markEnded(runID)
 		}
 	}
