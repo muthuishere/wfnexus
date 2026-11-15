@@ -107,29 +107,58 @@ func Load(path string) (*Config, error) {
 		}
 		if HasUserinfo(p.Proxy) {
 			// The message never repeats the URL: it holds the credential.
-			return nil, fmt.Errorf("%s: profile %q proxy carries credentials (user@ or user:pass@); use a local proxy without them", path, n)
+			return nil, fmt.Errorf("%s: profile %q proxy carries credentials (it contains @); use a local proxy without them", path, n)
 		}
 	}
 	return &c, nil
 }
 
-// HasUserinfo is whether a proxy address carries a user or user:pass part.
+// HasUserinfo is whether a proxy address may carry a user or user:pass part.
+// Any "@" anywhere in the value counts: URL parsers differ on where userinfo
+// ends (one slash, three slashes, no scheme), so the check does not parse.
 func HasUserinfo(proxy string) bool {
+	return strings.Contains(proxy, "@")
+}
+
+// DisplayProxy is how a proxy is shown (doctor, API, CLI): scheme://host:port
+// only, or host:port when no scheme was written. Userinfo, path, query and
+// fragment are dropped; a value that does not read as a proxy address is
+// shown as a fixed placeholder, never as written.
+func DisplayProxy(proxy string) string {
 	if proxy == "" {
+		return ""
+	}
+	const unreadable = "(unreadable proxy address)"
+	rest, scheme := proxy, ""
+	if i := strings.Index(rest, "://"); i >= 0 {
+		scheme, rest = rest[:i], rest[i+3:]
+		if !validScheme(scheme) {
+			return unreadable
+		}
+	}
+	u, err := url.Parse("//" + rest)
+	if err != nil || u.Hostname() == "" || strings.HasSuffix(u.Host, ":") || strings.ContainsAny(u.Host, "@/?#") {
+		return unreadable
+	}
+	if scheme == "" {
+		return u.Host
+	}
+	return scheme + "://" + u.Host
+}
+
+func validScheme(s string) bool {
+	if s == "" {
 		return false
 	}
-	if u, err := url.Parse(proxy); err == nil && u.User != nil {
-		return true
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '+' || r == '-' || r == '.'):
+		default:
+			return false
+		}
 	}
-	// No scheme ("user:pass@host:port") parses without User: check by hand.
-	host := proxy
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
-	}
-	if i := strings.IndexAny(host, "/?#"); i >= 0 {
-		host = host[:i]
-	}
-	return strings.Contains(host, "@")
+	return true
 }
 
 // Names are the profile names, sorted.
@@ -161,7 +190,7 @@ func (c *Config) Check() []Status {
 	var out []Status
 	for _, n := range c.Names() {
 		p := c.Profiles[n]
-		s := Status{Name: n, Default: n == c.Default, Command: strings.Join(p.Command, " "), Folder: p.Folder, Proxy: p.Proxy,
+		s := Status{Name: n, Default: n == c.Default, Command: strings.Join(p.Command, " "), Folder: p.Folder, Proxy: DisplayProxy(p.Proxy),
 			ReadActions: append([]string{}, p.ReadActions...)}
 		_, err := exec.LookPath(p.Command[0])
 		s.CommandFound = err == nil

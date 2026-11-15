@@ -47,14 +47,10 @@ function onPath(cmd) {
 const mode = process.argv[2];
 if (mode !== "read" && mode !== "act") fail("usage: browser.mjs read|act");
 
-// A proxy with user or user:pass@ is refused: credentials do not belong here.
+// A proxy that may carry user or user:pass@ is refused: credentials do not
+// belong here. Any "@" anywhere counts (parsers differ on where userinfo ends).
 function hasUserinfo(proxy) {
-  if (!proxy) return false;
-  let host = String(proxy);
-  const i = host.indexOf("://");
-  if (i >= 0) host = host.slice(i + 3);
-  host = host.split(/[/?#]/)[0];
-  return host.includes("@");
+  return proxy != null && String(proxy).includes("@");
 }
 
 const path = process.env.WFX_BROWSER_CONFIG || join(homedir(), ".config", "wfx", "browser.json");
@@ -77,7 +73,7 @@ if (!Object.hasOwn(profiles, name)) {
 const p = profiles[name];
 const argv = typeof p.command === "string" ? p.command.split(/\s+/).filter(Boolean) : p.command || [];
 if (argv.length === 0) fail(`profile "${name}" has no command`);
-if (hasUserinfo(p.proxy)) fail(`profile "${name}": proxy carries credentials; use a local proxy without them`);
+if (hasUserinfo(p.proxy)) fail(`profile "${name}": proxy carries credentials (it contains "@"); use a local proxy without them`);
 if (!onPath(argv[0])) fail(`profile "${name}": command ${argv[0]} not found`);
 
 const action = input("action").trim();

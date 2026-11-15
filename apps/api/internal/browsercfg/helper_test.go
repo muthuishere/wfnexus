@@ -1,12 +1,15 @@
 package browsercfg
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/testdeps"
 )
 
 // The browser module's helper (modules/browser/browser.mjs), run as a step
@@ -15,7 +18,7 @@ func runHelper(t *testing.T, mode, cfg, profile, action, args string) (string, i
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node not on PATH")
+		testdeps.Missing(t, "node", err)
 	}
 	helper, _ := filepath.Abs("../../../../modules/browser/browser.mjs")
 	work := t.TempDir()
@@ -133,6 +136,32 @@ func TestBrowserHelperRefusesProxyCredentials(t *testing.T) {
 		out, code := runHelper(t, mode, cfg, "x", "open", "")
 		if code != 2 || !strings.Contains(out, "proxy carries credentials") || strings.Contains(out, "hunter2") || strings.Contains(out, "bob") {
 			t.Fatalf("%s: %d %q", mode, code, out)
+		}
+	}
+}
+
+// Every proxy spelling with an "@" is refused before the command runs (exit
+// 2): one slash, three slashes, and the usual form. The fake prints its env, so
+// were it to run, the value would show in the output.
+func TestBrowserHelperRefusesAnyAtInProxy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake")
+	}
+	fake := filepath.Join(t.TempDir(), "fake-browser")
+	script := "#!/bin/sh\necho \"ran proxy=$WFX_BROWSER_PROXY http=$HTTP_PROXY https=$HTTPS_PROXY\"\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, proxy := range []string{"http:/bob:pw1secret@h:1", "http:///bob:pw1secret@h:1", "http://u:pw1secret@h:1"} {
+		body, _ := json.Marshal(map[string]any{"profiles": map[string]any{"x": map[string]any{
+			"command": []string{fake}, "folder": "/p", "proxy": proxy, "read_actions": []string{"open"}}}})
+		cfg := write(t, string(body))
+		for _, mode := range []string{"read", "act"} {
+			out, code := runHelper(t, mode, cfg, "x", "open", "")
+			if code != 2 || strings.Contains(out, "ran ") || !strings.Contains(out, "proxy carries credentials") ||
+				strings.Contains(out, "pw1secret") || strings.Contains(out, "bob") {
+				t.Fatalf("%s %s: %d %q", proxy, mode, code, out)
+			}
 		}
 	}
 }

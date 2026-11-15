@@ -22,14 +22,14 @@ func serviceEngine(t *testing.T) *Engine {
 	t.Helper()
 	dsn, err := pgtest.DSN()
 	if err != nil {
-		t.Skipf("%v", err)
+		pgtest.Unavailable(t, err)
 	}
 	if err := store.Migrate("postgres", dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	st, err := store.Open(context.Background(), "postgres", dsn)
 	if err != nil {
-		t.Skipf("no postgres: %v", err)
+		pgtest.Unavailable(t, err)
 	}
 	t.Cleanup(st.Close)
 	// Each test owns its service rows; the database is shared by the package.

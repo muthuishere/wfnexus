@@ -1,6 +1,7 @@
 package browsercfg
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -90,5 +91,47 @@ func TestLoadReadActions(t *testing.T) {
 	}
 	if st := c.Check(); len(st) != 1 || strings.Join(st[0].ReadActions, ",") != "open,text" {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+// Every spelling with an "@" is refused, whatever the slashes: Node and
+// Chromium read a user:pass from `http:/u:p@h` and `http:///u:p@h` too.
+func TestLoadRefusesAnyAtInProxy(t *testing.T) {
+	for _, proxy := range []string{"http:/bob:pw1secret@h:1", "http:///bob:pw1secret@h:1", "http://u:pw1secret@h:1", "h:1/x@pw1secret", "http://h:1/?q=a@pw1secret"} {
+		_, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","proxy":"`+proxy+`"}}}`))
+		if err == nil || !strings.Contains(err.Error(), "proxy carries credentials") || strings.Contains(err.Error(), "pw1secret") || strings.Contains(err.Error(), "bob") {
+			t.Fatalf("%s: err = %v", proxy, err)
+		}
+	}
+}
+
+// The doctor (and so the API and the CLI) shows only scheme://host:port.
+func TestDisplayProxyIsSchemeHostPortOnly(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                       "",
+		"http://127.0.0.1:8881":                  "http://127.0.0.1:8881",
+		"http://127.0.0.1:8881/":                 "http://127.0.0.1:8881",
+		"http://h:1/path?token=tok1secret#frag1": "http://h:1",
+		"socks5://h:1?token=tok1secret":          "socks5://h:1",
+		"http://h:1#tok1secret":                  "http://h:1",
+		"127.0.0.1:8881":                         "127.0.0.1:8881",
+		"h:1?token=tok1secret":                   "h:1",
+		"http://u:tok1secret@h:1":                "http://h:1",
+		"http:/u:tok1secret@h:1":                 "(unreadable proxy address)",
+		"ht tp://h:1?tok1secret":                 "(unreadable proxy address)",
+		"http://?token=tok1secret":               "(unreadable proxy address)",
+	} {
+		if got := DisplayProxy(in); got != want || strings.Contains(got, "tok1secret") {
+			t.Errorf("DisplayProxy(%q) = %q, want %q", in, got, want)
+		}
+	}
+	c, err := Load(write(t, `{"profiles":{"x":{"command":["sh"],"folder":"/p","proxy":"http://127.0.0.1:8881/p?token=tok1secret#frag"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := c.Check()
+	raw, _ := json.Marshal(st)
+	if len(st) != 1 || st[0].Proxy != "http://127.0.0.1:8881" || strings.Contains(string(raw), "tok1secret") || strings.Contains(string(raw), "frag") {
+		t.Fatalf("status = %s", raw)
 	}
 }
