@@ -8,6 +8,7 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // TENANT CONNECTIONS (ADR 0032).
@@ -176,4 +177,63 @@ func (e *Engine) refuseTenantConnectionsOnWorker(ctx context.Context, runID uuid
 		return fmt.Errorf("step %s: a non-default tenant's mcp servers are called from the server only, and only through its connections; this step cannot run on a worker", stepID)
 	}
 	return nil
+}
+
+// ---- the loader (ADR 0034) ----
+
+// tenantCatalog resolves a workflow's mcp names by its project: a project
+// bound to a non-default tenant names THAT tenant's connections, and only
+// them, and none while tenant connections are switched off; every other
+// project names the server's own registry, as before.
+type tenantCatalog struct {
+	workflow.Catalog
+	e *Engine
+}
+
+// projectTenantStore is what the loader reads.
+type projectTenantStore interface {
+	ProjectTenant(ctx context.Context, project string) (string, error)
+	ConnectionInTenant(ctx context.Context, tenant, name string) (*store.Connection, error)
+}
+
+func (c tenantCatalog) MissingMcpIn(project string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	ps, ok := c.e.store.(projectTenantStore)
+	if !ok {
+		return c.Catalog.MissingMcp(names)
+	}
+	ctx := context.Background()
+	tenant, err := ps.ProjectTenant(ctx, project)
+	if err != nil {
+		return names // cannot tell: nothing resolves
+	}
+	if tenant == store.DefaultTenant {
+		return c.Catalog.MissingMcp(names)
+	}
+	if !c.e.tenantConnectionsOn() {
+		return names
+	}
+	var miss []string
+	for _, n := range names {
+		if _, err := ps.ConnectionInTenant(ctx, tenant, n); err != nil {
+			miss = append(miss, n)
+		}
+	}
+	return miss
+}
+
+func (e *Engine) tenantScoped(cat workflow.Catalog) workflow.Catalog {
+	return tenantCatalog{Catalog: cat, e: e}
+}
+
+// projectOfDir names the project whose workflows directory dir is.
+func (e *Engine) projectOfDir(dir string) string {
+	for _, s := range e.Sources() {
+		if s.Dir == dir {
+			return s.Name
+		}
+	}
+	return "local"
 }
