@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -346,6 +347,34 @@ func TestAWorkerIsNotATenantOperator(t *testing.T) {
 	} {
 		if c, b := call(rt[0], rt[1], wt, map[string]any{"id": "x", "name": "x", "workflows": []string{"wf-a"}}); c != 403 {
 			t.Fatalf("%s %s by a worker: %d %s", rt[0], rt[1], c, b)
+		}
+	}
+}
+
+// can() refuses a service subject on its own, not only behind authorize's
+// /api/svc/ gate.
+func TestCanRefusesAServiceSubjectDirectly(t *testing.T) {
+	s := &Server{loopbackOnly: false}
+	for _, perm := range []string{PermRunsRead, PermWorkflowsRead, PermProjectsRead, PermAdminRead, PermRunsWrite} {
+		r := httptest.NewRequest("GET", "/api/runs", nil)
+		r = r.WithContext(withSubject(r.Context(), &Subject{Kind: SubjectService, Tenant: "acme", Role: RoleSuperadmin}))
+		if s.can(r, perm) {
+			t.Fatalf("can() granted %s to a service subject", perm)
+		}
+	}
+}
+
+// A service subject with no tenant is refused by the tenant routes, even if
+// one were ever constructed.
+func TestAServiceSubjectWithoutATenantIsRefused(t *testing.T) {
+	s := &Server{}
+	for _, h := range []http.HandlerFunc{s.svcSelf, s.svcListRuns} {
+		r := httptest.NewRequest("GET", "/api/svc/self", nil)
+		r = r.WithContext(withSubject(r.Context(), &Subject{Kind: SubjectService, Tenant: "", Principal: &store.ServicePrincipal{}}))
+		w := httptest.NewRecorder()
+		h(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("a tenantless service subject got %d", w.Code)
 		}
 	}
 }
