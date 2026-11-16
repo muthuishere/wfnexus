@@ -173,3 +173,21 @@ func TestATokenIssuerIsAllOrNothing(t *testing.T) {
 		t.Errorf("complete config: %v", err)
 	}
 }
+
+// A revocation that cannot be READ revokes: with the revocation table gone
+// (the link still readable), a valid token is refused.
+func TestAnUnreadableRevocationFailsClosed(t *testing.T) {
+	m := withIssuer(t)
+	f, call := newTenantFixture(t)
+	call("PUT", "/api/tenants/acme/issuer-links", f.admin, map[string]string{"externalTenant": "ext-1"})
+	acct := m.token(t, nil)
+	if c, _ := call("GET", "/api/svc/self", acct, nil); c != 200 {
+		t.Fatalf("before the fault: %d", c)
+	}
+	if _, err := f.st.DB().Exec(`DROP TABLE issuer_revocations`); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := call("GET", "/api/svc/self", acct, nil); c != 401 {
+		t.Fatalf("a token was accepted while revocations could not be read: %d", c)
+	}
+}

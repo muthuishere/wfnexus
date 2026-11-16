@@ -87,7 +87,9 @@ func (j *JWKS) KeysFor(kid string) (KeySet, error) {
 	if fresh && !missing {
 		return j.keys, nil
 	}
-	if j.keys == nil || now.Sub(j.tried) >= min {
+	// Rate-limited ALSO before the first success: an unreachable issuer at
+	// boot must not turn every presented token into a fetch.
+	if j.tried.IsZero() || now.Sub(j.tried) >= min {
 		j.tried = now
 		if ks, err := j.fetch(); err == nil {
 			j.keys, j.fetched = ks, now
@@ -106,9 +108,13 @@ func (j *JWKS) fetch() (KeySet, error) {
 	}
 	c := j.Client
 	if c == nil {
-		c = &http.Client{Timeout: 10 * time.Second}
+		c = &http.Client{Timeout: 5 * time.Second}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// No redirects: the key set comes from the configured URL or not at all.
+	cc := *c
+	cc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	c = &cc
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.URL, nil)
 	if err != nil {

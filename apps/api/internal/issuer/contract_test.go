@@ -344,3 +344,36 @@ func TestJWKSRefetchIsRateLimitedAndFailsClosedWhenStale(t *testing.T) {
 		t.Fatal("a set older than MaxStale was still served")
 	}
 }
+
+// Before any successful fetch, an unreachable issuer is still asked at most
+// once per MinRefetch, and a redirect is not followed.
+func TestJWKSColdStartIsRateLimitedAndRedirectsAreRefused(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/moved" {
+			http.Redirect(w, r, "/jwks", http.StatusFound)
+			return
+		}
+		http.Error(w, "down", 503)
+	}))
+	defer srv.Close()
+	now := tNow
+	j := &JWKS{URL: srv.URL + "/jwks", Client: srv.Client(), MinRefetch: 30 * time.Second, Now: func() time.Time { return now }}
+	for i := 0; i < 50; i++ {
+		if _, err := j.KeysFor(tKid); err == nil {
+			t.Fatal("keys from a down issuer")
+		}
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("%d fetches from a cold cache inside MinRefetch, want 1", n)
+	}
+	hits.Store(0)
+	r := &JWKS{URL: srv.URL + "/moved", Client: srv.Client(), Now: func() time.Time { return now }}
+	if _, err := r.KeysFor(tKid); err == nil {
+		t.Fatal("a redirected key set was accepted")
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("the redirect was followed: %d requests", n)
+	}
+}
