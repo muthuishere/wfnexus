@@ -28,6 +28,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/issuer"
 	"github.com/muthuishere/wfnexus/apps/api/internal/login"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -58,6 +59,10 @@ type Server struct {
 	// hands over write inputs (#146, #148). Only tests set it, through
 	// serviceRunsForTest.
 	serviceRuns bool
+
+	// issuer verifies an external issuer's access tokens (issuer.go); nil
+	// when none is configured, and then no such token resolves.
+	issuer *issuer.Verifier
 
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
@@ -117,6 +122,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.jwtKey = fixedJWTKey
 	}
 	s.serviceRuns = serviceRunsForTest
+	s.issuer = newIssuerVerifier(eng.TokenIssuerConfig())
+	if issuerForTest != nil {
+		s.issuer = issuerForTest
+	}
 	buildProviders(s)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)

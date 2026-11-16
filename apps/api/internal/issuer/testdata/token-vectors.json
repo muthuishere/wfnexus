@@ -1,0 +1,70 @@
+{
+  "about": "Product access-token conformance fixtures (token contract v0.2.0). TEST key: never trust it outside tests. Verify each token with issuer, audience and the clock set to verify_at (max skew in the file); every vector except 'valid' must be refused, and the verdict names the reason class.",
+  "issuer": "https://issuer.example.test",
+  "audience": "product-a",
+  "verify_at": "2026-11-16T12:00:00Z",
+  "max_clock_skew_seconds": 60,
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "hjhwvefPaIGOYAA0_qX7srlprp-2_z2GiRM2fnl107k",
+        "y": "kuzB2gjiUGk-2TvBTkcrS--Vdu03iYrTCEecW-hmlo4",
+        "kid": "golden-test-key-1",
+        "use": "sig",
+        "alg": "ES256"
+      }
+    ]
+  },
+  "vectors": [
+    {
+      "name": "valid",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.8QCoetiDeeRCccbByzAlxw44_xOe_pbqPixSiMndpR_clL0PlT6nxFYfAnuGsCe2uxwE7ZuqT7uPGVt1zRvEEg",
+      "verdict": "valid",
+      "note": "all claims present; auth_time one hour before iat"
+    },
+    {
+      "name": "missing_auth_time",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJleHAiOjE3OTQ4MzA5NDAsImlhdCI6MTc5NDgzMDM0MCwiaXNzIjoiaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZS50ZXN0IiwianRpIjoiZ29sZGVuLWp0aS0wMDAxIiwibmJmIjoxNzk0ODMwMzQwLCJyb2xlIjoibWVtYmVyIiwic2lkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwic3ViIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidGlkIjoiMzMzMzMzMzMtMzMzMy00MzMzLTgzMzMtMzMzMzMzMzMzMzMzIn0.SSZS5_uvw0OmoVuKDq3e5-MSAnOGdYdGyGxLW7YSCXiYd3pTKfvS4zFG2g1tD4sSKupptt-neIjmwrWXBTc0KA",
+      "verdict": "missing_claim",
+      "note": "auth_time is mandatory since v0.2.0"
+    },
+    {
+      "name": "wrong_aud",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJhbm90aGVyLXByb2R1Y3QiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.-OjjFZdPd2rvOqjeBdGtVTvbB0zbzQeuKtzvCs4MiUEp4GyzqdP0OEWF_iE6qZ2jCuYcypsycJbwva69zMbYCw",
+      "verdict": "wrong_audience",
+      "note": "token for another product"
+    },
+    {
+      "name": "missing_tid",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEifQ.Tu3nNop4mMvDxbrGodpTdsVqDQd7rEQsB7R9uJdWfDQPVLTgZ0J4TYU6x6DOpKDjtW3UI74UzsGQEzjq6pFyIQ",
+      "verdict": "missing_claim",
+      "note": "product tokens always carry tid"
+    },
+    {
+      "name": "expired",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgyOTgwMCwiaWF0IjoxNzk0ODI5MjAwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MjkyMDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.XLPNFTO8eUfik601ipudEZC0fo2cdKCta7QScLYE5MyK8UKPJakBMYvw1RKQPX0oReI7DqE3Zp8VLuthlWonGA",
+      "verdict": "expired",
+      "note": "exp ten minutes before verify_at"
+    },
+    {
+      "name": "alg_none",
+      "token": "eyJhbGciOiJub25lIiwia2lkIjoiZ29sZGVuLXRlc3Qta2V5LTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.",
+      "verdict": "algorithm_not_allowed",
+      "note": "unsigned token"
+    },
+    {
+      "name": "hs256_public_key",
+      "token": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImdvbGRlbi10ZXN0LWtleS0xIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.-o00-aTbnc0kk3bQu7sg2F0asXK6kgG1g5CYyl5Xrvs",
+      "verdict": "algorithm_not_allowed",
+      "note": "HS256 keyed with the public key (SPKI PEM): algorithm confusion"
+    },
+    {
+      "name": "kid_mismatch",
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6InVua25vd24ta2lkIiwidHlwIjoiYXQrand0In0.eyJhdWQiOiJwcm9kdWN0LWEiLCJhdXRoX3RpbWUiOjE3OTQ4MjY4MDAsImV4cCI6MTc5NDgzMDk0MCwiaWF0IjoxNzk0ODMwMzQwLCJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlLnRlc3QiLCJqdGkiOiJnb2xkZW4tanRpLTAwMDEiLCJuYmYiOjE3OTQ4MzAzNDAsInJvbGUiOiJtZW1iZXIiLCJzaWQiOiIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiLCJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJ0aWQiOiIzMzMzMzMzMy0zMzMzLTQzMzMtODMzMy0zMzMzMzMzMzMzMzMifQ.TZLDgB18HF2OBpWuGicre-pZuncGEgd0Ur3BOewvyXL8pMHgDlMA6vVUVhovtkQpFZMBEXDA7YktHmapQ9D1NA",
+      "verdict": "unknown_key",
+      "note": "kid not in the JWKS"
+    }
+  ]
+}

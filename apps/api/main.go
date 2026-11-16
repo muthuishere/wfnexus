@@ -290,6 +290,10 @@ func main() {
 	if err := bootstrapIdentity(ctx, cfg.Addr, st); err != nil {
 		log.Fatal(err)
 	}
+	// An external token issuer is all three settings or none (issuer.go).
+	if err := api.CheckTokenIssuer(cfg.TokenIssuer); err != nil {
+		log.Fatal(err)
+	}
 
 	uiDir, uiFS := uiSource(cfg)
 	srv := &http.Server{Addr: cfg.Addr, Handler: api.New(eng, st, bl, cfg.Addr, uiDir, uiFS), ReadHeaderTimeout: 10 * time.Second}

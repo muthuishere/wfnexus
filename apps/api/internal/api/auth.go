@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
+	"github.com/muthuishere/wfnexus/apps/api/internal/issuer"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -38,6 +39,11 @@ const (
 	// principal). It reaches only the tenant routes under /api/svc/; every
 	// other route refuses it (authz.go).
 	SubjectService subjectKind = "service"
+	// SubjectAccount is a person signed in at an EXTERNAL issuer, presenting
+	// that issuer's access token (issuer.go). Like a service subject it is
+	// bound to one tenant, read from the token's tid through an operator's
+	// link, and it reaches only the read routes under /api/svc/.
+	SubjectAccount subjectKind = "account"
 )
 
 // Subject is the authenticated caller. A nil *Subject means "no identity",
@@ -184,6 +190,12 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 // clear and never leaves this function.
 func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, error) {
 	if auth.LooksLikeJWT(tok) {
+		// An external issuer's token is ES256; ours is not. The header only
+		// routes the token: the external verifier itself refuses any alg
+		// but ES256, and ours refuses ES256.
+		if s.issuer != nil && issuer.LooksES256(tok) {
+			return s.subjectFromIssuer(ctx, tok)
+		}
 		return s.subjectFromJWT(ctx, tok)
 	}
 	if strings.HasPrefix(tok, auth.ServiceTokenPrefix) {
