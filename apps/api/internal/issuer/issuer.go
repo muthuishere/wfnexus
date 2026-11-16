@@ -99,10 +99,10 @@ type rawClaims struct {
 	Sid      string          `json:"sid"`
 	Tid      string          `json:"tid"`
 	Jti      string          `json:"jti"`
-	Exp      *json.Number    `json:"exp"`
-	Nbf      *json.Number    `json:"nbf"`
-	Iat      *json.Number    `json:"iat"`
-	AuthTime *json.Number    `json:"auth_time"`
+	Exp      json.RawMessage `json:"exp"`
+	Nbf      json.RawMessage `json:"nbf"`
+	Iat      json.RawMessage `json:"iat"`
+	AuthTime json.RawMessage `json:"auth_time"`
 }
 
 // Verify checks tok and returns its claims, or one of the Err* classes
@@ -154,6 +154,13 @@ func (v *Verifier) Verify(tok string) (*Claims, error) {
 	}
 	if !audienceHas(c.Aud, v.Audience) {
 		return nil, ErrAudience
+	}
+	// A time claim is a JSON NUMBER. A string that looks like one ("123")
+	// is malformed, not a time.
+	for _, raw := range []json.RawMessage{c.Exp, c.Iat, c.AuthTime, c.Nbf} {
+		if present(raw) && !isNumber(raw) {
+			return nil, ErrMalformed
+		}
 	}
 	exp, okE := unix(c.Exp)
 	iat, okI := unix(c.Iat)
@@ -241,11 +248,21 @@ func audienceHas(raw json.RawMessage, want string) bool {
 	return false
 }
 
-func unix(n *json.Number) (time.Time, bool) {
-	if n == nil {
+func present(raw json.RawMessage) bool {
+	t := strings.TrimSpace(string(raw))
+	return t != "" && t != "null"
+}
+
+func isNumber(raw json.RawMessage) bool {
+	t := strings.TrimSpace(string(raw))
+	return t != "" && (t[0] == '-' || (t[0] >= '0' && t[0] <= '9'))
+}
+
+func unix(raw json.RawMessage) (time.Time, bool) {
+	if !present(raw) || !isNumber(raw) {
 		return time.Time{}, false
 	}
-	f, err := n.Float64()
+	f, err := json.Number(strings.TrimSpace(string(raw))).Float64()
 	if err != nil || f <= 0 {
 		return time.Time{}, false
 	}

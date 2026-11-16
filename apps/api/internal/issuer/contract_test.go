@@ -397,3 +397,36 @@ func TestAShortOrLongSignatureIsRefusedWithoutPanic(t *testing.T) {
 		}()
 	}
 }
+
+// A time claim given as a string is malformed, even when it holds digits.
+func TestStringTypedTimeClaimsAreRefused(t *testing.T) {
+	m := newMinter(t)
+	for _, k := range []string{"exp", "iat", "auth_time", "nbf"} {
+		tok := m.token(t, func(c map[string]any) { c[k] = fmt.Sprint(c[k]) })
+		if _, err := m.verifier().Verify(tok); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s as a string: %v", k, err)
+		}
+	}
+}
+
+// A slow issuer does not hold the cache lock: while one fetch hangs, another
+// caller is answered at once.
+func TestASlowJWKSFetchDoesNotBlockOtherCallers(t *testing.T) {
+	release, arrived := make(chan struct{}), make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		<-release
+		http.Error(w, "down", 503)
+	}))
+	defer func() { close(release); srv.Close() }()
+	j := &JWKS{URL: srv.URL, Client: srv.Client(), MinRefetch: time.Minute}
+	go j.KeysFor(tKid)
+	<-arrived // the first call's fetch is now in flight
+	done := make(chan struct{})
+	go func() { j.KeysFor(tKid); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second caller waited on the first caller's fetch")
+	}
+}

@@ -1,4 +1,5 @@
 {
+  "contract": "v0.2.0",
   "about": "Product access-token conformance fixtures (token contract v0.2.0). TEST key: never trust it outside tests. Verify each token with issuer, audience and the clock set to verify_at (max skew in the file); every vector except 'valid' must be refused, and the verdict names the reason class.",
   "issuer": "https://issuer.example.test",
   "audience": "product-a",

@@ -79,24 +79,35 @@ func (j *JWKS) durations() (ttl, min, stale time.Duration) {
 // (rate-limited) when kid is not in it. It is a Verifier's Keys.
 func (j *JWKS) KeysFor(kid string) (KeySet, error) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
 	ttl, min, stale := j.durations()
 	now := j.now()
 	fresh := j.keys != nil && now.Sub(j.fetched) < ttl
 	missing := kid != "" && j.keys != nil && j.keys[kid] == nil
 	if fresh && !missing {
-		return j.keys, nil
+		ks := j.keys
+		j.mu.Unlock()
+		return ks, nil
 	}
 	// Rate-limited ALSO before the first success: an unreachable issuer at
-	// boot must not turn every presented token into a fetch.
-	if j.tried.IsZero() || now.Sub(j.tried) >= min {
+	// boot must not turn every presented token into a fetch. The fetch runs
+	// WITHOUT the lock, so a slow issuer never queues other requests behind
+	// it; they are answered from what is cached meanwhile.
+	doFetch := j.tried.IsZero() || now.Sub(j.tried) >= min
+	if doFetch {
 		j.tried = now
+	}
+	j.mu.Unlock()
+	if doFetch {
 		if ks, err := j.fetch(); err == nil {
+			j.mu.Lock()
 			j.keys, j.fetched = ks, now
+			j.mu.Unlock()
 			return ks, nil
 		}
 	}
-	if j.keys != nil && now.Sub(j.fetched) < stale {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.keys != nil && j.now().Sub(j.fetched) < stale {
 		return j.keys, nil
 	}
 	return nil, errors.New("key set unavailable")

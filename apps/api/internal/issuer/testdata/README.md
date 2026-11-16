@@ -9,6 +9,10 @@ private part, and the ids in the tokens are fake.
 - Values: issuer `https://issuer.example.test`, audience `product-a`, verify_at
   2026-11-16T12:00:00Z, max clock skew 60 s
 
+The `contract` field was added here when the file was copied; the tokens
+are unchanged. `TestGoldenVectors` refuses a fixture whose contract is not
+`issuer.ContractVersion`.
+
 `TestGoldenVectors` must give every vector the verdict recorded in it. When
 the contract changes, regenerate this file from the reference implementation
 and update the conformance suite in the same change. Never edit a token by

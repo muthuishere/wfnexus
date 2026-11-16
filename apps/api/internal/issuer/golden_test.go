@@ -47,6 +47,9 @@ func TestGoldenVectors(t *testing.T) {
 	if err := json.Unmarshal(raw, &g); err != nil {
 		t.Fatal(err)
 	}
+	if g.Contract != ContractVersion {
+		t.Fatalf("fixture contract %q, verifier implements %q: regenerate the fixture or update the suite", g.Contract, ContractVersion)
+	}
 	keys, err := ParseJWKS(g.JWKS)
 	if err != nil {
 		t.Fatal(err)

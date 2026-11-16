@@ -60,7 +60,8 @@ func (s *Server) subjectFromIssuer(ctx context.Context, tok string) (*Subject, e
 	}
 	c, err := v.Verify(tok)
 	if err != nil {
-		log.Printf("issuer token refused: %v", errors.Unwrap(err))
+		// The class and detail only; the token is never part of err.
+		log.Printf("issuer token refused: %v", err)
 		return nil, errors.New("unauthenticated")
 	}
 	tenant, err := s.store.IssuerTenant(ctx, v.Issuer, c.Tenant)
