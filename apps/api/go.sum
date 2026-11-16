@@ -126,6 +126,8 @@ github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261107205543-f1ce26c87d1b h
 github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261107205543-f1ce26c87d1b/go.mod h1:f/qag4DCSpYCRaMiY6D4NYagPjBua0II3fcIJVmHmsM=
 github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261115145228-bcee0be047d0 h1:Mcews8QgjagydIkQfktD7npbDHUlzbh3mtCy2e1GmHQ=
 github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261115145228-bcee0be047d0/go.mod h1:f/qag4DCSpYCRaMiY6D4NYagPjBua0II3fcIJVmHmsM=
+github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261116132410-847b42229f22 h1:Bynt48GJDNLQ3V76Rfq8oHW6x2Y6uK8CpcUoAhV92UY=
+github.com/muthuishere/wfnexus/agentadapter v0.0.0-20261116132410-847b42229f22/go.mod h1:f/qag4DCSpYCRaMiY6D4NYagPjBua0II3fcIJVmHmsM=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=

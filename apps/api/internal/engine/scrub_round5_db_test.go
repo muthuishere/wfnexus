@@ -73,6 +73,7 @@ func TestAResumedRunIsScrubbedAfterItsSetWasDropped(t *testing.T) {
 	if run.Status != "awaiting_approval" {
 		t.Fatalf("run = %s: %s", run.Status, run.Error)
 	}
+	waitSecretsEnded(t, h, run.ID, true)
 	clk.add(endedSecretsGrace)
 	h.eng.redactions.sweep()
 	if got := h.eng.redactions.get(run.ID); len(got) != 0 {
@@ -90,6 +91,83 @@ func TestAResumedRunIsScrubbedAfterItsSetWasDropped(t *testing.T) {
 	stored := string(mustJSON(h.steps(run.ID)["b"])) + revEventsR5(t, h, run.ID)
 	if r4Clean(t, "resumed step", stored); !strings.Contains(stored, "[redacted:R4_TOKEN]") {
 		t.Fatalf("the resumed step's output: %s", stored)
+	}
+}
+
+// waitSecretsEnded waits until the engine has started the run's grace period
+// and, with idle, until no step of it is in flight. setRun writes the status
+// first and marks the run's secrets ended after it, and a step's end restarts
+// the period (stepFinished), so a test that sees the status can otherwise
+// move its clock before the period has begun.
+func waitSecretsEnded(t *testing.T, h *harness, id uuid.UUID, idle bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		h.eng.redactions.mu.Lock()
+		_, ended := h.eng.redactions.ended[id]
+		busy := h.eng.redactions.busy[id]
+		h.eng.redactions.mu.Unlock()
+		if ended && (!idle || busy == 0) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the run's grace period never started")
+}
+
+// When a step parks the run, a sibling of its wave runs on to its end. What
+// that sibling writes after the park, even after the grace period, is still
+// scrubbed: runOneStep keeps the run's secrets while its step is in flight.
+// The park is made from outside, once the sibling is running, because inside
+// a real wave the order of the two is not fixed.
+func TestASiblingStillRunningAfterAParkIsScrubbed(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "go")
+	sib := workflow.Step{ID: "s", Run: `while [ ! -f ` + gate + ` ]; do sleep 0.05; done; printf 'token %s\n' "$R4_TOKEN"`,
+		Env: map[string]string{"R4_TOKEN": r4Secret}}
+	def := &workflow.Definition{Name: "r6-sibling-" + uuid.NewString()[:8], Steps: []workflow.Step{{ID: "p", Run: "true"}, sib}}
+	normalizeForTest(def)
+	h := newHarness(t, def, newFakeLLM(t), "")
+	clk := &fakeClock{t: time.Now()}
+	h.eng.redactions.mu.Lock()
+	h.eng.redactions.now = clk.now
+	h.eng.redactions.mu.Unlock()
+	ctx := context.Background()
+	run, err := h.store.CreateRun(ctx, "local", def.Name, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"p", "s"} {
+		if err := h.store.EnsureStep(ctx, run.ID, id, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		h.eng.runOneStep(ctx, run.ID, def, &def.Steps[1], workflow.TemplateData{RunID: run.ID.String(), WorkDir: t.TempDir()})
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if s := h.steps(run.ID)["s"]; s != nil && s.Status == "running" && len(h.eng.redactions.get(run.ID)) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sibling never started")
+		}
+	}
+	h.eng.setRun(ctx, run.ID, "awaiting_approval", "p", "") // its sibling parks the run
+	clk.add(endedSecretsGrace + time.Minute)
+	h.eng.redactions.sweep()
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the sibling never finished")
+	}
+	stored := string(mustJSON(h.steps(run.ID)["s"])) + revEventsR5(t, h, run.ID)
+	if r4Clean(t, "sibling after a park", stored); !strings.Contains(stored, "[redacted:R4_TOKEN]") {
+		t.Fatalf("the sibling's output: %s", stored)
 	}
 }
 
@@ -136,6 +214,72 @@ func TestARejectedAgentReplyKeepsNoPieceOfASecret(t *testing.T) {
 				"step error": h.steps(run.ID)["a"].Error, "run error": run.Error, "log": logs.String(),
 			} {
 				r4Clean(t, where, text)
+			}
+		})
+	}
+}
+
+// An ACP agent's turn error quotes what the agent did, shortened: a refused
+// tool's title (80 bytes), the stderr tail of an agent that died (4 KB). The
+// run's Scrub reaches the adapter on every turn and runs on the whole text
+// before the cut, so a value the cut splits leaves no piece in the step
+// error, the run error or the server log.
+func TestAnACPAgentsShortenedErrorKeepsNoPieceOfASecret(t *testing.T) {
+	for name, act := range map[string]string{
+		// 84 bytes: cut at 80, 20 bytes into the value; scrubbed, it fits
+		"refused title": `title="."*60+os.environ["R4_TOKEN"]`,
+		// 4100 bytes: the last 4 KB start 4 bytes into the value; scrubbed, it fits
+		"stderr tail": `sys.stderr.write(os.environ["R4_TOKEN"]+"#"*4075+"\n"); sys.stderr.flush(); sys.exit(3)`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			script := filepath.Join(t.TempDir(), "agent.py")
+			src := `#!/usr/bin/env python3
+import json,os,sys
+def send(o):
+    sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
+pending=None
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    m=json.loads(line)
+    method=m.get("method"); mid=m.get("id")
+    if method=="initialize":
+        send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1}})
+    elif method=="session/new":
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"s"}})
+    elif method=="session/prompt":
+        ` + act + `
+        pending=mid
+        send({"jsonrpc":"2.0","id":9001,"method":"session/request_permission","params":{"sessionId":"s",
+              "toolCall":{"toolCallId":"c1","title":title,"kind":"read"},
+              "options":[{"optionId":"no","kind":"reject_once","name":"Reject"}]}})
+    elif mid==9001 and pending is not None:
+        send({"jsonrpc":"2.0","id":pending,"result":{"stopReason":"end_turn"}})
+        pending=None
+    elif mid is not None:
+        send({"jsonrpc":"2.0","id":mid,"result":{}})
+`
+			if err := os.WriteFile(script, []byte(src), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			def := &workflow.Definition{Name: "r6-acp-" + uuid.NewString()[:8], Steps: []workflow.Step{
+				{ID: "a", Prompt: "go", Provider: "r6-acp", Env: map[string]string{"R4_TOKEN": r4Secret}},
+			}}
+			normalizeForTest(def)
+			h := newHarness(t, def, newFakeLLM(t), "")
+			h.eng.Catalog().Providers.Add(catalog.Provider{Name: "r6-acp", Kind: catalog.KindACP,
+				Command: []string{script}, Repairs: -1}, "test")
+			var logs bytes.Buffer
+			log.SetOutput(&logs)
+			defer log.SetOutput(os.Stderr)
+			run := h.run(nil)
+			for where, text := range map[string]string{
+				"step error": h.steps(run.ID)["a"].Error, "run error": run.Error, "log": logs.String(),
+			} {
+				r4Clean(t, where, text)
+			}
+			if run.Status != "failed" || !strings.Contains(run.Error, "[redacted:R4_TOKEN]") {
+				t.Fatalf("run = %s: %s", run.Status, run.Error)
 			}
 		})
 	}
