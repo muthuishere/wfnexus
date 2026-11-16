@@ -45,6 +45,11 @@ func newCustomerFixture(t *testing.T, on bool) *customerFixture {
 		dirs[p] = d
 		srcs = append(srcs, workflow.Source{Name: p, Dir: d})
 	}
+	// An EXISTING workflow of acme, so a refusal while off cannot be
+	// explained by a missing definition.
+	if err := os.WriteFile(filepath.Join(dirs["proj-a"], "seeded.yaml"), []byte("name: seeded\nsteps:\n  - id: a\n    prompt: hi\n    output_schema:\n      type: object\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dirs["proj-b"], "wf-b.yaml"), []byte("name: wf-b\nsteps:\n  - id: a\n    prompt: hi\n    output_schema:\n      type: object\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +127,8 @@ func TestTheCustomerAPIIsOffAndDoesNothing(t *testing.T) {
 		{"GET", "/api/svc/workflows/wf-b", nil},
 		{"POST", "/api/svc/workflows/validate", map[string]any{"project": "proj-a", "definition": hello("x")}},
 		{"POST", "/api/svc/workflows", map[string]any{"project": "proj-a", "definition": hello("made-while-off")}},
-		{"POST", "/api/svc/workflows/proj-a%2Fx/runs", map[string]any{}},
+		{"POST", "/api/svc/workflows/seeded/runs", map[string]any{}},
+		{"GET", "/api/svc/workflows/seeded", nil},
 	} {
 		if c, b := f.call(rt.m, rt.p, f.acct, rt.b); c != 404 {
 			t.Fatalf("%s %s while off: %d %s", rt.m, rt.p, c, b)
@@ -130,6 +136,19 @@ func TestTheCustomerAPIIsOffAndDoesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.dirs["proj-a"], "made-while-off.yaml")); err == nil {
 		t.Fatal("a workflow was written while the customer API is off")
+	}
+	if n := runsOf(t, f.st, "seeded"); n != 0 {
+		t.Fatalf("%d runs started while the customer API is off", n)
+	}
+	// The same calls switched ON succeed, so the 404s above are the off
+	// switch and nothing else.
+	customerAPIForTest = true
+	on := newCustomerFixture(t, true)
+	if c, b := on.call("GET", "/api/svc/workflows/seeded", on.acct, nil); c != 200 {
+		t.Fatalf("seeded workflow while on: %d %s", c, b)
+	}
+	if c, b := on.call("POST", "/api/svc/workflows/seeded/runs", on.acct, map[string]any{}); c != 201 {
+		t.Fatalf("seeded run while on: %d %s", c, b)
 	}
 }
 
