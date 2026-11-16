@@ -44,6 +44,7 @@ func (s *Server) tenantRoutes(r chi.Router) {
 
 	s.issuerRoutes(r)
 	s.connectionRoutes(r)
+	s.customerRoutes(r)
 
 	r.Get("/svc/self", s.svcSelf)
 	r.Get("/svc/runs", s.svcListRuns)
@@ -414,27 +415,39 @@ func (s *Server) svcGetRun(w http.ResponseWriter, r *http.Request) {
 // Every refusal is the same 404, so a principal cannot learn which workflows
 // exist outside its list or its tenant.
 func (s *Server) svcStartRun(w http.ResponseWriter, r *http.Request) {
-	if !s.serviceRuns {
-		notFound(w)
-		return
-	}
 	sub, ok := serviceSubject(w, r)
 	if !ok {
 		return
 	}
-	// Starting a run is a service principal's only. An account starts
-	// nothing here.
-	if sub.Kind != SubjectService || sub.Principal == nil {
+	name := urlName(r, "name")
+	switch {
+	case sub.Kind == SubjectService && sub.Principal != nil:
+		// A principal: service runs switched on, and the workflow listed.
+		if !s.serviceRuns {
+			notFound(w)
+			return
+		}
+		may, err := s.store.PrincipalMayStart(r.Context(), sub.Principal.ID, name)
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		if !may {
+			notFound(w)
+			return
+		}
+	case sub.Kind == SubjectAccount:
+		// An issuer account: only through the customer API (customer.go),
+		// which is switched off.
+		if !s.customerAPI {
+			notFound(w)
+			return
+		}
+	default:
 		notFound(w)
 		return
 	}
-	name := urlName(r, "name")
-	may, err := s.store.PrincipalMayStart(r.Context(), sub.Principal.ID, name)
-	if err != nil {
-		writeErr(w, 500, err)
-		return
-	}
-	if !may || s.eng.Definitions()[name] == nil {
+	if s.eng.Definitions()[name] == nil {
 		notFound(w)
 		return
 	}

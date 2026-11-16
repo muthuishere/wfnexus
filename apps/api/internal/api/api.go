@@ -59,6 +59,9 @@ type Server struct {
 	// hands over write inputs (#146, #148). Only tests set it, through
 	// serviceRunsForTest.
 	serviceRuns bool
+	// customerAPI turns on the customer routes (customer.go). Off, and only
+	// tests set it, through customerAPIForTest.
+	customerAPI bool
 
 	// issuer verifies an external issuer's access tokens (issuer.go); nil
 	// when none is configured, and then no such token resolves.
@@ -122,6 +125,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.jwtKey = fixedJWTKey
 	}
 	s.serviceRuns = serviceRunsForTest
+	s.customerAPI = customerAPIForTest
 	s.issuer = newIssuerVerifier(eng.TokenIssuerConfig())
 	if issuerForTest != nil {
 		s.issuer = issuerForTest
