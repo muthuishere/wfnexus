@@ -46,6 +46,10 @@ type Turn struct {
 	Prompt string
 	// Workdir is Options.Workdir, resolved.
 	Workdir string
+	// Scrub is Options.Scrub. A backend that shortens a text for an error (a
+	// dead process's stderr tail, a refused tool's title) scrubs the whole
+	// text with it first and cuts after.
+	Scrub func(string) string
 }
 
 // AgentFunc adapts a plain function to Agent.

@@ -205,6 +205,10 @@ const (
 // policy and gates, and records the terminal run status itself when it halts.
 // Shared by the sequential and the DAG paths so the two cannot drift.
 func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.Definition, step *workflow.Step, data workflow.TemplateData) (map[string]any, stepOutcome) {
+	// The run's secrets stay while this step is in flight, even when a
+	// sibling parks or ends the run meanwhile (runSecrets.stepStarted).
+	e.redactions.stepStarted(runID)
+	defer e.redactions.stepFinished(runID)
 	if step.IsLoop() {
 		return e.runLoop(ctx, runID, def, step, data)
 	}
@@ -259,7 +263,7 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 			// The output is kept so the failure can be read, but the step and
 			// the run are failed: a run whose command exited 1 is not "done".
 			e.setStep(ctx, runID, step.ID, model.StepPatch{Output: mustJSON(out)})
-			e.failStep(ctx, runID, step.ID, fmt.Errorf("command exited %d%s (declare it in exit-codes, e.g. {3: findings}, if this exit is an answer)", code, stderrTail(out)))
+			e.failStep(ctx, runID, step.ID, fmt.Errorf("command exited %d%s (declare it in exit-codes, e.g. {3: findings}, if this exit is an answer)", code, stderrTail(out, e.redactions.get(runID))))
 			return nil, stepHalted
 		}
 		e.setStep(ctx, runID, step.ID, model.StepPatch{
@@ -288,11 +292,8 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		e.failStep(ctx, runID, step.ID, err)
 		return nil, stepHalted
 	}
-	res.Output = scrubOutput(res.Output, e.redactions.get(runID))
+	e.scrubResult(runID, &res)
 	if res.Pending != nil {
-		// The question an agent asks can quote what it saw; it is scrubbed
-		// before it is stored, shown or sent to a notifier.
-		res.Pending = scrubPending(res.Pending, e.redactions.get(runID))
 		// Request.URL is the field an answer-here link belongs in, and it was
 		// stored empty until now. It is a POINTER at our own UI — never a link
 		// that resolves the pause by itself (ADR 0021).
@@ -325,6 +326,15 @@ func (e *Engine) runOneStep(ctx context.Context, runID uuid.UUID, def *workflow.
 		return nil, stepHalted
 	}
 	return res.Output, stepDone
+}
+
+// scrubResult removes the run's secret values from what an agent step
+// produced, before anything keeps it, sends it or hands it to a later step:
+// its output, and the question it paused on (which can quote what it saw).
+func (e *Engine) scrubResult(runID uuid.UUID, res *stepResult) {
+	secrets := e.redactions.get(runID)
+	res.Output = scrubOutput(res.Output, secrets)
+	res.Pending = scrubPending(res.Pending, secrets)
 }
 
 // executeNode runs the non-agent kinds, with the step's retry policy applied
@@ -456,10 +466,9 @@ func exitFailed(step *workflow.Step, out map[string]any) (int, bool) {
 	return code, true
 }
 
-// stderrTail is the last line of a command's stderr, for the failure message.
-// out is a step output that executeNode has already scrubbed, so the cut
-// below never shortens a raw secret.
-func stderrTail(out map[string]any) string {
+// stderrTail is the last line of a command's stderr, for the failure message,
+// shortened by clip (scrubbed whole, then cut).
+func stderrTail(out map[string]any, secrets []secretValue) string {
 	s, _ := out["stderr"].(string)
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -468,14 +477,13 @@ func stderrTail(out map[string]any) string {
 	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
 		s = s[i+1:]
 	}
-	if len(s) > 300 {
-		s = s[:300]
-	}
-	return ": " + s
+	return ": " + clip(s, 300, secrets, func(int) string { return "…" })
 }
 
 func (e *Engine) failStep(ctx context.Context, runID uuid.UUID, stepID string, err error) {
-	msg := scrub(err.Error())
+	// The run's secrets first: an identifier pattern (scrub) could otherwise
+	// take part of a secret and leave the rest.
+	msg := scrub(redactText(err.Error(), e.redactions.get(runID)))
 	e.setStep(ctx, runID, stepID, model.StepPatch{Status: str("failed"), Error: str(msg), FinishedAt: now()})
 	e.setRun(ctx, runID, "failed", stepID, msg)
 }
@@ -514,6 +522,10 @@ func outExitCode(out map[string]any) int {
 		return int(v)
 	case float64:
 		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
 	}
 	return 0
 }

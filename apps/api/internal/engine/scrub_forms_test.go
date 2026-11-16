@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestRedactTextRemovesEveryFormOfASecret(t *testing.T) {
 		}
 	}
 	out := scrubOutput(map[string]any{"stdout": "x " + v + " y", "n": 3}, secrets)
-	if strings.Contains(out["stdout"].(string), v) || out["n"] != float64(3) {
+	if strings.Contains(out["stdout"].(string), v) || out["n"] != json.Number("3") {
 		t.Fatalf("output = %v", out)
 	}
 	if got := scrubJSON([]byte(`{"a":"`+hex.EncodeToString(b)+`"}`), secrets); strings.Contains(string(got), hex.EncodeToString(b)) {

@@ -880,3 +880,55 @@ func TestAStalledCallIsRetriedOnceWithTheSamePrompt(t *testing.T) {
 		t.Fatalf("text=%q calls=%d, want the second call's reply", res.Text, calls)
 	}
 }
+
+// A rejected reply is quoted in the turn's error, shortened to its two ends.
+// Options.Scrub runs on the WHOLE reply before that: a value the shortening
+// cut in two could no longer be found whole, wherever the cut falls.
+func TestRejectedReplyIsScrubbedBeforeItIsShortened(t *testing.T) {
+	const secret = "Qv7Wx3Lm9Pt2Hk8Rv4Ty6Nb1"
+	for _, at := range []int{290, 296, 300, 305} { // the head cut at 300
+		for _, tailSide := range []bool{false, true} {
+			reply := strings.Repeat("a", at-12) + secret + strings.Repeat("b", 900)
+			if tailSide { // the tail keeps the last 300: cut through the secret there
+				reply = strings.Repeat("a", 900) + secret + strings.Repeat("b", 300-at+290)
+			}
+			back := agentadapter.AgentFunc{Fn: func(context.Context, agentadapter.Turn) (string, error) { return reply, nil }}
+			a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(), Repairs: -1,
+				Scrub: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted:T]") }})
+			tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+			_, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk)
+			if err == nil {
+				t.Fatal("expected the run to fail")
+			}
+			msg := err.Error()
+			for i := 0; i+4 <= len(secret); i++ {
+				if strings.Contains(msg, secret[i:i+4]) {
+					t.Fatalf("at=%d tail=%v: the error keeps %q of the value: %s", at, tailSide, secret[i:i+4], msg)
+				}
+			}
+			if !strings.Contains(msg, "last reply") {
+				t.Fatalf("the error should still quote the reply: %s", msg)
+			}
+		}
+	}
+}
+
+// Options.Scrub reaches the backend on every Turn, so a backend that shortens
+// a text for its error (a stderr tail, a refused tool's title) can scrub it
+// whole first.
+func TestOptionsScrubReachesTheBackendOnTheTurn(t *testing.T) {
+	var got func(string) string
+	back := agentadapter.AgentFunc{Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
+		got = turn.Scrub
+		return answer("done"), nil
+	}}
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(),
+		Scrub: func(s string) string { return strings.ReplaceAll(s, "Qv7Wx3Lm", "[redacted:T]") }})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	if _, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got("x Qv7Wx3Lm y") != "x [redacted:T] y" {
+		t.Fatal("the turn did not carry Options.Scrub")
+	}
+}

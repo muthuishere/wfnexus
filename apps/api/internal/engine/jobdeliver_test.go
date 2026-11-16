@@ -159,11 +159,11 @@ func TestARotatedValueIsDeliveredAndScrubbedEverywhere(t *testing.T) {
 	// error, which the platform also logs.
 	forms := valueForms(rotated)
 	all := strings.Join([]string{forms["raw"], forms["base64"], forms["hex"], forms["HEX"]}, " | ")
-	h.eng.IngestWorkerEvents(ctx, run.ID, []WorkerEvent{{StepID: "use", Kind: "log", Payload: map[string]any{"line": all}}})
 	stored, err := h.store.GetJob(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.eng.IngestWorkerEvents(ctx, run.ID, stored.Payload, []WorkerEvent{{StepID: "use", Kind: "log", Payload: map[string]any{"line": all}}})
 	res := h.eng.ScrubJobResult(ctx, run.ID, stored.Payload, JobResult{OK: false, ExitCode: 3, Stdout: all, Stderr: all, Error: "failed with " + all})
 	raw, _ := json.Marshal(res)
 	if err := h.store.FinishJob(ctx, job.ID, w.ID, raw); err != nil {
@@ -268,6 +268,7 @@ func TestTheModuleTokenAndAnAgentJobsValueAreDeliveredAndScrubbed(t *testing.T) 
 		}
 	}
 	forms := strings.Join([]string{valueForms(token)["base64"], valueForms(value)["hex"], token, value, valueForms(value)["base64"], valueForms(token)["hex"]}, " ")
-	h.eng.IngestWorkerEvents(ctx, run.ID, []WorkerEvent{{StepID: "mod", Kind: "log", Payload: forms}, {StepID: "agent", Kind: "log", Payload: forms}})
+	// no job payload: the values must be held from the claims alone
+	h.eng.IngestWorkerEvents(ctx, run.ID, nil, []WorkerEvent{{StepID: "mod", Kind: "log", Payload: forms}, {StepID: "agent", Kind: "log", Payload: forms}})
 	noForm(t, "after the claims", map[string]string{"database": pgDump(t, h.store)}, token, value)
 }

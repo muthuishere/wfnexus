@@ -300,12 +300,12 @@ func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.
 	}
 	out := map[string]any{
 		"ok": res.ExitCode == 0, "exitCode": res.ExitCode,
-		"stdout": trim(res.Stdout, maxEventOutput), "stderr": trim(res.Stderr, maxEventOutput),
+		"stdout": e.clipRun(runID, res.Stdout, maxEventOutput), "stderr": e.clipRun(runID, res.Stderr, maxEventOutput),
 		"runsOn": label,
 	}
 	e.emit(ctx, runID, step.ID, "tool_result", map[string]any{
 		"name": "run", "isError": res.ExitCode != 0,
-		"output": trim(res.Stdout+res.Stderr, maxEventOutput),
+		"output": e.clipRun(runID, res.Stdout+res.Stderr, maxEventOutput),
 	})
 	return out, nil
 }
@@ -457,8 +457,11 @@ type WorkerEvent struct {
 	Payload any    `json:"payload"`
 }
 
-// IngestWorkerEvents appends a worker's activity to the run's log.
-func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, evs []WorkerEvent) {
+// IngestWorkerEvents appends a worker's activity to the run's log, scrubbed
+// of the run's secret values. They are registered again first
+// (registerJobSecrets), so this holds after a server restart too.
+func (e *Engine) IngestWorkerEvents(ctx context.Context, runID uuid.UUID, payload json.RawMessage, evs []WorkerEvent) {
+	e.registerJobSecrets(ctx, runID, payload)
 	for _, ev := range evs {
 		kind := ev.Kind
 		if kind == "" {
@@ -592,14 +595,15 @@ func (e *Engine) deliverAtClaim(ctx context.Context, job *model.Job) error {
 	return nil
 }
 
-// ScrubJobResult removes the run's secret values, in every form secretForms
-// knows, from a worker's report before the platform stores it. So that this
-// holds after a server restart too, the values are registered again first:
-// the run's env-store values, the job's own env as it was sent (the step's env
-// block), whose credential-named values count as secret, and the values the
-// job delivers at claim, resolved again now. Values a worker resolves on its
-// own machine never reach the platform, so they cannot be scrubbed here.
-func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload json.RawMessage, res JobResult) JobResult {
+// registerJobSecrets registers a run's secret values again for a worker's
+// report or live log: the run's env-store values; the job's own env as it was
+// sent (the step's env block and a module's door token), whose
+// credential-named or env-store values count as secret; and the values the
+// job delivers at claim, resolved again now. After a server restart nothing
+// else would be registered. A run that has already ended, or is parked on a
+// person, in the store gets the usual grace period, so these values do not
+// stay in memory for good.
+func (e *Engine) registerJobSecrets(ctx context.Context, runID uuid.UUID, payload json.RawMessage) {
 	_ = e.scrubber(ctx, runID, e.projectOfRun(ctx, runID))
 	var p JobPayload
 	if len(payload) > 0 && json.Unmarshal(payload, &p) == nil {
@@ -610,6 +614,22 @@ func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload js
 			e.registerDelivered(runID, vals)
 		}
 	}
+	if e.store != nil {
+		if run, err := e.store.GetRun(ctx, runID); err == nil && run != nil && (runStatusEnded[run.Status] || runStatusParked[run.Status]) {
+			e.redactions.markEnded(runID)
+		}
+	}
+}
+
+// ScrubJobResult removes the run's secret values, in every form secretForms
+// knows, from a worker's report before the platform stores it. So that this
+// holds after a server restart too, the values are registered again first:
+// the run's env-store values, the job's own env as it was sent (the step's env
+// block), whose credential-named values count as secret, and the values the
+// job delivers at claim, resolved again now. Values a worker resolves on its
+// own machine never reach the platform, so they cannot be scrubbed here.
+func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload json.RawMessage, res JobResult) JobResult {
+	e.registerJobSecrets(ctx, runID, payload)
 	secrets := e.redactions.get(runID)
 	if len(secrets) == 0 {
 		return res
@@ -622,7 +642,7 @@ func (e *Engine) ScrubJobResult(ctx context.Context, runID uuid.UUID, payload js
 		res.Agent = &ag
 	}
 	var out JobResult
-	if json.Unmarshal(scrubJSON(mustJSON(res), secrets), &out) != nil {
+	if unmarshalNumbers(scrubJSON(mustJSON(res), secrets), &out) != nil {
 		return JobResult{Error: "the worker's report carried a secret value and could not be scrubbed safely"}
 	}
 	return out
