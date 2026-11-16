@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -26,6 +27,10 @@ import (
 // to; nothing in the path, query or body can name another. A resource of
 // another tenant answers exactly as an absent one does.
 
+// serviceRunsForTest is how a test switches service runs on. Nothing outside
+// _test.go files assigns it.
+var serviceRunsForTest bool
+
 func (s *Server) tenantRoutes(r chi.Router) {
 	r.Get("/tenants", s.listTenants)
 	r.Post("/tenants", s.createTenant)
@@ -35,15 +40,33 @@ func (s *Server) tenantRoutes(r chi.Router) {
 	r.Post("/tenants/{tenant}/principals", s.createPrincipal)
 	r.Delete("/tenants/{tenant}/principals/{id}", s.revokePrincipal)
 	r.Put("/tenants/{tenant}/principals/{id}/surface", s.setPrincipalSurface)
+	r.Put("/tenants/{tenant}/principals/{id}/workflows", s.setPrincipalWorkflows)
 
 	r.Get("/svc/self", s.svcSelf)
 	r.Get("/svc/runs", s.svcListRuns)
 	r.Get("/svc/runs/{id}", s.svcGetRun)
+	r.Post("/svc/workflows/{name}/runs", s.svcStartRun)
 }
 
 // ---- administration ----
 
+// operator answers whether the caller may administer tenants: a superadmin,
+// or nobody on a loopback bind. A worker token is a machine claiming jobs and
+// is NOT an operator here, although can() lets it through the route table.
+// Returns false having already answered.
+func (s *Server) operator(w http.ResponseWriter, r *http.Request) bool {
+	sub, ok := SubjectFrom(r.Context())
+	if (!ok && s.loopbackOnly) || (ok && sub.Kind == SubjectUser && sub.Role == RoleSuperadmin) {
+		return true
+	}
+	writeErr(w, http.StatusForbidden, errors.New("forbidden"))
+	return false
+}
+
 func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
+	if !s.operator(w, r) {
+		return
+	}
 	ts, err := s.store.ListTenants(r.Context())
 	if err != nil {
 		writeErr(w, 500, err)
@@ -56,6 +79,9 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
+	if !s.operator(w, r) {
+		return
+	}
 	var b struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -79,6 +105,9 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request) {
 
 // adminTenant reads {tenant} and answers 404 itself when it does not exist.
 func (s *Server) adminTenant(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !s.operator(w, r) {
+		return "", false
+	}
 	id := chi.URLParam(r, "tenant")
 	if _, err := s.store.GetTenant(r.Context(), id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -259,6 +288,49 @@ func (s *Server) setPrincipalSurface(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, p)
 }
 
+// setPrincipalWorkflows replaces the workflow names a principal may start.
+func (s *Server) setPrincipalWorkflows(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.adminTenant(w, r)
+	if !ok {
+		return
+	}
+	id, ok := s.adminPrincipalID(w, r)
+	if !ok {
+		return
+	}
+	var b struct {
+		Workflows []string `json:"workflows"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if len(b.Workflows) > maxDeclaredTools {
+		writeErr(w, 400, errors.New("too many workflows"))
+		return
+	}
+	for _, n := range b.Workflows {
+		if !toolNameRe.MatchString(n) {
+			writeErr(w, 400, errors.New("workflow names must be 1-128 of [A-Za-z0-9._:/-]"))
+			return
+		}
+	}
+	if err := s.store.SetServicePrincipalWorkflows(r.Context(), t, id, b.Workflows); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			notFound(w)
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	p, err := s.store.ServicePrincipalInTenant(r.Context(), t, id)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, p)
+}
+
 // ---- the tenant routes ----
 
 // serviceSubject is the gate every /api/svc/ handler goes through: the caller
@@ -325,4 +397,64 @@ func (s *Server) svcGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, run)
+}
+
+// svcStartRun starts a workflow for a service principal. It answers 404, and
+// creates nothing, unless ALL hold:
+//   - starting runs is switched on for this server (serviceRuns; off);
+//   - the principal lists the workflow by name;
+//   - the workflow exists and its project is in the principal's tenant.
+//
+// Every refusal is the same 404, so a principal cannot learn which workflows
+// exist outside its list or its tenant.
+func (s *Server) svcStartRun(w http.ResponseWriter, r *http.Request) {
+	if !s.serviceRuns {
+		notFound(w)
+		return
+	}
+	sub, ok := serviceSubject(w, r)
+	if !ok {
+		return
+	}
+	name := urlName(r, "name")
+	may, err := s.store.PrincipalMayStart(r.Context(), sub.Principal.ID, name)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if !may || s.eng.Definitions()[name] == nil {
+		notFound(w)
+		return
+	}
+	tn, err := s.store.ProjectTenant(r.Context(), s.eng.ProjectFor(name))
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	if tn != sub.Tenant {
+		notFound(w)
+		return
+	}
+	var input json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	input, err = s.eng.PrepareInput(name, input)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// No force: a principal cannot override `concurrency:`.
+	run, err := s.eng.CreateRunAdmitted(r.Context(), name, input, false)
+	if errors.Is(err, engine.ErrConcurrencyBusy) {
+		writeErr(w, 409, err)
+		return
+	}
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	s.eng.Start(run.ID)
+	writeJSON(w, 201, map[string]any{"run": run})
 }

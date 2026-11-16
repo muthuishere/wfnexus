@@ -4,10 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // tenantFixture: an auth-required server, a superadmin, two tenants each with
@@ -24,6 +30,11 @@ type tenantFixture struct {
 func newTenantFixture(t *testing.T) (*tenantFixture, func(method, path, tok string, body any) (int, string)) {
 	t.Helper()
 	h, st := testServer(t, "0.0.0.0:8090")
+	return newTenantFixtureOn(t, h, st)
+}
+
+func newTenantFixtureOn(t *testing.T, h http.Handler, st *store.Store) (*tenantFixture, func(method, path, tok string, body any) (int, string)) {
+	t.Helper()
 	ctx := context.Background()
 	u := &store.User{Name: "root", Role: RoleSuperadmin}
 	if err := st.CreateUser(ctx, u); err != nil {
@@ -124,9 +135,11 @@ func TestAServicePrincipalIsRefusedEverywhereElse(t *testing.T) {
 		{"POST", "/api/workflows/wf/runs"},
 		{"POST", "/api/tokens/revoke"},
 		{"GET", "/api/svc%2F..%2Fruns"},
+		{"GET", "/mcp/proj-b"},
+		{"POST", "/hooks/proj-b/wf"},
 	} {
 		c, b := call(rt[0], rt[1], f.tokA, map[string]string{})
-		if c != 403 && c != 404 && c != 405 {
+		if c != 401 && c != 403 && c != 404 && c != 405 {
 			t.Fatalf("%s %s served a service principal: %d %s", rt[0], rt[1], c, b)
 		}
 		if strings.Contains(b, f.runA) || strings.Contains(b, f.runB) {
@@ -204,15 +217,135 @@ func TestTenantAdministrationIsAnOperatorsAndShowsATokenOnce(t *testing.T) {
 		t.Fatalf("endpoint with credentials: %d", c)
 	}
 	c, b = call("PUT", "/api/tenants/acme/principals/"+f.principalAID+"/surface", f.admin,
-		map[string]any{"endpoint": "https://tools.example.test/mcp", "tools": []string{"leads.read", "leads.create"}})
-	if c != 200 || !strings.Contains(b, "leads.create") {
+		map[string]any{"endpoint": "https://tools.example.test/mcp", "tools": []string{"items.read", "items.create"}})
+	if c != 200 || !strings.Contains(b, "items.create") {
 		t.Fatalf("surface: %d %s", c, b)
 	}
 	if c, _ := call("PUT", "/api/tenants/globex/principals/"+f.principalAID+"/surface", f.admin,
 		map[string]any{"endpoint": "https://x.example.test", "tools": []string{}}); c != 404 {
 		t.Fatalf("surface through another tenant: %d", c)
 	}
-	if _, b := call("GET", "/api/svc/self", f.tokA, nil); !strings.Contains(b, "leads.read") {
+	if _, b := call("GET", "/api/svc/self", f.tokA, nil); !strings.Contains(b, "items.read") {
 		t.Fatalf("self does not show the declared surface: %s", b)
+	}
+}
+
+// A server with workflows: wf-a and wf-a2 in proj-a, wf-b in proj-b.
+func tenantRunServer(t *testing.T) (*tenantFixture, func(method, path, tok string, body any) (int, string)) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "wfnexus.db")
+	if err := store.Migrate("sqlite", path); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(context.Background(), "sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	for name, perms := range DefaultRoles() {
+		if err := st.UpsertRole(context.Background(), name, perms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defs := map[string]*workflow.Definition{
+		"wf-a":  {Name: "wf-a", Source: "proj-a"},
+		"wf-a2": {Name: "wf-a2", Source: "proj-a"},
+		"wf-b":  {Name: "wf-b", Source: "proj-b"},
+	}
+	eng := engine.New(config.Config{Addr: "0.0.0.0:8090"}, st, nil, defs, skills.Load(), nil)
+	h := New(eng, st, nil, "0.0.0.0:8090", "", nil)
+	return newTenantFixtureOn(t, h, st)
+}
+
+func runsOf(t *testing.T, st *store.Store, workflow string) int {
+	t.Helper()
+	rs, err := st.FindRuns(context.Background(), store.RunFilter{Workflow: workflow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(rs)
+}
+
+// Service runs are OFF: with nothing switched on, a principal that lists the
+// workflow is answered 404 and no run is created.
+func TestServiceRunsAreOffUnlessSwitchedOn(t *testing.T) {
+	f, call := tenantRunServer(t)
+	if c, b := call("PUT", "/api/tenants/acme/principals/"+f.principalAID+"/workflows", f.admin,
+		map[string]any{"workflows": []string{"wf-a"}}); c != 200 {
+		t.Fatalf("allow: %d %s", c, b)
+	}
+	if c, b := call("POST", "/api/svc/workflows/wf-a/runs", f.tokA, map[string]any{}); c != 404 {
+		t.Fatalf("a service run started while switched off: %d %s", c, b)
+	}
+	if n := runsOf(t, f.st, "wf-a"); n != 0 {
+		t.Fatalf("%d runs created while switched off", n)
+	}
+}
+
+// Switched on, a principal starts the workflows it LISTS, in ITS tenant,
+// and nothing else. Every refusal is the same 404 and creates no run.
+func TestAServicePrincipalStartsOnlyItsNamedWorkflowsInItsTenant(t *testing.T) {
+	serviceRunsForTest = true
+	t.Cleanup(func() { serviceRunsForTest = false })
+	f, call := tenantRunServer(t)
+	// acme's principal lists wf-a and, wrongly, wf-b (a globex workflow).
+	if c, b := call("PUT", "/api/tenants/acme/principals/"+f.principalAID+"/workflows", f.admin,
+		map[string]any{"workflows": []string{"wf-a", "wf-b", "wf-missing"}}); c != 200 {
+		t.Fatalf("allow: %d %s", c, b)
+	}
+	c, b := call("POST", "/api/svc/workflows/wf-a/runs", f.tokA, map[string]any{})
+	if c != 201 {
+		t.Fatalf("listed workflow in own tenant: %d %s", c, b)
+	}
+	var got struct {
+		Run struct {
+			ID string `json:"id"`
+		} `json:"run"`
+	}
+	_ = json.Unmarshal([]byte(b), &got)
+	if c, _ := call("GET", "/api/svc/runs/"+got.Run.ID, f.tokA, nil); c != 200 {
+		t.Fatalf("the started run is not in the principal's tenant: %d", c)
+	}
+	_, absent := call("POST", "/api/svc/workflows/no-such/runs", f.tokA, map[string]any{})
+	for _, wf := range []string{"wf-a2", "wf-b", "wf-missing"} {
+		c, b := call("POST", "/api/svc/workflows/"+wf+"/runs", f.tokA, map[string]any{})
+		if c != 404 || b != absent {
+			t.Fatalf("%s: %d %s (want the absent answer %s)", wf, c, b, absent)
+		}
+		if n := runsOf(t, f.st, wf); n != 0 {
+			t.Fatalf("%s: %d runs created by a refused start", wf, n)
+		}
+	}
+	// Taking a workflow off the list applies to the next request.
+	if c, _ := call("PUT", "/api/tenants/acme/principals/"+f.principalAID+"/workflows", f.admin,
+		map[string]any{"workflows": []string{}}); c != 200 {
+		t.Fatal("clear list")
+	}
+	if c, _ := call("POST", "/api/svc/workflows/wf-a/runs", f.tokA, map[string]any{}); c != 404 {
+		t.Fatalf("an unlisted workflow still starts: %d", c)
+	}
+	if n := runsOf(t, f.st, "wf-a"); n != 1 {
+		t.Fatalf("wf-a runs: %d, want 1", n)
+	}
+}
+
+// A worker token passes the route table (can() lets a worker through) but is
+// not a tenant operator.
+func TestAWorkerIsNotATenantOperator(t *testing.T) {
+	f, call := newTenantFixture(t)
+	wt := auth.NewToken()
+	if err := f.st.RegisterWorker(context.Background(), &store.Worker{Name: "box", Labels: []string{"linux"}}, auth.HashToken(wt)); err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range [][2]string{
+		{"GET", "/api/tenants"},
+		{"POST", "/api/tenants"},
+		{"GET", "/api/tenants/acme/principals"},
+		{"POST", "/api/tenants/acme/principals"},
+		{"PUT", "/api/tenants/acme/principals/" + f.principalAID + "/workflows"},
+	} {
+		if c, b := call(rt[0], rt[1], wt, map[string]any{"id": "x", "name": "x", "workflows": []string{"wf-a"}}); c != 403 {
+			t.Fatalf("%s %s by a worker: %d %s", rt[0], rt[1], c, b)
+		}
 	}
 }

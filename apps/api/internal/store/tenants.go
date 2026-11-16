@@ -200,12 +200,14 @@ func (s *Store) RunsInTenant(ctx context.Context, tenant string, limit int) ([]*
 // There is no field for its token: the value exists once, in the answer that
 // issued it, and is otherwise only a hash.
 type ServicePrincipal struct {
-	ID        uuid.UUID  `json:"id"`
-	TenantID  string     `json:"tenant"`
-	Name      string     `json:"name"`
-	Prefix    string     `json:"prefix"`
-	Endpoint  string     `json:"endpoint"`
-	Tools     []string   `json:"tools"`
+	ID       uuid.UUID `json:"id"`
+	TenantID string    `json:"tenant"`
+	Name     string    `json:"name"`
+	Prefix   string    `json:"prefix"`
+	Endpoint string    `json:"endpoint"`
+	Tools    []string  `json:"tools"`
+	// Workflows are the names this principal may start. Empty = none.
+	Workflows []string   `json:"workflows"`
 	CreatedAt time.Time  `json:"createdAt"`
 	RevokedAt *time.Time `json:"revokedAt,omitempty"`
 	LastUsed  *time.Time `json:"lastUsedAt,omitempty"`
@@ -222,7 +224,7 @@ func (s *Store) CreateServicePrincipal(ctx context.Context, tenant, name, tokenH
 	if _, err := s.GetTenant(ctx, tenant); err != nil {
 		return nil, err
 	}
-	p := &ServicePrincipal{ID: uuid.New(), TenantID: tenant, Name: name, Prefix: prefix, Tools: []string{}}
+	p := &ServicePrincipal{ID: uuid.New(), TenantID: tenant, Name: name, Prefix: prefix, Tools: []string{}, Workflows: []string{}}
 	err := s.qrow(ctx, `INSERT INTO service_principals (id, tenant_id, name, token_hash, prefix) VALUES ($1,$2,$3,$4,$5) RETURNING created_at`,
 		p.ID, tenant, name, tokenHash, prefix).Scan(&p.CreatedAt)
 	if err != nil && isUniqueViolation(err) {
@@ -234,7 +236,7 @@ func (s *Store) CreateServicePrincipal(ctx context.Context, tenant, name, tokenH
 const principalCols = `id, tenant_id, name, prefix, endpoint, created_at, revoked_at, last_used`
 
 func scanPrincipal(row rowScanner) (*ServicePrincipal, error) {
-	p := &ServicePrincipal{Tools: []string{}}
+	p := &ServicePrincipal{Tools: []string{}, Workflows: []string{}}
 	var revoked, used sql.NullTime
 	if err := row.Scan(&p.ID, &p.TenantID, &p.Name, &p.Prefix, &p.Endpoint, &p.CreatedAt, &revoked, &used); err != nil {
 		return nil, err
@@ -345,19 +347,72 @@ func (s *Store) SetServicePrincipalSurface(ctx context.Context, tenant string, i
 	return tx.Commit()
 }
 
+// loadTools fills a principal's declared tools and its startable workflows.
 func (s *Store) loadTools(ctx context.Context, p *ServicePrincipal) error {
-	rows, err := s.query(ctx, `SELECT tool FROM service_principal_tools WHERE principal_id=$1 ORDER BY tool`, p.ID)
+	var err error
+	if p.Tools, err = s.names(ctx, `SELECT tool FROM service_principal_tools WHERE principal_id=$1 ORDER BY tool`, p.ID); err != nil {
+		return err
+	}
+	p.Workflows, err = s.names(ctx, `SELECT workflow FROM service_principal_workflows WHERE principal_id=$1 ORDER BY workflow`, p.ID)
+	return err
+}
+
+func (s *Store) names(ctx context.Context, q string, id uuid.UUID) ([]string, error) {
+	rows, err := s.query(ctx, q, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// SetServicePrincipalWorkflows replaces the names a principal may start.
+func (s *Store) SetServicePrincipalWorkflows(ctx context.Context, tenant string, id uuid.UUID, workflows []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	p.Tools = []string{}
-	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
+	defer tx.Rollback()
+	var one int
+	if err := tx.QueryRowContext(ctx, s.d.q(`SELECT 1 FROM service_principals WHERE id=$1 AND tenant_id=$2`), id, tenant).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, s.d.q(`DELETE FROM service_principal_workflows WHERE principal_id=$1`), id); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, w := range workflows {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
+		if _, err := tx.ExecContext(ctx, s.d.q(`INSERT INTO service_principal_workflows (principal_id, workflow) VALUES ($1,$2)`), id, w); err != nil {
 			return err
 		}
-		p.Tools = append(p.Tools, t)
 	}
-	return rows.Err()
+	return tx.Commit()
+}
+
+// PrincipalMayStart reports whether an ACTIVE principal lists the workflow.
+// Read from the database on every call, so a change applies to the next
+// request, not the next token.
+func (s *Store) PrincipalMayStart(ctx context.Context, id uuid.UUID, workflow string) (bool, error) {
+	var one int
+	err := s.qrow(ctx, `SELECT 1 FROM service_principal_workflows w JOIN service_principals p ON p.id = w.principal_id
+		WHERE w.principal_id=$1 AND w.workflow=$2 AND p.revoked_at IS NULL`, id, workflow).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }

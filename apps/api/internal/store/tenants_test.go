@@ -345,6 +345,18 @@ func TestServicePrincipalLifecycle(t *testing.T) {
 		if got.Endpoint != "https://tools.example.test/mcp" || len(got.Tools) != 2 || got.Tools[0] != "a.write" {
 			t.Fatalf("surface: %+v", got)
 		}
+		if err := st.SetServicePrincipalWorkflows(ctx, tb, p.ID, []string{"wf"}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("workflows set through another tenant: %v", err)
+		}
+		if err := st.SetServicePrincipalWorkflows(ctx, ta, p.ID, []string{"wf", "wf"}); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := st.PrincipalMayStart(ctx, p.ID, "wf"); !ok || err != nil {
+			t.Fatalf("listed workflow: %v %v", ok, err)
+		}
+		if ok, _ := st.PrincipalMayStart(ctx, p.ID, "other"); ok {
+			t.Fatal("an unlisted workflow may start")
+		}
 		if err := st.RevokeServicePrincipal(ctx, tb, p.ID); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("revoke through another tenant: %v", err)
 		}
@@ -353,6 +365,9 @@ func TestServicePrincipalLifecycle(t *testing.T) {
 		}
 		if _, err := st.ServicePrincipalByTokenHash(ctx, HashExposeToken(tok)); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a revoked principal still resolves: %v", err)
+		}
+		if ok, _ := st.PrincipalMayStart(ctx, p.ID, "wf"); ok {
+			t.Fatal("a revoked principal may still start a workflow")
 		}
 	})
 }
@@ -364,4 +379,38 @@ func newTestServiceToken() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return "wfxs_" + hex.EncodeToString(b)
+}
+
+// The tenant migration rolls back and re-applies cleanly on both dialects.
+func TestTenantMigrationRollsBackAndReapplies(t *testing.T) {
+	t.Run("sqlite", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "d.db")
+		u := sqliteMigrateURL(path)
+		migrateTo(t, "sqlite", "sqlite", u, sqliteTenants)
+		migrateTo(t, "sqlite", "sqlite", u, versionBefore(t, "sqlite", sqliteTenants))
+		migrateTo(t, "sqlite", "sqlite", u, sqliteTenants)
+	})
+	t.Run("postgres", func(t *testing.T) {
+		dsn, err := pgtest.DSN()
+		if err != nil {
+			t.Skip("no postgres reachable — run `task infra:up`, or point TEST_DATABASE_URL at a server")
+		}
+		admin, err := sql.Open("pgx", dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		schema := "dn_" + uuid.NewString()[:8]
+		if _, err := admin.Exec(`CREATE SCHEMA ` + schema); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = admin.Exec(`DROP SCHEMA ` + schema + ` CASCADE`) })
+		pu, _ := url.Parse(dsn)
+		qv := pu.Query()
+		qv.Set("search_path", schema)
+		pu.RawQuery = qv.Encode()
+		migrateTo(t, "postgres", ".", pu.String(), pgTenants)
+		migrateTo(t, "postgres", ".", pu.String(), versionBefore(t, ".", pgTenants))
+		migrateTo(t, "postgres", ".", pu.String(), pgTenants)
+	})
 }

@@ -32,6 +32,12 @@ CREATE TABLE service_principal_tools (
     PRIMARY KEY (principal_id, tool)
 );
 
+CREATE TABLE service_principal_workflows (
+    principal_id text NOT NULL REFERENCES service_principals(id) ON DELETE CASCADE,
+    workflow     text NOT NULL,
+    PRIMARY KEY (principal_id, workflow)
+);
+
 -- No REFERENCES: SQLite refuses a foreign key with a non-NULL default on an
 -- added column. The value is only ever written from tenant_projects.
 ALTER TABLE workflow_runs ADD COLUMN tenant_id text NOT NULL DEFAULT 'default';

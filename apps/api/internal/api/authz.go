@@ -235,7 +235,8 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 		// tenant comes from its credential, so no route outside /api/svc/
 		// (none of which filter by tenant) may serve it.
 		if sub, ok := SubjectFrom(r.Context()); ok && sub.Kind == SubjectService {
-			if !strings.HasPrefix(r.URL.Path, "/api/svc/") {
+			// The escaped path, because that is what the router matches on.
+			if !strings.HasPrefix(r.URL.EscapedPath(), "/api/svc/") {
 				writeErr(w, http.StatusForbidden, errors.New("forbidden"))
 				return
 			}

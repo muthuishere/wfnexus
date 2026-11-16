@@ -42,6 +42,14 @@ create table if not exists service_principal_tools (
     primary key (principal_id, tool)
 );
 
+-- The workflows a principal may START, by name. None listed = none. A name
+-- is honoured only while that workflow's project is in the principal's tenant.
+create table if not exists service_principal_workflows (
+    principal_id uuid not null references service_principals(id) on delete cascade,
+    workflow     text not null,
+    primary key (principal_id, workflow)
+);
+
 alter table workflow_runs add column if not exists tenant_id text not null default 'default' references tenants(id);
 create index if not exists workflow_runs_tenant_created_idx on workflow_runs (tenant_id, created_at desc);
 alter table published_bundles add column if not exists tenant_id text not null default 'default' references tenants(id);
