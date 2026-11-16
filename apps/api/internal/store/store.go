@@ -166,7 +166,7 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 	}
 	r := &Run{ID: uuid.New(), Project: project, Workflow: workflow, Status: "queued", Input: input}
 	err := s.qrow(ctx,
-		`INSERT INTO workflow_runs (id, project, workflow, status, input) VALUES ($1,$2,$3,$4,$5) RETURNING created_at, updated_at`,
+		`INSERT INTO workflow_runs (id, project, workflow, status, input, tenant_id) VALUES ($1,$2,$3,$4,$5,`+tenantOfProject("$2")+`) RETURNING created_at, updated_at`,
 		r.ID, r.Project, r.Workflow, r.Status, jsonArg(r.Input)).Scan(&r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }

@@ -104,7 +104,12 @@ var resourcePerms = map[string][2]string{
 	"workers": {PermWorkersRead, PermWorkersWrite},
 	"bundles": {PermBundlesRead, PermPublish},
 	"users":   {PermAdminRead, PermAdminWrite},
-	"roles":   {PermAdminRead, PermAdminWrite},
+	// Tenants and their service principals: an operator's permission.
+	"tenants": {PermAdminRead, PermAdminWrite},
+	// The tenant routes a service principal calls. They are reachable ONLY by
+	// a service subject; the handlers refuse anything else (tenants.go).
+	"svc":   {PermPublic, PermPublic},
+	"roles": {PermAdminRead, PermAdminWrite},
 	// carry installs binaries and config on the server and workers: what
 	// runs on the machine, so it is an operator's permission.
 	"carry": {PermAdminRead, PermAdminWrite},
@@ -204,6 +209,11 @@ func (s *Server) can(r *http.Request, perm string) bool {
 	if !ok {
 		return s.loopbackOnly
 	}
+	// A service principal holds no permission in this table: it is confined
+	// to /api/svc/ by authorize, and this is the second wall.
+	if sub.Kind == SubjectService {
+		return false
+	}
 	// A worker is a machine claiming jobs; authWorker on the four worker routes
 	// is its authorization and this table is not about it.
 	if sub.Kind == SubjectWorker {
@@ -221,6 +231,17 @@ func (s *Server) can(r *http.Request, perm string) bool {
 // authorize is the middleware half: it refuses before the handler runs.
 func (s *Server) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A service principal reaches the tenant routes and nothing else. Its
+		// tenant comes from its credential, so no route outside /api/svc/
+		// (none of which filter by tenant) may serve it.
+		if sub, ok := SubjectFrom(r.Context()); ok && sub.Kind == SubjectService {
+			if !strings.HasPrefix(r.URL.Path, "/api/svc/") {
+				writeErr(w, http.StatusForbidden, errors.New("forbidden"))
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		perm := PermissionFor(r.Method, r.URL.Path)
 		if perm == "" {
 			// A route with no named permission is refused, not allowed. The
