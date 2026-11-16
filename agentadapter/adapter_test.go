@@ -912,3 +912,23 @@ func TestRejectedReplyIsScrubbedBeforeItIsShortened(t *testing.T) {
 		}
 	}
 }
+
+// Options.Scrub reaches the backend on every Turn, so a backend that shortens
+// a text for its error (a stderr tail, a refused tool's title) can scrub it
+// whole first.
+func TestOptionsScrubReachesTheBackendOnTheTurn(t *testing.T) {
+	var got func(string) string
+	back := agentadapter.AgentFunc{Fn: func(_ context.Context, turn agentadapter.Turn) (string, error) {
+		got = turn.Scrub
+		return answer("done"), nil
+	}}
+	a := agentadapter.New(agentadapter.Options{Agent: back, Workdir: t.TempDir(),
+		Scrub: func(s string) string { return strings.ReplaceAll(s, "Qv7Wx3Lm", "[redacted:T]") }})
+	tk, _ := toolnexus.CreateToolkit(context.Background(), toolnexus.Options{Builtins: false})
+	if _, err := toolnexus.CreateInProcessClient(a.InProcessOptions()).Run(context.Background(), "hi", tk); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got("x Qv7Wx3Lm y") != "x [redacted:T] y" {
+		t.Fatal("the turn did not carry Options.Scrub")
+	}
+}

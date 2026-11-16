@@ -86,9 +86,11 @@ type Options struct {
 	Repairs int
 	// KeepPromptFiles leaves the rendered prompt files on disk for inspection.
 	KeepPromptFiles bool
-	// Scrub, when non-nil, removes sensitive values from the agent's rejected
-	// reply before it is shortened for the turn's error. It runs on the whole
-	// reply: a value the shortening cuts in two can no longer be found whole.
+	// Scrub, when non-nil, removes sensitive values from every text the
+	// adapter or its backend shortens for an error: the agent's rejected reply,
+	// a refused tool's title, a dead process's stderr tail. It runs on the
+	// whole text before the cut: a value the cut splits can no longer be found
+	// whole. Each Turn carries it to the backend.
 	Scrub func(string) string
 	// Trace, when non-nil, receives every exchange — the prompt file path, the
 	// prompt, and the raw reply. The hook for debugging and for tests.
@@ -287,6 +289,7 @@ func (a *Adapter) invoke(ctx context.Context, turn, attempt int, prompt, model s
 		Prompt:     prompt,
 		Model:      model,
 		Workdir:    a.opts.Workdir,
+		Scrub:      a.opts.Scrub,
 	})
 	ex.Reply, ex.Err = text, err
 	if a.opts.Trace != nil {
