@@ -32,12 +32,23 @@ func (e *Engine) buildAgent(ctx context.Context, step *workflow.Step, workdir st
 	}
 	toolkits = append(toolkits, teamTks...)
 
-	tk, err := e.buildToolkit(ctx, step.ID, step.Skills, step.Tools, step.MCP)
+	// For a run in a non-default tenant, the step's mcp names are that
+	// tenant's connections, not mcp.json (connections.go).
+	globalMCP, tenantTk, tenantTools, err := e.splitStepMCP(ctx, step.ID, step.MCP)
+	if err != nil {
+		closer()
+		return nil, nil, err
+	}
+	if tenantTk != nil {
+		toolkits = append(toolkits, tenantTk)
+	}
+	tk, err := e.buildToolkit(ctx, step.ID, step.Skills, step.Tools, globalMCP)
 	if err != nil {
 		closer()
 		return nil, nil, err
 	}
 	toolkits = append(toolkits, tk)
+	tk.Register(tenantTools...)
 	tk.Register(extra...)
 
 	ag := agents.New(step.ID, agents.Spec{

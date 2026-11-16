@@ -204,7 +204,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 			hooks.BeforeLLM = chainBeforeLLM(compact, hooks.BeforeLLM)
 		}
 
-		ag, closeAgent, err := e.buildAgent(ctx, step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
+		ag, closeAgent, err := e.buildAgent(withStepRun(ctx, runID), step, workdir, e.mountRoots(runID), extra, hooks, onMetric)
 		if err != nil {
 			return attempt{err: err}
 		}
