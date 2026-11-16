@@ -179,8 +179,6 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/users/{name}", s.updateUser)
 		r.Post("/users/{name}/password", s.setUserPassword)
 		r.Delete("/users/{name}", s.deleteUser)
-		// Tenants, service principals and the tenant routes (tenants.go).
-		s.tenantRoutes(r)
 		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
 		// be attributed and stored — see publishingEnabled. On a default
 		// single-machine install these paths 404, which is what "absent, not
@@ -197,6 +195,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/roles", s.listRoles)
 		r.Put("/roles/{name}", s.saveRole)
 		r.Delete("/roles/{name}", s.deleteRole)
+
+		// Tenants, service principals and the tenant routes (tenants.go).
+		s.tenantRoutes(r)
 
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 		r.Get("/skills", s.listSkills)
