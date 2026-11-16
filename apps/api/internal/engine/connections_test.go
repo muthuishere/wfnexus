@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	tn "github.com/muthuishere/toolnexus/golang"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/secrets"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -260,16 +262,33 @@ func TestATenantRunCannotReachTheServersOwnMCP(t *testing.T) {
 	}
 }
 
-// Off unless switched on: then every run resolves from mcp.json as before.
-func TestTenantConnectionsAreOffUnlessSwitchedOn(t *testing.T) {
+// Switched OFF is closed, not a fallback: a non-default tenant's step naming
+// an mcp server is refused, and neither its connection nor mcp.json is used.
+// The default tenant keeps mcp.json.
+func TestTenantConnectionsOffRefusesATenantsMCPStep(t *testing.T) {
 	f := newConnFixture(t)
 	tenantConnectionsForTest = false
 	global, tk, tools, err := f.e.splitStepMCP(withStepRun(context.Background(), f.tenantRun), "s", []string{"crm"})
-	if err != nil || tk != nil || len(tools) != 0 || len(global) != 1 {
-		t.Fatalf("switched off: %v %v %v %v", global, tk, tools, err)
+	if err == nil || tk != nil || len(tools) != 0 || len(global) != 0 {
+		t.Fatalf("switched off, a tenant's mcp step resolved: %v %v %v %v", global, tk, tools, err)
 	}
 	if f.product.authed.Load() != 0 {
 		t.Fatal("the tenant's endpoint was called while switched off")
+	}
+	step := &workflow.Step{ID: "s", MCP: []string{"crm"}}
+	if _, _, err := f.e.buildAgent(withStepRun(context.Background(), f.tenantRun), step, t.TempDir(), nil, nil, &tn.Hooks{}, nil); err == nil {
+		t.Fatal("switched off, a tenant's agent was built with mcp.json")
+	}
+	if _, err := f.e.packAgentJob(context.Background(), f.tenantRun, &workflow.Definition{Name: "wf"}, step, "p", ""); err == nil {
+		t.Fatal("switched off, a tenant's mcp step was packed for a worker")
+	}
+	// The default tenant: mcp.json, as before, switched off or on.
+	global, tk, _, err = f.e.splitStepMCP(withStepRun(context.Background(), f.defRun), "s", []string{"crm"})
+	if err != nil || tk != nil || len(global) != 1 {
+		t.Fatalf("default tenant switched off: %v %v %v", global, tk, err)
+	}
+	if err := f.e.refuseTenantConnectionsOnWorker(context.Background(), f.defRun, "s", []string{"crm"}); err != nil {
+		t.Fatalf("default tenant on a worker: %v", err)
 	}
 }
 
@@ -384,4 +403,60 @@ func TestTheDefaultTenantStillGetsTheServersOwnMCP(t *testing.T) {
 		}
 	}
 	t.Fatal("the default tenant did not get mcp.json's server")
+}
+
+// End to end over what is STORED: once a tenant step has resolved its
+// connection, the credential (raw, base64, in a header) reaches no event,
+// no step error and no run error of that run.
+func TestTheCredentialIsNeverStoredInARunsRows(t *testing.T) {
+	f := newConnFixture(t)
+	ctx := withStepRun(context.Background(), f.tenantRun)
+	_, tk, tools, err := f.e.splitStepMCP(ctx, "s", []string{"crm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tk.Close()
+	fail, _ := connTool(tools, "crm_fail_item")
+	res, _ := fail.Execute(map[string]any{}, nil)
+	echoed := res.Output // carries "Bearer <credential>"
+	b64 := base64.StdEncoding.EncodeToString([]byte(f.credential))
+	if err := f.st.EnsureStep(context.Background(), f.tenantRun, "s", 0); err != nil {
+		t.Fatal(err)
+	}
+	f.e.emit(ctx, f.tenantRun, "s", "tool_result", map[string]any{"output": echoed, "b64": b64})
+	f.e.emit(ctx, f.tenantRun, "s", "log", map[string]any{"text": "header was " + echoed})
+	f.e.setStep(ctx, f.tenantRun, "s", model.StepPatch{Error: str("tool failed: " + echoed)})
+	f.e.setRun(ctx, f.tenantRun, "failed", "s", "step s: "+echoed+" / "+b64)
+
+	evs, err := f.st.ListEvents(context.Background(), f.tenantRun, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) < 2 {
+		t.Fatalf("fixture: %d events stored", len(evs))
+	}
+	var stored []string
+	for _, ev := range evs {
+		raw, _ := json.Marshal(ev)
+		stored = append(stored, string(raw))
+	}
+	steps, _ := f.st.ListSteps(context.Background(), f.tenantRun)
+	for _, s := range steps {
+		raw, _ := json.Marshal(s)
+		stored = append(stored, string(raw))
+	}
+	run, err := f.st.GetRun(context.Background(), f.tenantRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(run)
+	stored = append(stored, string(raw))
+	if !strings.Contains(strings.Join(stored, "\n"), "tool failed") {
+		t.Fatal("fixture: the step error was not stored")
+	}
+	for _, s := range stored {
+		if strings.Contains(s, f.credential) || strings.Contains(s, b64) {
+			t.Fatalf("the credential is stored: %s", s)
+		}
+	}
 }

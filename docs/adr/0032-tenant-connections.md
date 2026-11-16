@@ -26,8 +26,8 @@ A workflow run in a tenant needs to call tools that another service exposes over
 
    An empty list means no tools, and no connection is opened. toolnexus would read an empty list as "all", which is why the filter is the guard.
 5. **The credential is opened in memory** for the toolkit's request header. It is registered with the run's redactions, so it is scrubbed from events in raw, base64 and JSON-escaped forms.
-6. **No worker.** A step whose run is in a non-default tenant and that names MCP servers is refused by `packAgentJob`, because the credential would ride in the job.
-7. **Off.** Tenant connections are switched off, and nothing in configuration switches them on. The default tenant always resolves names from `mcp.json`, exactly as before.
+6. **No worker.** A step whose run is in a non-default tenant and that names MCP servers is refused by `packAgentJob`, whether connections are on or off, because the credential (or `mcp.json`) would ride in the job.
+7. **Off is closed, not a fallback.** Tenant connections are switched off, and nothing in configuration switches them on. While off, a non-default tenant's step that names an MCP server is refused, both on the server and for a worker; neither its connection nor `mcp.json` is used. The default tenant always resolves names from `mcp.json`, exactly as before.
 
 ## Consequences
 

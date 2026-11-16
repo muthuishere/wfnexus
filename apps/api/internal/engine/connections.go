@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -33,7 +32,9 @@ import (
 //     credential would ride in the job.
 //
 // It is OFF: tenantConnections is false and nothing in configuration sets it.
-// The default tenant always resolves names from mcp.json, exactly as before.
+// OFF does not mean "fall back": a non-default tenant's step that names an
+// mcp server is REFUSED, on the server and on a worker. The default tenant
+// always resolves names from mcp.json, exactly as before.
 
 // tenantConnectionsForTest is how a test switches tenant connections on.
 // Nothing outside _test.go files assigns it.
@@ -66,7 +67,9 @@ type connectionStore interface {
 func (e *Engine) runTenant(ctx context.Context, runID uuid.UUID) (string, connectionStore, error) {
 	cs, ok := e.store.(connectionStore)
 	if !ok {
-		return "", nil, errors.New("tenant connections: the store cannot resolve tenants")
+		// A store with no tenant tables (a test double) has only the
+		// default tenant.
+		return "", nil, nil
 	}
 	t, err := cs.RunTenant(ctx, runID)
 	if err != nil {
@@ -83,7 +86,7 @@ func (e *Engine) runTenant(ctx context.Context, runID uuid.UUID) (string, connec
 // tenant, a toolkit of that tenant's connections (the caller closes it) and
 // the allow-listed tools to register.
 func (e *Engine) splitStepMCP(ctx context.Context, label string, names []string) ([]string, *tn.Toolkit, []tn.Tool, error) {
-	if !e.tenantConnectionsOn() || len(names) == 0 {
+	if len(names) == 0 {
 		return names, nil, nil, nil
 	}
 	runID, ok := stepRunFrom(ctx)
@@ -96,6 +99,9 @@ func (e *Engine) splitStepMCP(ctx context.Context, label string, names []string)
 	}
 	if tenant == "" {
 		return names, nil, nil, nil
+	}
+	if !e.tenantConnectionsOn() {
+		return nil, nil, nil, fmt.Errorf("%s: this run's tenant cannot use mcp servers: tenant connections are switched off", label)
 	}
 	servers := map[string]any{}
 	allowed := map[string]bool{}
@@ -159,7 +165,7 @@ func allowedTools(all []tn.Tool, allowed map[string]bool) []tn.Tool {
 
 // refuseTenantConnectionsOnWorker is packAgentJob's guard.
 func (e *Engine) refuseTenantConnectionsOnWorker(ctx context.Context, runID uuid.UUID, stepID string, names []string) error {
-	if !e.tenantConnectionsOn() || len(names) == 0 {
+	if len(names) == 0 {
 		return nil
 	}
 	tenant, _, err := e.runTenant(ctx, runID)
@@ -167,7 +173,7 @@ func (e *Engine) refuseTenantConnectionsOnWorker(ctx context.Context, runID uuid
 		return fmt.Errorf("step %s: %w", stepID, err)
 	}
 	if tenant != "" {
-		return fmt.Errorf("step %s: a tenant's connections are called from the server only; this step cannot run on a worker", stepID)
+		return fmt.Errorf("step %s: a non-default tenant's mcp servers are called from the server only, and only through its connections; this step cannot run on a worker", stepID)
 	}
 	return nil
 }
