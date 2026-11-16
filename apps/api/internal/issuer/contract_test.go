@@ -377,3 +377,23 @@ func TestJWKSColdStartIsRateLimitedAndRedirectsAreRefused(t *testing.T) {
 		t.Fatalf("the redirect was followed: %d requests", n)
 	}
 }
+
+// A short or long signature is ErrSignature, never a panic: the length check
+// is what keeps sig[:32] in range.
+func TestAShortOrLongSignatureIsRefusedWithoutPanic(t *testing.T) {
+	m := newMinter(t)
+	p := strings.Split(m.token(t, nil), ".")
+	for _, n := range []int{0, 1, 31, 32, 63, 65, 128} {
+		tok := p[0] + "." + p[1] + "." + base64.RawURLEncoding.EncodeToString(make([]byte, n))
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("%d-byte signature panicked: %v", n, r)
+				}
+			}()
+			if _, err := m.verifier().Verify(tok); !errors.Is(err, ErrSignature) {
+				t.Errorf("%d-byte signature: %v", n, err)
+			}
+		}()
+	}
+}

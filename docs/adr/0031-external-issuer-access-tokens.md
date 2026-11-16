@@ -31,5 +31,5 @@ ADR 0030 binds a machine credential to one tenant. A person signed in at an exte
 
 - One issuer per server.
 - The customer-facing API (build, create, run) is a later change and stays switched off.
-- An equivalent mutant cannot be seen failing: the 64-byte signature-length check, because a longer signature fails verification anyway.
+- The 64-byte signature-length check is load-bearing. Without it, a signature shorter than 32 bytes panics at `sig[:32]`. A test pins signatures of 0, 1, 31, 32, 63, 65 and 128 bytes to ErrSignature with no panic.
 - The fail-closed path on a revocation read error is tested by fault injection: the revocation table is dropped while the link stays readable.
