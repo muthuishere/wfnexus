@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -162,7 +164,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", cfg.StorageDriver, err)
 	}
-	log.Printf("storage: %s %s", cfg.StorageDriver, cfg.DatabaseURL)
+	logStorage(cfg.StorageDriver, cfg.DatabaseURL)
 	defer st.Close()
 
 	// `wfx-server link …` is a console command against this database: it
@@ -320,3 +322,26 @@ var (
 	_ engine.Store     = (*store.Store)(nil)
 	_ engine.Artifacts = (blob.Store)(nil)
 )
+
+// logStorage names the storage the server opened, never with its password
+// (#172): a container's log is collected and kept by whatever runs it.
+func logStorage(driver, dsn string) {
+	log.Printf("storage: %s %s", driver, redactDSN(dsn))
+}
+
+// kvPassword is a password=… pair in a key/value connection string, quoted or not.
+var kvPassword = regexp.MustCompile(`(?i)(\bpassword\s*=\s*)('(?:[^'\\]|\\.)*'|\S+)`)
+
+// redactDSN hides the password in a connection string: a URL's userinfo
+// password, or a key/value password=. A URL that does not parse is hidden
+// whole rather than guessed at. A plain path (sqlite) is returned as it is.
+func redactDSN(dsn string) string {
+	if strings.Contains(dsn, "://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "(connection string hidden: it does not parse as a URL)"
+		}
+		return u.Redacted()
+	}
+	return kvPassword.ReplaceAllString(dsn, "${1}xxxxx")
+}
