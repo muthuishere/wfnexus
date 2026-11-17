@@ -505,14 +505,6 @@ type exposeKindView struct {
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
-func baseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}
-
 func exposePath(kind, project, short string) string {
 	if kind == store.ExposeHook {
 		return "/hooks/" + project + "/" + short
@@ -532,7 +524,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 	out := map[string]any{"workflow": name, "project": project, "tool": toolName(project, name)}
 	for _, kind := range []string{store.ExposeHook, store.ExposeMCP} {
 		p := exposePath(kind, project, short)
-		v := exposeKindView{Path: p, URL: baseURL(r) + p}
+		v := exposeKindView{Path: p, URL: s.externalBase(r) + p}
 		for _, a := range act {
 			if a.Kind == kind {
 				created := a.CreatedAt
@@ -541,7 +533,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 		}
 		out[kind] = v
 	}
-	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": baseURL(r) + exposePath(store.ExposeMCP, project, "")}
+	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": s.externalBase(r) + exposePath(store.ExposeMCP, project, "")}
 	return out, nil
 }
 
@@ -691,7 +683,7 @@ func (s *Server) getProjectExpose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := exposePath(store.ExposeMCP, project, "")
-	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": baseURL(r) + p, "tokens": act})
+	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": s.externalBase(r) + p, "tokens": act})
 }
 
 func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
@@ -709,7 +701,7 @@ func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	url := baseURL(r) + exposePath(store.ExposeMCP, project, "")
+	url := s.externalBase(r) + exposePath(store.ExposeMCP, project, "")
 	writeJSON(w, 201, map[string]any{"project": project, "url": url, "token": secret, "snippet": mcpSnippet(url, secret)})
 }
 

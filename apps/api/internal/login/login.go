@@ -21,9 +21,13 @@ import (
 // the start of a new user's name, never a key.
 type Identity struct {
 	Provider string
-	Subject  string // the provider's id for the person: the verified id_token sub, GitHub's numeric user id, the LDAP username
-	Username string
-	Groups   []string
+	Subject  string // the provider's id for the person: the verified id_token sub, GitHub's numeric user id, the LDAP entry's stable id
+	// LegacySubject is the subject an older binding of this same person used
+	// (for LDAP, the username before stable ids were kept); a binding found
+	// under it is re-keyed to Subject.
+	LegacySubject string
+	Username      string
+	Groups        []string
 }
 
 // ErrBadCredentials is the one refusal a password provider gives.

@@ -109,8 +109,36 @@ auth:
     an account; a new subject whose name is taken gets its own account. An
     email names an account only when the provider says it is verified.
   - Roles mapped by `defaultRole` and `groupRoles` follow the person's groups
-    at every sign-in, granted and revoked. Roles the provider config does not
-    mention are left alone.
+    at every sign-in, granted and revoked, each change written to the audit
+    log. Roles the provider config does not mention are left alone. The last
+    superadmin is never removed this way, even when several leave the group
+    and sign in at once (the check and the change are one transaction that
+    holds the superadmin rows): the role is kept and a warning is logged.
+    The same locked check covers every way a superadmin can be removed: role
+    sync, and an admin demoting, disabling or deleting one. When every
+    remaining superadmin waits on an account link, a warning says nobody can
+    sign in as an administrator until one is confirmed.
+  - LDAP accounts are keyed on the entry's stable id (`entryUUID`, or
+    `objectGUID` on Active Directory), else the entry's own username attribute
+    (`usernameClaim`, default `uid`), never what was typed. The username
+    attribute is required only when an entry has no stable id. A binding made
+    under the typed username is re-keyed on the next sign-in, with an audit
+    line (`account … re-keyed to directory id … on sign-in as …`). The
+    directory is the source of truth: if a username was reassigned in the
+    directory before the upgrade, the old account is re-keyed to whoever
+    holds that username now. Check the audit lines after the upgrade.
+    Matching an older binding, or a legacy account by name, ignores case as
+    the directory does (`Ana@corp` is found for `ana`), with an audit line.
+    When several accounts match that way, the sign-in is refused, the audit
+    line names them all, `wfx-server link list` shows them as ambiguous, and
+    none is changed: an admin removes or renames all but one.
+  - Discovery runs on its own context with a timeout; a failure is retried
+    after a pause that grows with each failure (from 1 s to 5 min), and a
+    success is kept.
+  - An account an admin creates after the upgrade (say `alice@sso`) is not
+    picked up by a sign-in of the same name: that sign-in gets an account of
+    its own. To hand an existing account to an external sign-in, the person
+    signs in first and the admin grants roles to the account it made.
 
   Upgrade note: the upgrade marks accounts that existed before it and look
   external (`<user>@<provider>`, no password) and ends their sessions,
@@ -123,9 +151,18 @@ auth:
   are never bound by name, whatever they are called. Accounts that hold roles are re-linked on first sign-in
   but keep no roles until an admin confirms with
   `wfx-server link confirm NAME` (on the server, no sign-in needed;
-  `wfx-server link list` shows them), or a superadmin confirms with
+  `wfx-server link list` shows every binding open to review, with the name
+  the person signed in as and the subject), or a superadmin confirms with
   `POST /api/users/{name}/link/confirm`. Until then that sign-in is refused
-  with "your account link is pending confirmation".
+  with "your account link is pending confirmation". A binding to the wrong
+  person is undone with `wfx-server link reject NAME` (or
+  `POST /api/users/{name}/link/reject`): the account is unbound and signed
+  out, no subject ever rejected for it can bind it again, and the rightful
+  owner signs in to bind it.
+
+  Without `WFX_PUBLIC_URL` the server logs a warning at startup: worker join
+  commands, hook and MCP addresses and device links then use the listen
+  address, which other machines may not reach.
 - `ldap`: a service bind, a search, then a bind as the user. Groups come from
   `memberOf`. `mock-ldap` is an in-process fake directory read from a YAML
   file, for dev and tests. It is refused off loopback unless `force: true`.
