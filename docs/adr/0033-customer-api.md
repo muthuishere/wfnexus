@@ -24,7 +24,7 @@ An account signed in at the external issuer (ADR 0031) needs to list, read, vali
 
 ## Consequences
 
-- Customer workflows name no MCP server in this change. The loader validates `mcp:` names against the server's registry, so a tenant connection's name would fail every reload. The same holds for an operator's workflow in a tenant project. Letting the loader accept a bound project's connection names is a later change, needed before W3's connections are usable from any workflow.
+- Customer workflows name no MCP server in this change. When this was written, the loader checked `mcp:` names against the server's registry. A workflow naming a tenant connection was therefore skipped at load (on its own, not the whole reload), and so was an operator's workflow in a tenant project. ADR 0034 (#162) resolves a bound project's names against its tenant's connections. Customer workflows still name none until approval gates are guaranteed.
 - Tenant members (people with a role in a tenant on this server) are not callers yet; only issuer accounts are.
 - A save into a git-backed project (as a reviewed proposal) is a later change.
 - The definition-level `uses:` and remote-pin refusal has no test of its own (an unresolved `uses:` also fails validation); every other refusal above is tested on its own.

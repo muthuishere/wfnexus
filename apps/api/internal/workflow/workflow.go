@@ -477,6 +477,48 @@ type Catalog interface {
 	MissingMcp(names []string) []string
 }
 
+// ProjectMcp is implemented by a catalog that resolves mcp names per project
+// (a tenant's connections, ADR 0034). ForProject scopes a catalog to one.
+type ProjectMcp interface {
+	MissingMcpIn(project string, names []string) []string
+}
+
+type projectScoped struct {
+	Catalog
+	pm      ProjectMcp
+	project string
+}
+
+func (p projectScoped) MissingMcp(names []string) []string {
+	return p.pm.MissingMcpIn(p.project, names)
+}
+
+// ForProject returns cat with its mcp check scoped to project, when cat can
+// resolve per project; otherwise cat unchanged.
+func ForProject(cat Catalog, project string) Catalog {
+	if cat == nil {
+		return nil
+	}
+	pm, ok := cat.(ProjectMcp)
+	if !ok {
+		return cat
+	}
+	p := projectScoped{Catalog: cat, pm: pm, project: project}
+	// Keep every other capability the catalog has: a validator that also
+	// resolves `uses:` (Callables) must still do so when scoped.
+	if c, ok := cat.(Callables); ok {
+		return projectScopedCallables{p, c}
+	}
+	return p
+}
+
+type projectScopedCallables struct {
+	projectScoped
+	c Callables
+}
+
+func (p projectScopedCallables) Callable(name string) *Definition { return p.c.Callable(name) }
+
 func (d *Definition) validate(cat Catalog) error {
 	if err := checkSpecs(d.Name, d.Inputs); err != nil {
 		return err

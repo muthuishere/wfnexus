@@ -177,7 +177,15 @@ func (e *Engine) SourceSkips() []workflow.Skip {
 func (e *Engine) validator() workflow.Catalog {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return callables{catalog.NewValidator(e.Skills(), e.Catalog()), e.defs}
+	return callables{e.tenantScoped(catalog.NewValidator(e.Skills(), e.Catalog())), e.defs}
+}
+
+// MissingMcpIn passes the per-project mcp check through (connections.go).
+func (c callables) MissingMcpIn(project string, names []string) []string {
+	if pm, ok := c.Catalog.(workflow.ProjectMcp); ok {
+		return pm.MissingMcpIn(project, names)
+	}
+	return c.Catalog.MissingMcp(names)
 }
 
 // callables is the validator plus the loaded workflows, so a save or check of
@@ -213,10 +221,10 @@ func (e *Engine) ReloadDefinitions() error {
 	if e.remote != nil {
 		opts = append(opts, workflow.WithRemoteResolver(e.remote))
 	}
-	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+	defs, skips, err := workflow.LoadSources(e.Sources(), e.tenantScoped(catalog.NewValidator(reg, cat)), opts...)
 	if e.adoptBundleRoots() {
 		reg = skills.LoadRoots(e.skillRoots()...)
-		defs, skips, err = workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+		defs, skips, err = workflow.LoadSources(e.Sources(), e.tenantScoped(catalog.NewValidator(reg, cat)), opts...)
 	}
 	if err != nil {
 		return err
@@ -411,7 +419,9 @@ func (e *Engine) SaveWorkflowIn(project string, d *workflow.Definition) (string,
 	// template. Keeping `template:` from an applied template file installed a
 	// workflow that refuses to run and is listed nowhere.
 	d.Template = workflow.TemplateInfo{}
-	path, err := workflow.Save(dir, d, e.validator())
+	// Validated as a workflow of the project it lands in, so its mcp names
+	// resolve the way the loader will resolve them (connections.go).
+	path, err := workflow.Save(dir, d, workflow.ForProject(e.validator(), e.projectOfDir(dir)))
 	if err != nil {
 		return "", err
 	}
