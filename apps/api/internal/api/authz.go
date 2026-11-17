@@ -211,7 +211,7 @@ func (s *Server) can(r *http.Request, perm string) bool {
 	}
 	// A service principal holds no permission in this table: it is confined
 	// to /api/svc/ by authorize, and this is the second wall.
-	if sub.Kind == SubjectService {
+	if sub.Kind == SubjectService || sub.Kind == SubjectAccount {
 		return false
 	}
 	// A worker is a machine claiming jobs; authWorker on the four worker routes
@@ -234,7 +234,7 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 		// A service principal reaches the tenant routes and nothing else. Its
 		// tenant comes from its credential, so no route outside /api/svc/
 		// (none of which filter by tenant) may serve it.
-		if sub, ok := SubjectFrom(r.Context()); ok && sub.Kind == SubjectService {
+		if sub, ok := SubjectFrom(r.Context()); ok && (sub.Kind == SubjectService || sub.Kind == SubjectAccount) {
 			// The escaped path, because that is what the router matches on.
 			if !strings.HasPrefix(r.URL.EscapedPath(), "/api/svc/") {
 				writeErr(w, http.StatusForbidden, errors.New("forbidden"))

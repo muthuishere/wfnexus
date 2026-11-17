@@ -42,6 +42,8 @@ func (s *Server) tenantRoutes(r chi.Router) {
 	r.Put("/tenants/{tenant}/principals/{id}/surface", s.setPrincipalSurface)
 	r.Put("/tenants/{tenant}/principals/{id}/workflows", s.setPrincipalWorkflows)
 
+	s.issuerRoutes(r)
+
 	r.Get("/svc/self", s.svcSelf)
 	r.Get("/svc/runs", s.svcListRuns)
 	r.Get("/svc/runs/{id}", s.svcGetRun)
@@ -333,13 +335,14 @@ func (s *Server) setPrincipalWorkflows(w http.ResponseWriter, r *http.Request) {
 
 // ---- the tenant routes ----
 
-// serviceSubject is the gate every /api/svc/ handler goes through: the caller
-// is a service principal, and its tenant is the one on the stored row. It
-// returns false having ALREADY answered. A nil subject (loopback) is refused
-// too: there is no tenant to act in without a credential.
+// serviceSubject is the gate every /api/svc/ READ handler goes through: the
+// caller is a service principal (tenant from its stored row) or an external
+// issuer's account (tenant from an operator's link of its tid). It returns
+// false having ALREADY answered. A nil subject (loopback) is refused too:
+// there is no tenant to act in without a credential.
 func serviceSubject(w http.ResponseWriter, r *http.Request) (*Subject, bool) {
 	sub, ok := SubjectFrom(r.Context())
-	if !ok || sub.Kind != SubjectService || sub.Tenant == "" {
+	if !ok || (sub.Kind != SubjectService && sub.Kind != SubjectAccount) || sub.Tenant == "" {
 		writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated: a service principal token is required"))
 		return nil, false
 	}
@@ -356,11 +359,13 @@ func (s *Server) svcSelf(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{
-		"tenant":    sub.Tenant,
-		"principal": sub.Principal,
-		"projects":  projects,
-	})
+	out := map[string]any{"tenant": sub.Tenant, "kind": string(sub.Kind), "projects": projects}
+	if sub.Principal != nil {
+		out["principal"] = sub.Principal
+	} else {
+		out["subject"] = sub.Name
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) svcListRuns(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +419,12 @@ func (s *Server) svcStartRun(w http.ResponseWriter, r *http.Request) {
 	}
 	sub, ok := serviceSubject(w, r)
 	if !ok {
+		return
+	}
+	// Starting a run is a service principal's only. An account starts
+	// nothing here.
+	if sub.Kind != SubjectService || sub.Principal == nil {
+		notFound(w)
 		return
 	}
 	name := urlName(r, "name")
