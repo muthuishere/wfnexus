@@ -50,29 +50,46 @@ func TestTheStorageLineShowsNoConnectionDetail(t *testing.T) {
 			}
 		}
 	}
-	// A SQLite path has no secret and is printed as it is.
-	if out := captureLog(func() { logStorage("sqlite", "/data/wfnexus.db") }); !strings.HasSuffix(out, "storage: sqlite /data/wfnexus.db\n") {
+	// Not even a SQLite path: the line names the driver and nothing else.
+	if out := captureLog(func() { logStorage("sqlite", "/data/wfnexus.db") }); !strings.HasSuffix(out, "storage: sqlite (connection details not shown)\n") {
 		t.Errorf("sqlite: %q", out)
 	}
 }
 
-// A Postgres URL given to the SQLite driver (the two settings are separate)
-// is not a path: nothing of it is printed, on the line or in an error.
-func TestAURLUnderTheSQLiteDriverIsNotPrinted(t *testing.T) {
-	for _, dsn := range []string{
-		"postgres://wfx:" + bootPW + "@db.internal/wfnexus",
-		"wfx:" + bootPW + "@db.internal",
-		"postgres://db.internal/wfnexus?password=" + bootPW,
+// A connection string given to the SQLite driver prints its error whole only
+// when it is affirmatively a file path. Any other shape (the two settings are
+// separate, so a Postgres string can land here) is not printed, on the line
+// or in an error.
+func TestOnlyAPlainSQLitePathPrintsItsError(t *testing.T) {
+	for _, c := range []struct{ name, dsn string }{
+		{"url with userinfo", "postgres://wfx:" + bootPW + "@db.internal/wfnexus"},
+		{"bare userinfo", "wfx:" + bootPW + "@db.internal"},
+		{"url, query password", "postgres://db.internal/wfnexus?password=" + bootPW},
+		{"key/value", "host=db.internal user=wfx password=" + bootPW + " dbname=wfnexus"},
+		{"whitespace", "db.internal wfx " + bootPW},
+		{"a 'password' in the name", "/tmp/password" + bootPW},
 	} {
-		if out := captureLog(func() { logStorage("sqlite", dsn) }); strings.Contains(out, bootPW) || !strings.Contains(out, "not shown") {
-			t.Errorf("line: %q", out)
+		if out := captureLog(func() { logStorage("sqlite", c.dsn) }); strings.Contains(out, bootPW) {
+			t.Errorf("%s: line %q", c.name, out)
 		}
-		d := dsn
+		d := c.dsn
 		swapStorage(t, func(string, string) error { return errors.New("unable to open database file " + d) }, openDB)
-		_, err := openStorage(context.Background(), "sqlite", dsn)
+		_, err := openStorage(context.Background(), "sqlite", c.dsn)
 		if err == nil || strings.Contains(err.Error(), bootPW) {
-			t.Errorf("error: %v", err)
+			t.Errorf("%s: error %v", c.name, err)
 		}
+	}
+}
+
+// A user name holding a percent-encoded ':' carries the password into the
+// server's own message; every quoted name in it is cut at the ':'.
+func TestAServerMessageNeverEchoesAPasswordInTheUserName(t *testing.T) {
+	dsn := "postgres://wfx%3A" + bootPW + "@db.internal/wfnexus"
+	e := &pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx:` + bootPW + `"`}
+	swapStorage(t, func(string, string) error { return e }, openDB)
+	_, err := openStorage(context.Background(), "postgres", dsn)
+	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `password authentication failed for user "wfx:…" (SQLSTATE 28P01)`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -126,6 +143,12 @@ func TestAnOpenErrorIsNeverPrintedRaw(t *testing.T) {
 	_, err := openStorage(context.Background(), "pgx", dsn)
 	if err == nil || strings.Contains(err.Error(), bootPW[:8]) || !strings.Contains(err.Error(), "withheld") {
 		t.Fatalf("open error = %v", err)
+	}
+	// A Postgres error is never printed raw, even when its connection string
+	// looks like a plain path.
+	swapStorage(t, func(string, string) error { return errors.New("raw driver text") }, openDB)
+	if _, err := openStorage(context.Background(), "postgres", "/data/wfnexus"); err == nil || strings.Contains(err.Error(), "raw driver text") {
+		t.Fatalf("postgres error with a path-like string = %v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -27,15 +28,16 @@ import (
 // fragment, a bad-escape query pair), and where they disagree a piece of the
 // password lands in a "field".
 //
-//   - A SQLite connection string that is a plain path (no "://", no "@") has
-//     no secret: it and its errors print as they are.
-//   - Anything else (every Postgres driver name, or a URL given to the SQLite
-//     driver by mistake) prints no connection detail at all, and its
-//     migrate/open errors are never printed as the driver wrote them: a fixed
-//     message and a reason. Only errors whose text holds no connection string
-//     pass through (an allow-list): a dirty migration version, a migration's
-//     own line and message (not the error it wraps), and what the database
-//     SERVER said.
+//   - The storage line names the driver and nothing else, for every driver.
+//   - A storage error prints as the driver wrote it only for a SQLite
+//     connection string that is affirmatively a file path (plainPath).
+//     Anything else is never printed as the driver wrote it: a fixed message
+//     and a reason. Only errors whose text holds no connection string pass
+//     through (an allow-list): a dirty migration version, a migration's own
+//     line and message (not the error it wraps), and what the database
+//     SERVER said, with every quoted name cut at its first ':' (a password
+//     percent-encoded into the user name comes back inside the server's
+//     message).
 
 // migrateDB and openDB are the store's; a test swaps them to reach the open
 // error, which a real broken URL never gets to (the migration fails first).
@@ -78,9 +80,9 @@ func safeReason(err error) string {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pqErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", pqErr.Message, pqErr.Code)
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", trimQuotedNames(pqErr.Message), pqErr.Code)
 	case errors.As(err, &pgErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", pgErr.Message, pgErr.Code)
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", trimQuotedNames(pgErr.Message), pgErr.Code)
 	}
 	var mErr migratedb.Error
 	var mErrP *migratedb.Error
@@ -111,18 +113,25 @@ func safeReason(err error) string {
 	return "it failed; the driver's message is withheld because it may contain the connection string"
 }
 
-// logStorage names the storage the server opened: a SQLite path, or for
-// anything else the driver alone.
+// logStorage names the storage the server opened: the driver, nothing else.
 func logStorage(driver, dsn string) {
-	if plainPath(driver, dsn) {
-		log.Printf("storage: %s %s", driver, dsn)
-		return
-	}
 	log.Printf("storage: %s (connection details not shown)", driver)
 }
 
-// plainPath reports whether dsn is a SQLite file path, which holds no secret.
-// A URL or anything with userinfo given to the SQLite driver is not.
+// plainPath reports whether dsn is affirmatively a SQLite file path, whose
+// errors may print as they are. A connection string of any other shape given
+// to the SQLite driver (a URL, userinfo, key=value pairs) is not.
 func plainPath(driver, dsn string) bool {
-	return store.IsSQLite(driver) && !strings.Contains(dsn, "://") && !strings.Contains(dsn, "@")
+	return store.IsSQLite(driver) &&
+		!strings.ContainsAny(dsn, "=@ \t\n") &&
+		!strings.Contains(strings.ToLower(dsn), "password")
+}
+
+// quotedName is a double-quoted name in a server message ("wfx", "wfnexus").
+var quotedName = regexp.MustCompile(`"([^":]*):[^"]*"`)
+
+// trimQuotedNames cuts every quoted name in a server message at its first
+// ':', so 'user "wfx:secret"' prints as 'user "wfx:…"'.
+func trimQuotedNames(msg string) string {
+	return quotedName.ReplaceAllString(msg, `"$1:…"`)
 }
