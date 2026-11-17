@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -21,6 +22,33 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, users)
+}
+
+// listPendingLinks is GET /api/users/links: accounts linked on their first
+// sign-in after the upgrade that held roles, waiting for confirmation.
+func (s *Server) listPendingLinks(w http.ResponseWriter, r *http.Request) {
+	links, err := s.store.PendingLinks(r.Context())
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, links)
+}
+
+// confirmLink is POST /api/users/{name}/link/confirm (a superadmin; the
+// server-side `wfx-server link confirm NAME` does the same with no sign-in).
+func (s *Server) confirmLink(w http.ResponseWriter, r *http.Request) {
+	name := urlName(r, "name")
+	if err := s.store.ConfirmLink(r.Context(), name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			notFound(w)
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	log.Printf("auth: AUDIT account link for %s confirmed by %s", name, actorOf(r, stepBody{}).ID)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 type userBody struct {

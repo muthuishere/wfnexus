@@ -257,3 +257,23 @@ func (s *Server) grantSpec(ctx context.Context, u *store.User, spec string) erro
 	}
 	return errors.New("unknown role " + spec)
 }
+
+// revokeSpec takes away what grantSpec gives for the same spec.
+func (s *Server) revokeSpec(ctx context.Context, u *store.User, spec string) error {
+	role, name, _ := strings.Cut(strings.TrimSpace(spec), ":")
+	role = normalizeRole(role)
+	switch role {
+	case "":
+		return nil
+	case RoleSuperadmin:
+		if u.Role != RoleSuperadmin {
+			return nil
+		}
+		return s.store.SetUserRole(ctx, u.Name, "")
+	case store.ProjectAdmin:
+		return s.store.RemoveMember(ctx, store.MemberProject, name, u.ID)
+	case store.WorkflowAdmin, store.WorkflowRunner:
+		return s.store.RemoveMember(ctx, store.MemberWorkflow, name, u.ID)
+	}
+	return errors.New("unknown role " + spec)
+}

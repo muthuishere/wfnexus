@@ -55,7 +55,7 @@ func (l *LDAP) Authenticate(_ context.Context, username, password string) (*Iden
 	for _, g := range e.GetAttributeValues(groupAttr) {
 		groups = append(groups, firstRDN(g))
 	}
-	return &Identity{Provider: l.cfg.Name, Username: username, Groups: groups}, nil
+	return &Identity{Provider: l.cfg.Name, Subject: username, Username: username, Groups: groups}, nil
 }
 
 func firstRDN(dn string) string {
@@ -97,7 +97,7 @@ func (m *MockLDAP) Authenticate(_ context.Context, username, password string) (*
 	for _, u := range m.Users {
 		if u.Username == username && password != "" &&
 			subtle.ConstantTimeCompare([]byte(u.Password), []byte(password)) == 1 {
-			return &Identity{Provider: m.provider, Username: username, Groups: u.Groups}, nil
+			return &Identity{Provider: m.provider, Subject: username, Username: username, Groups: u.Groups}, nil
 		}
 	}
 	return nil, ErrBadCredentials

@@ -3,6 +3,7 @@ module github.com/muthuishere/wfnexus/apps/api
 go 1.26.0
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-ldap/ldap/v3 v3.4.8
@@ -22,6 +23,8 @@ require (
 require (
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
 )
 
 require (
