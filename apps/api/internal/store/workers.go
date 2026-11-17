@@ -210,6 +210,25 @@ func (s *Store) FinishJob(ctx context.Context, id uuid.UUID, workerID uuid.UUID,
 	return nil
 }
 
+// FailJob finishes a job the platform could not hand out (a variable it must
+// deliver has no value): the step fails with reason, and is not claimed again.
+func (s *Store) FailJob(ctx context.Context, id uuid.UUID, reason string) error {
+	res, _ := json.Marshal(map[string]any{"ok": false, "error": reason})
+	_, err := s.exec(ctx,
+		`UPDATE worker_jobs SET status='done', result=$2, finished_at=now()
+		 WHERE id=$1 AND status <> 'done'`, id, jsonArg(res))
+	return err
+}
+
+// ReleaseJob gives a lease back: the claim could not be completed, so the job
+// is queued again for the next claim rather than left leased to nobody.
+func (s *Store) ReleaseJob(ctx context.Context, id uuid.UUID) error {
+	_, err := s.exec(ctx,
+		`UPDATE worker_jobs SET status='queued', worker_id=NULL, leased_at=NULL
+		 WHERE id=$1 AND status='leased'`, id)
+	return err
+}
+
 func (s *Store) GetJob(ctx context.Context, id uuid.UUID) (*Job, error) {
 	return s.scanJob(s.qrow(ctx, `SELECT `+jobCols+` FROM worker_jobs WHERE id=$1`, id))
 }
