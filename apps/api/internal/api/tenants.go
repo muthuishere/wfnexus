@@ -43,6 +43,7 @@ func (s *Server) tenantRoutes(r chi.Router) {
 	r.Put("/tenants/{tenant}/principals/{id}/workflows", s.setPrincipalWorkflows)
 
 	s.issuerRoutes(r)
+	s.connectionRoutes(r)
 
 	r.Get("/svc/self", s.svcSelf)
 	r.Get("/svc/runs", s.svcListRuns)

@@ -143,6 +143,9 @@ func (e *Engine) packAgentJob(ctx context.Context, runID uuid.UUID, def *workflo
 	}
 	job.Skills = files
 
+	if err := e.refuseTenantConnectionsOnWorker(ctx, runID, step.ID, step.MCP); err != nil {
+		return nil, err
+	}
 	if len(step.MCP) > 0 {
 		raw, err := os.ReadFile(e.cfg.McpConfig)
 		if err != nil {
