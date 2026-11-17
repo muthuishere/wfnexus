@@ -90,11 +90,13 @@ describe('admin pages', () => {
     await waitFor(() => expect(calls.some(c => c.method === 'PUT')).toBe(true))
     expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({ disabled: true, role: 'viewer' })
 
-    fireEvent.change(screen.getByLabelText('Role of ana'), { target: { value: 'admin' } })
+    fireEvent.change(screen.getByLabelText('Role of ana'), { target: { value: 'superadmin' } })
     await waitFor(() => expect(calls.filter(c => c.method === 'PUT').length).toBe(2))
-    expect(calls.filter(c => c.method === 'PUT')[1].body).toMatchObject({ role: 'admin', disabled: false })
+    expect(calls.filter(c => c.method === 'PUT')[1].body).toMatchObject({ role: 'superadmin', disabled: false })
   })
 
+  // ADR 0028: the only global role is superadmin or none; a new user gets none
+  // and is granted project or workflow roles per scope.
   test('Users: adding a user creates it and then sets a one-time password', async () => {
     const calls = fake({
       'GET /api/users': () => [200, []],
@@ -107,7 +109,7 @@ describe('admin pages', () => {
     fireEvent.change(form.querySelector('input[name=name]')!, { target: { value: 'bo' } })
     fireEvent.submit(form)
     await screen.findByText('BoOneTimePass123456')
-    expect(calls.find(c => c.method === 'POST' && c.url === '/api/users')?.body).toMatchObject({ name: 'bo', role: 'viewer' })
+    expect(calls.find(c => c.method === 'POST' && c.url === '/api/users')?.body).toMatchObject({ name: 'bo', role: '' })
   })
 
   test('Roles: toggling a permission and saving PUTs the role row', async () => {
