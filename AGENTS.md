@@ -45,7 +45,7 @@ cd apps/api && go test ./... && go vet ./...
 
 There is no hosted CI and no `.github/workflows` (this repo is public). The gate is local:
 `task ci` before every push, reported in the pull request as "CI: local, task ci, pass".
-A release is `task release:publish -- vX.Y.Z` from a clean, pushed `main`; the docs site is
+A release is `task release:publish -- vX.Y.Z` from a clean, pushed `main` (docs/RELEASING.md); the docs site is
 `task site:deploy`.
 
 Adding a workflow: drop a YAML in `workflows/`, then `POST /api/workflows/reload` (or the UI's
