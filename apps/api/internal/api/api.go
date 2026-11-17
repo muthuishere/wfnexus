@@ -52,6 +52,13 @@ type Server struct {
 	addr         string
 	loopbackOnly bool
 
+	// serviceRuns lets a service principal START a workflow it is allowed
+	// (tenants.go). It is false and nothing in configuration sets it: it
+	// stays off until write steps always pause for approval and the engine
+	// hands over write inputs (#146, #148). Only tests set it, through
+	// serviceRunsForTest.
+	serviceRuns bool
+
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
 	// Password sign-in attempts, per source and per username (ADR 0025).
@@ -109,6 +116,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	if fixedJWTKey != nil {
 		s.jwtKey = fixedJWTKey
 	}
+	s.serviceRuns = serviceRunsForTest
 	buildProviders(s)
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
@@ -191,6 +199,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/roles", s.listRoles)
 		r.Put("/roles/{name}", s.saveRole)
 		r.Delete("/roles/{name}", s.deleteRole)
+
+		// Tenants, service principals and the tenant routes (tenants.go).
+		s.tenantRoutes(r)
 
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 		r.Get("/skills", s.listSkills)

@@ -34,6 +34,10 @@ const (
 	// grant. SubjectWorker is a machine: labels, issued by a join.
 	SubjectUser   subjectKind = "user"
 	SubjectWorker subjectKind = "worker"
+	// SubjectService is a machine bound to exactly ONE tenant (a service
+	// principal). It reaches only the tenant routes under /api/svc/; every
+	// other route refuses it (authz.go).
+	SubjectService subjectKind = "service"
 )
 
 // Subject is the authenticated caller. A nil *Subject means "no identity",
@@ -45,6 +49,10 @@ type Subject struct {
 	Project string
 	User    *store.User
 	Worker  *store.Worker
+	// Tenant is set for a service subject only, and only from its stored
+	// principal row: never from anything in the request.
+	Tenant    string
+	Principal *store.ServicePrincipal
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
 	// logout deletes it.
 	SessionID uuid.UUID
@@ -177,6 +185,13 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, error) {
 	if auth.LooksLikeJWT(tok) {
 		return s.subjectFromJWT(ctx, tok)
+	}
+	if strings.HasPrefix(tok, auth.ServiceTokenPrefix) {
+		p, err := s.store.ServicePrincipalByTokenHash(ctx, auth.HashToken(tok))
+		if err != nil {
+			return nil, errors.New("unauthenticated")
+		}
+		return &Subject{Kind: SubjectService, Name: p.Name, Tenant: p.TenantID, Principal: p}, nil
 	}
 	if !strings.HasPrefix(tok, "wfx_") {
 		return nil, errors.New("unauthenticated")
