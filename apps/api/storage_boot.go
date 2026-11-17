@@ -3,10 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/golang-migrate/migrate/v4"
+	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/lib/pq"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
@@ -14,24 +21,93 @@ import (
 // THE DATABASE PASSWORD NEVER REACHES THE LOG (#172).
 //
 // A container's log is collected and kept by whatever runs it, so nothing the
-// boot prints may carry the connection string's secrets: not the storage line,
-// and not an error. A migration that cannot parse the URL quotes the whole
-// URL in its error, so errors are scrubbed too, by VALUE: every secret found
-// in the connection string (and its escaped forms) is replaced wherever it
-// appears, whatever the message around it looks like.
+// boot prints may carry the connection string's secrets.
+//
+//   - The storage line prints the connection string WE hold, redacted
+//     structurally (redactDSN).
+//   - A Postgres migrate/open error is NEVER printed as the driver wrote it:
+//     a URL that does not parse is quoted by the parser, cut at '#', '/' or
+//     '?' or %q-escaped, so no replacement of the password can be complete.
+//     The boot prints a fixed message, the redacted connection string, and a
+//     reason. Only errors whose text is known to hold no connection string
+//     are passed through (an allow-list, not a block-list): a dirty migration
+//     version, a migration's own failure, and a message the database SERVER
+//     sent. Everything else gets a reason picked from the error's kind.
+//   - SQLite's connection string is a file path with no secret; its errors
+//     print as they are.
 
-// openStorage is the boot's storage sequence: migrate, open, name it. Every
-// error it returns has already been scrubbed of the connection string's secrets.
+// migrateDB and openDB are the store's; a test swaps them to reach the open
+// error, which a real broken URL never gets to (the migration fails first).
+var (
+	migrateDB = store.Migrate
+	openDB    = store.Open
+)
+
+// openStorage is the boot's storage sequence: migrate, open, name it.
 func openStorage(ctx context.Context, driver, dsn string) (*store.Store, error) {
-	if err := store.Migrate(driver, dsn); err != nil {
-		return nil, errors.New("migrate: " + scrubDSN(err.Error(), dsn))
+	if err := migrateDB(driver, dsn); err != nil {
+		return nil, storageError("migrate", driver, dsn, err)
 	}
-	st, err := store.Open(ctx, driver, dsn)
+	st, err := openDB(ctx, driver, dsn)
 	if err != nil {
-		return nil, errors.New(driver + ": " + scrubDSN(err.Error(), dsn))
+		return nil, storageError("open", driver, dsn, err)
 	}
 	logStorage(driver, dsn)
 	return st, nil
+}
+
+// storageError is what the boot prints for a failed step: never the driver's
+// raw text for a Postgres connection string.
+func storageError(step, driver, dsn string, err error) error {
+	if !strings.Contains(strings.ToLower(driver), "postgres") {
+		return fmt.Errorf("%s %s: %w", step, driver, err)
+	}
+	return fmt.Errorf("%s postgres %s: %s", step, redactDSN(dsn), safeReason(err))
+}
+
+// safeReason is an allow-listed message for err, or a reason chosen from its
+// kind. It never returns the text of an error it does not know.
+func safeReason(err error) string {
+	var dirty migrate.ErrDirty
+	if errors.As(err, &dirty) {
+		return dirty.Error()
+	}
+	server := ""
+	var pqErr *pq.Error
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &pqErr):
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", pqErr.Message, pqErr.Code)
+	case errors.As(err, &pgErr):
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", pgErr.Message, pgErr.Code)
+	}
+	var mErr migratedb.Error
+	var mErrP *migratedb.Error
+	if errors.As(err, &mErr) || errors.As(err, &mErrP) {
+		if mErrP != nil {
+			mErr = *mErrP
+		}
+		msg := fmt.Sprintf("a migration failed at line %d: %s", mErr.Line, mErr.Err)
+		if server != "" {
+			msg += "; " + server
+		}
+		return msg
+	}
+	if server != "" {
+		return server
+	}
+	var urlErr *url.Error
+	var netErr net.Error
+	text := strings.ToLower(err.Error()) // read to classify, never printed
+	switch {
+	case errors.As(err, &urlErr), strings.Contains(text, "parse "), strings.Contains(text, "invalid"):
+		return "the connection string does not parse as a URL (check characters in the password: escape them)"
+	case strings.Contains(text, "scheme"), strings.Contains(text, "unknown driver"):
+		return "the connection string is not a postgres:// URL"
+	case errors.As(err, &netErr), strings.Contains(text, "dial "), strings.Contains(text, "connection refused"), strings.Contains(text, "no such host"):
+		return "the database cannot be reached at that address"
+	}
+	return "it failed; the driver's message is withheld because it may contain the connection string"
 }
 
 // logStorage names the storage the server opened, never with its password.
@@ -61,7 +137,7 @@ func redactDSN(dsn string) string {
 		}
 		if q := u.Query(); len(q) > 0 {
 			for k := range q {
-				if isSecretKey(k) {
+				if strings.HasSuffix(strings.ToLower(k), "password") {
 					q.Set(k, hidden)
 				}
 			}
@@ -70,64 +146,4 @@ func redactDSN(dsn string) string {
 		return u.Redacted()
 	}
 	return kvSecret.ReplaceAllString(dsn, "${1}"+hidden)
-}
-
-// scrubDSN removes the connection string's secrets from any text (an error).
-func scrubDSN(text, dsn string) string {
-	if dsn != "" {
-		text = strings.ReplaceAll(text, dsn, redactDSN(dsn))
-	}
-	return scrubSecrets(text, dsnSecrets(dsn))
-}
-
-func scrubSecrets(text string, secrets []string) string {
-	for _, s := range secrets {
-		text = strings.ReplaceAll(text, s, hidden)
-	}
-	return text
-}
-
-func isSecretKey(k string) bool { return strings.HasSuffix(strings.ToLower(k), "password") }
-
-// dsnSecrets is every secret value in a connection string, in the raw and
-// escaped forms it may be printed in. It works on strings that do not parse:
-// the URL userinfo is cut out by hand.
-func dsnSecrets(dsn string) []string {
-	var raw []string
-	if urlScheme.MatchString(dsn) {
-		rest := dsn[strings.Index(dsn, "://")+3:]
-		if at := strings.LastIndex(rest, "@"); at >= 0 {
-			if _, pw, ok := strings.Cut(rest[:at], ":"); ok {
-				raw = append(raw, pw)
-			}
-		}
-		if _, query, ok := strings.Cut(dsn, "?"); ok {
-			for _, pair := range strings.Split(query, "&") {
-				if k, v, ok := strings.Cut(pair, "="); ok && isSecretKey(k) {
-					raw = append(raw, v)
-				}
-			}
-		}
-	} else {
-		for _, m := range kvSecret.FindAllStringSubmatch(dsn, -1) {
-			raw = append(raw, m[2], strings.Trim(m[2], "'"))
-		}
-	}
-	var out []string
-	for _, s := range raw {
-		forms := []string{s, url.QueryEscape(s), url.PathEscape(s)}
-		if u, err := url.QueryUnescape(s); err == nil {
-			forms = append(forms, u)
-		}
-		if u, err := url.PathUnescape(s); err == nil {
-			forms = append(forms, u)
-		}
-		for _, f := range forms {
-			// A one- or two-character "secret" would scrub ordinary text.
-			if len(f) >= 3 {
-				out = append(out, f)
-			}
-		}
-	}
-	return out
 }
