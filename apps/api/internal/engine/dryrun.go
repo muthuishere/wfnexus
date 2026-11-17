@@ -219,7 +219,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		if ds.Kind == "prompt" {
 			ds.RunsOn = s.RunsOn
 			if e.servesLocally(s.RunsOn) {
-				prov, err := e.resolveLLMWithEnv(s, "", workflow.MergeEnv(stored, s.Env))
+				prov, err := e.resolveLLMWithEnv(s, "", workflow.MergeEnv(stored, s.Env), nil)
 				if err != nil {
 					fail(DryProblem{Step: s.ID, Field: "provider", Message: err.Error(), Fatal: true})
 				} else {

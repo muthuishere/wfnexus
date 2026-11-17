@@ -98,6 +98,15 @@ func (s *Server) finishJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// The report is scrubbed of the run's secret values before it is stored:
+	// the job row is kept, and the step reads its output from it. Without
+	// the job there is no run to scrub for, so nothing is stored.
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	res = s.eng.ScrubJobResult(r.Context(), job.RunID, job.Payload, res)
 	raw, _ := json.Marshal(res)
 	if err := s.store.FinishJob(r.Context(), id, wk.ID, raw); err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -137,7 +146,7 @@ func (s *Server) workerEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.eng.IngestWorkerEvents(r.Context(), job.RunID, body.Events)
+	s.eng.IngestWorkerEvents(r.Context(), job.RunID, job.Payload, body.Events)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": len(body.Events)})
 }
 

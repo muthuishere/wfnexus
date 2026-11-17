@@ -159,7 +159,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		// The provider is resolved BEFORE the metric sink because the sink needs
 		// its price: cost is computed as the tokens arrive, not reconstructed
 		// afterwards from a log nobody reads back.
-		prov, err := e.resolveLLMWithEnv(step, workdir, env)
+		prov, err := e.resolveLLMWithEnv(step, workdir, env, func(s string) string { return e.scrubQuoted(runID, s) })
 		if err != nil {
 			return attempt{err: fmt.Errorf("step %s: %w", step.ID, err)}
 		}
@@ -252,13 +252,7 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		if reached || !failed || ctx.Err() != nil || i == len(chain)-1 {
 			break
 		}
-		why := scrub(trim(a.res.Text, 300))
-		if a.err != nil {
-			why = scrub(a.err.Error())
-		}
-		e.emit(ctx, runID, step.ID, "log", map[string]any{
-			"text": fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, chain[i+1]),
-		})
+		e.emit(ctx, runID, step.ID, "log", map[string]any{"text": e.fallbackLine(runID, name, chain[i+1], a.res.Text, a.err)})
 	}
 	if a.err != nil {
 		return stepResult{}, a.err
@@ -301,13 +295,28 @@ func (e *Engine) runAgent(ctx context.Context, runID uuid.UUID, wfName string, s
 		spent.Output = ensureConfidence(submitted)
 		return spent, nil
 	case res.IsError || res.Status == "error":
-		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, scrub(res.Text))
+		return stepResult{}, fmt.Errorf("step %s failed: %s", step.ID, e.scrubQuoted(runID, res.Text))
 	default:
 		// The runtime reports no structured limit, so the reason is stated in
 		// full rather than guessed at (spikes/15).
-		return stepResult{}, fmt.Errorf("step %s stopped as %q without a valid result: %s",
-			step.ID, res.Status, scrub(trim(res.Text, 500)))
+		return stepResult{}, e.stoppedError(runID, step.ID, res.Status, res.Text)
 	}
+}
+
+// fallbackLine is the log line for a provider that failed: its reply (or
+// error) quoted, scrubbed whole and then cut.
+func (e *Engine) fallbackLine(runID uuid.UUID, name, next, reply string, err error) string {
+	why := e.clipScrubbed(runID, reply, 300)
+	if err != nil {
+		why = e.scrubQuoted(runID, err.Error())
+	}
+	return fmt.Sprintf("provider %s could not be reached (%s) — falling back to %s", orDefault(name), why, next)
+}
+
+// stoppedError is the error of an agent step that stopped without a valid
+// result: its last reply quoted, scrubbed whole and then cut.
+func (e *Engine) stoppedError(runID uuid.UUID, stepID, status, reply string) error {
+	return fmt.Errorf("step %s stopped as %q without a valid result: %s", stepID, status, e.clipScrubbed(runID, reply, 500))
 }
 
 // askHumanGranted reports whether this step may interrupt a person: the tool
@@ -495,7 +504,7 @@ func (e *Engine) hooks(ctx context.Context, runID uuid.UUID, stepID, workdir str
 		AfterTool: func(_ context.Context, ev tn.AfterToolEvent) (*tn.ToolOverride, error) {
 			e.emit(ctx, runID, stepID, "tool_result", map[string]any{
 				"name": ev.Name, "id": ev.ID, "isError": ev.Result.IsError,
-				"output": trim(scrub(ev.Result.Output), maxEventOutput),
+				"output": e.clipScrubbed(runID, ev.Result.Output, maxEventOutput),
 			})
 			return nil, nil
 		},
@@ -523,12 +532,25 @@ func lastTurnsWarning(turns int) int {
 	return n
 }
 
-func trim(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := runeCut(s, n)
-	return cut + fmt.Sprintf("\n… (%d more bytes)", len(s)-len(cut))
+// trim shortens a text that holds no run's secrets (an authoring preview).
+// Anything from a run is shortened by clipRun or clipScrubbed instead, which
+// scrub the whole text before the cut.
+func trim(s string, n int) string { return clip(s, n, nil, moreBytes) }
+
+// scrubQuoted is a quoted reply or error, not cut: the run's secrets removed
+// first, then provider identifiers (scrub), so a pattern cannot take part of
+// a secret and leave the rest.
+func (e *Engine) scrubQuoted(runID uuid.UUID, text string) string {
+	return scrub(redactText(text, e.redactions.get(runID)))
+}
+
+// clipScrubbed is clipRun for text that may also carry provider account
+// identifiers (scrub): the run's secrets are removed first, so the
+// identifier patterns cannot take part of a secret and leave the rest; then
+// the identifiers; then the cut.
+func (e *Engine) clipScrubbed(runID uuid.UUID, text string, n int) string {
+	secrets := e.redactions.get(runID)
+	return clip(scrub(redactText(text, secrets)), n, secrets, moreBytes)
 }
 
 // assistantText pulls the visible assistant text out of a raw provider response.
@@ -561,10 +583,12 @@ func (e *Engine) saveArtifacts(ctx context.Context, runID uuid.UUID, stepID, wor
 		return // a worker has neither; its evidence travels back on the result
 	}
 	ctx = context.WithoutCancel(ctx)
+	secrets := e.redactions.get(runID)
 	put := func(name, ctype string, body []byte) {
 		if len(body) == 0 {
 			return
 		}
+		body = []byte(redactText(string(body), secrets))
 		key := fmt.Sprintf("runs/%s/%s/%s", runID, stepID, name)
 		if err := e.blob.Put(ctx, key, bytes.NewReader(body), int64(len(body)), ctype); err != nil {
 			e.emit(ctx, runID, stepID, "error", map[string]any{"text": "artifact upload failed: " + scrub(err.Error())})

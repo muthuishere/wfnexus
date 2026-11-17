@@ -114,19 +114,23 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 			return nil, fmt.Errorf("could not run %q: %w", cmd, runErr)
 		}
 	}
+	// Scrubbed as text BEFORE it is shortened (clip): a cut can fall inside a
+	// secret, and a prefix no longer matches any whole form.
 	out := map[string]any{
 		"ok": exitCode == 0, "exitCode": exitCode,
-		"stdout": trim(stdout.String(), maxEventOutput), "stderr": trim(stderr.String(), maxEventOutput),
+		"stdout": e.clipRun(runID, stdout.String(), maxEventOutput),
+		"stderr": e.clipRun(runID, stderr.String(), maxEventOutput),
 	}
 	if oc := e.collectStory(ctx, runID, step.ID, story, out); oc != "" && e.store != nil {
 		// Live: the headline moves the moment a step says what it found.
+		// oc was read through readCapped: scrubbed whole, then cut.
 		if err := e.store.SetRunOutcome(context.WithoutCancel(ctx), runID, oc); err != nil {
 			e.emit(ctx, runID, step.ID, "log", map[string]any{"message": "outcome: " + err.Error()})
 		}
 	}
 	e.emit(ctx, runID, step.ID, "tool_result", map[string]any{
 		"name": "run", "isError": exitCode != 0,
-		"output": trim(stdout.String()+stderr.String(), maxEventOutput),
+		"output": e.clipRun(runID, stdout.String()+stderr.String(), maxEventOutput),
 	})
 	// A non-zero exit is reported in the output, not as an error: runOneStep
 	// fails the step on it unless the step opted out (exitFailed).
