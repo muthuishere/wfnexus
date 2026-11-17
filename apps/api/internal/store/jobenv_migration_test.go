@@ -91,15 +91,18 @@ func TestMigrationBlanksStoredJobEnvSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	run, err := st.CreateRun(context.Background(), "local", "wf", json.RawMessage(`{}`))
+	// The run is written with SQL: the store's CreateRun targets the CURRENT
+	// schema (tenant_id, since migration 26), and this database is at 22.
+	runID := uuid.New()
+	if _, err := st.db.Exec(`INSERT INTO workflow_runs (id, project, workflow, status, input) VALUES ($1,$2,$3,$4,$5)`,
+		runID.String(), "local", "wf", "queued", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.EnqueueJob(context.Background(), runID, "s", "box", json.RawMessage(oldJobPayload))
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := st.EnqueueJob(context.Background(), run.ID, "s", "box", json.RawMessage(oldJobPayload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	leased := enqueueLeased(t, st, run.ID)
+	leased := enqueueLeased(t, st, runID)
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
