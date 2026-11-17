@@ -26,54 +26,52 @@ func captureLog(f func()) string {
 	return buf.String()
 }
 
-// The storage line prints host, port and database name, and nothing else
-// from the connection string (#172).
-func TestTheStorageLineShowsOnlyHostPortAndDatabase(t *testing.T) {
-	for _, c := range []struct{ name, dsn, want string }{
-		{"url", "postgres://wfx:" + bootPW + "@db.internal:5432/wfnexus?sslmode=require", "host=db.internal port=5432 database=wfnexus"},
-		{"url, escaped password", "postgres://wfx:" + bootPW + "%40x@db.internal/wfnexus", "host=db.internal database=wfnexus"},
-		{"url, '@' in the password", "postgres://wfx:" + bootPW + "@x@db.internal/wfnexus", "host=db.internal database=wfnexus"},
-		{"url, query password", "postgres://wfx@db.internal/wfnexus?password=" + bootPW + "&sslmode=disable", "host=db.internal database=wfnexus"},
-		{"url, query sslpassword", "postgres://wfx@db.internal/wfnexus?sslpassword=" + bootPW, "host=db.internal database=wfnexus"},
-		{"url, query password with a bad escape", "postgres://wfx@db.internal/wfnexus?password=" + bootPW + "%zz", "host=db.internal database=wfnexus"},
-		{"url, query password with ';'", "postgres://wfx@db.internal/wfnexus?password=" + bootPW + ";sslmode=disable", "host=db.internal database=wfnexus"},
-		{"key/value", "host=db.internal port=5432 user=wfx password=" + bootPW + " dbname=wfnexus", "host=db.internal port=5432 database=wfnexus"},
-		{"key/value sslpassword", "host=db.internal sslpassword=" + bootPW + " dbname=wfnexus", "host=db.internal database=wfnexus"},
-		{"key/value, :// in a value", "host=db.internal application_name=a://b password=" + bootPW + " dbname=wfnexus", "host=db.internal database=wfnexus"},
-	} {
-		for _, driver := range []string{"postgres", "pgx"} {
-			out := captureLog(func() { logStorage(driver, c.dsn) })
-			if want := "storage: " + driver + " " + c.want + "\n"; !strings.HasSuffix(out, want) {
-				t.Errorf("%s (%s): got %q, want suffix %q", c.name, driver, out, want)
-			}
-			if strings.Contains(out, bootPW) {
-				t.Errorf("%s (%s): the storage line printed the password: %q", c.name, driver, out)
+// The storage line prints nothing taken from a Postgres connection string,
+// whatever its shape (#172). Shapes where a re-parse would disagree with the
+// driver are included: a libpq escaped space keeps "dbname=…" inside the
+// password, a numeric password prefix parses as a port.
+func TestTheStorageLineShowsNoConnectionDetail(t *testing.T) {
+	dsns := []string{
+		"postgres://wfx:" + bootPW + "@db.internal:5432/wfnexus?sslmode=require",
+		"postgres://wfx:" + bootPW + "%40x@db.internal/wfnexus",
+		"postgres://wfx@db.internal/wfnexus?password=" + bootPW + "%zz",
+		"postgres://wfx@db.internal/wfnexus?password=" + bootPW + ";sslmode=disable",
+		"postgres://wfx:93715#" + bootPW + "@db.internal/wfnexus",
+		"host=db.internal port=5432 user=wfx password=" + bootPW + " dbname=wfnexus",
+		`host=db.internal user=wfx password=abc\ dbname=` + bootPW,
+		`host=db.internal user=wfx password=abc\ port=` + bootPW,
+		`host=db.internal user=wfx password=abc\ host=` + bootPW,
+	}
+	for _, dsn := range dsns {
+		for _, driver := range []string{"postgres", "postgresql", "pgx"} {
+			out := captureLog(func() { logStorage(driver, dsn) })
+			if want := "storage: " + driver + " (connection details not shown)\n"; !strings.HasSuffix(out, want) || strings.Contains(out, bootPW) {
+				t.Errorf("%s: got %q, want suffix %q", driver, out, want)
 			}
 		}
 	}
+	// A SQLite path has no secret and is printed as it is.
 	if out := captureLog(func() { logStorage("sqlite", "/data/wfnexus.db") }); !strings.HasSuffix(out, "storage: sqlite /data/wfnexus.db\n") {
 		t.Errorf("sqlite: %q", out)
 	}
 }
 
-// Where a field could hold part of the password, no target is shown at all:
-// a numeric password prefix parses as a port, a password tail as the path,
-// the query or a fragment.
-func TestAnAmbiguousConnectionStringShowsNoTarget(t *testing.T) {
-	const prefix = "93715"
-	for _, c := range []struct{ name, dsn string }{
-		{"'#' after a numeric prefix", "postgres://wfx:" + prefix + "#" + bootPW + "@db.internal/wfnexus"},
-		{"'/' after a numeric prefix", "postgres://wfx:" + prefix + "/" + bootPW + "@db.internal/wfnexus"},
-		{"'?' after a numeric prefix", "postgres://wfx:" + prefix + "?" + bootPW + "@db.internal/wfnexus"},
-		{"does not parse", "postgres://wfx:" + bootPW + "%zz@db.internal/wfnexus"},
-		{"key/value, escaped space", `host=db.internal user=wfx password=abc\ ` + bootPW + " dbname=wfnexus"},
-		{"key/value, quoted", "host=db.internal password='" + bootPW + " x' dbname=wfnexus"},
-		{"key/value, stray token", "host=db.internal password=abc " + bootPW + " dbname=wfnexus"},
-		{"a field a name cannot hold", "postgres://wfx@db.internal/wfnexus%2F" + bootPW},
+// A Postgres URL given to the SQLite driver (the two settings are separate)
+// is not a path: nothing of it is printed, on the line or in an error.
+func TestAURLUnderTheSQLiteDriverIsNotPrinted(t *testing.T) {
+	for _, dsn := range []string{
+		"postgres://wfx:" + bootPW + "@db.internal/wfnexus",
+		"wfx:" + bootPW + "@db.internal",
+		"postgres://db.internal/wfnexus?password=" + bootPW,
 	} {
-		got := storageTarget("postgres", c.dsn)
-		if got != notShown {
-			t.Errorf("%s: target %q, want it not shown", c.name, got)
+		if out := captureLog(func() { logStorage("sqlite", dsn) }); strings.Contains(out, bootPW) || !strings.Contains(out, "not shown") {
+			t.Errorf("line: %q", out)
+		}
+		d := dsn
+		swapStorage(t, func(string, string) error { return errors.New("unable to open database file " + d) }, openDB)
+		_, err := openStorage(context.Background(), "sqlite", dsn)
+		if err == nil || strings.Contains(err.Error(), bootPW) {
+			t.Errorf("error: %v", err)
 		}
 	}
 }
