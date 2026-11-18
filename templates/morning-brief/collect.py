@@ -10,7 +10,7 @@ facts.json:
                 wait:<id>         a run waiting on a person (approval / question)
                 pr:<n>            an open PR on $GH_REPO
                 issue:<n>         an open issue on $GH_REPO
-                now               ceo-harness NOW.md: mtime + its top section
+                now               the NOW.md status file: mtime + its top section
                 missing:<source>  a source that could not be read
   previous    the last morning-brief's kept lines (what changed since yesterday)
   missing[]   the sources that could not be read
@@ -24,7 +24,7 @@ import urllib.request
 SELF = os.environ.get("BRIEF_WORKFLOW", "morning-brief")
 SINCE_HOURS = float(os.environ.get("SINCE_HOURS", "24"))
 REPO = os.environ.get("GH_REPO", "muthuishere/wfnexus")
-NOW_MD = os.path.expanduser(os.environ.get("NOW_MD", "~/muthu/deemwarworkspace/ceo-harness/NOW.md"))
+NOW_MD = os.path.expanduser(os.environ.get("NOW_MD", "~/NOW.md"))
 
 
 def api(path):
@@ -101,7 +101,7 @@ def now_md(facts):
             if line.strip():
                 top.append(line.strip())
     mtime = dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
-    facts.append({"id": "now", "source": "ceo-harness",
+    facts.append({"id": "now", "source": "now-file",
                   "text": f"NOW.md last edited {mtime}. Top: " + " / ".join(top[:12])[:900]})
 
 
@@ -119,7 +119,7 @@ def main():
     try:
         now_md(facts)
     except Exception as e:
-        missing.append(("ceo-harness", repr(e)[:200]))
+        missing.append(("now-file", repr(e)[:200]))
     for src, why in missing:
         facts.append({"id": f"missing:{src}", "source": src, "text": f"could not read {src}: {why}"})
     with open("facts.json", "w") as f:

@@ -109,7 +109,7 @@ func TestMorningBriefCollectNotesMissingSources(t *testing.T) {
 	for _, f := range readJSON(t, filepath.Join(dir, "facts.json"))["facts"].([]any) {
 		ids[f.(map[string]any)["id"].(string)] = true
 	}
-	for _, want := range []string{"run:r-dep", "wait:r-appr", "missing:github-pr", "missing:github-issue", "missing:ceo-harness"} {
+	for _, want := range []string{"run:r-dep", "wait:r-appr", "missing:github-pr", "missing:github-issue", "missing:now-file"} {
 		if !ids[want] {
 			t.Errorf("no fact %s in %v", want, ids)
 		}

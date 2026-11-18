@@ -1,9 +1,9 @@
 # morning-brief
 
-The owner's 08:00 WhatsApp brief, replacing the CEO's by-hand morning check.
+An 08:00 WhatsApp brief of what needs attention.
 `collect` (no AI) gathers failed runs and runs waiting on a person from
 `$WFX_API`, open PRs and issues on `$GH_REPO` via `gh`, and the mtime and top
-section of the ceo-harness `NOW.md`, plus yesterday's brief; a source it cannot
+section of a `NOW.md` status file (`$NOW_MD`), plus yesterday's brief; a source it cannot
 read becomes a citable `missing:<source>` fact instead of failing the run.
 `brief` (one read-only agent turn on the default model) writes at most 12
 lines, most urgent first, each citing fact ids; `check` drops any line that

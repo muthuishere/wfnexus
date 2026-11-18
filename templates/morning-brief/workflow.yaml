@@ -1,7 +1,7 @@
 # morning-brief — the owner's 08:00 WhatsApp brief: what needs him first.
 #
 #   collect   plain run, no AI: failed runs and waiting approvals from $WFX_API,
-#             open PRs/issues on $GH_REPO via `gh`, ceo-harness NOW.md (mtime +
+#             open PRs/issues on $GH_REPO via `gh`, the NOW.md status file (mtime +
 #             top section), and yesterday's brief lines. A source that cannot
 #             be read becomes a `missing:<source>` fact; it never fails the run.
 #   brief     one agent turn (read only) → {lines:[{text, cites}]}, ≤12 lines
@@ -52,7 +52,7 @@ input_schema:
 env:
   SINCE_HOURS: "24"
   GH_REPO: "muthuishere/wfnexus"
-  NOW_MD: "~/muthu/deemwarworkspace/ceo-harness/NOW.md"
+  NOW_MD: "~/NOW.md"
 
 steps:
   - id: collect
