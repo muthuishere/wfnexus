@@ -11,7 +11,8 @@
 #   gh            github.com/cli/cli releases            gh_<v>_<os>_<arch>.tar.gz
 #   aos           github.com/muthuishere/aos install.sh  (its own release picker)
 #   ctx-optimize  github.com/muthuishere/ctx-optimize     ctx-optimize_<v>_<os>_<arch>.tar.gz
-#   apl           github.com/deemwar-products/apl (PRIVATE) apl_<os>_<arch>, via an authenticated gh
+#   apl           the repository named by $WFX_APL_REPO (owner/name)  apl_<os>_<arch>,
+#                 via an authenticated gh; unset, apl is skipped
 #
 # Used by: `wfx server deploy` (every deploy), infra/Dockerfile*, and each
 # module's `requires.cli[].install`.
@@ -43,9 +44,10 @@ one() {
     curl -fsSL "https://github.com/muthuishere/ctx-optimize/releases/download/v$v/ctx-optimize_${v}_${OS}_$ARCH.tar.gz" |
       tar -xz -C "$TMP" && cp "$TMP/ctx-optimize" "$BIN/ctx-optimize" ;;
   apl)
-    command -v gh >/dev/null 2>&1 || { echo "skip  apl: needs gh (private release)"; return 1; }
-    gh release download -R deemwar-products/apl -p "apl_${OS}_$ARCH" -O "$BIN/apl" --clobber || {
-      echo "skip  apl: gh is not logged in to an account that can read deemwar-products/apl"; return 1; } ;;
+    [ -n "${WFX_APL_REPO:-}" ] || { echo "skip  apl: set WFX_APL_REPO to the repository that publishes it (owner/name)"; return 1; }
+    command -v gh >/dev/null 2>&1 || { echo "skip  apl: needs gh"; return 1; }
+    gh release download -R "$WFX_APL_REPO" -p "apl_${OS}_$ARCH" -O "$BIN/apl" --clobber || {
+      echo "skip  apl: gh is not logged in to an account that can read $WFX_APL_REPO"; return 1; } ;;
   *) echo "unknown CLI: $1" >&2; return 2 ;;
   esac
   chmod 755 "$BIN/$1" 2>/dev/null

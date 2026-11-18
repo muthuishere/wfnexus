@@ -13,7 +13,7 @@ config changes on prod.
 
 ## 1. What passes a real test today
 
-`wfx doctor` runs against the **prod-db server** (wfnexus user, linux/amd64) through the `deemwar` context.
+`wfx doctor` runs against a **remote Linux server** (linux/amd64) through a named context.
 
 | provider | where | test | result |
 |---|---|---|---|

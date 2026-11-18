@@ -70,13 +70,13 @@ func TestContextWithoutViaIsUnchanged(t *testing.T) {
 	}
 	// A login through a via context keeps its url and via.
 	c, _ := loadContexts()
-	c.Contexts["deemwar"] = &wfxContext{URL: "http://127.0.0.1:8090", Via: "ssh://wfx@h"}
+	c.Contexts["work"] = &wfxContext{URL: "http://127.0.0.1:8090", Via: "ssh://wfx@h"}
 	_ = saveContexts(c)
-	if err := putContext("deemwar", "wfx_d", "muthu"); err != nil {
+	if err := putContext("work", "wfx_d", "muthu"); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = loadContexts()
-	if d := c.Contexts["deemwar"]; d.Via != "ssh://wfx@h" || d.URL != "http://127.0.0.1:8090" || d.Token != "wfx_d" {
+	if d := c.Contexts["work"]; d.Via != "ssh://wfx@h" || d.URL != "http://127.0.0.1:8090" || d.Token != "wfx_d" {
 		t.Fatalf("via context after login = %+v", d)
 	}
 	var back contextsFile
@@ -370,7 +370,7 @@ func testForwarderThroughSSH(t *testing.T, httpMode bool) {
 
 func TestTunnelLineDown(t *testing.T) {
 	tempContexts(t)
-	if got := tunnelLine("deemwar"); got != "deemwar · tunnel down (opens on next command)" {
+	if got := tunnelLine("work"); got != "work · tunnel down (opens on next command)" {
 		t.Fatal(got)
 	}
 }

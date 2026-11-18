@@ -126,7 +126,7 @@ on the first command that needs it and closes it after 15 minutes with nothing o
 ```bash
 wfx team add alice alice.pub        # on the server, as the wfx user: tunnel-only key, no shell
 wfx profile create myserver --url http://127.0.0.1:8090 --via ssh://wfx@your-server --accept-host-key
-wfx status                          # deemwar · tunnel up 4m · idle close in 11m
+wfx status                          # work · tunnel up 4m · idle close in 11m
 ```
 
 `--key` picks a key (default: ssh-agent, then `~/.ssh/id_ed25519`, `id_rsa`); host keys are checked

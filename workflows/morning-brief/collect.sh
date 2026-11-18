@@ -7,6 +7,10 @@
 # difference. A collector that dies on the first expired token is a collector
 # that silently stops reporting.
 set -uo pipefail
+# Whose day: MAIL_ACCOUNTS is a space-separated list of apl handles for mail
+# and calendar (empty = none); GH_USER defaults to the signed-in gh user.
+MAIL_ACCOUNTS="${MAIL_ACCOUNTS:-}"
+GH_USER="${GH_USER:-$(gh api user -q .login 2>/dev/null)}"
 GMAIL="https://gmail.googleapis.com/gmail/v1/users/me"
 CAL="https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
@@ -91,11 +95,11 @@ def lines(cmd):
     return out
 src="$0"
 doc={
- 'mail':        lines(f'source {src}; mail_for google:deemwar; mail_for google:muthu'),
- 'calendar':    lines(f'source {src}; cal_for google:deemwar; cal_for google:muthu'),
- 'prs_to_review':lines(f'source {src}; gh_q "is:open+is:pr+review-requested:muthuishere" review'),
- 'prs_assigned':lines(f'source {src}; gh_q "is:open+is:pr+assignee:muthuishere" assigned'),
- 'issues_assigned':lines(f'source {src}; gh_q "is:open+is:issue+assignee:muthuishere" issue'),
+ 'mail':        lines(f'source {src}; for a in $MAIL_ACCOUNTS; do mail_for "\$a"; done'),
+ 'calendar':    lines(f'source {src}; for a in $MAIL_ACCOUNTS; do cal_for "\$a"; done'),
+ 'prs_to_review':lines(f'source {src}; gh_q "is:open+is:pr+review-requested:$GH_USER" review'),
+ 'prs_assigned':lines(f'source {src}; gh_q "is:open+is:pr+assignee:$GH_USER" assigned'),
+ 'issues_assigned':lines(f'source {src}; gh_q "is:open+is:issue+assignee:$GH_USER" issue'),
  'gcloud_errors':lines(f'source {src}; gcloud_errors'),
 }
 print(json.dumps(doc, indent=1))
