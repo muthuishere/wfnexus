@@ -34,9 +34,9 @@ import (
 //     Anything else is never printed as the driver wrote it: a fixed message
 //     and a reason. Only errors whose text holds no connection string pass
 //     through (an allow-list): a dirty migration version, a migration's own
-//     line and message (not the error it wraps), and what the database
-//     SERVER said, with user and role names withheld and other quoted values
-//     cut at their first ':' (serverText).
+//     line (not its message or the error it wraps), and the SQLSTATE code
+//     of a database server error with its standard meaning (never the
+//     server's message, describeSQLState).
 
 // migrateDB and openDB are the store's; a test swaps them to reach the open
 // error, which a real broken URL never gets to (the migration fails first).
@@ -74,14 +74,18 @@ func safeReason(err error) string {
 	if errors.As(err, &dirty) {
 		return dirty.Error()
 	}
-	server := ""
+	// The server's message is never printed: it is free text, in the
+	// server's language, and it quotes names that can hold the password (a
+	// password percent-encoded into the user name, or a user name that IS the
+	// secret). Only the SQLSTATE code is printed, with its standard meaning.
+	code := ""
 	var pqErr *pq.Error
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pqErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", serverText(pqErr.Message), pqErr.Code)
+		code = string(pqErr.Code)
 	case errors.As(err, &pgErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", serverText(pgErr.Message), pgErr.Code)
+		code = pgErr.Code
 	}
 	var mErr migratedb.Error
 	var mErrP *migratedb.Error
@@ -89,14 +93,14 @@ func safeReason(err error) string {
 		if mErrP != nil {
 			mErr = *mErrP
 		}
-		msg := fmt.Sprintf("a migration failed at line %d: %s", mErr.Line, serverText(mErr.Err))
-		if server != "" {
-			msg += "; " + server
+		msg := fmt.Sprintf("a migration failed at line %d", mErr.Line)
+		if code != "" {
+			msg += "; " + describeSQLState(code)
 		}
 		return msg
 	}
-	if server != "" {
-		return server
+	if code != "" {
+		return describeSQLState(code)
 	}
 	var urlErr *url.Error
 	var netErr net.Error
@@ -126,20 +130,42 @@ func plainPath(driver, dsn string) bool {
 		!strings.Contains(strings.ToLower(dsn), "password")
 }
 
-var (
-	// userName is a user or role name in a server message, quoted with " or
-	// ', or unquoted after ':' or '='. It is withheld whole: in
-	// postgres://SECRET@host the user name IS the secret, with no ':' to cut.
-	userName = regexp.MustCompile(`(?i)\b(user|role)(\s+"[^"]*"|\s+'[^']*'|\s*[:=]\s*[^\s,;)]+)`)
-	// quotedValue is any other quoted value; it is cut at its first ':'.
-	quotedValue = regexp.MustCompile(`(["'])([^"':]*):[^"']*(["'])`)
-)
+// sqlState is a SQLSTATE code as the standard defines it: five characters,
+// digits and upper-case letters. Anything else in that field is not printed.
+var sqlState = regexp.MustCompile(`^[0-9A-Z]{5}$`)
 
-// serverText is a message from the database server (or a migration) made
-// safe to print: user and role names withheld, other quoted values cut at
-// their first ':' (a password percent-encoded into a name comes back inside
-// the server's message).
-func serverText(msg string) string {
-	msg = userName.ReplaceAllString(msg, `$1 "…"`)
-	return quotedValue.ReplaceAllString(msg, `$1$2:…$3`)
+// sqlStateMeaning is the standard meaning of the codes a boot most often meets.
+var sqlStateMeaning = map[string]string{
+	"28P01": "password authentication failed",
+	"28000": "the user is not authorized",
+	"3D000": "the database does not exist",
+	"42501": "insufficient privilege",
+	"53300": "too many connections",
+	"57P03": "the server is not accepting connections yet",
+}
+
+// sqlStateClass is the standard meaning of a code's first two characters.
+var sqlStateClass = map[string]string{
+	"08": "a connection error",
+	"28": "an authorization error",
+	"3D": "the database does not exist",
+	"42": "a syntax or access rule error",
+	"53": "the server is out of resources",
+	"57": "the server stopped or is not ready",
+}
+
+// describeSQLState is what the boot prints for a database server error: the
+// code and its standard meaning, never the server's message.
+func describeSQLState(code string) string {
+	if !sqlState.MatchString(code) {
+		return "the database server refused (its message is withheld)"
+	}
+	meaning, ok := sqlStateMeaning[code]
+	if !ok {
+		meaning, ok = sqlStateClass[code[:2]]
+	}
+	if !ok {
+		meaning = "an error"
+	}
+	return fmt.Sprintf("the database server refused: %s (SQLSTATE %s; its message is withheld)", meaning, code)
 }
