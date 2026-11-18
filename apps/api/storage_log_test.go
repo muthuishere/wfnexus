@@ -88,7 +88,7 @@ func TestAServerMessageNeverEchoesAPasswordInTheUserName(t *testing.T) {
 	e := &pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx:` + bootPW + `"`}
 	swapStorage(t, func(string, string) error { return e }, openDB)
 	_, err := openStorage(context.Background(), "postgres", dsn)
-	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `password authentication failed for user "wfx:…" (SQLSTATE 28P01)`) {
+	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `password authentication failed for user "…" (SQLSTATE 28P01)`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestAllowListedStorageErrorsKeepTheirMessage(t *testing.T) {
 		want string
 	}{
 		{migrate.ErrDirty{Version: 7}, "Dirty database version 7"},
-		{&pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx"`}, `the database server said: password authentication failed for user "wfx" (SQLSTATE 28P01)`},
+		{&pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx"`}, `the database server said: password authentication failed for user "…" (SQLSTATE 28P01)`},
 	} {
 		e := c.err
 		swapStorage(t, func(string, string) error { return e }, openDB)
@@ -190,5 +190,30 @@ func TestASQLiteStorageErrorIsPrintedWhole(t *testing.T) {
 	_, err := openStorage(context.Background(), "sqlite", "/data/w.db")
 	if err == nil || !strings.Contains(err.Error(), "disk I/O error at /data/w.db") {
 		t.Fatalf("sqlite error = %v", err)
+	}
+}
+
+// A user or role name is withheld in every form a message may carry it, and
+// any other quoted value is cut at its first ':' (#177).
+func TestServerTextWithholdsUserNamesInEveryForm(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`password authentication failed for user "` + bootPW + `"`, `password authentication failed for user "…"`},
+		{`password authentication failed for user 'wfx:` + bootPW + `'`, `password authentication failed for user "…"`},
+		{`no such user: wfx:` + bootPW, `no such user "…"`},
+		{`role=` + bootPW + `, denied`, `role "…", denied`},
+		{`database "wfnexus:` + bootPW + `" does not exist`, `database "wfnexus:…" does not exist`},
+		{`relation 'x:` + bootPW + `' is missing`, `relation 'x:…' is missing`},
+		{`database "wfnexus" does not exist`, `database "wfnexus" does not exist`},
+	} {
+		if got := serverText(c.in); got != c.want || strings.Contains(got, bootPW) {
+			t.Errorf("serverText(%q) = %q, want %q", strings.ReplaceAll(c.in, bootPW, "<pw>"), strings.ReplaceAll(got, bootPW, "<pw>"), c.want)
+		}
+	}
+	// A migration's own message goes through the same filter.
+	failed := migratedb.Error{Line: 2, Err: `permission denied for user "` + bootPW + `"`}
+	swapStorage(t, func(string, string) error { return failed }, openDB)
+	_, err := openStorage(context.Background(), "postgres", "postgres://db.internal/wfnexus")
+	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `a migration failed at line 2: permission denied for user "…"`) {
+		t.Fatalf("migration error = %v", err)
 	}
 }

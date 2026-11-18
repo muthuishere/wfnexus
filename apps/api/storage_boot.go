@@ -35,9 +35,8 @@ import (
 //     and a reason. Only errors whose text holds no connection string pass
 //     through (an allow-list): a dirty migration version, a migration's own
 //     line and message (not the error it wraps), and what the database
-//     SERVER said, with every quoted name cut at its first ':' (a password
-//     percent-encoded into the user name comes back inside the server's
-//     message).
+//     SERVER said, with user and role names withheld and other quoted values
+//     cut at their first ':' (serverText).
 
 // migrateDB and openDB are the store's; a test swaps them to reach the open
 // error, which a real broken URL never gets to (the migration fails first).
@@ -80,9 +79,9 @@ func safeReason(err error) string {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.As(err, &pqErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", trimQuotedNames(pqErr.Message), pqErr.Code)
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", serverText(pqErr.Message), pqErr.Code)
 	case errors.As(err, &pgErr):
-		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", trimQuotedNames(pgErr.Message), pgErr.Code)
+		server = fmt.Sprintf("the database server said: %s (SQLSTATE %s)", serverText(pgErr.Message), pgErr.Code)
 	}
 	var mErr migratedb.Error
 	var mErrP *migratedb.Error
@@ -90,7 +89,7 @@ func safeReason(err error) string {
 		if mErrP != nil {
 			mErr = *mErrP
 		}
-		msg := fmt.Sprintf("a migration failed at line %d: %s", mErr.Line, mErr.Err)
+		msg := fmt.Sprintf("a migration failed at line %d: %s", mErr.Line, serverText(mErr.Err))
 		if server != "" {
 			msg += "; " + server
 		}
@@ -127,11 +126,20 @@ func plainPath(driver, dsn string) bool {
 		!strings.Contains(strings.ToLower(dsn), "password")
 }
 
-// quotedName is a double-quoted name in a server message ("wfx", "wfnexus").
-var quotedName = regexp.MustCompile(`"([^":]*):[^"]*"`)
+var (
+	// userName is a user or role name in a server message, quoted with " or
+	// ', or unquoted after ':' or '='. It is withheld whole: in
+	// postgres://SECRET@host the user name IS the secret, with no ':' to cut.
+	userName = regexp.MustCompile(`(?i)\b(user|role)(\s+"[^"]*"|\s+'[^']*'|\s*[:=]\s*[^\s,;)]+)`)
+	// quotedValue is any other quoted value; it is cut at its first ':'.
+	quotedValue = regexp.MustCompile(`(["'])([^"':]*):[^"']*(["'])`)
+)
 
-// trimQuotedNames cuts every quoted name in a server message at its first
-// ':', so 'user "wfx:secret"' prints as 'user "wfx:…"'.
-func trimQuotedNames(msg string) string {
-	return quotedName.ReplaceAllString(msg, `"$1:…"`)
+// serverText is a message from the database server (or a migration) made
+// safe to print: user and role names withheld, other quoted values cut at
+// their first ':' (a password percent-encoded into a name comes back inside
+// the server's message).
+func serverText(msg string) string {
+	msg = userName.ReplaceAllString(msg, `$1 "…"`)
+	return quotedValue.ReplaceAllString(msg, `$1$2:…$3`)
 }
