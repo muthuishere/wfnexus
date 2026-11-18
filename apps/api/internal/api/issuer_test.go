@@ -168,6 +168,11 @@ func TestATokenIssuerIsAllOrNothing(t *testing.T) {
 	if err := CheckTokenIssuer(config.TokenIssuer{}); err != nil {
 		t.Errorf("none: %v", err)
 	}
+	// Off by default: with nothing configured there is no verifier, so no
+	// ES256 token ever reaches the issuer path.
+	if newIssuerVerifier(config.TokenIssuer{}) != nil {
+		t.Error("no configuration built a verifier: external issuer tokens must be off by default")
+	}
 	ok := config.TokenIssuer{Issuer: testIss, Audience: testAud, JWKSURL: "https://issuer.example.test/jwks"}
 	if err := CheckTokenIssuer(ok); err != nil || newIssuerVerifier(ok) == nil {
 		t.Errorf("complete config: %v", err)
