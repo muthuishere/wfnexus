@@ -38,6 +38,7 @@ func fakeClaude() {
 		text := m.Message.Content[0].Text
 		if text == "die" {
 			fmt.Fprintln(os.Stderr, "fake claude: boom")
+			dieStderr()
 			os.Exit(3)
 		}
 		if text == "sleep" {
@@ -83,6 +84,7 @@ func fakeCodex() {
 			_ = json.Unmarshal(m.Params, &p)
 			if p.Input[0].Text == "die" {
 				fmt.Fprintln(os.Stderr, "fake codex: boom")
+				dieStderr()
 				os.Exit(3)
 			}
 			turns[p.ThreadID]++
@@ -93,6 +95,15 @@ func fakeCodex() {
 		}
 	}
 	os.Exit(0)
+}
+
+// dieStderr writes the file WARM_FAKE_STDERR names to stderr, for a test of
+// what a dead process's error shows.
+func dieStderr() {
+	if f := os.Getenv("WARM_FAKE_STDERR"); f != "" {
+		b, _ := os.ReadFile(f)
+		_, _ = os.Stderr.Write(b)
+	}
 }
 
 func fakeEnv(kind string) []string { return []string{"WARM_FAKE=" + kind} }

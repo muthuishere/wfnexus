@@ -46,6 +46,17 @@ func fakeAdapterMain() {
 			os.Exit(3)
 		}
 		appendLine("sent.jsonl")
+		// A file attachment's bytes, as the adapter read them while sending.
+		var env notify.Envelope
+		if json.Unmarshal(in, &env) == nil && env.Attachment != nil && env.Attachment.Path != "" {
+			if b, err := os.ReadFile(env.Attachment.Path); err == nil {
+				f, err := os.OpenFile(filepath.Join(dir, "attached.txt"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+				if err == nil {
+					f.Write(append(b, '\n'))
+					f.Close()
+				}
+			}
+		}
 		n := len(readLines(filepath.Join(dir, "sent.jsonl")))
 		fmt.Printf(`{"id":"m%d"}`, n)
 	case "receive":

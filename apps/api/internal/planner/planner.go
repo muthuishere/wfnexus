@@ -100,6 +100,9 @@ type Action struct {
 	Produces []Fact
 	// Guard must hold for the action to be applicable, beyond its preconditions.
 	Guard func(*World) bool
+	// Needs are actions that must be done first, whatever the facts say: the
+	// order inside a module command (plan → approve → act) is not a fact.
+	Needs []string
 }
 
 // Plan is a static view of a workflow, used for validation and explanation.
@@ -116,13 +119,36 @@ type Plan struct {
 func (p Plan) Ready(w *World, done map[string]bool) []Action {
 	var out []Action
 	for _, a := range p.Actions {
-		if done[a.ID] || !applicable(a, w) {
+		if done[a.ID] || !needsDone(a, done) || !applicable(a, w) {
 			continue
 		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// Settled returns the actions with needs whose needs are all done but whose
+// guard does not hold: nothing that runs later can change their inputs, so
+// they are skipped rather than waited on, and what needs them can go on.
+func (p Plan) Settled(w *World, done map[string]bool) []Action {
+	var out []Action
+	for _, a := range p.Actions {
+		if done[a.ID] || len(a.Needs) == 0 || !needsDone(a, done) || applicable(a, w) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func needsDone(a Action, done map[string]bool) bool {
+	for _, n := range a.Needs {
+		if !done[n] {
+			return false
+		}
+	}
+	return true
 }
 
 func applicable(a Action, w *World) bool {

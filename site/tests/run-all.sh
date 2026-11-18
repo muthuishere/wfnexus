@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every site gate, in the order CI runs them. Adapted from toolnexus's site/tests/run-all.sh:
+# Every site gate, in the order `task site:check` runs them. Adapted from toolnexus's site/tests/run-all.sh:
 # the point is the same — the docs cannot drift from the code without this failing.
 #
 #   bash site/tests/run-all.sh

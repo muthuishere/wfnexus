@@ -566,6 +566,20 @@ running *here* is fatal when `devin` is not on **this** PATH, and the same step 
 is checked against the pool instead — because whether this box has the CLI says nothing about the
 machine that will run it.
 
+**Values from the env store reach a worker only when it claims the job.** The job row lists the
+variables' names; the values are resolved at claim, put into the claim response, and live in the
+worker's memory for that job only. A job claimed again after a worker restart gets them again. A
+name with no value at claim time fails the step, naming the variable, rather than running it
+without. On the worker they are sealed: never logged, never written to disk except as an agent
+step's per-job 0700 secrets file, removed when the job ends and swept at the next start if the
+worker was killed. A value rotated between queueing and claiming is the one delivered.
+
+**Upgrading with workers:** upgrade the server before the workers, with a single server running
+during the upgrade. A job queued before the upgrade that moved values to claim time cannot tell
+which of its values were the workflow's own, so it fails with "re-run the step" instead of running
+with empty variables; a job a worker already holds finishes normally. An older server must not run
+against a database a newer one has migrated.
+
 The one thing that cannot be placed is a step using the platform's own authoring tools
 (`workflow_catalog`, `workflow_validate`, `workflow_dryrun`) — those *are* this process, and the
 step is refused at pack time rather than mid-run. [`infra/README.md`](infra/README.md) has the

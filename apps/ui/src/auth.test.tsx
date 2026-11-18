@@ -95,6 +95,8 @@ describe('admin pages', () => {
     expect(calls.filter(c => c.method === 'PUT')[1].body).toMatchObject({ role: 'superadmin', disabled: false })
   })
 
+  // ADR 0028: the only global role is superadmin or none; a new user gets none
+  // and is granted project or workflow roles per scope.
   test('Users: adding a user creates it and then sets a one-time password', async () => {
     const calls = fake({
       'GET /api/users': () => [200, []],

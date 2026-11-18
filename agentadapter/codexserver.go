@@ -114,7 +114,7 @@ func (a *CodexServer) Execute(ctx context.Context, t Turn) (string, error) {
 	if model == "" {
 		model = t.Model
 	}
-	return a.run(ctx, model, t.Prompt)
+	return a.run(withScrub(ctx, t.Scrub), model, t.Prompt)
 }
 
 func (a *CodexServer) spareSlot() chan codexThread {
@@ -365,7 +365,7 @@ func (c *codexConn) call(ctx context.Context, method string, params any) (json.R
 		c.mu.Unlock()
 	}()
 	if err := c.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
-		return nil, c.p.exitErr("codex")
+		return nil, c.p.exitErr(ctx, "codex")
 	}
 	select {
 	case m := <-ch:
@@ -374,7 +374,7 @@ func (c *codexConn) call(ctx context.Context, method string, params any) (json.R
 		}
 		return m.Result, nil
 	case <-c.dead:
-		return nil, c.p.exitErr("codex")
+		return nil, c.p.exitErr(ctx, "codex")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -413,7 +413,7 @@ func (c *codexConn) turn(ctx context.Context, thread, prompt string) (string, er
 				return codexAnswer(m.Params, lastErr)
 			}
 		case <-c.dead:
-			return "", c.p.exitErr("codex")
+			return "", c.p.exitErr(ctx, "codex")
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}

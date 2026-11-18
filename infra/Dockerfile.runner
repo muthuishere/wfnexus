@@ -4,7 +4,7 @@
 # It holds the tools the steps it takes will use: git, a shell, and whichever
 # agent CLI you want available on this label. That is the whole reason workers
 # exist — the toolchain lives with the machine, not with the platform.
-FROM golang:1.26-alpine AS build
+FROM golang:1.26.11-alpine AS build
 WORKDIR /src
 COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download

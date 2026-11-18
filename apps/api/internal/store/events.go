@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Run events out (migration 000029): a project's event URL and signing secret,
+// Run events out (migration 000035; sqlite 000029): a project's event URL and signing secret,
 // and the outbox the delivery loop drains.
 
 // SetProjectEvents sets where a project's run events go; url "" clears it.

@@ -2,7 +2,8 @@ name: ci-triage
 description: >-
   GitHub-Actions-shaped, and only one job pays for an agent. A command runs the
   suite, a judge routes on what it found, and the agent is called solely when
-  there is something worth its cost.
+  there is something worth its cost. Note: the test_command input is
+  executed as a script; do not expose this workflow to outside input (hooks, MCP).
 
 input_schema:
   type: object
@@ -20,7 +21,10 @@ jobs:
     timeout_sec: 900
     steps:
       - id: test
-        run: "{{ .Input.test_command }}"
+        # The command is an input: written to a file as data, then run as a
+        # script on purpose.
+        run: |
+          f=$(mktemp) && printf '%s\n' "{{ .Input.test_command }}" > "$f" && sh "$f"
         # A red suite is the ANSWER the judge routes on, not a failed run.
         continue-on-error: true
 

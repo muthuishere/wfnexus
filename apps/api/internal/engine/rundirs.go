@@ -376,8 +376,17 @@ func (e *Engine) archiveRunDir(ctx context.Context, runID uuid.UUID) error {
 	gz := gzip.NewWriter(tmp)
 	tw := tar.NewWriter(gz)
 	seen := map[string]bool{}
+	// Module call directories (in.*, plan.json) are the platform's
+	// housekeeping, not what the run produced: never archived.
+	callsRel := ""
+	if r, err := filepath.Rel(ws, filepath.Join(e.cfg.WorkDir, runID.String(), "calls")); err == nil && !strings.HasPrefix(r, "..") {
+		callsRel = filepath.ToSlash(r)
+	}
 	for _, rel := range candidates {
 		if seen[rel] || excludedPath(rel) {
+			continue
+		}
+		if callsRel != "" && (filepath.ToSlash(rel) == callsRel || strings.HasPrefix(filepath.ToSlash(rel), callsRel+"/")) {
 			continue
 		}
 		seen[rel] = true

@@ -219,7 +219,7 @@ func (e *Engine) DryRunDefinition(def *workflow.Definition, input map[string]any
 		if ds.Kind == "prompt" {
 			ds.RunsOn = s.RunsOn
 			if e.servesLocally(s.RunsOn) {
-				prov, err := e.resolveLLMWithEnv(s, "", workflow.MergeEnv(stored, s.Env))
+				prov, err := e.resolveLLMWithEnv(s, "", workflow.MergeEnv(stored, s.Env), nil)
 				if err != nil {
 					fail(DryProblem{Step: s.ID, Field: "provider", Message: err.Error(), Fatal: true})
 				} else {
@@ -533,6 +533,9 @@ func dryPlanWaves(def *workflow.Definition, input map[string]any) ([][]string, s
 	done := map[string]bool{}
 	var waves [][]string
 	for range def.Steps {
+		for _, a := range plan.Settled(world, done) {
+			done[a.ID] = true
+		}
 		ready := plan.Ready(world, done)
 		if len(ready) == 0 {
 			break

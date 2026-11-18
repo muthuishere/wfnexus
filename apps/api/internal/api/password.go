@@ -100,6 +100,10 @@ func (s *Server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if u, err = s.externalUser(ctx, p, id); err != nil {
+			if errors.Is(err, errLinkPending) {
+				writeErr(w, http.StatusForbidden, errLinkPending)
+				return
+			}
 			writeErr(w, http.StatusUnauthorized, errBadCredentials)
 			return
 		}

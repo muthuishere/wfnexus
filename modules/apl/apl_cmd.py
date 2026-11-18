@@ -13,7 +13,7 @@ resolve` for search. The handle is the `handle` input, else the profile's
 `<kind>_handle` input (mail_handle, teams_handle, calendar_handle,
 drive_handle), else the profile's account.
 
-plan exit codes: 0 auto, 10 a person approves first, 11 draft, 12 none, 2 bad
+plan exit codes: 0 auto, 10 approval (the engine's pause already asked), 11 draft, 12 none, 2 bad
 input. A drafted or skipped send prints {"status": "drafted"|"skipped", ...}
 and touches nothing.
 """
@@ -74,6 +74,15 @@ def apl(*args, body=None):
 
 
 def profile():
+    # The engine hands the step the profile it resolved (for a write, the one
+    # shown and pinned when it was approved); the step never looks it up.
+    pinned = os.environ.get("WFX_MODULE_PROFILE")
+    if pinned is not None:
+        try:
+            p = json.loads(pinned)
+        except ValueError:
+            return {}
+        return {} if p.get("error") else p
     api, tok = os.environ.get("WFX_API", "").rstrip("/"), os.environ.get("WFX_MODULE_TOKEN", "")
     if not api or not tok:
         return {}

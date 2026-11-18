@@ -375,7 +375,7 @@ func (e *Engine) Dream(ctx context.Context, wf, project string) (DreamResult, er
 	if err != nil {
 		return out, err
 	}
-	prov, err := e.resolveLLMWithEnv(&workflow.Step{ID: "dream"}, dir, nil)
+	prov, err := e.resolveLLMWithEnv(&workflow.Step{ID: "dream"}, dir, nil, nil)
 	if err != nil {
 		return out, fmt.Errorf("dream provider: %w", err)
 	}

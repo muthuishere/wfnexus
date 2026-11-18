@@ -24,6 +24,11 @@ type loadOptions struct {
 	// save or check of one workflow sees (Callables) — after the directory
 	// being loaded has had its say.
 	callable func(name string) *Definition
+	// localLabels are the runner labels the server serves itself; a write
+	// call may run only there for now (checkWritePlacement). Empty: "local".
+	localLabels []string
+	// anyRunner skips that rule; tests that only render a command's steps use it.
+	anyRunner bool
 }
 
 // Callables is an optional Catalog extension: the workflows already loaded.
@@ -61,4 +66,18 @@ func newLoadOptions(opts []LoadOption) loadOptions {
 		}
 	}
 	return o
+}
+
+// WithLocalLabels names the runner labels the loading server serves itself.
+func WithLocalLabels(labels []string) LoadOption {
+	return func(o *loadOptions) { o.localLabels = append([]string(nil), labels...) }
+}
+
+// Options combines several load options into one.
+func Options(opts ...LoadOption) LoadOption {
+	return func(o *loadOptions) {
+		for _, f := range opts {
+			f(o)
+		}
+	}
 }

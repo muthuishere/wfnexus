@@ -36,7 +36,8 @@ func morningBriefEnv(t *testing.T, ghWorks bool) map[string]string {
 
 func TestMorningBriefDraftsByDefaultAndDropsUncitedLines(t *testing.T) {
 	cmd, waDir := fakeWA(t, "sent")
-	defs := loadWATemplates(t, morningBriefEnv(t, true), "morning-brief", "whatsapp-sender")
+	env := morningBriefEnv(t, true)
+	defs := loadWATemplates(t, env, "morning-brief", "whatsapp-sender")
 	lines := []map[string]any{
 		{"text": "deploy waits on your approval", "cites": []string{"wait:r-appr"}},
 		{"text": "deploy failed: DEPLOY_TOKEN missing", "cites": []string{"run:r-dep"}},
@@ -47,6 +48,7 @@ func TestMorningBriefDraftsByDefaultAndDropsUncitedLines(t *testing.T) {
 	h := newHarness(t, defs["morning-brief"], newFakeLLM(t, submit(map[string]any{"lines": lines}), finish(),
 		submit(map[string]any{"lines": lines}), finish()), "")
 	h.eng.defs["whatsapp-sender"] = defs["whatsapp-sender"]
+	pointAPIAt(t, h, env["WFX_API"])
 	useWAChannel(t, h, cmd, "")
 	chat := uniq("owner") + "@s.whatsapp.net"
 

@@ -138,12 +138,15 @@ func (e *Engine) persistStepState(ctx context.Context, def *workflow.Definition,
 				e.emit(ctx, uuidOrNil(data.RunID), step.ID, "error", map[string]any{"message": fmt.Sprintf("state %s.%s: %v", scope, key, err)})
 				continue
 			}
+			// Rendered from the run's data: scrubbed of its secrets before it
+			// is kept beyond the run.
+			val = redactText(val, e.redactions.get(uuidOrNil(data.RunID)))
 			if err := e.store.PutState(ctx, scope, scopeName, key, val); err != nil {
 				e.emit(ctx, uuidOrNil(data.RunID), step.ID, "error", map[string]any{"message": fmt.Sprintf("state %s.%s: %v", scope, key, err)})
 				continue
 			}
 			e.emit(ctx, uuidOrNil(data.RunID), step.ID, "log", map[string]any{
-				"message": fmt.Sprintf("state %s.%s = %s", scope, key, trim(val, 200)),
+				"message": fmt.Sprintf("state %s.%s = %s", scope, key, e.clipRun(uuidOrNil(data.RunID), val, 200)),
 			})
 		}
 	}

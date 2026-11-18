@@ -470,12 +470,17 @@ func (s *Server) mcpEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	srv := mcpserver.NewMCPServer("wfnexus-"+project, "1", mcpserver.WithToolCapabilities(false))
 	defs := s.eng.Definitions()
+	reach := map[string]bool{}
 	for _, name := range allowed {
 		def := defs[name]
-		if def == nil {
-			continue // exposed, then deleted: not a tool any more
+		if def == nil || mcpReserved(project, def) {
+			continue // deleted since it was exposed, or clashes with a reserved name
 		}
+		reach[name] = true
 		srv.AddTool(mcpTool(project, def), s.mcpCall(name, t.ID))
+	}
+	if len(reach) > 0 {
+		srv.AddTool(mcpStatusTool(), s.mcpStatus(reach))
 	}
 	mcpserver.NewStreamableHTTPServer(srv, mcpserver.WithStateLess(true)).ServeHTTP(w, r)
 }
@@ -492,7 +497,21 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 		}
 		schema = cp
 	}
-	raw, _ := json.Marshal(schema)
+	// Every workflow tool also takes the optional wait argument.
+	props := map[string]any{}
+	if p, ok := schema["properties"].(map[string]any); ok {
+		for k, v := range p {
+			props[k] = v
+		}
+	}
+	props[mcpWaitArg] = map[string]any{"type": "integer", "minimum": 0, "maximum": int(maxWait / time.Second),
+		"description": "seconds to wait for the run to finish before answering with its id and status (default 30; 0 = answer at once)"}
+	cp := map[string]any{}
+	for k, v := range schema {
+		cp[k] = v
+	}
+	cp["properties"] = props
+	raw, _ := json.Marshal(cp)
 	desc := def.Description
 	if desc == "" {
 		desc = "Run the wfnexus workflow " + def.Name
@@ -500,14 +519,72 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 	return mcp.NewToolWithRawSchema(toolName(project, def.Name), desc, raw)
 }
 
+// mcpWaitArg is the optional tool argument that sets how long a call waits;
+// it is taken out before the workflow sees its input. It is a reserved name:
+// a workflow input property with this name is not offered over MCP.
+const mcpWaitArg = "wfx_wait"
+
+// mcpStatusName is the tool that reports a run of a workflow this endpoint
+// offers. Reserved: a workflow with this tool name is not offered.
+const mcpStatusName = "wfx_run_status"
+
+// mcpReserved: the workflow's tool name or an input property clashes with
+// what the endpoint itself adds.
+func mcpReserved(project string, def *workflow.Definition) bool {
+	if toolName(project, def.Name) == mcpStatusName {
+		return true
+	}
+	p, _ := def.InputSchema["properties"].(map[string]any)
+	_, clash := p[mcpWaitArg]
+	return clash
+}
+
+func mcpStatusTool() mcp.Tool {
+	return mcp.NewTool(mcpStatusName,
+		mcp.WithDescription("Status of a run of any workflow this endpoint offers (however it was started): status, settled, and the result once finished."),
+		mcp.WithString("run_id", mcp.Required(), mcp.Description("the runId a workflow call returned")))
+}
+
+// mcpStatus answers only for runs of the workflows this token reaches; any
+// other id gets the same answer as an id that does not exist.
+func (s *Server) mcpStatus(reach map[string]bool) mcpserver.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		notFound := mcp.NewToolResultError("run not found")
+		id, err := uuid.Parse(req.GetString("run_id", ""))
+		if err != nil {
+			return notFound, nil
+		}
+		run, err := s.store.GetRun(ctx, id)
+		if err != nil || !reach[run.Workflow] {
+			return notFound, nil
+		}
+		res, err := s.waitRun(ctx, id, 0)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		text, _ := json.Marshal(res)
+		return mcp.NewToolResultStructured(res, string(text)), nil
+	}
+}
+
 func (s *Server) mcpCall(name, tokenID string) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		input, _ := json.Marshal(req.GetRawArguments())
+		wait := exposeWaitDefault
+		args, _ := req.GetRawArguments().(map[string]any)
+		if v, ok := args[mcpWaitArg]; ok {
+			n, ok := v.(float64)
+			if !ok || n < 0 {
+				return mcp.NewToolResultError(mcpWaitArg + " must be a number of seconds, 0 or more"), nil
+			}
+			wait = min(time.Duration(n)*time.Second, maxWait)
+			delete(args, mcpWaitArg)
+		}
+		input, _ := json.Marshal(args)
 		id, err := s.startExposedRun(ctx, name, input, "mcp:"+tokenID)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		res, err := s.waitRun(ctx, id, exposeWaitDefault)
+		res, err := s.waitRun(ctx, id, wait)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -535,14 +612,6 @@ type exposeKindView struct {
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
-func baseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}
-
 func exposePath(kind, project, short string) string {
 	if kind == store.ExposeHook {
 		return "/hooks/" + project + "/" + short
@@ -562,7 +631,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 	out := map[string]any{"workflow": name, "project": project, "tool": toolName(project, name)}
 	for _, kind := range []string{store.ExposeHook, store.ExposeMCP} {
 		p := exposePath(kind, project, short)
-		v := exposeKindView{Path: p, URL: baseURL(r) + p}
+		v := exposeKindView{Path: p, URL: s.externalBase(r) + p}
 		for _, a := range act {
 			if a.Kind == kind {
 				created := a.CreatedAt
@@ -571,7 +640,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 		}
 		out[kind] = v
 	}
-	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": baseURL(r) + exposePath(store.ExposeMCP, project, "")}
+	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": s.externalBase(r) + exposePath(store.ExposeMCP, project, "")}
 	return out, nil
 }
 
@@ -721,7 +790,7 @@ func (s *Server) getProjectExpose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := exposePath(store.ExposeMCP, project, "")
-	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": baseURL(r) + p, "tokens": act})
+	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": s.externalBase(r) + p, "tokens": act})
 }
 
 func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
@@ -739,7 +808,7 @@ func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	url := baseURL(r) + exposePath(store.ExposeMCP, project, "")
+	url := s.externalBase(r) + exposePath(store.ExposeMCP, project, "")
 	writeJSON(w, 201, map[string]any{"project": project, "url": url, "token": secret, "snippet": mcpSnippet(url, secret)})
 }
 

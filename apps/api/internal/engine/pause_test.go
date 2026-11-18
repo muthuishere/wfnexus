@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tn "github.com/muthuishere/toolnexus/golang"
 
@@ -119,7 +120,29 @@ func TestNotifierReceivesThePauseAndCarriesNoCapability(t *testing.T) {
 
 	run := h.run(nil)
 	h.wait(run.ID)
+	// The run is parked before its notifier is told (the pause is recorded
+	// first), so wait for the run to settle and the notification to land.
+	waitSettled(t, h, run.ID)
+	for i := 0; i < 100; i++ {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
+	// The run parks first and the notifier is told after; wait for it.
+	for i := 0; i < 100; i++ {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) != 1 {
