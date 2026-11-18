@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
+	"github.com/muthuishere/wfnexus/apps/api/internal/issuer"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -34,6 +35,15 @@ const (
 	// grant. SubjectWorker is a machine: labels, issued by a join.
 	SubjectUser   subjectKind = "user"
 	SubjectWorker subjectKind = "worker"
+	// SubjectService is a machine bound to exactly ONE tenant (a service
+	// principal). It reaches only the tenant routes under /api/svc/; every
+	// other route refuses it (authz.go).
+	SubjectService subjectKind = "service"
+	// SubjectAccount is a person signed in at an EXTERNAL issuer, presenting
+	// that issuer's access token (issuer.go). Like a service subject it is
+	// bound to one tenant, read from the token's tid through an operator's
+	// link, and it reaches only the read routes under /api/svc/.
+	SubjectAccount subjectKind = "account"
 )
 
 // Subject is the authenticated caller. A nil *Subject means "no identity",
@@ -45,6 +55,10 @@ type Subject struct {
 	Project string
 	User    *store.User
 	Worker  *store.Worker
+	// Tenant is set for a service subject only, and only from its stored
+	// principal row: never from anything in the request.
+	Tenant    string
+	Principal *store.ServicePrincipal
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
 	// logout deletes it.
 	SessionID uuid.UUID
@@ -143,7 +157,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			if err != nil && viaCookie {
 				if rc := refreshCookie(r); rc != "" {
 					if access, rsub, rerr := s.refreshAccess(r.Context(), rc); rerr == nil {
-						setSessionCookie(w, r, access)
+						s.setSessionCookie(w, r, access)
 						sub, err = rsub, nil
 					}
 				}
@@ -157,7 +171,7 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 			// dead session cookie is also cleared, so the next load of the
 			// UI is a clean sign-in rather than the same 401 forever.
 			if viaCookie {
-				clearSessionCookie(w, r)
+				s.clearSessionCookie(w, r)
 			}
 			writeErr(w, http.StatusUnauthorized, errors.New("unauthenticated"))
 			return
@@ -176,7 +190,20 @@ func (s *Server) requireSubject(next http.Handler) http.Handler {
 // clear and never leaves this function.
 func (s *Server) resolveSubject(ctx context.Context, tok string) (*Subject, error) {
 	if auth.LooksLikeJWT(tok) {
+		// An external issuer's token is ES256; ours is not. The header only
+		// routes the token: the external verifier itself refuses any alg
+		// but ES256, and ours refuses ES256.
+		if s.issuer != nil && issuer.LooksES256(tok) {
+			return s.subjectFromIssuer(ctx, tok)
+		}
 		return s.subjectFromJWT(ctx, tok)
+	}
+	if strings.HasPrefix(tok, auth.ServiceTokenPrefix) {
+		p, err := s.store.ServicePrincipalByTokenHash(ctx, auth.HashToken(tok))
+		if err != nil {
+			return nil, errors.New("unauthenticated")
+		}
+		return &Subject{Kind: SubjectService, Name: p.Name, Tenant: p.TenantID, Principal: p}, nil
 	}
 	if !strings.HasPrefix(tok, "wfx_") {
 		return nil, errors.New("unauthenticated")
@@ -199,7 +226,7 @@ func (s *Server) revokeSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	// A browser signing out: the cookie goes whether or not the row does.
 	if bearer(r) == "" && (sessionCookie(r) != "" || refreshCookie(r) != "") {
-		clearSessionCookie(w, r)
+		s.clearSessionCookie(w, r)
 	}
 	if err := s.store.RevokeUserToken(r.Context(), sub.SessionID); err != nil {
 		writeErr(w, http.StatusNotFound, errors.New("token not found"))

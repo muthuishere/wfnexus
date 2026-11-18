@@ -76,6 +76,11 @@ type Config struct {
 	// an unaddressed `send:` step or `wfx send` goes to (WFX_DEFAULT_CHANNEL,
 	// or channels.default). "" ⇒ none: pauses reach only the notifiers.
 	DefaultChannel string
+
+	// TokenIssuer is an EXTERNAL issuer whose ES256 access tokens this server
+	// accepts (internal/issuer). Set from WFX_TOKEN_ISSUER, WFX_TOKEN_AUDIENCE
+	// and WFX_TOKEN_JWKS_URL; all three or none.
+	TokenIssuer TokenIssuer
 	// Auth is the login providers (ADR 0028), from the file only.
 	Auth Auth
 	// DefaultClassifier, when set, is the registry classifier a decide step
@@ -275,6 +280,7 @@ func LoadWithFile(path string) (Config, error) {
 		FallbackProviders: splitList(env("WFX_FALLBACK_PROVIDERS", join(f.Model.Fallback))),
 		DefaultClassifier: env("WFX_DEFAULT_CLASSIFIER", f.Classifier.Name),
 		DefaultChannel:    env("WFX_DEFAULT_CHANNEL", f.Channels.Default),
+		TokenIssuer:       tokenIssuerFromEnv(),
 		Auth:              f.Auth,
 
 		MaxConcurrentRuns: envInt("WFX_MAX_CONCURRENT_RUNS", orInt(f.MaxConcurrentRuns, 4)),

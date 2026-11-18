@@ -17,7 +17,7 @@ input_schema:
 steps:
   - id: current
     produces: [installed]
-    run: "npm ls {{ .Input.package }} --json || true"
+    run: npm ls "{{ .Input.package }}" --json || true
     output_schema:
       type: object
       properties:

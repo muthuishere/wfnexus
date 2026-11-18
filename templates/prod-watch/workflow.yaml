@@ -98,7 +98,7 @@ steps:
       CHECKS_DIR: "checks"                 # the sidecar dir, or a path in your repo
       DB_PSQL: ""                          # e.g. ssh -o BatchMode=yes db sudo -u postgres psql -d app   or   psql "$DATABASE_URL"
     run: |
-      WINDOW_MIN={{ .Input.window_min }} python3 ./collect.py > signals.json
+      WINDOW_MIN="{{ .Input.window_min }}" python3 ./collect.py > signals.json
       rc=$?
       if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then echo "collector broke (exit $rc) — refusing to report healthy"; exit 2; fi
       python3 -c "
@@ -278,7 +278,7 @@ steps:
     when:
       - path: collect.exitCode
         equals: 3
-    run: DRY_RUN={{ .Input.dry_run }} python3 ./file_issues.py
+    run: DRY_RUN="{{ .Input.dry_run }}" python3 ./file_issues.py
     timeout_sec: 120
     gates:
       - field: exitCode

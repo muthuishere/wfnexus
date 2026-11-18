@@ -203,6 +203,10 @@ type Step struct {
 	// output. Use it for the parts of a workflow that do not need judgment:
 	// running a suite, a linter, a git operation.
 	Run string `yaml:"run,omitempty" json:"run,omitempty"`
+	// RunConst are literal inputs a task or module was given, placed into Run
+	// as {{ .Const.<name> }} references (inputs.go) so they too reach the
+	// script as data.
+	RunConst map[string]string `yaml:"run_const,omitempty" json:"runConst,omitempty"`
 	// Env is this step's environment, layered over its job's and the
 	// workflow's. A value may NAME a variable rather than hold one — see
 	// env.go, which is what keeps a credential out of the file.
@@ -477,6 +481,48 @@ type Catalog interface {
 	MissingMcp(names []string) []string
 }
 
+// ProjectMcp is implemented by a catalog that resolves mcp names per project
+// (a tenant's connections, ADR 0034). ForProject scopes a catalog to one.
+type ProjectMcp interface {
+	MissingMcpIn(project string, names []string) []string
+}
+
+type projectScoped struct {
+	Catalog
+	pm      ProjectMcp
+	project string
+}
+
+func (p projectScoped) MissingMcp(names []string) []string {
+	return p.pm.MissingMcpIn(p.project, names)
+}
+
+// ForProject returns cat with its mcp check scoped to project, when cat can
+// resolve per project; otherwise cat unchanged.
+func ForProject(cat Catalog, project string) Catalog {
+	if cat == nil {
+		return nil
+	}
+	pm, ok := cat.(ProjectMcp)
+	if !ok {
+		return cat
+	}
+	p := projectScoped{Catalog: cat, pm: pm, project: project}
+	// Keep every other capability the catalog has: a validator that also
+	// resolves `uses:` (Callables) must still do so when scoped.
+	if c, ok := cat.(Callables); ok {
+		return projectScopedCallables{p, c}
+	}
+	return p
+}
+
+type projectScopedCallables struct {
+	projectScoped
+	c Callables
+}
+
+func (p projectScopedCallables) Callable(name string) *Definition { return p.c.Callable(name) }
+
 func (d *Definition) validate(cat Catalog) error {
 	if err := checkSpecs(d.Name, d.Inputs); err != nil {
 		return err
@@ -533,6 +579,11 @@ func (d *Definition) validate(cat Catalog) error {
 			// A loop over a `steps:` body: the body is the work, checked below.
 		} else if kinds == 0 {
 			return fmt.Errorf("%s/%s: a step needs one of `prompt` (an agent), `run` (a command), `judge` (a decision), `send` (a message) or `start` (other workflows)", d.Name, s.ID)
+		}
+		if s.Run != "" {
+			if err := checkRunText(s.Run, s.Shell); err != nil {
+				return fmt.Errorf("%s/%s: run: %w", d.Name, s.ID, err)
+			}
 		}
 		if kinds > 1 {
 			return fmt.Errorf("%s/%s: a step is exactly one of an agent, a command, a decision, a message or a start — `prompt`, `run`, `judge`, `send` and `start` are mutually exclusive", d.Name, s.ID)
@@ -1238,6 +1289,10 @@ type TemplateData struct {
 	// Memory is what previous runs of this workflow left behind, rendered as a
 	// bounded section (engine/memory.go). Empty when memory is off or empty.
 	Memory string
+
+	// Const are the step's own constants: literal inputs a task or module
+	// was given at load, which run text references as {{ .Const.<name> }}.
+	Const map[string]string
 }
 
 var funcs = template.FuncMap{

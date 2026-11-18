@@ -12,7 +12,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/builtins"
 )
 
-// Built-in tools (internal/builtins): aos, ctx-optimize, jevx on every runner.
+// Built-in tools (internal/builtins): aos, ctx-optimize, jevx, tmvp, gh on every runner.
 // The server keeps the DESIRED versions; every runner converges on them at its
 // next heartbeat and reports what it has.
 

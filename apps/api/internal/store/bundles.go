@@ -126,8 +126,8 @@ func (s *Store) CreateBundle(ctx context.Context, b *PublishedBundle) error {
 		return ErrGitOriginHalf
 	}
 	err := s.qrow(ctx, `
-		INSERT INTO published_bundles (id, kind, project, name, version, digest, manifest, git_remote, git_commit, published_by, published_by_name)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11) RETURNING published_at`,
+		INSERT INTO published_bundles (id, kind, project, name, version, digest, manifest, git_remote, git_commit, published_by, published_by_name, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,`+tenantOfProject("$3")+`) RETURNING published_at`,
 		b.ID, b.Kind, b.Project, b.Name, b.Version, b.Digest, jsonArg(b.Manifest),
 		nullString(b.GitRemote), nullString(b.GitCommit),
 		nullUUID(b.PublishedBy), b.PublishedByName).Scan(&b.PublishedAt)

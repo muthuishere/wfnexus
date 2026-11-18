@@ -34,7 +34,8 @@ steps:
     # THIS run, so each judge gets it in its prompt and needs no file tool —
     # a judge with only submit_output to call cannot wander off reading files.
     run: |
-      ./dossier.py '{{ .Input.run_id }}' '{{ default "http://127.0.0.1:8090" .Input.api }}' || exit $?
+      api="{{ .Input.api }}"
+      ./dossier.py "{{ .Input.run_id }}" "${api:-http://127.0.0.1:8090}" || exit $?
       wfx state set --workflow "dossier_${WFX_RUN_ID}" "$(cat dossier.md)" >/dev/null \
         || { echo "could not hand the dossier to the judges (wfx state set failed)"; exit 5; }
     timeout_sec: 240
@@ -218,15 +219,22 @@ steps:
     description: Agreement, disagreements, unavailable judges, and the overall verdict (pass = JEV yes AND two model passes).
     needs: [jev, judge_gptoss, judge_codex, judge_grok]
     run: |
-      cat > judges.json <<'WFX_JUDGES_EOF'
+      jev="{{ .Steps.jev }}"
+      probe_gptoss="{{ .Steps.probe_gptoss }}"
+      judge_gptoss="{{ .Steps.judge_gptoss }}"
+      probe_codex="{{ .Steps.probe_codex }}"
+      judge_codex="{{ .Steps.judge_codex }}"
+      probe_grok="{{ .Steps.probe_grok }}"
+      judge_grok="{{ .Steps.judge_grok }}"
+      cat > judges.json <<WFX_JUDGES_EOF
       {
-        "jev":     {{ json .Steps.jev }},
-        "gpt_oss": { "probe": {{ json .Steps.probe_gptoss }}, "out": {{ json .Steps.judge_gptoss }} },
-        "codex":   { "probe": {{ json .Steps.probe_codex }},  "out": {{ json .Steps.judge_codex }} },
-        "grok":    { "probe": {{ json .Steps.probe_grok }},   "out": {{ json .Steps.judge_grok }} }
+        "jev":     ${jev:-null},
+        "gpt_oss": { "probe": ${probe_gptoss:-null}, "out": ${judge_gptoss:-null} },
+        "codex":   { "probe": ${probe_codex:-null},  "out": ${judge_codex:-null} },
+        "grok":    { "probe": ${probe_grok:-null},   "out": ${judge_grok:-null} }
       }
       WFX_JUDGES_EOF
-      ./scorecard.py '{{ .Input.run_id }}'
+      ./scorecard.py "{{ .Input.run_id }}"
       wfx state rm --workflow "dossier_${WFX_RUN_ID}" >/dev/null 2>&1 || true
     timeout_sec: 60
     output_schema: *run_output

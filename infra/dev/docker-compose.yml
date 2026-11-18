@@ -7,6 +7,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: bfp-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: bfp
       POSTGRES_PASSWORD: bfp
@@ -16,6 +17,7 @@ services:
   minio:
     image: minio/minio:latest
     container_name: bfp-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: bfp

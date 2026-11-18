@@ -35,9 +35,7 @@ commands:
         timeout_sec: 300
         run: |
           [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
-          cat > in.script <<'WFX_V'
-          {{ .Inputs.script }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.script }}" > in.script
           "${AOS_BIN:-aos}" exec capture sh -c "$(cat in.script)"
 
   file-read:
@@ -53,12 +51,8 @@ commands:
         timeout_sec: 60
         run: |
           [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.lines <<'WFX_V'
-          {{ .Inputs.lines }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.lines }}" > in.lines
           if [ -n "$(cat in.lines)" ]; then
             "${AOS_BIN:-aos}" file read "$(cat in.path)" --lines="$(cat in.lines)"
           else
@@ -80,12 +74,8 @@ commands:
         timeout_sec: 60
         run: |
           [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
-          cat > in.path <<'WFX_V'
-          {{ .Inputs.path }}
-          WFX_V
-          cat > in.content <<'WFX_V'
-          {{ .Inputs.content }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.path }}" > in.path
+          printf '%s\n' "{{ .Inputs.content }}" > in.content
           "${AOS_BIN:-aos}" file write "$(cat in.path)" < in.content
 
   screenshot:
@@ -101,12 +91,8 @@ commands:
         timeout_sec: 60
         run: |
           [ -n "$WFX_RUNNER" ] || { echo '{"status":"failed","error":"aos commands run on a worker: machine must be a worker label"}'; exit 2; }
-          cat > in.out <<'WFX_V'
-          {{ .Inputs.out }}
-          WFX_V
-          cat > in.app <<'WFX_V'
-          {{ .Inputs.app }}
-          WFX_V
+          printf '%s\n' "{{ .Inputs.out }}" > in.out
+          printf '%s\n' "{{ .Inputs.app }}" > in.app
           if [ -n "$(cat in.app)" ]; then
             "${AOS_BIN:-aos}" capture screenshot --app="$(cat in.app)" --out="$(cat in.out)"
           else

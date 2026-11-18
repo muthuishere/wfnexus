@@ -51,7 +51,7 @@ func noClose() {}
 // resolveLLM uses the step's own env block. Callers that have the whole
 // cascade — the engine, about to run a step — use resolveLLMWithEnv instead.
 func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, error) {
-	return e.resolveLLMWithEnv(step, workdir, step.Env)
+	return e.resolveLLMWithEnv(step, workdir, step.Env, nil)
 }
 
 // UseProvider runs every agent step of every run on this engine on the named
@@ -70,7 +70,10 @@ func (e *Engine) resolveLLM(step *workflow.Step, workdir string) (resolved, erro
 // exactly as a misspelt `provider:` would be.
 func (e *Engine) UseProvider(name string) { e.providerOverride = name }
 
-func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string) (resolved, error) {
+// scrub, when not nil, removes the run's sensitive values from a local
+// agent's rejected reply before the adapter shortens it for the turn's error
+// (agentadapter Options.Scrub); nil outside a run.
+func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv map[string]string, scrub func(string) string) (resolved, error) {
 	if e.providerOverride != "" {
 		s := *step
 		s.Provider, s.Model = e.providerOverride, ""
@@ -183,7 +186,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 				return resolved{}, fmt.Errorf("step %s: %w", step.ID, err)
 			}
 		}
-		return localProvider(p, step.Model, workdir, env)
+		return localProvider(p, step.Model, workdir, env, scrub)
 	}
 	return resolved{}, fmt.Errorf("provider %q has unknown kind %q", p.Name, p.Kind)
 }
@@ -202,7 +205,7 @@ func (e *Engine) resolveLLMWithEnv(step *workflow.Step, workdir string, stepEnv 
 //
 // A step therefore runs on Devin or a local `claude` by naming it, with no API
 // key: the credential is the one the CLI already holds.
-func localProvider(p catalog.Provider, stepModel, workdir string, env []string) (resolved, error) {
+func localProvider(p catalog.Provider, stepModel, workdir string, env []string, scrub func(string) string) (resolved, error) {
 	model := p.Model
 	if stepModel != "" {
 		model = stepModel
@@ -224,6 +227,7 @@ func localProvider(p catalog.Provider, stepModel, workdir string, env []string) 
 		Timeout:        time.Duration(p.TimeoutSec) * time.Second,
 		AttemptTimeout: time.Duration(p.AttemptTimeoutSec) * time.Second,
 		Repairs:        p.Repairs,
+		Scrub:          scrub,
 	})
 
 	// The base URL is a sentinel and is never dialled; the round tripper
