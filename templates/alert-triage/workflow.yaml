@@ -102,7 +102,7 @@ steps:
       DB_PSQL: ""
       WINDOW_MIN: "60"
     run: |
-      ISSUE={{ .Input.issue }} MAX_ISSUES={{ .Input.max_issues }} python3 ./gather.py
+      ISSUE="{{ .Input.issue }}" MAX_ISSUES="{{ .Input.max_issues }}" python3 ./gather.py
       rc=$?
       if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then echo "gather broke (exit $rc)"; exit 2; fi
       exit $rc
@@ -224,7 +224,7 @@ steps:
     when:
       - path: gather.exitCode
         equals: 3
-    run: DRY_RUN={{ .Input.dry_run }} python3 ./post_triage.py
+    run: DRY_RUN="{{ .Input.dry_run }}" python3 ./post_triage.py
     timeout_sec: 120
     gates:
       - field: exitCode

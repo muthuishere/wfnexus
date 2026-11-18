@@ -89,7 +89,7 @@ watermark:
 
 ```yaml
 - id: fetch
-  run: 'echo "everything after {{ default "0" .Workflow.last_id }}"'
+  run: 'since="{{ .Workflow.last_id }}"; echo "everything after ${since:-0}"'
   state:
     workflow:
       last_id: "{{ .Output.stdout }}"
@@ -100,6 +100,11 @@ Four scopes, narrowest to widest: `{{ .Step.x }}` (this step, across runs),
 `{{ .Global.x }}`. They are four SEPARATE namespaces — `.Step.x` does not fall
 back to `.Workflow.x` — so a missing key never looks like a stale one. An
 unwritten key renders empty, which is why the read above has a `default`.
+
+In `run:` text, `{{ … }}` may only reference a value (`"{{ .Input.x }}"`,
+inside double quotes or an unquoted heredoc); `if`, `range`, `with`, pipes and
+functions are refused at load, so do that logic in the script. Objects arrive
+as JSON (docs/step-reference.md).
 
 A `run:` step can also write imperatively with `wfx state set --workflow k v`;
 it never names WHICH workflow, because the server reads that off the run.

@@ -93,7 +93,7 @@ steps:
 		yamlDef(t, "name: "+child+`
 steps:
   - id: greet
-    run: sleep 0.3; echo hello-{{ .Input.who }}
+    run: sleep 0.3; echo "hello-{{ .Input.who }}"
 `))
 	id := h.start(parent, map[string]any{"who": "ana"})
 	run := h.waitEnded(id)

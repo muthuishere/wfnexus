@@ -76,9 +76,10 @@ steps:
     timeout_sec: 900
     run: |
       printf '*\n' > .wfx-docs-drift/.gitignore
-      SINCE='{{ if .Input.since }}{{ .Input.since }}{{ else }}{{ .Workflow.last_sha }}{{ end }}' \
-      LOOKBACK_DAYS='{{ .Input.lookback_days }}' DOCS='{{ .Input.docs }}' EXCLUDE='{{ .Input.exclude }}' \
-      MAX_FINDINGS='{{ .Input.max_findings }}' BRANCH="wfx/docs-drift-$(printf %.8s '{{ .RunID }}')" \
+      since="{{ .Input.since }}"; last_sha="{{ .Workflow.last_sha }}"
+      SINCE="${since:-$last_sha}" \
+      LOOKBACK_DAYS="{{ .Input.lookback_days }}" DOCS="{{ .Input.docs }}" EXCLUDE="{{ .Input.exclude }}" \
+      MAX_FINDINGS="{{ .Input.max_findings }}" BRANCH="wfx/docs-drift-$(printf %.8s "{{ .RunID }}")" \
         python3 .wfx-docs-drift/collect.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
     gates:
@@ -150,8 +151,8 @@ steps:
     description: Docs-only diff; evidence read from the cited line; stale AND supported both yes, else the doc is restored.
     timeout_sec: 900
     run: |
-      cat > .wfx-docs-drift/sync.json <<'WFX_SYNC_EOF'
-      {{ json .Steps.sync }}
+      cat > .wfx-docs-drift/sync.json <<WFX_SYNC_EOF
+      {{ .Steps.sync }}
       WFX_SYNC_EOF
       python3 .wfx-docs-drift/verify.py
       c=$?; case $c in 0|78) exit $c;; *) exit 70;; esac
@@ -194,7 +195,7 @@ steps:
     name: Remember the last commit checked
     description: Workflow state `last_sha` — advanced only by a real run.
     run: |
-      if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse {{ .BaseRef }}; else printf '%s' '{{ .Workflow.last_sha }}'; fi | tr -d '\n'
+      if [ "{{ .Input.dry_run }}" = "false" ]; then git rev-parse "{{ .BaseRef }}"; else printf '%s' "{{ .Workflow.last_sha }}"; fi | tr -d '\n'
     state:
       workflow:
         last_sha: "{{ .Output.stdout }}"
@@ -205,6 +206,6 @@ steps:
     run: |
       D=.wfx-docs-drift
       echo "dry_run={{ .Input.dry_run }} · worktree $(pwd) · branch $(git rev-parse --abbrev-ref HEAD) · since $(cat $D/since.txt 2>/dev/null | cut -c1-10)"
-      echo "--- commits"; git log --oneline {{ .BaseRef }}..HEAD 2>/dev/null || true
+      echo "--- commits"; git log --oneline "{{ .BaseRef }}..HEAD" 2>/dev/null || true
       [ -f $D/pr-body.md ] && { echo "--- PR body: $(pwd)/$D/pr-body.md"; head -c 2200 $D/pr-body.md; }
       exit 0

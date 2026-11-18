@@ -10,6 +10,123 @@ A `run:` step executes a shell command and produces a fixed output:
 | `stdout`   | string  | trimmed standard output                                    |
 | `stderr`   | string  | trimmed standard error                                     |
 
+## `run:` text may only reference values; logic goes in the script
+
+In a `run:` step, `{{ … }}` may hold exactly one thing: a reference to a value.
+A reference is a field path on the root dot:
+
+- `{{ .Input.name }}`, `{{ .Steps.collect.output.y }}`, `{{ .Item.z }}`,
+  `{{ .Decide.q }}`, `{{ .Output.v }}`, `{{ .Memory }}`;
+- a state key: `{{ .Workflow.last_sha }}`, `{{ .Global.tier }}`;
+- the run's own facts: `{{ .RunID }}`, `{{ .Index }}`, `{{ .WorkDir }}`, `{{ .BaseRef }}`.
+
+Trim markers (`{{- … -}}`) and comments (`{{/* … */}}`) are fine.
+
+**Everything else is refused when the workflow loads.** The error names the
+workflow, the step and the construct. That covers `if`, `else`, `range`,
+`with`, `define`, `template`, `block`, `break`, `continue`, variables (`$`,
+`$x`, `:=`, `=`), pipes, function calls (`printf`, `len`, `index`, `eq`,
+`json`, `default`, `or`, …), parentheses and literals. Do the logic in the
+script, working on the value it receives:
+
+```yaml
+# before (refused now)
+run: |
+  ./deliver.py --subject "Daily brief {{ if .Input.day }}{{ .Input.day }}{{ else }}$(date +%F){{ end }}"
+# after
+run: |
+  day="{{ .Input.day }}"
+  ./deliver.py --subject "Daily brief ${day:-$(date +%F)}"
+```
+
+Prompts, gate messages, `send:` text and every other non-shell text keep full
+templates.
+
+### How a value arrives
+
+Each reference becomes an environment variable when the step runs:
+`${WFX_DATA_1}`, `${WFX_DATA_2}`, … in the order they appear, or
+`${env:WFX_DATA_1}` under `pwsh`. The value travels beside the command. So a
+value arrives unchanged, whatever quotes, newlines or shell syntax it holds,
+and the run page shows the references, not the values. The run's own facts
+arrive the same way; there is no exception for them.
+
+- **A string arrives as it is. Any other value arrives as JSON**: an object, a
+  list, a number or a boolean, indented as the `json` function writes it. An
+  absent value arrives empty, whatever the path goes through: a step that did
+  not run, a key a value does not have, an unset judge answer or state key. A key that only `index` could reach (a space or
+  odd characters in it) can't be referenced. Reference the whole value instead
+  and read the key in the script:
+  `printf '%s' "{{ .Steps.x.output }}" | jq -r '.["odd key"]'`.
+- **A reference sits inside double quotes or an unquoted heredoc, nowhere
+  else.** Write `"{{ .Input.x }}"`, or put it in a `<<EOF` body. A workflow
+  that breaks this does not load:
+  - a bare word (`echo {{ .Input.x }}`, `X={{ .Input.x }}`): unquoted, the
+    shell splits it on spaces, expands globs in it, and a value starting with
+    `-` becomes an option;
+  - single quotes (`'{{ .Input.x }}'`) or a quoted heredoc (`<<'EOF'`): they
+    expand nothing, so the script would see a variable name, not the value.
+- **A command that is itself an input** (a test command, say) is run on
+  purpose: write it to a file as data, then run the file:
+  `f=$(mktemp); printf '%s\n' "{{ .Input.test_command }}" > "$f"; bash "$f"`.
+- **Places that evaluate text again are refused at load:**
+  - shell arithmetic: `$(( ))`, `(( ))`, `let`, `declare`/`typeset`/`local -i`,
+    a numeric `[[ … -eq … ]]`, an array subscript;
+  - text given to `eval`, to `trap`, or as the script of a shell's `-c`
+    (`sh`, `bash`, `zsh`, `dash`, `ksh`, `csh`, `tcsh`, `fish`, `"$BASH"`,
+    `$SHELL`; also glued `sh -c"…"`, after options such as `-o pipefail`, and
+    after `--`), `su`/`runuser … -c`, `ssh`, or pwsh
+    `Invoke-Expression`/`iex`. Quoted or escaped command words (`"sh"`,
+    `\eval`) count the same;
+  - the code argument of an interpreter: `python -c`, `node -e`/`-p`,
+    `perl -e`, `ruby -e`, `php -r`, and pwsh `-Command`;
+  - text a program reads on stdin **as its script**: a pipe, heredoc,
+    here-string or `<( … )` feeding a shell or interpreter that has no script
+    file and no code argument (`| sh`, `| python3`, `| bash -s`,
+    `python3 - <<EOF`, `. /dev/stdin <<<"…"`). Given a script or code, what it
+    reads on stdin is data. These are fine:
+    `echo "{{ .Input.x }}" | python3 -c '…json.load(sys.stdin)…'`,
+    `| node -e '…'`, `| perl -ne '…'`, `| python3 parse.py`,
+    `| bash ./consume.sh`, `| ssh host 'cat > f'`, `python3 analyze.py <<EOF`.
+
+  For a number, read it into a variable, check it
+  (`case "$n" in ''|*[!0-9]*) exit 2;; esac`), then use the variable. For
+  `sh -c`, pass the value as an argument: `sh -c 'echo "$1"' _ "{{ .Input.x }}"`.
+  For an interpreter, pass it after the code:
+  `python3 -c 'import sys; print(sys.argv[1])' "{{ .Input.x }}"`.
+- **The shell checks are a guard, not a proof.** They catch the common ways
+  a value ends up evaluated, not every way. Not detected:
+  - a value used as a variable name (`test -v`, `printf -v`, `read`,
+    `${!…}`);
+  - a value copied into a variable and then used in arithmetic;
+  - a value written to a file that is then sourced or run;
+  - a value inside the program text of `awk`, `sed -e`, `jq`, `find -exec`,
+    `watch`, `flock -c`, `script -c`, `tmux` commands, `git -c alias.*=!…`, or
+    an interpreter not listed above;
+  - a command word split by a line continuation (`ev\` + newline + `al`), or
+    named by a default (`${SHELL:-sh} -c`);
+  - a shell started through a wrapper's own placeholder (`xargs -I{} sh -c`);
+  - a value in `PS4` with `set -x`, or in an `alias`;
+  - pwsh `[scriptblock]::Create(…)`.
+
+  Pass values to such programs as arguments, environment or files, never inside
+  their code. For input that comes from outside (hooks, MCP), typed inputs that
+  limit what a value may be (#137) are the defence; this check is not.
+- **Large values go to a file.** A value over 64 KiB (or once a step's values
+  pass 256 KiB together, or one holding a NUL byte) is written to a 0600 file.
+  `WFX_DATA_<n>_FILE` names it, and the reference becomes
+  `$(cat "${WFX_DATA_<n>_FILE}")`. Read that way, a value is not exact in two
+  cases: command substitution drops trailing newlines, and the shell drops a
+  NUL byte. The file itself holds the value exactly, so a script that needs
+  every byte reads the file.
+- **`shell: cmd` cannot take values**: cmd re-reads an expanded variable as
+  code. Use `pwsh`, `bash` or `sh`.
+- The same happens on a worker: the job carries the command and its values
+  separately, and the worker uses its own shell's syntax for the references.
+- A task's or module's literal inputs (`inputs:`/`with:` values) become the
+  step's constants, referenced as `{{ .Const.<name> }}` by the input's own
+  name, and arrive the same way.
+
 ## A non-zero exit fails the step
 
 By default any non-zero exit fails the step and the run. That is right for a

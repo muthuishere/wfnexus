@@ -27,11 +27,11 @@ on:
   workflow_dispatch:
 
 steps:
-  # Reading: an unwritten key renders EMPTY, so the first run needs a fallback.
-  # `default` takes the fallback first.
+  # Reading: an unwritten key renders EMPTY, so the first run needs a fallback;
+  # the script supplies it (run: text holds references only).
   - id: fetch
     run: |
-      since="{{ default "0" .Workflow.last_id }}"
+      since="{{ .Workflow.last_id }}"; since="${since:-0}"
       echo "everything after id $since"
       # …fetch it, and print the highest id seen…
       printf %s "$(( since + 5 ))"
