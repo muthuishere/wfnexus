@@ -75,7 +75,7 @@ func login(args []string) error {
 		// server has no authentication to log in to either.
 		return fmt.Errorf("usage: wfx login --url https://wfx.example.com")
 	}
-	// A via context is named, not addressed: `wfx login --url deemwar` signs in
+	// A via context is named, not addressed: `wfx login --url work` signs in
 	// through its tunnel and stores the token on that context.
 	saveAs := ""
 	if c, err := loadContexts(); err == nil {

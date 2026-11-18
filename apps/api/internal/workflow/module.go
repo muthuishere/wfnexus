@@ -23,7 +23,7 @@ import (
 //	requires:
 //	  env:     [APL_BIN]
 //	binary:                  # optional: the CLI it needs, delivered by carry
-//	  carry: deemwar/wfx-wa-monitor@0.2.0
+//	  carry: acme/wfx-wa-monitor@0.2.0
 //	inputs: { ... }          # optional: the module's OWN command (steps: below,
 //	steps:  [ ... ]          #   or task.yaml), called as `uses: apl@0`
 //	commands:                # named commands, called as `uses: apl.whatsapp-send@0`

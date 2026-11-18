@@ -262,3 +262,18 @@ func mustOut(t *testing.T, name string, args ...string) string {
 	}
 	return string(out)
 }
+
+// The apl repository is a setting, passed to the target only when set (#180).
+func TestCoreCLIsGetTheAplRepositoryOnlyWhenSet(t *testing.T) {
+	t.Setenv("WFX_APL_REPO", "")
+	if got := coreCLIsCommand(); got != "sh -s --" {
+		t.Fatalf("unset: %q", got)
+	}
+	t.Setenv("WFX_APL_REPO", "acme/apl")
+	if got := coreCLIsCommand(); got != "WFX_APL_REPO='acme/apl' sh -s --" {
+		t.Fatalf("set: %q", got)
+	}
+	if !strings.Contains(coreCLIs, `gh release download -R "$WFX_APL_REPO"`) {
+		t.Fatal("core-clis.sh must download apl from $WFX_APL_REPO, not a named repository")
+	}
+}

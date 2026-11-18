@@ -316,6 +316,16 @@ type serverDeployOpts struct {
 //go:embed core-clis.sh
 var coreCLIs string
 
+// coreCLIsCommand runs core-clis.sh on the target, passing WFX_APL_REPO (the
+// repository that publishes apl) from this machine when it is set: the
+// script runs over ssh, where it is not.
+func coreCLIsCommand() string {
+	if repo := os.Getenv("WFX_APL_REPO"); repo != "" {
+		return "WFX_APL_REPO=" + shQuote(repo) + " sh -s --"
+	}
+	return "sh -s --"
+}
+
 func serverCmd(args []string) error {
 	verb := first(args)
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
@@ -380,7 +390,7 @@ func serverDeploy(r remoteRunner, o serverDeployOpts) error {
 		// Core module CLIs are part of every server. A failure is reported,
 		// never fatal: the server runs without them, the Modules page says so.
 		fmt.Println("→ external module CLI (apl); aos, ctx-optimize, jevx, tmvp, gh are built in")
-		out, err := r.run("sh -s --", strings.NewReader(coreCLIs))
+		out, err := r.run(coreCLIsCommand(), strings.NewReader(coreCLIs))
 		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 			if l != "" {
 				fmt.Println("  " + l)

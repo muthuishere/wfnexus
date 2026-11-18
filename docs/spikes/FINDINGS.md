@@ -1097,24 +1097,24 @@ resolution / resolution_reason` to `step_runs`.
 $ curl -XPOST …/runs/a4ff6695…/approve -d '{"stepId":"publish"}'
 {"error":"an actor is required: who is resolving this pause?"}
 
-$ curl -XPOST …/runs/a4ff6695…/approve -H 'X-WFX-Actor: muthu@deemwar.com' -d '{"stepId":"publish"}'
+$ curl -XPOST …/runs/a4ff6695…/approve -H 'X-WFX-Actor: alice@example.com' -d '{"stepId":"publish"}'
 {"ok":true}
 
 sqlite> select step_id,status,resolved_by,resolved_at,resolution from step_runs where run_id='a4ff6695…';
 prepare|done||||
-publish|done|muthu@deemwar.com (via api)|2026-09-24 16:23:13.295343 +0000 UTC|approved|
+publish|done|alice@example.com (via api)|2026-09-24 16:23:13.295343 +0000 UTC|approved|
 ```
 
 An answer and a decline are now different rows:
 
 ```
-# answered: {"stepId":"gather","actor":"muthu@deemwar.com","answer":"staging"}
-gather|done|muthu@deemwar.com (via api)|2026-09-24 16:24:46.750092 +0000 UTC|answered|{"environment":"staging"}
+# answered: {"stepId":"gather","actor":"alice@example.com","answer":"staging"}
+gather|done|alice@example.com (via api)|2026-09-24 16:24:46.750092 +0000 UTC|answered|{"environment":"staging"}
 run: done
 
-# declined: {"stepId":"gather","actor":"oncall@deemwar.com","ok":false,"reason":"declined"}
-gather|declined|oncall@deemwar.com (via api)|declined|Which environment do you want deployed to?
-run: cancelled | question declined by oncall@deemwar.com (via api)
+# declined: {"stepId":"gather","actor":"oncall@example.com","ok":false,"reason":"declined"}
+gather|declined|oncall@example.com (via api)|declined|Which environment do you want deployed to?
+run: cancelled | question declined by oncall@example.com (via api)
 ```
 
 `expired` fails the run, `declined` / `cancelled` cancel it, and the step does
