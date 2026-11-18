@@ -18,6 +18,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store/pgtest"
+	"github.com/muthuishere/wfnexus/apps/api/internal/testdeps"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -43,7 +44,7 @@ func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 	// whatever the local config happens to point at.
 	dsn, err := pgtest.DSN()
 	if err != nil {
-		t.Skipf("%v", err)
+		pgtest.Unavailable(t, err)
 	}
 	cfg.StorageDriver = "postgres"
 	cfg.DatabaseURL = dsn
@@ -53,12 +54,12 @@ func testDeps(t *testing.T) (*store.Store, *blob.Blob, config.Config) {
 	}
 	st, err := store.Open(ctx, cfg.StorageDriver, cfg.DatabaseURL)
 	if err != nil {
-		t.Skipf("no postgres: %v", err)
+		pgtest.Unavailable(t, err)
 	}
 	t.Cleanup(st.Close)
 	bl, err := blob.Open(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
 	if err != nil {
-		t.Skipf("no minio: %v", err)
+		testdeps.Missing(t, "test MinIO", err)
 	}
 	return st, bl, cfg
 }

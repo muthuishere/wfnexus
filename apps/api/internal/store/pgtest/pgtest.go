@@ -22,10 +22,14 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/testdeps"
 )
 
 const defaultServer = "postgres://bfp:bfp@127.0.0.1:5460/postgres?sslmode=disable"
@@ -48,11 +52,33 @@ func DSN() (string, error) {
 	return dsn, failure
 }
 
+// Unavailable is what a test does when DSN (or opening it) failed: skip, or
+// fail with WFX_TEST_REQUIRE_DEPS=1 (testdeps), so an authoritative run
+// cannot pass with the database tests unrun.
+func Unavailable(t testing.TB, err error) {
+	t.Helper()
+	testdeps.Missing(t, "test Postgres", err)
+}
+
 // Main runs a package's tests and then drops the database DSN created. Every
 // package that calls DSN needs it as its TestMain, or the database outlives
 // the run.
+//
+// The drop runs when m.Run returns and on SIGINT/SIGTERM (Ctrl-C, a killed
+// job). It cannot run when the process dies another way: a test that panics
+// (or hits -timeout, which panics), os.Exit or log.Fatal in a test, or
+// SIGKILL. Those leave a wfx_test_<pid>_<hex> database behind.
 func Main(m *testing.M) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		if _, ok := <-sig; ok {
+			drop()
+			os.Exit(1)
+		}
+	}()
 	code := m.Run()
+	signal.Stop(sig)
 	drop()
 	os.Exit(code)
 }
