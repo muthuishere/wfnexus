@@ -26,8 +26,8 @@ import (
 
 func TestParseVia(t *testing.T) {
 	cases := []struct{ in, user, addr, key string }{
-		{"ssh://wfx@46.4.13.167", "wfx", "46.4.13.167:22", ""},
-		{"ssh://wfx@46.4.13.167:2222", "wfx", "46.4.13.167:2222", ""},
+		{"ssh://wfx@203.0.113.10", "wfx", "203.0.113.10:22", ""},
+		{"ssh://wfx@203.0.113.10:2222", "wfx", "203.0.113.10:2222", ""},
 		{"ssh://wfx@h.example.com?key=/k/id", "wfx", "h.example.com:22", "/k/id"},
 	}
 	for _, c := range cases {
