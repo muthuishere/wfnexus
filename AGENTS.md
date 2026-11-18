@@ -41,7 +41,20 @@ Read `README.md` first; it is short and accurate.
 ```bash
 task infra:up && task api        # :8090 (WFX_MODE=server)   task ui   # :5173
 cd apps/api && go test ./... && go vet ./...
+cd apps/api && WFX_TEST_REQUIRE_DEPS=1 go test ./...   # authoritative run
 ```
+
+There is no hosted CI and no `.github/workflows` (this repo is public). The gate is local:
+`task ci` before every push, reported in the pull request as "CI: local, task ci, pass".
+A release is `task release:publish -- vX.Y.Z` from a clean, pushed `main` (docs/RELEASING.md); the docs site is
+`task site:deploy`.
+
+Tests that need something from the machine (node, the test Postgres, MinIO) skip when it is
+missing, so the suite runs on a bare laptop. A skip is not a pass: an authoritative run (before a
+merge, in review, in CI) sets `WFX_TEST_REQUIRE_DEPS=1`, which turns those skips into failures
+("node is required", "test Postgres is required"). Database tests create their own
+`wfx_test_<pid>_<hex>` database (`internal/store/pgtest`) and drop it at the end of the package,
+also on Ctrl-C; a test panic, `-timeout`, `os.Exit` or SIGKILL leaves it behind.
 
 Adding a workflow: drop a YAML in `workflows/`, then `POST /api/workflows/reload` (or the UI's
 "Reload YAML" button) — no restart. Adding a skill: `skills/<name>/SKILL.md` with `name` +

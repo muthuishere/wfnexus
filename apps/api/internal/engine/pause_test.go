@@ -133,6 +133,16 @@ func TestNotifierReceivesThePauseAndCarriesNoCapability(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// The run parks first and the notifier is told after; wait for it.
+	for i := 0; i < 100; i++ {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) != 1 {

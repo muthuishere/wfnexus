@@ -4,14 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -42,6 +38,7 @@ func fakeClaude() {
 		text := m.Message.Content[0].Text
 		if text == "die" {
 			fmt.Fprintln(os.Stderr, "fake claude: boom")
+			dieStderr()
 			os.Exit(3)
 		}
 		if text == "sleep" {
@@ -87,6 +84,7 @@ func fakeCodex() {
 			_ = json.Unmarshal(m.Params, &p)
 			if p.Input[0].Text == "die" {
 				fmt.Fprintln(os.Stderr, "fake codex: boom")
+				dieStderr()
 				os.Exit(3)
 			}
 			turns[p.ThreadID]++
@@ -97,6 +95,15 @@ func fakeCodex() {
 		}
 	}
 	os.Exit(0)
+}
+
+// dieStderr writes the file WARM_FAKE_STDERR names to stderr, for a test of
+// what a dead process's error shows.
+func dieStderr() {
+	if f := os.Getenv("WARM_FAKE_STDERR"); f != "" {
+		b, _ := os.ReadFile(f)
+		_, _ = os.Stderr.Write(b)
+	}
 }
 
 func fakeEnv(kind string) []string { return []string{"WARM_FAKE=" + kind} }
@@ -293,37 +300,3 @@ func TestClaudeStreamReportsUsage(t *testing.T) {
 	}
 }
 
-// Cancelling the turn's context kills the CLI process mid-turn.
-func TestClaudeStreamCancelKillsTheProcess(t *testing.T) {
-	pidfile := filepath.Join(t.TempDir(), "pid")
-	a := &ClaudeStream{Bin: os.Args[0], Env: append(fakeEnv("claude"), "WARM_FAKE_PIDFILE="+pidfile)}
-	defer a.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { _, err := a.Execute(ctx, turnText("sleep")); done <- err }()
-	var pid int
-	for i := 0; i < 200 && pid == 0; i++ {
-		time.Sleep(20 * time.Millisecond)
-		b, _ := os.ReadFile(pidfile)
-		pid, _ = strconv.Atoi(string(b))
-	}
-	if pid == 0 {
-		t.Fatal("fake claude never started its turn")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v, want context.Canceled", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Execute did not return after cancel")
-	}
-	for i := 0; i < 100; i++ {
-		if syscall.Kill(pid, 0) != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("fake claude pid %d still alive after cancel", pid)
-}

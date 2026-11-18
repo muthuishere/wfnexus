@@ -23,3 +23,14 @@ func HashToken(t string) string {
 	sum := sha256.Sum256([]byte(t))
 	return hex.EncodeToString(sum[:])
 }
+
+// ServiceTokenPrefix marks a service principal's credential (a machine bound
+// to one tenant). It is distinct from `wfx_` so the two lookups never meet.
+const ServiceTokenPrefix = "wfxs_"
+
+// NewServiceToken mints a service principal's credential: 256 random bits.
+func NewServiceToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return ServiceTokenPrefix + hex.EncodeToString(b)
+}

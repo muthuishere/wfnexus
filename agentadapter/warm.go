@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // WarmAgent is an Agent backed by a long-lived process the host owns.
@@ -71,7 +72,7 @@ func startProc(bin string, args, env []string, dir, tag string) (*proc, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &proc{cmd: cmd, stdin: in, lines: make(chan []byte, 64), done: make(chan struct{}), quit: make(chan struct{}), tail: &tailBuffer{max: 4096}, tag: tag}
+	p := &proc{cmd: cmd, stdin: in, lines: make(chan []byte, 64), done: make(chan struct{}), quit: make(chan struct{}), tail: &tailBuffer{}, tag: tag}
 	cmd.Stderr = p.tail
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", bin, err)
@@ -116,7 +117,8 @@ func (p *proc) kill() {
 
 // exitErr describes a process that stopped answering: its exit and the end of
 // its stderr, which is where a CLI says why (a login, a bad flag, a crash).
-func (p *proc) exitErr(name string) error {
+// The tail is scrubbed with the turn's Scrub (carried on ctx) before it is cut.
+func (p *proc) exitErr(ctx context.Context, name string) error {
 	msg := fmt.Sprintf("%s: the process stopped", name)
 	select {
 	case <-p.done:
@@ -125,33 +127,93 @@ func (p *proc) exitErr(name string) error {
 		}
 	case <-time.After(2 * time.Second):
 	}
-	if t := strings.TrimSpace(p.tail.String()); t != "" {
+	if t := p.tail.text(scrubOf(ctx)); t != "" {
 		msg += "; stderr: " + t
 	}
 	return errors.New(msg)
 }
 
-// tailBuffer keeps the last max bytes written to it.
+// tailShow is how much of a dead process's stderr an error shows; tailKeep is
+// how much is kept to cut it from. Scrubbing a text and then cutting it is the
+// only order that holds: a cut that comes first can split a sensitive value,
+// and the piece left is no longer recognisable as it. The buffer itself has to
+// drop old bytes as they come, though, so a value can be split at its start;
+// what is shown is therefore always at least tailKeep-tailShow (60 KB) after
+// that point, and a value of which some form is longer than that is the one
+// case not covered.
+const (
+	tailShow = 4096
+	tailKeep = 64 << 10
+)
+
+// tailBuffer keeps the last tailKeep bytes written to it.
 type tailBuffer struct {
 	mu  sync.Mutex
-	max int
 	b   []byte
+	cut bool // bytes were dropped from the start
 }
 
 func (t *tailBuffer) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.b = append(t.b, p...)
-	if len(t.b) > t.max {
-		t.b = append([]byte(nil), t.b[len(t.b)-t.max:]...)
+	if len(t.b) > tailKeep {
+		t.b = append([]byte(nil), t.b[len(t.b)-tailKeep:]...)
+		t.cut = true
 	}
 	return len(p), nil
 }
 
-func (t *tailBuffer) String() string {
+// text is the tail as an error shows it: scrubbed whole, then cut.
+func (t *tailBuffer) text(scrub func(string) string) string {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	return string(t.b)
+	s, cut := string(t.b), t.cut
+	t.mu.Unlock()
+	return showTail(s, cut, scrub)
+}
+
+// showTail scrubs s whole and keeps at most its last tailShow bytes, on a rune
+// boundary. When s already lost its start (cut), at least its first
+// tailKeep-tailShow bytes go too, whatever the scrub left: that is where a
+// piece of a value split by the buffer sits, and a scrub only replaces whole
+// values, so the piece stays where it was.
+func showTail(s string, cut bool, scrub func(string) string) string {
+	if scrub != nil {
+		s = scrub(s)
+	}
+	drop := len(s) - tailShow
+	if cut {
+		drop = max(drop, tailKeep-tailShow)
+	}
+	if drop <= 0 {
+		return strings.TrimSpace(s)
+	}
+	if drop >= len(s) {
+		return ""
+	}
+	for drop < len(s) && !utf8.RuneStart(s[drop]) {
+		drop++
+	}
+	if rest := strings.TrimSpace(s[drop:]); rest != "" {
+		return "… " + rest
+	}
+	return ""
+}
+
+// scrubKey carries a turn's Scrub on its context, down to where a process's
+// death is turned into an error.
+type scrubKey struct{}
+
+func withScrub(ctx context.Context, scrub func(string) string) context.Context {
+	if scrub == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, scrubKey{}, scrub)
+}
+
+func scrubOf(ctx context.Context) func(string) string {
+	f, _ := ctx.Value(scrubKey{}).(func(string) string)
+	return f
 }
 
 // backoff spaces restarts of a process that keeps dying: 250 ms, doubling, at

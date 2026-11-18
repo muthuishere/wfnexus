@@ -44,7 +44,23 @@ const (
 	exposeRatePerMin  = 60
 	exposeRateBurst   = 20
 	hookSignatureName = "X-WFX-Signature"
+	hookTimestampName = "X-WFX-Timestamp"
+	hookEventIDName   = "X-WFX-Event-Id"
+	// hookWindow is how far a signed hook's timestamp may be from now. A
+	// captured request is dead after it; inside it the event id refuses a
+	// second delivery.
+	hookWindow = 5 * time.Minute
 )
+
+// SignPayload is the one signature both directions use: HMAC-SHA256 over
+// `<timestamp>.<event id>.<body>`, as `sha256=<hex>`. Binding the time and
+// the id into the MAC is what makes the window and the dedupe key hold.
+func SignPayload(secret string, ts int64, eventID string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "%d.%s.", ts, eventID)
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
 
 // exposeWaitDefault is how long a tools/call (or ?wait=1) waits for a run
 // before answering with its id. A var so tests can shorten it.
@@ -249,7 +265,7 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		exposeUnauthorized(w)
 		return
 	}
-	tokenID, ok := s.hookAuth(r, project, name, body)
+	tokenID, eventID, ok := s.hookAuth(r, project, name, body)
 	if !ok {
 		exposeUnauthorized(w)
 		return
@@ -269,6 +285,11 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("Idempotency-Key is longer than 200 characters"))
 		return
 	}
+	// A signed event is delivered once: its id (inside the MAC) is the key,
+	// and a second delivery is refused rather than replayed.
+	if eventID != "" {
+		key = "event:" + eventID
+	}
 	var id uuid.UUID
 	replay := false
 	if key != "" {
@@ -278,6 +299,11 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !claimed {
+			if eventID != "" {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error": "duplicate event: " + eventID + " was already received", "runId": prior})
+				return
+			}
 			if prior == "" {
 				writeErr(w, http.StatusConflict, errors.New("a request with this Idempotency-Key is still starting"))
 				return
@@ -334,43 +360,47 @@ func (s *Server) hook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, exposedResult{RunID: id.String(), Status: status, Settled: runSettled(status)})
 }
 
-// hookAuth accepts a bearer token issued for THIS workflow's hook, or an HMAC
-// of the body in X-WFX-Signature: sha256=<hex>, keyed with the hook's SIGNING
-// SECRET — a separate random secret shown once at issue and stored sealed
-// with the server's env-store key. The stored token hash is never a key.
-func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (string, bool) {
+// hookAuth accepts a bearer token issued for THIS workflow's hook, or a signed
+// request: X-WFX-Signature = SignPayload(signing secret, X-WFX-Timestamp,
+// X-WFX-Event-Id, body), keyed with the hook's SIGNING SECRET — a separate
+// random secret shown once at issue and stored sealed with the server's
+// env-store key. The stored token hash is never a key. eventID is the signed
+// event id ("" for a bearer request).
+func (s *Server) hookAuth(r *http.Request, project, name string, body []byte) (tokenID, eventID string, ok bool) {
 	if tok := exposeBearer(r); tok != "" {
 		t, err := s.store.LookupExposeToken(r.Context(), tok)
 		if err != nil || t.Kind != store.ExposeHook || t.Project != project || t.Workflow != name {
-			return "", false
+			return "", "", false
 		}
-		return t.ID, true
+		return t.ID, "", true
 	}
-	sig := strings.TrimPrefix(r.Header.Get(hookSignatureName), "sha256=")
-	got, err := hex.DecodeString(sig)
-	if sig == "" || err != nil {
-		return "", false
+	sig := r.Header.Get(hookSignatureName)
+	eventID = strings.TrimSpace(r.Header.Get(hookEventIDName))
+	ts, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get(hookTimestampName)), 10, 64)
+	if sig == "" || eventID == "" || len(eventID) > 200 || err != nil {
+		return "", "", false
+	}
+	if d := time.Since(time.Unix(ts, 0)); d > hookWindow || d < -hookWindow {
+		return "", "", false // outside the replay window
 	}
 	box := s.eng.Secrets()
 	if box == nil {
-		return "", false // no server key: signed hooks are off, bearer only
+		return "", "", false // no server key: signed hooks are off, bearer only
 	}
 	sealed, err := s.store.ActiveExposeSigning(r.Context(), project, name, store.ExposeHook)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	for id, sl := range sealed {
 		key, err := box.Open(sl)
 		if err != nil {
 			continue
 		}
-		mac := hmac.New(sha256.New, []byte(key))
-		mac.Write(body)
-		if hmac.Equal(mac.Sum(nil), got) {
-			return id, true
+		if hmac.Equal([]byte(SignPayload(key, ts, eventID, body)), []byte(sig)) {
+			return id, eventID, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // newSigningSecret is a hook's HMAC key: 32 random bytes, hex, with a prefix
@@ -440,12 +470,17 @@ func (s *Server) mcpEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	srv := mcpserver.NewMCPServer("wfnexus-"+project, "1", mcpserver.WithToolCapabilities(false))
 	defs := s.eng.Definitions()
+	reach := map[string]bool{}
 	for _, name := range allowed {
 		def := defs[name]
-		if def == nil {
-			continue // exposed, then deleted: not a tool any more
+		if def == nil || mcpReserved(project, def) {
+			continue // deleted since it was exposed, or clashes with a reserved name
 		}
+		reach[name] = true
 		srv.AddTool(mcpTool(project, def), s.mcpCall(name, t.ID))
+	}
+	if len(reach) > 0 {
+		srv.AddTool(mcpStatusTool(), s.mcpStatus(reach))
 	}
 	mcpserver.NewStreamableHTTPServer(srv, mcpserver.WithStateLess(true)).ServeHTTP(w, r)
 }
@@ -462,7 +497,21 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 		}
 		schema = cp
 	}
-	raw, _ := json.Marshal(schema)
+	// Every workflow tool also takes the optional wait argument.
+	props := map[string]any{}
+	if p, ok := schema["properties"].(map[string]any); ok {
+		for k, v := range p {
+			props[k] = v
+		}
+	}
+	props[mcpWaitArg] = map[string]any{"type": "integer", "minimum": 0, "maximum": int(maxWait / time.Second),
+		"description": "seconds to wait for the run to finish before answering with its id and status (default 30; 0 = answer at once)"}
+	cp := map[string]any{}
+	for k, v := range schema {
+		cp[k] = v
+	}
+	cp["properties"] = props
+	raw, _ := json.Marshal(cp)
 	desc := def.Description
 	if desc == "" {
 		desc = "Run the wfnexus workflow " + def.Name
@@ -470,14 +519,72 @@ func mcpTool(project string, def *workflow.Definition) mcp.Tool {
 	return mcp.NewToolWithRawSchema(toolName(project, def.Name), desc, raw)
 }
 
+// mcpWaitArg is the optional tool argument that sets how long a call waits;
+// it is taken out before the workflow sees its input. It is a reserved name:
+// a workflow input property with this name is not offered over MCP.
+const mcpWaitArg = "wfx_wait"
+
+// mcpStatusName is the tool that reports a run of a workflow this endpoint
+// offers. Reserved: a workflow with this tool name is not offered.
+const mcpStatusName = "wfx_run_status"
+
+// mcpReserved: the workflow's tool name or an input property clashes with
+// what the endpoint itself adds.
+func mcpReserved(project string, def *workflow.Definition) bool {
+	if toolName(project, def.Name) == mcpStatusName {
+		return true
+	}
+	p, _ := def.InputSchema["properties"].(map[string]any)
+	_, clash := p[mcpWaitArg]
+	return clash
+}
+
+func mcpStatusTool() mcp.Tool {
+	return mcp.NewTool(mcpStatusName,
+		mcp.WithDescription("Status of a run of any workflow this endpoint offers (however it was started): status, settled, and the result once finished."),
+		mcp.WithString("run_id", mcp.Required(), mcp.Description("the runId a workflow call returned")))
+}
+
+// mcpStatus answers only for runs of the workflows this token reaches; any
+// other id gets the same answer as an id that does not exist.
+func (s *Server) mcpStatus(reach map[string]bool) mcpserver.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		notFound := mcp.NewToolResultError("run not found")
+		id, err := uuid.Parse(req.GetString("run_id", ""))
+		if err != nil {
+			return notFound, nil
+		}
+		run, err := s.store.GetRun(ctx, id)
+		if err != nil || !reach[run.Workflow] {
+			return notFound, nil
+		}
+		res, err := s.waitRun(ctx, id, 0)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		text, _ := json.Marshal(res)
+		return mcp.NewToolResultStructured(res, string(text)), nil
+	}
+}
+
 func (s *Server) mcpCall(name, tokenID string) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		input, _ := json.Marshal(req.GetRawArguments())
+		wait := exposeWaitDefault
+		args, _ := req.GetRawArguments().(map[string]any)
+		if v, ok := args[mcpWaitArg]; ok {
+			n, ok := v.(float64)
+			if !ok || n < 0 {
+				return mcp.NewToolResultError(mcpWaitArg + " must be a number of seconds, 0 or more"), nil
+			}
+			wait = min(time.Duration(n)*time.Second, maxWait)
+			delete(args, mcpWaitArg)
+		}
+		input, _ := json.Marshal(args)
 		id, err := s.startExposedRun(ctx, name, input, "mcp:"+tokenID)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		res, err := s.waitRun(ctx, id, exposeWaitDefault)
+		res, err := s.waitRun(ctx, id, wait)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -505,14 +612,6 @@ type exposeKindView struct {
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
-func baseURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + r.Host
-}
-
 func exposePath(kind, project, short string) string {
 	if kind == store.ExposeHook {
 		return "/hooks/" + project + "/" + short
@@ -532,7 +631,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 	out := map[string]any{"workflow": name, "project": project, "tool": toolName(project, name)}
 	for _, kind := range []string{store.ExposeHook, store.ExposeMCP} {
 		p := exposePath(kind, project, short)
-		v := exposeKindView{Path: p, URL: baseURL(r) + p}
+		v := exposeKindView{Path: p, URL: s.externalBase(r) + p}
 		for _, a := range act {
 			if a.Kind == kind {
 				created := a.CreatedAt
@@ -541,7 +640,7 @@ func (s *Server) exposeView(r *http.Request, project, name string) (map[string]a
 		}
 		out[kind] = v
 	}
-	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": baseURL(r) + exposePath(store.ExposeMCP, project, "")}
+	out["projectMcp"] = map[string]any{"path": exposePath(store.ExposeMCP, project, ""), "url": s.externalBase(r) + exposePath(store.ExposeMCP, project, "")}
 	return out, nil
 }
 
@@ -691,7 +790,7 @@ func (s *Server) getProjectExpose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := exposePath(store.ExposeMCP, project, "")
-	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": baseURL(r) + p, "tokens": act})
+	writeJSON(w, 200, map[string]any{"project": project, "path": p, "url": s.externalBase(r) + p, "tokens": act})
 }
 
 func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
@@ -709,7 +808,7 @@ func (s *Server) issueProjectExpose(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	url := baseURL(r) + exposePath(store.ExposeMCP, project, "")
+	url := s.externalBase(r) + exposePath(store.ExposeMCP, project, "")
 	writeJSON(w, 201, map[string]any{"project": project, "url": url, "token": secret, "snippet": mcpSnippet(url, secret)})
 }
 

@@ -38,6 +38,11 @@ import (
 // runStatusEnded are the statuses a child is finished in.
 var runStatusEnded = map[string]bool{"done": true, "failed": true, "cancelled": true}
 
+// runStatusParked are the statuses a run waits on a person in, with no step
+// running and no end in sight. Its secrets are held like an ended run's: a
+// grace period, then dropped (setRun); its next step registers them again.
+var runStatusParked = map[string]bool{"needs_input": true, "awaiting_approval": true}
+
 // UseEventSink wires where `workflow.completed` events go — the router. The
 // sink returns true when it handled the event; false (or no sink) falls back
 // to starting the parent's workflow in the parent's conversation.

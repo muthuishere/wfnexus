@@ -121,6 +121,15 @@ type Engine struct {
 	// (start.go). Both are in-memory, per process, like the scheduler.
 	conv      convLanes
 	eventSink func(ctx context.Context, ev map[string]any) bool
+
+	// onRunStatus is told every run status the moment it lands (setRun):
+	// the server turns it into signed run events for the run's project.
+	onRunStatus func(ctx context.Context, runID uuid.UUID, status, step, errMsg string)
+}
+
+// OnRunStatus registers the one listener for run status changes.
+func (e *Engine) OnRunStatus(f func(ctx context.Context, runID uuid.UUID, status, step, errMsg string)) {
+	e.onRunStatus = f
 }
 
 func New(cfg config.Config, st Store, bl Artifacts, defs map[string]*workflow.Definition, reg *skills.Registry, cat *catalog.Catalog) *Engine {
@@ -188,7 +197,15 @@ func (e *Engine) SourceSkips() []workflow.Skip {
 func (e *Engine) validator() workflow.Catalog {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return callables{catalog.NewValidator(e.Skills(), e.Catalog()), e.defs}
+	return callables{e.tenantScoped(catalog.NewValidator(e.Skills(), e.Catalog())), e.defs}
+}
+
+// MissingMcpIn passes the per-project mcp check through (connections.go).
+func (c callables) MissingMcpIn(project string, names []string) []string {
+	if pm, ok := c.Catalog.(workflow.ProjectMcp); ok {
+		return pm.MissingMcpIn(project, names)
+	}
+	return c.Catalog.MissingMcp(names)
 }
 
 // callables is the validator plus the loaded workflows, so a save or check of
@@ -224,10 +241,10 @@ func (e *Engine) ReloadDefinitions() error {
 	if e.remote != nil {
 		opts = append(opts, workflow.WithRemoteResolver(e.remote))
 	}
-	defs, skips, err := workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+	defs, skips, err := workflow.LoadSources(e.Sources(), e.tenantScoped(catalog.NewValidator(reg, cat)), opts...)
 	if e.adoptBundleRoots() {
 		reg = skills.LoadRoots(e.skillRoots()...)
-		defs, skips, err = workflow.LoadSources(e.Sources(), catalog.NewValidator(reg, cat), opts...)
+		defs, skips, err = workflow.LoadSources(e.Sources(), e.tenantScoped(catalog.NewValidator(reg, cat)), opts...)
 	}
 	if err != nil {
 		return err
@@ -422,7 +439,9 @@ func (e *Engine) SaveWorkflowIn(project string, d *workflow.Definition) (string,
 	// template. Keeping `template:` from an applied template file installed a
 	// workflow that refuses to run and is listed nowhere.
 	d.Template = workflow.TemplateInfo{}
-	path, err := workflow.Save(dir, d, e.validator())
+	// Validated as a workflow of the project it lands in, so its mcp names
+	// resolve the way the loader will resolve them (connections.go).
+	path, err := workflow.Save(dir, d, workflow.ForProject(e.validator(), e.projectOfDir(dir)))
 	if err != nil {
 		return "", err
 	}
@@ -539,9 +558,24 @@ func (e *Engine) setRun(ctx context.Context, runID uuid.UUID, status, step, errM
 		log.Printf("engine: update run: %v", err)
 	}
 	e.emit(ctx, runID, step, "run.status", map[string]any{"status": status, "step": step, "error": errMsg})
+	if e.onRunStatus != nil {
+		e.onRunStatus(context.WithoutCancel(ctx), runID, status, step, errMsg)
+	}
 	// AFTER the status landed: a waiting parent re-reads its children, and the
 	// next message of a conversation may start (start.go, conversation.go).
 	e.afterRunStatus(ctx, runID, status)
+	if runStatusEnded[status] || runStatusParked[status] {
+		// The run is over, or parked on a person for as long as they take:
+		// the redactor built from its secrets leaves the cache, and the
+		// secrets themselves leave memory endedSecretsGrace later, under the
+		// same cap (runSecrets.markEnded). A parked run that resumes
+		// registers them again when its step starts (stepEnv).
+		e.redactions.dropRedactor(runID)
+		e.redactions.markEnded(runID)
+	} else {
+		// Running again (resumed, answered, retried): not ended.
+		e.redactions.markRunning(runID)
+	}
 }
 
 // failureLine is the ERROR line a failed run writes to the server log.
@@ -553,8 +587,21 @@ func failureLine(runID uuid.UUID, step, reason string) string {
 }
 
 func (e *Engine) setStep(ctx context.Context, runID uuid.UUID, stepID string, p model.StepPatch) {
+	// Scrubbed BEFORE anything is stored: the error, what the step produced,
+	// its raw text, the command it ran, a question it asked.
+	secrets := e.redactions.get(runID)
 	if p.Error != nil {
-		p.Error = str(redactText(*p.Error, e.redactions.get(runID)))
+		p.Error = str(redactText(*p.Error, secrets))
+	}
+	if len(secrets) > 0 {
+		p.Output = scrubJSON(p.Output, secrets)
+		p.Pending = scrubJSON(p.Pending, secrets)
+		if p.RawText != nil {
+			p.RawText = str(redactText(*p.RawText, secrets))
+		}
+		if p.Prompt != nil {
+			p.Prompt = str(redactText(*p.Prompt, secrets))
+		}
 	}
 	if e.store == nil {
 		// The platform owns the step row; the worker only reports what happened.

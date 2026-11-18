@@ -155,15 +155,20 @@ func main() {
 	// Which database runs is one line of config, exactly like the artifact
 	// store below: a laptop gets a SQLite file it can delete, a deployment gets
 	// Postgres. The queries are the same either way.
-	if err := store.Migrate(cfg.StorageDriver, cfg.DatabaseURL); err != nil {
-		log.Fatalf("migrate: %v", err)
-	}
-	st, err := store.Open(ctx, cfg.StorageDriver, cfg.DatabaseURL)
+	st, err := openStorage(ctx, cfg.StorageDriver, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("%s: %v", cfg.StorageDriver, err)
+		log.Fatal(err)
 	}
-	log.Printf("storage: %s %s", cfg.StorageDriver, cfg.DatabaseURL)
 	defer st.Close()
+
+	// `wfx-server link …` is a console command against this database: it
+	// serves nothing.
+	if len(os.Args) > 1 && os.Args[1] == "link" {
+		if err := linkCmd(ctx, st, os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	// Which artifact store runs is one line of config. A laptop writes files
 	// into a folder and needs nothing running; a deployment writes to a bucket
@@ -288,6 +293,10 @@ func main() {
 	// Whether this process may serve at all, decided from the bind address
 	// before the listener opens.
 	if err := bootstrapIdentity(ctx, cfg.Addr, st); err != nil {
+		log.Fatal(err)
+	}
+	// An external token issuer is all three settings or none (issuer.go).
+	if err := api.CheckTokenIssuer(cfg.TokenIssuer); err != nil {
 		log.Fatal(err)
 	}
 

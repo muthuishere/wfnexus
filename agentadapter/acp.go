@@ -42,6 +42,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // NativeCall is one of the agent's OWN tool calls that the client refused:
@@ -248,32 +249,9 @@ type ACPAgent struct {
 	refusedCalls []NativeCall          // the same, with what each one meant to do
 	nativeSeen   map[string]NativeCall // tool calls the agent announced, by toolCallId
 
-	cwd            string  // the session's working directory, kept for fresh sessions
-	turnsInSession int     // prompts sent into the current session
-	stderr         tailBuf // the last few KB the agent wrote to stderr, for a death notice
-}
-
-// tailBuf keeps the last 4 KB written to it. An agent that dies says why on
-// stderr; discarding that turned every crash into a bare "broken pipe".
-type tailBuf struct {
-	mu  sync.Mutex
-	buf []byte
-}
-
-func (t *tailBuf) Write(p []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.buf = append(t.buf, p...)
-	if len(t.buf) > 4096 {
-		t.buf = t.buf[len(t.buf)-4096:]
-	}
-	return len(p), nil
-}
-
-func (t *tailBuf) String() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return strings.TrimSpace(string(t.buf))
+	cwd            string     // the session's working directory, kept for fresh sessions
+	turnsInSession int        // prompts sent into the current session
+	stderr         tailBuffer // the end of what the agent wrote to stderr, for a death notice
 }
 
 // ACPModel is one model an ACP agent offers.
@@ -321,7 +299,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 	}
 	if a.cfg.SessionPerTurn && a.turnsInSession > 0 {
 		if err := a.newSession(ctx); err != nil {
-			return "", a.withStderr(err)
+			return "", a.withStderr(err, t.Scrub)
 		}
 	}
 	a.turnsInSession++
@@ -346,7 +324,7 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 		"sessionId": a.session,
 		"prompt":    []any{map[string]any{"type": "text", "text": prompt}},
 	}); err != nil {
-		return "", a.withStderr(err)
+		return "", a.withStderr(err, t.Scrub)
 	}
 
 	a.chunksMu.Lock()
@@ -358,6 +336,9 @@ func (a *ACPAgent) Execute(ctx context.Context, t Turn) (string, error) {
 		refused := append([]string{}, a.refused...)
 		a.refusedMu.Unlock()
 		if len(refused) > 0 {
+			for i, w := range refused {
+				refused[i] = clipTitle(w, t.Scrub)
+			}
 			// the repair can then say exactly what not to do again
 			return "", fmt.Errorf("devin-acp: %w — it tried its own tools, which were refused: %s", ErrEmptyTurn, strings.Join(refused, "; "))
 		}
@@ -502,9 +483,10 @@ func (a *ACPAgent) newSession(ctx context.Context) error {
 }
 
 // withStderr appends what the agent last wrote to stderr when it has died:
-// "broken pipe" alone names the symptom and hides the cause.
-func (a *ACPAgent) withStderr(err error) error {
-	tail := a.stderr.String()
+// "broken pipe" alone names the symptom and hides the cause. The tail is
+// scrubbed whole before it is cut (showTail).
+func (a *ACPAgent) withStderr(err error, scrub func(string) string) error {
+	tail := a.stderr.text(scrub)
 	msg := err.Error()
 	died := strings.Contains(msg, "broken pipe") || strings.Contains(msg, "closed its output")
 	if tail == "" || !died {
@@ -798,6 +780,24 @@ func (a *ACPAgent) onUpdate(params json.RawMessage) {
 	a.chunksMu.Unlock()
 }
 
+// clipTitle is a refused tool's title as the turn's error names it: scrubbed
+// whole, then cut to 80 bytes on a rune boundary. The title is kept whole
+// until here because a cut made first can split a sensitive value, and the
+// piece left is no longer recognisable as it.
+func clipTitle(w string, scrub func(string) string) string {
+	if scrub != nil {
+		w = scrub(w)
+	}
+	if len(w) <= 80 {
+		return w
+	}
+	n := 80
+	for n > 0 && !utf8.RuneStart(w[n]) {
+		n--
+	}
+	return w[:n] + "…"
+}
+
 // allow answers a permission request with the first allow-shaped option.
 func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) {
 	var p struct {
@@ -817,9 +817,6 @@ func (a *ACPAgent) answerPermission(id int, params json.RawMessage, allow bool) 
 		what := strings.TrimSpace(p.ToolCall.Title)
 		if what == "" {
 			what = p.ToolCall.Kind
-		}
-		if len(what) > 80 {
-			what = what[:80] + "…"
 		}
 		a.refusedMu.Lock()
 		if what != "" && len(a.refused) < 8 {

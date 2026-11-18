@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -123,6 +124,10 @@ func normalizeDriver(driver string) string {
 	return driverPostgres
 }
 
+// IsSQLite reports whether driver names SQLite, by the same rule the store
+// opens with. Every other accepted driver (postgres, postgresql, pgx) is Postgres.
+func IsSQLite(driver string) bool { return normalizeDriver(driver) == driverSQLite }
+
 // Migrate applies the embedded SQL tree for this driver. Idempotent.
 //
 // The two dialects have SEPARATE migration sets, because the applied Postgres
@@ -148,10 +153,39 @@ func Migrate(driver, dsn string) error {
 		return err
 	}
 	defer m.Close()
+	stored := countStoredJobEnv(driver, dsn)
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return err
 	}
+	if stored > 0 && countStoredJobEnv(driver, dsn) == 0 {
+		log.Printf("store: blanked stored env values in %d job rows (names kept)", stored)
+	}
 	return nil
+}
+
+// countStoredJobEnv is how many job rows still hold an env value (the format
+// before values were delivered at claim). Counts only; 0 when the table is
+// not there yet.
+func countStoredJobEnv(driver, dsn string) int {
+	ctx := context.Background()
+	s, err := Open(ctx, driver, dsn)
+	if err != nil {
+		return 0
+	}
+	defer s.Close()
+	q := `select count(*) from worker_jobs where
+	  exists (select 1 from jsonb_each_text(coalesce(payload->'env', '{}'::jsonb)) e where e.value <> '')
+	  or exists (select 1 from jsonb_each_text(case when jsonb_typeof(payload->'agent'->'step'->'env') = 'object' then payload->'agent'->'step'->'env' else '{}'::jsonb end) e where e.value <> '')`
+	if s.d.isSQLite() {
+		q = `SELECT count(*) FROM worker_jobs WHERE
+		  EXISTS (SELECT 1 FROM json_each(payload, '$.env') WHERE value <> '')
+		  OR EXISTS (SELECT 1 FROM json_each(payload, '$.agent.step.env') WHERE value <> '')`
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, q).Scan(&n); err != nil {
+		return 0
+	}
+	return n
 }
 
 // ---- runs ----
@@ -166,7 +200,7 @@ func (s *Store) CreateRun(ctx context.Context, project, workflow string, input j
 	}
 	r := &Run{ID: uuid.New(), Project: project, Workflow: workflow, Status: "queued", Input: input}
 	err := s.qrow(ctx,
-		`INSERT INTO workflow_runs (id, project, workflow, status, input) VALUES ($1,$2,$3,$4,$5) RETURNING created_at, updated_at`,
+		`INSERT INTO workflow_runs (id, project, workflow, status, input, tenant_id) VALUES ($1,$2,$3,$4,$5,`+tenantOfProject("$2")+`) RETURNING created_at, updated_at`,
 		r.ID, r.Project, r.Workflow, r.Status, jsonArg(r.Input)).Scan(&r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }

@@ -22,31 +22,28 @@ func eachStore(t *testing.T, fn func(t *testing.T, st *Store)) {
 	t.Helper()
 	t.Run("sqlite", func(t *testing.T) { fn(t, openSQLite(t)) })
 	t.Run("postgres", func(t *testing.T) {
-		st := openPostgres(t)
-		if st == nil {
-			t.Skip("no postgres reachable — run `task infra:up`, or point TEST_DATABASE_URL at a server")
-		}
-		fn(t, st)
+		fn(t, openPostgres(t))
 	})
 }
 
 func TestMain(m *testing.M) { pgtest.Main(m) }
 
-// openPostgres returns nil when there is nothing to talk to, so the suite still
-// runs on a laptop with no infrastructure.
+// openPostgres skips the test when there is nothing to talk to, so the suite
+// still runs on a laptop with no infrastructure; with WFX_TEST_REQUIRE_DEPS=1
+// it fails instead (pgtest.Unavailable).
 func openPostgres(t *testing.T) *Store {
 	t.Helper()
 	// This package's own throwaway database (pgtest), never the shared one.
 	dsn, err := pgtest.DSN()
 	if err != nil {
-		return nil
+		pgtest.Unavailable(t, fmt.Errorf("%w — run `task infra:up`, or point TEST_DATABASE_URL at a server", err))
 	}
 	if err := Migrate(driverPostgres, dsn); err != nil {
 		t.Fatalf("migrating a fresh database failed: %v", err)
 	}
 	st, err := Open(context.Background(), driverPostgres, dsn)
 	if err != nil {
-		return nil
+		pgtest.Unavailable(t, err)
 	}
 	t.Cleanup(func() {
 		// Other tests in this package share the database, so leave it as found.

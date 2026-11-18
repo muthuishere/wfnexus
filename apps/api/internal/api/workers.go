@@ -98,6 +98,15 @@ func (s *Server) finishJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// The report is scrubbed of the run's secret values before it is stored:
+	// the job row is kept, and the step reads its output from it. Without
+	// the job there is no run to scrub for, so nothing is stored.
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	res = s.eng.ScrubJobResult(r.Context(), job.RunID, job.Payload, res)
 	raw, _ := json.Marshal(res)
 	if err := s.store.FinishJob(r.Context(), id, wk.ID, raw); err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -137,7 +146,7 @@ func (s *Server) workerEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	s.eng.IngestWorkerEvents(r.Context(), job.RunID, body.Events)
+	s.eng.IngestWorkerEvents(r.Context(), job.RunID, job.Payload, body.Events)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accepted": len(body.Events)})
 }
 
@@ -272,23 +281,11 @@ func (s *Server) removeWorker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// publicURL is the address a worker can reach this server on. Configured
-// (WFX_PUBLIC_URL) when the server sits behind an ingress, inferred otherwise —
-// so the join command shown in the dashboard is one that actually works.
-func (s *Server) publicURL(r *http.Request) string {
-	if u := s.eng.PublicURL(); u != "" {
-		return u
-	}
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = fwd
-	}
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
+// publicURL is the address a worker can reach this server on: the configured
+// public URL (WFX_PUBLIC_URL), or this server's own listen address — never
+// the request's Host or X-Forwarded-* headers, which the caller chooses. Set
+// the public URL when the server sits behind an ingress.
+func (s *Server) publicURL(r *http.Request) string { return s.externalBase(r) }
 
 // joinCommand is the line an operator copies onto a machine. One command, a URL
 // and a token: everything else the runner works out for itself.

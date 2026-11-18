@@ -69,10 +69,6 @@ func TestMembers(t *testing.T) {
 		check(t, st)
 	})
 	t.Run("postgres", func(t *testing.T) {
-		st := openPostgres(t)
-		if st == nil {
-			t.Skip("no postgres reachable — run `task infra:up`, or point TEST_DATABASE_URL at a server")
-		}
-		check(t, st)
+		check(t, openPostgres(t))
 	})
 }
