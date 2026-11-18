@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -40,8 +41,76 @@ echo "$spec" >> "$pre/installs.log"
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+old)
 }
 
+// fakeRelease serves every release tool's asset (raw, .tar.gz or .zip) and
+// its checksums file; hits counts asset downloads.
+func fakeRelease(t *testing.T, corrupt bool) *int {
+	files := map[string][]byte{}
+	sums := map[string]string{}
+	for _, tool := range Pinned {
+		if tool.Release == "" {
+			continue
+		}
+		for _, v := range []string{tool.Version, "0.2.0"} {
+			asset, sumsFile, member := defaultAsset(tool)
+			if tool.Asset != nil {
+				asset, sumsFile, member = tool.Asset(v)
+			}
+			body := []byte("#!/bin/sh\necho " + tool.Name + " " + v + "\n")
+			data := body
+			var buf bytes.Buffer
+			switch {
+			case member == "":
+			case strings.HasSuffix(asset, ".zip"):
+				zw := zip.NewWriter(&buf)
+				w, _ := zw.Create("pkg/" + member)
+				w.Write(body)
+				zw.Close()
+				data = buf.Bytes()
+			default:
+				zw := gzip.NewWriter(&buf)
+				tw := tar.NewWriter(zw)
+				_ = tw.WriteHeader(&tar.Header{Name: "pkg/" + member, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+				tw.Write(body)
+				tw.Close()
+				zw.Close()
+				data = buf.Bytes()
+			}
+			files[v+"/"+asset] = data
+			h := sha256.Sum256(data)
+			sum := hex.EncodeToString(h[:])
+			if corrupt {
+				sum = strings.Repeat("0", 64)
+			}
+			sums[v+"/"+sumsFile] += sum + "  " + asset + "\n"
+		}
+	}
+	hits := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			w.Write([]byte(`{"tag_name":"v0.2.0"}`))
+			return
+		}
+		key := strings.TrimPrefix(filepath.Base(filepath.Dir(r.URL.Path)), "v") + "/" + filepath.Base(r.URL.Path)
+		if s, ok := sums[key]; ok {
+			w.Write([]byte(s))
+			return
+		}
+		if b, ok := files[key]; ok {
+			*hits++
+			w.Write(b)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("WFX_RELEASE_BASE", srv.URL)
+	t.Setenv("WFX_RELEASE_API", srv.URL)
+	return hits
+}
+
 func TestEnsureInstallsUpdatesAndRollsBack(t *testing.T) {
 	fakeNpm(t)
+	fakeRelease(t, false)
 	dir := t.TempDir()
 	for _, s := range Ensure(dir, nil)[:len(Pinned)] {
 		if s.Error != "" || !strings.HasSuffix(s.Path, s.Name) {
@@ -75,8 +144,12 @@ func TestEnsureSaysWhenNodeCannotBeHad(t *testing.T) {
 	nodeDist = srv.URL
 	defer func() { nodeDist = old }()
 	t.Setenv("PATH", t.TempDir())
+	fakeRelease(t, false)
 	st := Ensure(t.TempDir(), nil)
-	for _, s := range st[:len(Pinned)] {
+	for i, s := range st[:len(Pinned)] {
+		if Pinned[i].Release != "" {
+			continue
+		}
 		if s.Error != NoNpm {
 			t.Fatalf("%+v", s)
 		}
@@ -132,5 +205,46 @@ func TestEnsureNodeBundlesLTS(t *testing.T) {
 	}
 	if p, _ := exec.LookPath("node"); !strings.HasPrefix(p, filepath.Join(dir, "node", "v24.0.0")) {
 		t.Fatalf("node on PATH: %q", p)
+	}
+}
+
+// A release tool is fetched once, checksum-verified, put on PATH, and
+// refused when the checksum does not match.
+func TestEnsureReleaseToolVerifiesAndCaches(t *testing.T) {
+	tool, ok := Find("tmvp")
+	if !ok || tool.Release == "" {
+		t.Fatal("tmvp is not a pinned release tool")
+	}
+	hits := fakeRelease(t, false)
+	dir := t.TempDir()
+	if err := ensureRelease(dir, tool); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRelease(dir, tool); err != nil || *hits != 1 {
+		t.Fatalf("second ensure: err=%v downloads=%d", err, *hits)
+	}
+	if b, _ := os.ReadFile(releasePath(dir, "tmvp")); !strings.Contains(string(b), "tmvp 0.1.0") {
+		t.Fatalf("binary %q", b)
+	}
+	if v, err := Latest(tool); err != nil || v != "0.2.0" {
+		t.Fatalf("latest %q %v", v, err)
+	}
+	fakeRelease(t, true)
+	tool.Version = "0.2.0"
+	if err := ensureRelease(t.TempDir(), tool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("corrupt: %v", err)
+	}
+}
+
+// gh ships as an archive: the binary is pulled out of it.
+func TestEnsureReleaseToolFromArchive(t *testing.T) {
+	tool, _ := Find("gh")
+	fakeRelease(t, false)
+	dir := t.TempDir()
+	if err := ensureRelease(dir, tool); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(releasePath(dir, "gh")); string(b) != "#!/bin/sh\necho gh "+tool.Version+"\n" {
+		t.Fatalf("gh binary %q", b)
 	}
 }

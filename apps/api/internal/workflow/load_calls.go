@@ -288,7 +288,7 @@ func (x *expander) run(cat Catalog) {
 		}
 		for _, d := range append([]*Definition(nil), g.defs...) {
 			normalize(d)
-			if err := d.validate(cat); err != nil {
+			if err := d.validate(ForProject(cat, g.name)); err != nil {
 				fail(g, d, err)
 			} else if err := checkWritePlacement(d, x.opt.localLabels); err != nil && !x.opt.anyRunner {
 				fail(g, d, err)
