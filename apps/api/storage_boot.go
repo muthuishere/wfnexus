@@ -120,10 +120,11 @@ func logStorage(driver, dsn string) {
 
 // plainPath reports whether dsn is affirmatively a SQLite file path, whose
 // errors may print as they are. A connection string of any other shape given
-// to the SQLite driver (a URL, userinfo, key=value pairs) is not.
+// to the SQLite driver (a URL, userinfo, key=value pairs, or a percent-encoded
+// string, which can hide an encoded "@" or ":" from these checks) is not.
 func plainPath(driver, dsn string) bool {
 	return store.IsSQLite(driver) &&
-		!strings.ContainsAny(dsn, "=@ \t\n") &&
+		!strings.ContainsAny(dsn, "=@% \t\n") &&
 		!strings.Contains(strings.ToLower(dsn), "password")
 }
 
