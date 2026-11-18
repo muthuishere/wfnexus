@@ -28,6 +28,7 @@ import (
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/issuer"
 	"github.com/muthuishere/wfnexus/apps/api/internal/login"
 	"github.com/muthuishere/wfnexus/apps/api/internal/skills"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -52,6 +53,20 @@ type Server struct {
 	addr         string
 	loopbackOnly bool
 
+	// serviceRuns lets a service principal START a workflow it is allowed
+	// (tenants.go). It is false and nothing in configuration sets it: it
+	// stays off until write steps always pause for approval and the engine
+	// hands over write inputs (#146, #148). Only tests set it, through
+	// serviceRunsForTest.
+	serviceRuns bool
+	// customerAPI turns on the customer routes (customer.go). Off, and only
+	// tests set it, through customerAPIForTest.
+	customerAPI bool
+
+	// issuer verifies an external issuer's access tokens (issuer.go); nil
+	// when none is configured, and then no such token resolves.
+	issuer *issuer.Verifier
+
 	// The RFC 8628 §5.2 rate limit on the verification endpoint.
 	verify *verifyLimiter
 	// Password sign-in attempts, per source and per username (ADR 0025).
@@ -71,6 +86,9 @@ type Server struct {
 
 	// providers are the configured login providers (ADR 0028), by name.
 	providers map[string]*login.Provider
+
+	// events delivers signed run events to each project's URL (events.go).
+	events *eventLoop
 }
 
 // isLoopback reports whether a bind address is reachable only from this
@@ -109,7 +127,21 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 	if fixedJWTKey != nil {
 		s.jwtKey = fixedJWTKey
 	}
+	s.serviceRuns = serviceRunsForTest
+	s.customerAPI = customerAPIForTest
+	s.issuer = newIssuerVerifier(eng.TokenIssuerConfig())
+	if issuerForTest != nil {
+		s.issuer = issuerForTest
+	}
 	buildProviders(s)
+	s.events = newEventLoop()
+	if st != nil {
+		eng.OnRunStatus(s.recordRunEvent)
+		// Events still owed from before a restart are delivered now.
+		if due, err := st.DueEvents(context.Background(), 1); err == nil && len(due) > 0 {
+			s.kickEvents()
+		}
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
@@ -171,6 +203,10 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/users/{name}", s.updateUser)
 		r.Post("/users/{name}/password", s.setUserPassword)
 		r.Delete("/users/{name}", s.deleteUser)
+		// Account links pending an admin's confirmation (providers.go).
+		r.Get("/users/links", s.listPendingLinks)
+		r.Post("/users/{name}/link/confirm", s.confirmLink)
+		r.Post("/users/{name}/link/reject", s.rejectLink)
 		// The PUBLISH direction (ADR 0018). Mounted only where a publish can
 		// be attributed and stored — see publishingEnabled. On a default
 		// single-machine install these paths 404, which is what "absent, not
@@ -187,6 +223,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/roles", s.listRoles)
 		r.Put("/roles/{name}", s.saveRole)
 		r.Delete("/roles/{name}", s.deleteRole)
+
+		// Tenants, service principals and the tenant routes (tenants.go).
+		s.tenantRoutes(r)
 
 		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 		r.Get("/skills", s.listSkills)
@@ -229,6 +268,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Put("/projects/{name}/env", s.setProjectEnv)
 		r.Delete("/projects/{name}/env/{key}", s.deleteProjectEnv)
 		r.Delete("/projects/{name}", s.deleteProject)
+		r.Get("/projects/{name}/events", s.getProjectEvents)
+		r.Put("/projects/{name}/events", s.setProjectEvents)
+		r.Delete("/projects/{name}/events", s.deleteProjectEvents)
 		// The state store: the operator's door names the scope's owner, a
 		// running step's door (below, under /runs/{id}) never can.
 		r.Get("/state", s.listState)
@@ -263,7 +305,7 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		r.Get("/workers/services", s.workerServices)
 		r.Post("/workers/services/heartbeat", s.serviceHeartbeat)
 		r.Get("/workers/providers", s.workerProviders)
-		// Built-in tools (aos, ctx-optimize, jevx): desired versions and reports.
+		// Built-in tools (aos, ctx-optimize, jevx, tmvp, gh): desired versions and reports.
 		r.Get("/workers/builtins", s.workerBuiltins)
 		r.Post("/workers/builtins", s.workerBuiltinsReport)
 		r.Get("/builtins", s.listBuiltins)

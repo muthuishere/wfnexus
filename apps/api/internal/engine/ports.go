@@ -100,6 +100,8 @@ type Store interface {
 	ClaimJob(ctx context.Context, w *model.Worker) (*model.Job, error)
 	GetJob(ctx context.Context, id uuid.UUID) (*model.Job, error)
 	CancelJob(ctx context.Context, id uuid.UUID) error
+	FailJob(ctx context.Context, id uuid.UUID, reason string) error
+	ReleaseJob(ctx context.Context, id uuid.UUID) error
 	RequeueLostJobs(ctx context.Context) (int64, error)
 }
 

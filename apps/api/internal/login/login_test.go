@@ -23,8 +23,12 @@ func TestPresetsAndBuildRules(t *testing.T) {
 	if !strings.Contains(errs[1].Error(), "off loopback") {
 		t.Fatalf("mock-ldap off loopback: %v", errs[1])
 	}
-	u, err := ps["gh"].Redirect.AuthCodeURL(context.Background(), "st", "https://w/cb")
-	if err != nil || !strings.HasPrefix(u, "https://github.com/login/oauth/authorize?") || !strings.Contains(u, "state=st") {
+	a := NewAuthRequest()
+	a.State = "st"
+	u, err := ps["gh"].Redirect.AuthCodeURL(context.Background(), a, "https://w/cb")
+	if err != nil || !strings.HasPrefix(u, "https://github.com/login/oauth/authorize?") || !strings.Contains(u, "state=st") ||
+		!strings.Contains(u, "code_challenge_method=S256") || !strings.Contains(u, "code_challenge="+pkceChallenge(a.Verifier)) ||
+		strings.Contains(u, "nonce=") {
 		t.Fatalf("github preset: %s %v", u, err)
 	}
 	if o := ps["g"].Redirect.(*OAuth); o.cfg.Issuer != "https://accounts.google.com" || o.cfg.UsernameClaim != "email" {

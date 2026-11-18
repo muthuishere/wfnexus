@@ -7,8 +7,8 @@ vars:
   # The version a binary reports comes from the tag, and from nowhere else. A
   # build off a tag reports the tag; anything else reports the commit, with
   # -dirty when the tree is modified — so a build can never claim to be a
-  # release it is not. CI checks out with fetch-depth: 0 because a shallow
-  # clone makes `git describe --tags` lie.
+  # release it is not. release:publish refuses a shallow clone, because a
+  # shallow clone makes `git describe --tags` lie.
   VERSION: { sh: 'git describe --tags --always --dirty 2>/dev/null || echo dev' }
   COMMIT: { sh: 'git rev-parse --short HEAD 2>/dev/null || echo unknown' }
   DATE: { sh: 'date -u +%Y-%m-%dT%H:%M:%SZ' }
@@ -108,6 +108,11 @@ tasks:
     dir: apps/api
     cmds: ['go build -ldflags="{{.LDFLAGS}}" -o {{.BIN}}/wfx-runner ./cmd/wfx-runner']
   # ---- release -------------------------------------------------------------
+  release:publish:
+    desc: "Publish a release from this machine: task release:publish -- v0.4.0"
+    # Gate, build, assert, and only then tag and publish (scripts/release-local.sh).
+    cmds: ["bash scripts/release-local.sh {{.CLI_ARGS}}"]
+
   release:
     desc: Every binary for every platform, plus the self-contained server tarball
     deps: [assets:stage]
@@ -195,8 +200,18 @@ tasks:
       - "echo 'wfx installed — try: wfx workflows'"
 
   # ---- check ----------------------------------------------------------------
+  # There is no hosted CI. `task ci` is the gate: run it before every push and
+  # report "CI: local, task ci, pass" in the pull request.
+  ci:
+    desc: The full gate, run before every push (paired migrations, check, hostile, race, e2e)
+    cmds:
+      - bash scripts/check-migrations.sh
+      - task: check
+      - task: test:hostile
+      - task: test:race
+      - task: e2e
   check:
-    desc: Everything CI would run
+    desc: Tests, vet, every build, the UI and the workflows (part of task ci)
     cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate, task: adapters:test, task: agentadapter:test]
   adapters:test:
     desc: The reference channel adapters against a fake apl (plain node, no deps)
@@ -269,7 +284,17 @@ tasks:
     # to have `task api` running. CI found that on its first run.
     deps: [build:cli, build:api]
     cmds:
-      - bash .github/scripts/validate-workflows.sh
+      - bash scripts/validate-workflows.sh
+
+  # ---- the docs site --------------------------------------------------------
+  site:check:
+    desc: The docs site gates and build (verify-symbols, coverage, wfx help, astro build)
+    dir: site
+    cmds: [npm ci --silent, bash tests/run-all.sh]
+  site:deploy:
+    desc: Build the docs site and publish site/dist to the gh-pages branch
+    deps: [site:check]
+    cmds: [bash scripts/site-deploy.sh]
 
   # ---- the knowledge graph --------------------------------------------------
   graph:

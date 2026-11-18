@@ -18,9 +18,12 @@ workflow by a person:
 
 - **Hook** — `POST /hooks/{project}/{workflow}`. The JSON body is the run's
   input (validated by `input_schema` exactly like a manual run).
-  `Authorization: Bearer <token>`, or `X-WFX-Signature: sha256=<hex>` — an
-  HMAC-SHA256 of the raw body keyed with the hook's **signing secret**, for
-  senders that sign rather than carry a header. The signing secret (`wfxs_` +
+  `Authorization: Bearer <token>`, or a signed request — `X-WFX-Timestamp`
+  (unix seconds), `X-WFX-Event-Id`, and `X-WFX-Signature: sha256=<hex>`, an
+  HMAC-SHA256 of `<timestamp>.<event id>.<raw body>` keyed with the hook's
+  **signing secret**. A timestamp more than 5 minutes off is refused, and an
+  event id already received answers 409 — the same scheme run events OUT use
+  (`PUT /api/projects/{name}/events`). The signing secret (`wfxs_` +
   32 random bytes) is separate from the token, issued with it, shown once, and
   stored sealed with the server's env-store key (`WFX_SECRET_KEY`, the same
   box as stored env values). The token hash is never a key. With no server

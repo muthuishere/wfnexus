@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -29,6 +30,23 @@ func fakeEngineAPI(t *testing.T, runs []map[string]any, steps map[string][]map[s
 // fakeEngineAPIWith also serves memory, state, definitions and the writes a
 // retrospective may make (start a run, write memory, save a workflow), and
 // records each as "METHOD path body".
+// fakeAPIMu guards the request logs the fake API keeps: its handler runs on
+// the server's goroutines while the test reads and resets them.
+var fakeAPIMu sync.Mutex
+
+// logged is a copy of a request log; clearLog empties one.
+func logged(p *[]string) []string {
+	fakeAPIMu.Lock()
+	defer fakeAPIMu.Unlock()
+	return append([]string(nil), (*p)...)
+}
+
+func clearLog(p *[]string) {
+	fakeAPIMu.Lock()
+	defer fakeAPIMu.Unlock()
+	*p = nil
+}
+
 func fakeEngineAPIWith(t *testing.T, runs []map[string]any, steps map[string][]map[string]any,
 	memory []map[string]any) (string, *[]string, *[]string) {
 	t.Helper()
@@ -38,6 +56,8 @@ func fakeEngineAPIWith(t *testing.T, runs []map[string]any, steps map[string][]m
 		"nightly": map[string]any{"name": "nightly", "steps": []any{map[string]any{"id": "check"}}},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fakeAPIMu.Lock()
+		defer fakeAPIMu.Unlock()
 		methods = append(methods, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		p := strings.TrimPrefix(r.URL.Path, "/api")
@@ -194,7 +214,7 @@ func TestRetrospectiveCollectsTracksAndChecks(t *testing.T) {
 	if status["deploy"] != "recurred" || status["nightly"] != "no new failure" {
 		t.Fatalf("fix tracking %v", status)
 	}
-	for _, m := range *methods {
+	for _, m := range logged(methods) {
 		if m != http.MethodGet {
 			t.Fatalf("retrospective sent a %s — it is read-only", m)
 		}
@@ -273,7 +293,7 @@ func TestFrontdeskEngineSnapshot(t *testing.T) {
 	if recent := s["recent"].([]any); recent[0].(map[string]any)["id"] != "b" {
 		t.Fatalf("recent not newest first: %v", recent)
 	}
-	for _, m := range *methods {
+	for _, m := range logged(methods) {
 		if m != http.MethodGet {
 			t.Fatalf("frontdesk sent a %s — it is read-only", m)
 		}
@@ -436,8 +456,8 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 	if r, p := sup["rejected"].([]any), sup["pending"].([]any); len(r) != 1 || r[0] != rejectedFP || len(p) != 1 || p[0] != pendingFP {
 		t.Fatalf("suppressed %v", sup)
 	}
-	if !hasWrite(*writes, "POST /api/workflows/retrospective/memory", "rejected-proposal "+rejectedFP) || len(*writes) != 1 {
-		t.Fatalf("the rejection must be remembered once in retro memory: %v", *writes)
+	if !hasWrite(logged(writes), "POST /api/workflows/retrospective/memory", "rejected-proposal "+rejectedFP) || len(logged(writes)) != 1 {
+		t.Fatalf("the rejection must be remembered once in retro memory: %v", logged(writes))
 	}
 
 	// A real change carries a multiline `run:` with quotes, heredocs and a
@@ -504,7 +524,7 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 	}
 	// propose: one apply-mode run per proposal — one pending approval each,
 	// carrying the change byte for byte.
-	*writes = nil
+	clearLog(writes)
 	code, pout := runScript(t, "templates/retrospective/propose.py", dir, "WFX_API="+url)
 	if code != 0 || len(pout) > 4000 {
 		t.Fatalf("propose: exit %d (%d chars) %s", code, len(pout), pout)
@@ -524,8 +544,8 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 			}
 		}
 	}
-	if len(*writes) != 3 || !hasWrite(*writes, "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
-		t.Fatalf("propose writes %v", *writes)
+	if len(logged(writes)) != 3 || !hasWrite(logged(writes), "POST /api/workflows/retrospective/runs", `"mode": "apply"`) {
+		t.Fatalf("propose writes %v", logged(writes))
 	}
 	var sent struct {
 		Proposal struct {
@@ -536,7 +556,7 @@ func TestRetrospectiveTypedProposals(t *testing.T) {
 			} `json:"change"`
 		} `json:"proposal"`
 	}
-	body := (*writes)[0][strings.Index((*writes)[0], "{"):]
+	body := logged(writes)[0][strings.Index(logged(writes)[0], "{"):]
 	if err := json.Unmarshal([]byte(body), &sent); err != nil || len(sent.Proposal.Change.Definition.Steps) != 2 ||
 		sent.Proposal.Change.Definition.Steps[1]["run"] != longRun {
 		t.Fatalf("the multiline run: did not survive check → propose: %v", err)
@@ -565,14 +585,14 @@ func TestRetrospectiveApproveApplies(t *testing.T) {
 			`PUT /api/state {"scope": "workflow", "name": "deploy", "key": "push-rule"`},
 	}
 	for _, c := range cases {
-		*writes = nil
+		clearLog(writes)
 		dir := t.TempDir()
 		writeJSON(t, filepath.Join(dir, "input.json"), map[string]any{"mode": "apply", "proposal": c.proposal, "fingerprint": "fp1"})
 		if code, out := runScript(t, "templates/retrospective/apply.py", dir, "WFX_API="+url); code != 0 {
 			t.Fatalf("%v: exit %d %s", c.proposal["kind"], code, out)
 		}
-		if !hasWrite(*writes, c.want, "") || !hasWrite(*writes, "POST /api/workflows/retrospective/memory", "applied-proposal fp1") {
-			t.Errorf("%v: writes %v, want %q", c.proposal["kind"], *writes, c.want)
+		if !hasWrite(logged(writes), c.want, "") || !hasWrite(logged(writes), "POST /api/workflows/retrospective/memory", "applied-proposal fp1") {
+			t.Errorf("%v: writes %v, want %q", c.proposal["kind"], logged(writes), c.want)
 		}
 	}
 	dir := t.TempDir()

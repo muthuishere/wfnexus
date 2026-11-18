@@ -62,7 +62,7 @@ export default function ExposePanel({ workflow }: { workflow: string }) {
             <strong>Copy this token now — it will not be shown again.</strong>
             <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{issued.token}</pre>
             {issued.signingSecret && (<>
-              <div className="muted">Signing secret, for an X-WFX-Signature HMAC instead of the bearer token (also shown once)</div>
+              <div className="muted">Signing secret, for a signed request (X-WFX-Signature over timestamp.event-id.body) instead of the bearer token (also shown once)</div>
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{issued.signingSecret}</pre>
             </>)}
             {issued.signingNote && <div className="muted">{issued.signingNote}</div>}

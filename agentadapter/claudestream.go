@@ -95,7 +95,7 @@ func (a *ClaudeStream) Execute(ctx context.Context, t Turn) (string, error) {
 	if model == "" {
 		model = t.Model
 	}
-	return a.run(ctx, model, t.Prompt)
+	return a.run(withScrub(ctx, t.Scrub), model, t.Prompt)
 }
 
 func (a *ClaudeStream) bin() string {
@@ -178,13 +178,13 @@ func claudeTurn(ctx context.Context, p *proc, prompt string) (string, *Usage, er
 		"message": map[string]any{"role": "user", "content": []map[string]string{{"type": "text", "text": prompt}}},
 	})
 	if err := p.write(msg); err != nil {
-		return "", nil, p.exitErr("claude")
+		return "", nil, p.exitErr(ctx, "claude")
 	}
 	for {
 		select {
 		case line, ok := <-p.lines:
 			if !ok {
-				return "", nil, p.exitErr("claude")
+				return "", nil, p.exitErr(ctx, "claude")
 			}
 			var ev struct {
 				Type    string  `json:"type"`

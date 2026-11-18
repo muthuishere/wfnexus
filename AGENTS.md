@@ -44,6 +44,11 @@ cd apps/api && go test ./... && go vet ./...
 cd apps/api && WFX_TEST_REQUIRE_DEPS=1 go test ./...   # authoritative run
 ```
 
+There is no hosted CI and no `.github/workflows` (this repo is public). The gate is local:
+`task ci` before every push, reported in the pull request as "CI: local, task ci, pass".
+A release is `task release:publish -- vX.Y.Z` from a clean, pushed `main` (docs/RELEASING.md); the docs site is
+`task site:deploy`.
+
 Tests that need something from the machine (node, the test Postgres, MinIO) skip when it is
 missing, so the suite runs on a bare laptop. A skip is not a pass: an authoritative run (before a
 merge, in review, in CI) sets `WFX_TEST_REQUIRE_DEPS=1`, which turns those skips into failures

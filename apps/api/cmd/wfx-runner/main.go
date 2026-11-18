@@ -282,7 +282,7 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	fmt.Printf("%s serving %s — waiting for work from %s\n", cfg.Name, strings.Join(cfg.Labels, ", "), cfg.URL)
-	// Built-in tools (aos, ctx-optimize, jevx) before the first job, then kept
+	// Built-in tools (aos, ctx-optimize, jevx, tmvp, gh) before the first job, then kept
 	// at the server's desired versions on every heartbeat (internal/builtins).
 	syncBuiltins(ctx, cfg)
 	if !*once {
@@ -297,6 +297,11 @@ func cmdRun(args []string) error {
 		// Service modules on this worker's labels run beside the job loop and
 		// stop with it (#103).
 		go serviceSupervisor(cfg).Run(ctx)
+	}
+	// Secret files a previous run of this worker left when it was killed
+	// mid-job (its deferred cleanup never ran).
+	if n := engine.SweepStaleSecrets(); n > 0 {
+		fmt.Printf("removed %d stale job secret folder(s)\n", n)
 	}
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -389,6 +394,11 @@ type payload struct {
 	Ref        string            `json:"ref"`
 	Env        map[string]string `json:"env"`
 	TimeoutSec int               `json:"timeoutSec"`
+	// Deliver names the variables in Env whose values the platform handed
+	// over at claim (env-store values, a module's token). They are sealed:
+	// they go into the step's environment and nowhere else — this runner
+	// never logs them and never writes them to disk.
+	Deliver []string `json:"deliver"`
 	// Mount is the workflow's `mount:` lines, resolved against THIS machine's
 	// disk — the platform's folders were never sent and could not be. Files are
 	// the workflow's own scripts, which did travel, and are staged into the
