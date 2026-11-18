@@ -70,7 +70,7 @@ describe('password sign-in', () => {
 })
 
 describe('admin pages', () => {
-  const ana = { id: '1', name: 'ana', displayName: '', role: 'viewer', project: '', disabled: false, mustChange: false, hasPassword: true, createdAt: '' }
+  const ana = { id: '1', name: 'ana', displayName: '', role: '', project: '', disabled: false, mustChange: false, hasPassword: true, createdAt: '' }
   const roles = [{ name: 'admin', permissions: ['*'] }, { name: 'viewer', permissions: ['runs:read'] }]
 
   test('Users: reset shows the one-time password once; disable and role change PUT the user', async () => {
@@ -88,7 +88,7 @@ describe('admin pages', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
     await waitFor(() => expect(calls.some(c => c.method === 'PUT')).toBe(true))
-    expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({ disabled: true, role: 'viewer' })
+    expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({ disabled: true, role: '' })
 
     fireEvent.change(screen.getByLabelText('Role of ana'), { target: { value: 'superadmin' } })
     await waitFor(() => expect(calls.filter(c => c.method === 'PUT').length).toBe(2))
