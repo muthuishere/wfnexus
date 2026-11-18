@@ -1,6 +1,6 @@
 module github.com/muthuishere/wfnexus/agentadapter
 
-go 1.26.0
+go 1.26.11
 
 require github.com/muthuishere/toolnexus/golang v0.19.0
 
