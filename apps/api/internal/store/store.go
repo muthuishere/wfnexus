@@ -124,6 +124,10 @@ func normalizeDriver(driver string) string {
 	return driverPostgres
 }
 
+// IsSQLite reports whether driver names SQLite, by the same rule the store
+// opens with. Every other accepted driver (postgres, postgresql, pgx) is Postgres.
+func IsSQLite(driver string) bool { return normalizeDriver(driver) == driverSQLite }
+
 // Migrate applies the embedded SQL tree for this driver. Idempotent.
 //
 // The two dialects have SEPARATE migration sets, because the applied Postgres
