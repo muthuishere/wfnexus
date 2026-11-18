@@ -21,15 +21,33 @@
 # SKIP_IMAGES=1 publishes the binaries only (no images, no chart).
 set -euo pipefail
 
+step() { echo; echo "==> $1"; }
+die() { echo "release: $1" >&2; exit 1; }
+
+# assert_clean: no tracked file differs from HEAD. Checked before anything,
+# after the gate and after the build: a step that modifies a tracked file
+# would otherwise ship binaries built from uncommitted changes.
+assert_clean() {
+  local changed
+  changed="$(git status --porcelain --untracked-files=no)"
+  [ -z "$changed" ] || die "$1: tracked files changed: $(echo "$changed" | tr '\n' ' ')"
+}
+
+# assert_version: the binary reports EXACTLY the tag ("wfx v0.2.0 (…"). A
+# -dirty or described (v0.2.0-3-gabc) version does not match.
+assert_version() {
+  case "$1" in *" $2 ("*) ;; *) die "built binary reports '$1', not exactly $2" ;; esac
+}
+
+# A test sources this file for the functions above only.
+[ "${RELEASE_LIB_ONLY:-}" = 1 ] && return 0
+
 TAG="${1:-}"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
   echo "usage: task release:publish -- vMAJOR.MINOR.PATCH" >&2; exit 2; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-
-step() { echo; echo "==> $1"; }
-die() { echo "release: $1" >&2; exit 1; }
 
 # ---- 1. preflight ----------------------------------------------------------
 step "preflight"
@@ -42,7 +60,7 @@ if [ "${SKIP_IMAGES:-}" != 1 ]; then
 fi
 [ "$(git rev-parse --is-shallow-repository)" = false ] || die "shallow clone: git describe would lie"
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "not on main"
-[ -z "$(git status --porcelain --untracked-files=no)" ] || die "the working tree has changes"
+assert_clean "preflight"
 git fetch --quiet --tags origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || die "HEAD is not origin/main"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists"
@@ -56,6 +74,7 @@ echo "releasing $TAG of $REPO from $(git rev-parse --short HEAD)"
 step "gate: task ci"
 (cd apps/ui && npm ci --silent)
 GOWORK=off task ci
+assert_clean "after the gate"
 
 # ---- 3. build --------------------------------------------------------------
 step "build"
@@ -64,6 +83,7 @@ PUSHED=0
 cleanup() { [ "$PUSHED" = 1 ] || git tag -d "$TAG" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 GOWORK=off task release
+assert_clean "after the build"
 
 # ---- 4. assert -------------------------------------------------------------
 step "assert: the built binary reports the tag"
@@ -71,7 +91,7 @@ BIN="bin/release/wfx-$(go env GOOS)-$(go env GOARCH)"
 [ -x "$BIN" ] || die "no $BIN to ask"
 GOT="$("$BIN" version | head -n1)"
 echo "tag=$TAG built=$GOT"
-case "$GOT" in *"$TAG"*) ;; *) die "built binary reports '$GOT', not $TAG" ;; esac
+assert_version "$GOT" "$TAG"
 
 step "assert: every artifact is covered by checksums.txt"
 (

@@ -203,9 +203,10 @@ tasks:
   # There is no hosted CI. `task ci` is the gate: run it before every push and
   # report "CI: local, task ci, pass" in the pull request.
   ci:
-    desc: The full gate, run before every push (paired migrations, check, hostile, race, e2e)
+    desc: The full gate, run before every push (paired migrations, release guards, check, hostile, race, e2e)
     cmds:
       - bash scripts/check-migrations.sh
+      - bash scripts/release-local_test.sh
       - task: check
       - task: test:hostile
       - task: test:race
