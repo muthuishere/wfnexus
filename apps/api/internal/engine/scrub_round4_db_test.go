@@ -162,7 +162,7 @@ func TestAnAgentsOutputIsScrubbedBeforeTheNextStepReadsIt(t *testing.T) {
 	def := &workflow.Definition{Name: "r4-next-" + uuid.NewString()[:8], Steps: []workflow.Step{
 		{ID: "a", Prompt: "find it", Env: map[string]string{"R4_TOKEN": r4Secret},
 			OutputSchema: objSchema([]any{"finding"}, map[string]any{"finding": strProp()})},
-		{ID: "b", Run: `printf '%s' '{{ .Steps.a.finding }}' > ` + file},
+		{ID: "b", Run: `printf '%s' "{{ .Steps.a.finding }}" > ` + file},
 	}}
 	normalizeForTest(def)
 	h := newHarness(t, def, newFakeLLM(t, submit(map[string]any{"finding": "saw " + r4Secret}), finish()), "")
