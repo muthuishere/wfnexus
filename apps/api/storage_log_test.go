@@ -68,6 +68,7 @@ func TestOnlyAPlainSQLitePathPrintsItsError(t *testing.T) {
 		{"key/value", "host=db.internal user=wfx password=" + bootPW + " dbname=wfnexus"},
 		{"whitespace", "db.internal wfx " + bootPW},
 		{"a 'password' in the name", "/tmp/password" + bootPW},
+		{"percent-encoded userinfo", "postgres://wfx%3A" + bootPW + "%40db.internal/wfnexus"},
 	} {
 		if out := captureLog(func() { logStorage("sqlite", c.dsn) }); strings.Contains(out, bootPW) {
 			t.Errorf("%s: line %q", c.name, out)
