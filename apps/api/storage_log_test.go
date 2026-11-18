@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
@@ -88,7 +90,7 @@ func TestAServerMessageNeverEchoesAPasswordInTheUserName(t *testing.T) {
 	e := &pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx:` + bootPW + `"`}
 	swapStorage(t, func(string, string) error { return e }, openDB)
 	_, err := openStorage(context.Background(), "postgres", dsn)
-	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `password authentication failed for user "wfx:…" (SQLSTATE 28P01)`) {
+	if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), `password authentication failed (SQLSTATE 28P01; its message is withheld)`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -161,7 +163,7 @@ func TestAllowListedStorageErrorsKeepTheirMessage(t *testing.T) {
 		want string
 	}{
 		{migrate.ErrDirty{Version: 7}, "Dirty database version 7"},
-		{&pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx"`}, `the database server said: password authentication failed for user "wfx" (SQLSTATE 28P01)`},
+		{&pq.Error{Code: "28P01", Message: `password authentication failed for user "wfx"`}, `the database server refused: password authentication failed (SQLSTATE 28P01; its message is withheld)`},
 	} {
 		e := c.err
 		swapStorage(t, func(string, string) error { return e }, openDB)
@@ -179,7 +181,7 @@ func TestAFailedMigrationKeepsItsLineButNotTheWrappedError(t *testing.T) {
 	failed := migratedb.Error{Line: 3, Err: "migration failed", OrigErr: errors.New("driver said " + dsn)}
 	swapStorage(t, func(string, string) error { return failed }, openDB)
 	_, err := openStorage(context.Background(), "postgres", dsn)
-	if err == nil || !strings.Contains(err.Error(), "a migration failed at line 3: migration failed") || strings.Contains(err.Error(), bootPW) {
+	if err == nil || !strings.Contains(err.Error(), "a migration failed at line 3") || strings.Contains(err.Error(), bootPW) {
 		t.Fatalf("migration error = %v", err)
 	}
 }
@@ -190,5 +192,31 @@ func TestASQLiteStorageErrorIsPrintedWhole(t *testing.T) {
 	_, err := openStorage(context.Background(), "sqlite", "/data/w.db")
 	if err == nil || !strings.Contains(err.Error(), "disk I/O error at /data/w.db") {
 		t.Fatalf("sqlite error = %v", err)
+	}
+}
+
+// A database server's message is never printed, whatever its form or
+// language: only the SQLSTATE code and its standard meaning (#177).
+func TestAServerMessageIsNeverPrinted(t *testing.T) {
+	dsn := "postgres://db.internal/wfnexus"
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{&pq.Error{Code: "28P01", Message: `password authentication failed for user "` + bootPW + `"`}, "password authentication failed (SQLSTATE 28P01"},
+		{&pq.Error{Code: "28P01", Message: `Passwort-Authentifizierung für Benutzer »wfx:` + bootPW + `« fehlgeschlagen`}, "password authentication failed (SQLSTATE 28P01"},
+		{&pq.Error{Code: "3D000", Message: `database "` + bootPW + `" does not exist`}, "the database does not exist (SQLSTATE 3D000"},
+		{&pq.Error{Code: "28000", Message: `no such user wfx:` + bootPW}, "the user is not authorized (SQLSTATE 28000"},
+		{&pq.Error{Code: "08006", Message: `username=` + bootPW + ` rejected`}, "a connection error (SQLSTATE 08006"},
+		{&pgconn.PgError{Code: "28P01", Message: `user 'wfx:` + bootPW + `'`}, "password authentication failed (SQLSTATE 28P01"},
+		{&pq.Error{Code: pq.ErrorCode("x" + bootPW), Message: "x"}, "the database server refused (its message is withheld)"},
+		{migratedb.Error{Line: 2, Err: `permission denied for user "` + bootPW + `"`}, "a migration failed at line 2"},
+	} {
+		e := c.err
+		swapStorage(t, func(string, string) error { return e }, openDB)
+		_, err := openStorage(context.Background(), "postgres", dsn)
+		if err == nil || strings.Contains(err.Error(), bootPW) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%T: error = %q, want it to contain %q", c.err, strings.ReplaceAll(fmt.Sprint(err), bootPW, "<pw>"), c.want)
+		}
 	}
 }
