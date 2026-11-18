@@ -25,7 +25,7 @@ func TestEveryShippedWorkflowAndTemplateLoads(t *testing.T) {
 	defs, skips, err := workflow.LoadSources([]workflow.Source{
 		{Name: "workflows", Dir: repoPath(t, "workflows")},
 		{Name: "templates", Dir: repoPath(t, "templates")},
-	}, catalog.NewValidator(reg, cat))
+	}, catalog.NewValidator(reg, cat), shippedModules(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +34,9 @@ func TestEveryShippedWorkflowAndTemplateLoads(t *testing.T) {
 	}
 	if len(defs) == 0 {
 		t.Fatal("nothing loaded")
+	}
+	if defs["conversation-task"] == nil {
+		t.Error("the conversation-task template (it uses a module) did not load")
 	}
 	t.Logf("%d workflows loaded", len(workflow.Sorted(defs)))
 }
@@ -66,4 +69,15 @@ func TestNoShippedWorkflowNamesAnAPIProvider(t *testing.T) {
 			return nil
 		})
 	}
+}
+
+// shippedModules is the modules in this repository as a load option: what a
+// `uses: <module>.<command>` step resolves to, exactly as on a server.
+func shippedModules(t *testing.T) workflow.LoadOption {
+	t.Helper()
+	mods, errs := workflow.FindModules("builtin", repoPath(t, "modules"))
+	if len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	return workflow.WithModules(mods)
 }

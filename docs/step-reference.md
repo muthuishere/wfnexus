@@ -213,6 +213,102 @@ The core `browser` module runs that command with one profile:
   pauses the run for approval before it, every time (see below). `browser.read`
   is not a write and does not pause.
 
+## The `conversation` module: tasks on an external conversational service
+
+`conversation.start_task` asks an external conversational service to run a
+task: contact these targets on this channel and collect these fields.
+`conversation.task_status` reads the task back. The template
+`templates/conversation-task` does both.
+
+```yaml
+steps:
+  - id: start
+    uses: conversation.start_task@0          # effect: write, so the run pauses for approval first
+    with:
+      task_type: collect
+      targets: '["+15550100", {"id": "c-42", "phone": "+15550101", "name": "Ada"}]'
+      fields: '["name", "email"]'
+      channel: whatsapp
+      service_url_env: WFX_CONVERSATION_URL      # NAMES of variables, not values
+      api_key_env: WFX_CONVERSATION_KEY
+  - id: wait
+    uses: conversation.task_status@0
+    with:
+      task_id: '{{ (fromJson .Steps.start.start.stdout).task_id }}'
+      wait_seconds: "1800"                   # 0 = read once
+      poll_seconds: "30"
+      service_url_env: WFX_CONVERSATION_URL
+      api_key_env: WFX_CONVERSATION_KEY
+```
+
+- **Credentials:** `service_url_env` and `api_key_env` name environment
+  variables (set with `wfx env`, the key with `--secret`).
+  - Only names that start with `WFX_CONVERSATION_` are accepted (for example
+    `WFX_CONVERSATION_URL`, `WFX_CONVERSATION_KEY`,
+    `WFX_CONVERSATION_SUPPORT_KEY`). Any other name is refused before the
+    environment is read, so a step can't send another of the machine's
+    credentials.
+  - Neither value is written into a workflow file, and the key is never
+    printed.
+  - Once steps read sec directly (#128), these become sec names.
+- **The URL:** it must be https; plain http is allowed only for localhost,
+  127.0.0.0/8 and ::1. Redirects are never followed, so the key never goes to
+  another origin.
+  - Known: https to an internal or private address is allowed. Only the
+    operator sets the URL (in the env store); a workflow names the variable
+    and cannot choose the address.
+- **The request:** `start_task` sends `POST {url}/tasks` with
+  `{type, targets, fields, channel}`, `Authorization: Bearer <key>` and
+  `Idempotency-Key: <run id>:<step id>`. A retried step therefore starts no
+  second task. Inside a loop the step id names the iteration (`each[1].…`),
+  so each iteration starts its own task. Output: `{task_id, status}`.
+- **Approval:** `start_task` is marked `effect: write`. The engine therefore
+  pauses the run for approval before it, every time: it starts contacting
+  people.
+- **Polling:** `task_status` sends `GET {url}/tasks/{id}` until the status is
+  `done`, `failed` or `cancelled`, or `wait_seconds` (0–3600) passes. Output:
+  `{task_id, status, fields, truncated}`.
+  - A task that ends `failed` or `cancelled` prints its result and fails the
+    step with exit 5.
+  - A deadline that passes fails the step with exit 3 and
+    `deadline reached: last status <status>`.
+  - `task_id` is an identifier (`A-Z a-z 0-9 . _ : -`, 1–128, not `.` or
+    `..`) or start_task's whole JSON output; `poll_seconds` is 1–600
+    (default 10).
+  - The step's own limit is 3900 s: the helper stops itself at
+    `wait_seconds` plus one request timeout (at most 3600 + 120 s).
+  - Each request has its own 30 s limit, which covers its body: a server
+    that trickles its answer is cut off. `WFX_CONVERSATION_REQUEST_TIMEOUT`
+    in the env store sets 1–120 s.
+- **Limits:**
+  - at most 50 targets per call. Each is an E.164 phone (`+15550100`), an
+    identifier (`A-Z a-z 0-9 . _ : -`, 1–128), or an object holding only
+    `id` (an identifier), `phone` (E.164) and `name` (up to 128 printable
+    characters);
+  - 1–50 field names matching `^[a-z][a-z0-9_]{0,63}$`;
+  - `task_type` and `channel` are 1–64 characters of `a-z 0-9 . _ -`;
+  - the key is at least 16 characters;
+  - the service's answer may be at most 1 MiB; a larger one, or a larger
+    declared `Content-Length`, is refused;
+  - a returned field value over 16 KiB is cut, ends in `…[truncated]`, and
+    sets `truncated: true`;
+  - a service error body is shown up to 500 characters. Text is always
+    scrubbed of the key before it is cut, so a cut never leaves part of the
+    key behind.
+- **Untrusted text:** targets and the collected fields come from outside, the
+  fields from the people contacted. Treat them as untrusted text: don't put
+  them into a prompt as instructions or into a script as code. Pass them on
+  as data.
+- **The key is never printed,** in any form a service might echo it back in
+  (raw, JSON-escaped, base64, hex, URL-encoded).
+- **Exit codes:**
+  - 2: invalid input or configuration;
+  - 3: deadline reached;
+  - 4: the service refused, could not be reached, or answered too much or
+    too slowly; its answer is shown without the key or the URL's query
+    string;
+  - 5: the task failed or was cancelled.
+
 ## A module command marked `effect: write` always pauses the run for approval
 
 A step that uses a module command marked `effect: write` (sending a message,
