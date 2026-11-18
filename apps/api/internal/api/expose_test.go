@@ -11,9 +11,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -276,8 +279,8 @@ func TestMCPListsOptedInWorkflowsAndCallsThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 1 || list.Tools[0].Name != "echo" {
-		t.Fatalf("tools = %+v", list.Tools)
+	if names := toolNames(list.Tools); names != "echo,wfx_run_status" {
+		t.Fatalf("tools = %s", names)
 	}
 	if raw, _ := json.Marshal(list.Tools[0]); !strings.Contains(string(raw), `"who"`) {
 		t.Fatalf("input schema = %s", raw)
@@ -309,13 +312,165 @@ func TestMCPListsOptedInWorkflowsAndCallsThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plist.Tools) != 1 || plist.Tools[0].Name != "echo" {
-		t.Fatalf("project tools = %+v", plist.Tools)
+	if names := toolNames(plist.Tools); names != "echo,wfx_run_status" {
+		t.Fatalf("project tools = %s", names)
 	}
 
 	// Revoked: the endpoint refuses.
 	f.call(t, "DELETE", "/api/workflows/demo%2Fecho/expose/mcp", nil, nil)
 	if _, err := mcpClient(t, srv, "/mcp/demo/echo", wfTok); err == nil {
 		t.Fatal("a revoked token opened the MCP endpoint")
+	}
+}
+
+func toolNames(ts []mcp.Tool) string {
+	var n []string
+	for _, t := range ts {
+		n = append(n, t.Name)
+	}
+	sort.Strings(n)
+	return strings.Join(n, ",")
+}
+
+func callTool(t *testing.T, c *client.Client, name string, args map[string]any) map[string]any {
+	t.Helper()
+	req := mcp.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+	res, err := c.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"isError": res.IsError}
+	if raw, _ := json.Marshal(res.StructuredContent); string(raw) != "null" {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
+}
+
+// wfx_wait: 0 answers with the run id at once; the default still waits, so
+// existing callers see no change.
+func TestMCPCallCanReturnTheRunIDAtOnce(t *testing.T) {
+	f := exposeServer(t)
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	c, err := mcpClient(t, srv, "/mcp/demo/echo", f.issue(t, "/api/workflows/demo%2Fecho/expose/mcp", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := c.ListTools(context.Background(), mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range list.Tools {
+		if raw, _ := json.Marshal(tl); tl.Name == "echo" && !strings.Contains(string(raw), mcpWaitArg) {
+			t.Fatalf("echo schema has no %s: %s", mcpWaitArg, raw)
+		}
+	}
+
+	quick := callTool(t, c, "echo", map[string]any{"who": "bo", "wfx_wait": 0})
+	id, _ := quick["runId"].(string)
+	if id == "" || quick["settled"] == true || quick["isError"] == true {
+		t.Fatalf("wfx_wait 0 = %v", quick)
+	}
+	// The argument does not reach the workflow's input.
+	run, err := f.st.GetRun(context.Background(), uuid.MustParse(id))
+	if err != nil || strings.Contains(string(run.Input), mcpWaitArg) {
+		t.Fatalf("input = %s %v", run.Input, err)
+	}
+	// Status reports it until it finishes, with the result.
+	deadline := time.Now().Add(20 * time.Second)
+	var st map[string]any
+	for time.Now().Before(deadline) {
+		if st = callTool(t, c, "wfx_run_status", map[string]any{"run_id": id}); st["settled"] == true {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if raw, _ := json.Marshal(st); st["status"] != "done" || !strings.Contains(string(raw), "hello bo") {
+		t.Fatalf("status = %s", raw)
+	}
+
+	// Default: waits for the result, as before.
+	if def := callTool(t, c, "echo", map[string]any{"who": "al"}); def["status"] != "done" || def["settled"] != true {
+		t.Fatalf("default call = %v", def)
+	}
+	if bad := callTool(t, c, "echo", map[string]any{"wfx_wait": "soon"}); bad["isError"] != true {
+		t.Fatalf("bad wfx_wait = %v", bad)
+	}
+}
+
+// The status tool answers only for runs this token could have started: another
+// project's run id, a workflow the token does not reach, and an unknown id all
+// get the same "run not found".
+func TestMCPRunStatusIsConfinedToTheTokensWorkflows(t *testing.T) {
+	f := exposeServer(t)
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	// A second project with a workflow of the same short name.
+	repo := t.TempDir()
+	wf := filepath.Join(repo, ".wfx", "workflows")
+	if err := os.MkdirAll(wf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wf, "echo.yaml"), []byte(exposeEcho), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.eng.ImportRepo(context.Background(), "beta", repo, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.issue(t, "/api/workflows/demo%2Fecho/expose/mcp", false)
+	f.issue(t, "/api/workflows/beta%2Fecho/expose/mcp", false)
+	tok := func(p string) string {
+		code, out, _ := f.call(t, "POST", "/api/projects/"+p+"/expose/mcp", nil, nil)
+		if code != 201 {
+			t.Fatalf("project token %s = %d %v", p, code, out)
+		}
+		return out["token"].(string)
+	}
+	a, err := mcpClient(t, srv, "/mcp/demo", tok("demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := mcpClient(t, srv, "/mcp/beta", tok("beta"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aRun := callTool(t, a, "echo", map[string]any{"who": "a"})["runId"].(string)
+	if st := callTool(t, a, "wfx_run_status", map[string]any{"run_id": aRun}); st["status"] != "done" {
+		t.Fatalf("own run = %v", st)
+	}
+	// Project beta's token asks for project demo's run.
+	if st := callTool(t, b, "wfx_run_status", map[string]any{"run_id": aRun}); st["isError"] != true || st["status"] != nil {
+		t.Fatalf("beta read demo's run: %v", st)
+	}
+	// A run of a demo workflow the token does not reach (started over REST).
+	code, out, _ := f.call(t, "POST", "/api/workflows/demo%2Fother/runs", []byte(`{}`), nil)
+	if code != 201 {
+		t.Fatalf("run other = %d %v", code, out)
+	}
+	otherRun := out["run"].(map[string]any)["id"].(string)
+	if st := callTool(t, a, "wfx_run_status", map[string]any{"run_id": otherRun}); st["isError"] != true {
+		t.Fatalf("read a run of an unexposed workflow: %v", st)
+	}
+	for _, id := range []string{uuid.NewString(), "nope"} {
+		if st := callTool(t, a, "wfx_run_status", map[string]any{"run_id": id}); st["isError"] != true {
+			t.Fatalf("id %s = %v", id, st)
+		}
+	}
+}
+
+// A workflow whose input uses the reserved wfx_wait name is not offered.
+func TestMCPSkipsWorkflowsUsingReservedNames(t *testing.T) {
+	def := &workflow.Definition{Name: "demo/x", InputSchema: map[string]any{"type": "object",
+		"properties": map[string]any{"wfx_wait": map[string]any{"type": "string"}}}}
+	if !mcpReserved("demo", def) {
+		t.Fatal("wfx_wait input not treated as reserved")
+	}
+	if !mcpReserved("demo", &workflow.Definition{Name: "demo/wfx_run_status"}) {
+		t.Fatal("a workflow named like the status tool not treated as reserved")
+	}
+	if mcpReserved("demo", &workflow.Definition{Name: "demo/echo"}) {
+		t.Fatal("a plain workflow treated as reserved")
 	}
 }
