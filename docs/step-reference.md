@@ -166,6 +166,122 @@ steps:
 
 Prefer `exit-codes` when you know which codes are answers.
 
+## A module command marked `effect: write` always pauses the run for approval
+
+A step that uses a module command marked `effect: write` (sending a message,
+creating an issue, writing a file, …) pauses the run for approval before any
+of that command's steps runs.
+- **Where the pause sits:** on the command's first step, before anything of
+  that call has run. A step the module or the workflow itself marks
+  `requires_approval` keeps that as well.
+- **What the person sees:** the pause shows what the call will run, every
+  step of it with its inputs filled in, scrubbed of the run's secrets.
+- **Pinned:** the run holds what was approved. Its fingerprint covers each
+  step's script, every value the script receives (`WFX_DATA_n`, and the files
+  large values go to), the step's constants, the environment the call runs
+  with (hashed, never shown: `GH_HOST`, env-store values, …), the module's
+  version, the step's definition and the module profile the call resolves
+  to. It is checked before every step of the call, not only the first: if any
+  of it changes (a workflow edited and reloaded, a value, an env-store entry
+  or the profile changed), the step fails with "changed after it was
+  approved" instead of running something nobody approved. Approve it again
+  with a retry.
+- **The profile is resolved at the pause:** a command with a `profile` input
+  (gh's repo, apl's handles) gets the profile the call names, or the module's
+  default, resolved by the engine when the run pauses. The pause shows it
+  (name, account, its inputs such as `repo=`), and every step of the call
+  runs with that resolved profile (`WFX_MODULE_PROFILE`); a step never looks
+  the default up for itself. Where the server resolves the profile again (apl
+  `whatsapp-send` queues on the service's outbox), the step hands it the
+  approved account, and a profile that names another account by then is
+  refused: nothing is queued.
+- **What the pin does not cover: which account a CLI is logged in as.** The
+  pin covers the call's inputs, environment and profile. The identity behind
+  the tools a module runs (`gh auth login`, an apl login, a cloud CLI's
+  credentials) is the machine's, outside the run: switching that login while
+  a run waits changes who the approved write is sent as. Keep those logins
+  stable on a server that runs writes, or give each its own machine.
+- **A retry starts the call again:** retrying any step of a write call resets
+  the call from its first step, which pauses again for approval.
+- **Files between a call's steps:** after each step of a write call the
+  engine fingerprints the call's files (`in.*`, `plan.json`). The next write
+  step compares before it runs: a file changed in between, by anything,
+  fails it with "changed after it was approved". The record (and the call's
+  approval record, once its first step has started) is held in memory, so
+  after a server restart a half-done write call fails (nothing more is
+  written); run it again.
+- **A call follows its first step:** a call's `when:` is decided once, on
+  the call's first step. If that step is skipped, every step of the call is
+  skipped. A write step runs only after the call's first step was approved
+  and finished, whatever else has run in between.
+- **The command's own policy still applies after approval:** gh's and apl's
+  default `responsePolicy: draft` still writes nothing, and `none` skips.
+  `approval` = the engine's pause: the call has already waited for a person,
+  so it then writes, as `auto` does, with no second pause.
+- **No opt-out:** a `with:` override that sets `requires_approval: false` on
+  a module command's step is refused at load, at any level of `uses:`. Other
+  overrides leave the pause in place.
+- **Not in a planned workflow:** a workflow ordered by `goal:` or
+  `consumes`/`produces` cannot use a write command; it is refused at load,
+  naming the workflow and step. (The planner honours each step's `needs`, so
+  a module's steps keep their order there.)
+- **No loops on a `uses:` step:** `foreach`, `until` and `while` on it are a
+  load error. Move the loop into the called workflow, or call the command once
+  per run.
+- **Who may approve:** if the workflow has an approvers policy (`approvers:`
+  or `prevent_self_approval` on any step), the person who started the run may
+  not approve its own write. With no policy, as on a one-person install, the
+  starter may approve.
+  - A run started by another run counts as started by the person at the top.
+  - The policy is the one in force when the run paused; a reloaded
+    definition doesn't change it.
+  - A write's approval needs a named approver; there is no exemption for an
+    unnamed local answer.
+  - Under a policy, a write's approval needs a signed-in user. On the
+    unauthenticated loopback the approver is only a typed name, and anyone
+    there could type an approver's name (or any name but the starter's), so a
+    typed name is refused for a write held to a policy. With no policy a
+    typed name is still accepted.
+  - The loopback device sign-in (`/api/device/verify` with no session)
+    creates only the install's FIRST account, its superadmin owner, and
+    signs loopback-only accounts in again later. Any other new name is
+    refused (an admin adds users: `wfx user add`), so a name typed at the
+    machine can never become a new account with a role. That is what an
+    approver policy on loopback rests on. It also refuses an account with a
+    password (sign in with it: `wfx login --user NAME`) and one an external
+    provider signs in (`name@provider`).
+  - A loopback-only account (no password, no external sign-in) has no
+    credential beyond the machine, so anyone at the machine can sign in as
+    it. Give approvers a password or an external sign-in for an approver
+    policy to hold on loopback.
+  - A second account or a service token counts as a different person: the
+    check is on the account name, not on who is behind it.
+- **Agents are different:** an agent step that lists a write command in its
+  `tools:` gets only the low-confidence pause (`min_confidence`), not this
+  mandatory one. Give a write to a `uses:` step when it must always be
+  approved.
+- **Each call has its own directory:** a module command's steps run in a
+  directory of their own under the run's directory (not the checkout), so two
+  calls running at once don't share their `in.*` files. That is housekeeping,
+  not a boundary: a step runs as the same user and can reach it. What guards
+  a write is the fingerprint above. The directory is left out of the run's
+  archive, and a worker removes it after the call's last step. The checkout
+  is in `WFX_WORKSPACE`.
+- **gh:** `gh.api` only reads (GET); any other method is refused with exit 2.
+  Writing through the API is `gh.api-write` (a write: it pauses), which
+  needs a method other than GET.
+- **Inputs:** module input handling (values reaching module scripts as data)
+  is fixed by #136, so merge #136 first.
+
+## `WFX_*` variables belong to the platform
+
+A workflow, a job or a step may not set a `WFX_*` variable in its `env:`.
+Those names are provided by the platform (`WFX_RUN_ID`, `WFX_STEP_ID`,
+`WFX_API`, `WFX_DATA_*`, …) or by the env store (`wfx env set WFX_…`). A
+workflow that sets one does not load, and the error names the workflow or
+step and the variable. When a step runs, the env store's and the platform's
+`WFX_*` values win over anything else.
+
 ## Secrets travel through the environment, never through step output
 
 A step gets its secrets as environment variables: env-store values, and any

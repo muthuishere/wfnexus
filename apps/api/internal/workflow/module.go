@@ -169,6 +169,12 @@ func LoadModule(dir string) (*Module, error) {
 		if err := checkSpecs(p+" command "+c, t.Inputs); err != nil {
 			return nil, err
 		}
+		if err := writeLoops(t); err != nil {
+			return nil, fmt.Errorf("%s: command %s: %w", p, c, err)
+		}
+	}
+	if err := writeLoops(m.Task); err != nil {
+		return nil, fmt.Errorf("%s: %w", p, err)
 	}
 	for n, s := range m.Services {
 		if !safeModuleName(n) || strings.Contains(n, ".") {
@@ -258,4 +264,27 @@ func envName(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// writeLoops refuses a loop (foreach, until, while) in a write command: the
+// pause and its pin are taken once, on the command's first step, and a retry
+// restarts the call from there. A loop as the first step would repeat past
+// the pause, and an iteration retried on its own would skip the restart.
+func writeLoops(t Task) error {
+	if t.Effect != "write" {
+		return nil
+	}
+	var walk func(steps []Step) error
+	walk = func(steps []Step) error {
+		for i := range steps {
+			if steps[i].IsLoop() {
+				return fmt.Errorf("step %s loops (foreach, until or while); a write command's steps may not loop — call the command once per item instead", steps[i].ID)
+			}
+			if err := walk(steps[i].Steps); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(t.Steps)
 }

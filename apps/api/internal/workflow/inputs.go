@@ -251,6 +251,10 @@ func applyInputs(s *Step, vals map[string]any) {
 		}
 	}
 	s.RunsOn = substInputs(s.RunsOn, vals)
+	if s.CallProfile != nil {
+		p := substInputs(*s.CallProfile, vals)
+		s.CallProfile = &p
+	}
 	if len(s.Env) > 0 {
 		env := make(map[string]string, len(s.Env))
 		for k, v := range s.Env {

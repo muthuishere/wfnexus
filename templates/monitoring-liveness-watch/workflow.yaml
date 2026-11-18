@@ -91,7 +91,6 @@ steps:
       DASHBOARDS: ""                       # FILL e.g. infra/grafana/dashboards/*.json (glob, in your repo)
       HEARTBEATS: "prod-watch=45"          # FILL: watcher workflow=max minutes since its last completed run
       HEARTBEAT_STATE_MAX_MIN: "45"
-      WFX_API: "http://127.0.0.1:8090"
     run: |
       HEARTBEAT_STATE="{{ .Project.prod-watch.heartbeat }}" python3 ./collect.py > signals.json
       rc=$?

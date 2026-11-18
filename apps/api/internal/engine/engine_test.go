@@ -91,7 +91,12 @@ func newHarness(t *testing.T, def *workflow.Definition, llm *fakeLLM, skillRoot 
 		for _, id := range h.runs {
 			eng.Cancel(context.Background(), id)
 		}
-		time.Sleep(50 * time.Millisecond)
+		// Runs started by an approval or a retry are not in h.runs; wait for
+		// every run, its directory archiving included, before the temporary
+		// directories it writes into are removed.
+		if !eng.WaitIdle(30 * time.Second) {
+			t.Error("runs still executing at cleanup")
+		}
 	})
 	return h
 }

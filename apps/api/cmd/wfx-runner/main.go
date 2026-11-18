@@ -387,6 +387,8 @@ type payload struct {
 	Project    string            `json:"project"`
 	Command    string            `json:"command"`
 	Data       []string          `json:"data"`
+	CallDir    string            `json:"callDir"`
+	CallLast   bool              `json:"callLast"`
 	Shell      string            `json:"shell"`
 	RepoURL    string            `json:"repoUrl"`
 	Ref        string            `json:"ref"`
@@ -554,6 +556,23 @@ func do(ctx context.Context, cfg *Config, p payload) result {
 	argv := sh.Command(script)
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Dir = dir
+	// A module call runs in its own directory under this run's, so two calls
+	// never share their in.* files. Only a plain relative path is accepted.
+	if p.CallDir != "" {
+		clean := filepath.Clean(p.CallDir)
+		if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, "..") {
+			return result{Error: "bad call directory " + p.CallDir}
+		}
+		cd := filepath.Join(cfg.WorkDir, "runs", safeName(p.RunID), clean)
+		if err := os.MkdirAll(cd, 0o700); err != nil {
+			return result{Error: err.Error()}
+		}
+		c.Dir = cd
+		if p.CallLast {
+			// Housekeeping: the call is over after this job.
+			defer os.RemoveAll(cd)
+		}
+	}
 	// The step's env is resolved HERE, against this machine. A value like
 	// ${GITHUB_PAT} names a variable this box holds; the platform never had it
 	// and it never crossed the network.

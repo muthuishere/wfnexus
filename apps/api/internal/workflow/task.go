@@ -208,7 +208,7 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 		for _, s := range t.Steps {
 			own[s.ID] = true
 		}
-		for _, s := range t.Steps {
+		for i, s := range t.Steps {
 			step := s // copy; a task is used by many workflows
 			step.ID = prefix + "." + s.ID
 			step.Needs = prefixAll(prefix, s.Needs)
@@ -224,6 +224,16 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			}
 			step.Consumes = renameAll(u.Consumes, s.Consumes)
 			step.Produces = renameAll(u.Produces, s.Produces)
+			// A module command's step may not be told not to pause: an
+			// approval its module or the platform asks for is not the
+			// caller's to waive.
+			if s.Module != "" || s.WriteEffect || t.Module != "" {
+				for _, key := range []string{"*", s.ID} {
+					if o, ok := u.With[key]; ok && o.RequiresApproval != nil && !*o.RequiresApproval {
+						return fmt.Errorf("%s: with %q sets requires_approval: false on %s, a module command's step; a module command's approval cannot be switched off", where, key, step.ID)
+					}
+				}
+			}
 			applyOverride(&step, u.With["*"])
 			applyOverride(&step, u.With[s.ID])
 			if len(t.Inputs) > 0 {
@@ -231,7 +241,33 @@ func (d *Definition) expandUses(tasks map[string]*Task, opt loadOptions) error {
 			}
 			if t.Module != "" {
 				step.Module = t.Module
+				if _, ok := t.Inputs["profile"]; ok {
+					p := inputText(vals["profile"])
+					step.CallProfile = &p
+				}
 			}
+			// A module command marked `effect: write` changes something
+			// outside the run, so the run pauses for approval before it, on
+			// the command's first step, before anything of it has run. The
+			// marks travel with the step through every level of `uses:` and
+			// the pause is derived from them AFTER every override, so no
+			// caller can switch it off. A step the module itself marks
+			// requires_approval keeps it.
+			if t.Effect == "write" {
+				step.WriteEffect = true
+				step.WriteEntry = step.WriteEntry || i == 0
+			}
+			if step.WriteEntry {
+				step.RequiresApproval = true
+			}
+			// The call this step belongs to: the innermost call keeps it,
+			// re-prefixed as outer calls rename the step.
+			if s.CallHead != "" {
+				step.CallHead = prefix + "." + s.CallHead
+			} else if len(t.Steps) > 0 {
+				step.CallHead = prefix + "." + t.Steps[0].ID
+			}
+			step.CallSelf = step.ID
 			expanded = append(expanded, step)
 		}
 	}

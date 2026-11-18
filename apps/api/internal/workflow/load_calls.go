@@ -290,6 +290,8 @@ func (x *expander) run(cat Catalog) {
 			normalize(d)
 			if err := d.validate(ForProject(cat, g.name)); err != nil {
 				fail(g, d, err)
+			} else if err := checkWritePlacement(d, x.opt.localLabels); err != nil && !x.opt.anyRunner {
+				fail(g, d, err)
 			}
 		}
 	}

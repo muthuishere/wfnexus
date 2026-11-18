@@ -221,6 +221,12 @@ type JobPayload struct {
 	RepoURL string            `json:"repoUrl,omitempty"`
 	Ref     string            `json:"ref,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// CallDir is a module call's own directory under the worker's run
+	// directory, so two calls never share their in.* files (nodes.go).
+	CallDir string `json:"callDir,omitempty"`
+	// CallLast: no later step of the call needs this one, so the worker
+	// removes the call directory when the job ends.
+	CallLast bool `json:"callLast,omitempty"`
 	// Deliver names the variables whose values come from the env store (and a
 	// module's token). The job row keeps only these NAMES; the values are put
 	// into Env in the claim response, for the worker that holds the job, and
@@ -261,6 +267,9 @@ type JobResult struct {
 
 // runRemote queues a command for a worker holding `label` and waits for it.
 func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.Step, rt workflow.RunText, label string, data workflow.TemplateData) (map[string]any, error) {
+	if step.WriteEffect {
+		return nil, fmt.Errorf("step %s would run on a worker (%s): write commands run on the server's runner only for now", step.ID, label)
+	}
 	cmd := rt.Display()
 	env, err := e.stepEnv(ctx, runID, step, "")
 	if err != nil {
@@ -272,6 +281,10 @@ func (e *Engine) runRemote(ctx context.Context, runID uuid.UUID, step *workflow.
 		RunID: runID.String(), StepID: step.ID, Command: rt.Script, Data: rt.Data,
 		Shell: step.Shell, TimeoutSec: step.TimeoutSec, Env: env,
 		Mount: mounts, Files: files, Deliver: deliver, Module: step.Module,
+	}
+	if step.Module != "" {
+		payload.CallDir = "calls/" + CallKey(step.ID)
+		payload.CallLast = lastOfCall(e.defOfRun(ctx, runID), step)
 	}
 	if run, err := e.store.GetRun(ctx, runID); err == nil {
 		payload.Project = run.Project

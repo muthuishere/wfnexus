@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,6 +99,27 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	if data.WorkDir != "" {
 		c.Dir = data.WorkDir
 	}
+	// A module command's step runs in its own call directory, so two calls
+	// running at once never share their in.* files. It is under the run's
+	// own directory, not the checkout, so nothing there is ever committed.
+	callDir := ""
+	if step.Module != "" && e.cfg.WorkDir != "" {
+		callDir = filepath.Join(e.cfg.WorkDir, runID.String(), "calls", CallKey(step.ID))
+		if err := os.MkdirAll(callDir, 0o700); err != nil {
+			return nil, fmt.Errorf("step %s: call directory: %w", step.ID, err)
+		}
+		c.Dir = callDir
+		if e.testHookBeforeCallStep != nil {
+			e.testHookBeforeCallStep(step, callDir)
+		}
+		// The files a call's earlier steps wrote (in.*, plan.json) are what
+		// this write step acts on; they must be exactly what those steps
+		// left, after the approval (callgate.go).
+		if err := e.checkCallFiles(runID, step, callDir); err != nil {
+			return nil, err
+		}
+		defer e.recordCallFiles(runID, step, callDir)
+	}
 	// The whole cascade — system, project, then the file — resolved against
 	// THIS machine. A reference to a variable nobody set is an error naming the
 	// variable, rather than an empty string and a 401 somewhere far away.
@@ -108,6 +130,14 @@ func (e *Engine) runCommand(ctx context.Context, runID uuid.UUID, step *workflow
 	stepEnv, err := workflow.ResolveEnv(env)
 	if err != nil {
 		return nil, fmt.Errorf("step %s: %w", step.ID, err)
+	}
+	// The module profile the step uses, resolved by the engine (for a write
+	// call, the one pinned at its pause); added after ResolveEnv so nothing
+	// in it is read as a reference.
+	if prof, ok, err := e.profileEnv(ctx, runID, step, data); err != nil {
+		return nil, err
+	} else if ok {
+		stepEnv = append(stepEnv, "WFX_MODULE_PROFILE="+prof)
 	}
 	// The step's story files (story.go): summary, outcome, state.
 	story, err := newStoryFiles()
@@ -178,4 +208,31 @@ func (e *Engine) runJudge(ctx context.Context, runID uuid.UUID, step *workflow.S
 // isAgent reports whether a step actually runs an agent — the expensive kind.
 func isAgent(s *workflow.Step) bool {
 	return s.Run == "" && s.Judge == nil && s.Send == nil && s.Start == nil
+}
+
+// CallKey names a module call's directory: the call's id (the step id without
+// the command's own step), made safe as one path segment. Steps of one call
+// share it; two calls never do.
+func CallKey(stepID string) string {
+	call := stepID
+	if i := strings.LastIndex(stepID, "."); i >= 0 {
+		call = stepID[:i]
+	}
+	key := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, call)
+	// Never a path step of its own: no "..", no leading dot.
+	for strings.Contains(key, "..") {
+		key = strings.ReplaceAll(key, "..", "_")
+	}
+	key = strings.TrimLeft(key, ".")
+	if key == "" {
+		key = "_"
+	}
+	return key
 }
