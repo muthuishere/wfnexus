@@ -55,9 +55,15 @@ type Subject struct {
 	Project string
 	User    *store.User
 	Worker  *store.Worker
-	// Tenant is set for a service subject only, and only from its stored
-	// principal row: never from anything in the request.
-	Tenant    string
+	// Tenant is set only from a stored row, never from anything in the
+	// request: a service subject's principal row, an account's issuer link,
+	// or a user's user_tenants row (ADR 0035). For a user, "" means
+	// unscoped, as every user was before organizations. Readers that mean
+	// "a service or account caller" check Kind, not Tenant.
+	Tenant string
+	// OrgRole is a user's role in Tenant ("org-admin" or "member"), from the
+	// same row; "" when Tenant is "".
+	OrgRole   string
 	Principal *store.ServicePrincipal
 	// SessionID is the refresh row an access JWT was minted from (ADR 0028);
 	// logout deletes it.
@@ -256,6 +262,8 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 		"name":          sub.Name,
 		"role":          sub.Role,
 		"project":       sub.Project,
+		"tenant":        sub.Tenant,
+		"orgRole":       sub.OrgRole,
 		"grants":        grants,
 	})
 }

@@ -343,7 +343,57 @@ func (o *OAuth) Exchange(ctx context.Context, code, redirectURI string, a AuthRe
 			groups = append(groups, fmt.Sprint(g))
 		}
 	}
-	return &Identity{Provider: o.cfg.Name, Subject: subject, Username: name, Groups: groups}, nil
+	id := &Identity{Provider: o.cfg.Name, Subject: subject, Username: name, Groups: groups}
+	if o.cfg.OrgClaim != "" {
+		if err := o.orgClaims(idt, id); err != nil {
+			return nil, err
+		}
+	}
+	return id, nil
+}
+
+// maxOrgClaim bounds an organization claim: it becomes a tenant name and
+// a log line, and no real tenant id is anywhere near this long.
+const maxOrgClaim = 256
+
+// orgClaims reads the organization and role claims from the VERIFIED
+// id_token, never from userinfo: the id_token is signed by the issuer and
+// checked above, while userinfo is a second, separate answer. A missing org
+// claim leaves Org empty (the api package refuses the sign-in); a claim of
+// the wrong shape is refused here. The role claim may be a string or an
+// array of strings (providers send both); other values are ignored.
+func (o *OAuth) orgClaims(idt *oidc.IDToken, id *Identity) error {
+	if idt == nil {
+		return errors.New("an organization claim needs an id_token")
+	}
+	var c map[string]any
+	if err := idt.Claims(&c); err != nil {
+		return err
+	}
+	switch v := c[o.cfg.OrgClaim].(type) {
+	case nil:
+	case string:
+		if len(v) > maxOrgClaim {
+			return fmt.Errorf("the %s claim is too long", o.cfg.OrgClaim)
+		}
+		id.Org = v
+	default:
+		return fmt.Errorf("the %s claim is not a string", o.cfg.OrgClaim)
+	}
+	if o.cfg.RoleClaim == "" {
+		return nil
+	}
+	switch v := c[o.cfg.RoleClaim].(type) {
+	case string:
+		id.OrgRoles = []string{v}
+	case []any:
+		for _, r := range v {
+			if s, ok := r.(string); ok {
+				id.OrgRoles = append(id.OrgRoles, s)
+			}
+		}
+	}
+	return nil
 }
 
 // checkIDToken verifies an id_token with go-oidc (signature, iss, aud, exp)

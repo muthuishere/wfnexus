@@ -49,6 +49,7 @@ func buildProviders(s *Server) {
 	for _, err := range errs {
 		log.Printf("auth: provider disabled: %v", err)
 	}
+	refuseUnscopedOrgProviders(ps)
 	if s.configuredPublicURL() == "" {
 		for name, p := range ps {
 			if p.Redirect != nil {
@@ -97,6 +98,12 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	if id.Subject == "" {
 		return nil, errors.New("the provider gave no stable id for the person")
 	}
+	// The organization is checked first, so a refused sign-in makes no
+	// account (ADR 0035). nil for a provider without orgClaim.
+	org, err := s.resolveOrg(ctx, p, id)
+	if err != nil {
+		return nil, err
+	}
 	provider := p.Config.Name
 	u, err := s.store.UserBySubject(ctx, provider, id.Subject)
 	if errors.Is(err, store.ErrNotFound) && id.LegacySubject != "" && id.LegacySubject != id.Subject {
@@ -135,6 +142,11 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 		return nil, err
 	} else if st == store.LinkConfirm {
 		return nil, errLinkPending
+	}
+	if org != nil {
+		if err := s.bindOrg(ctx, p, u, org); err != nil {
+			return nil, err
+		}
 	}
 	s.syncRoles(ctx, p, u, id.Groups)
 	return s.store.UserByName(ctx, u.Name)

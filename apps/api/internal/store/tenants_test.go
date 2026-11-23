@@ -414,3 +414,55 @@ func TestTenantMigrationRollsBackAndReapplies(t *testing.T) {
 		migrateTo(t, "postgres", ".", pu.String(), pgTenants)
 	})
 }
+
+// A user is bound to one tenant: binding again to the same tenant refreshes
+// the role, binding to another is refused and changes nothing, and a user
+// with no binding is unscoped, not an error (ADR 0035).
+func TestUserTenantBinding(t *testing.T) {
+	bothDialects(t, func(t *testing.T, st *Store) {
+		ctx := context.Background()
+		// Unique ids: the Postgres database is shared by this package's tests.
+		sfx := uuid.NewString()[:8]
+		acme, globex := "acme-"+sfx, "globex-"+sfx
+		for _, id := range []string{acme, globex} {
+			if _, err := st.CreateTenant(ctx, id, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		u := &User{Name: "bob-" + uuid.NewString()[:8]}
+		if err := st.CreateUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+		if tn, role, err := st.UserTenant(ctx, u.ID); err != nil || tn != "" || role != "" {
+			t.Fatalf("unbound: %q %q %v", tn, role, err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "org-admin"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "member"); err != nil {
+			t.Fatalf("refresh role: %v", err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "member"); err != nil {
+			t.Fatalf("same role again: %v", err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, globex, "org-admin"); !errors.Is(err, ErrUserTenantBound) {
+			t.Fatalf("switch: %v, want ErrUserTenantBound", err)
+		}
+		if tn, role, err := st.UserTenant(ctx, u.ID); err != nil || tn != acme || role != "member" {
+			t.Fatalf("after switch attempt: %q %q %v", tn, role, err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "superadmin"); err == nil {
+			t.Fatal("a role outside org-admin/member was stored")
+		}
+		if p, err := st.UserProvider(ctx, u.ID); err != nil || p != "" {
+			t.Fatalf("UserProvider of a local user: %q %v", p, err)
+		}
+		// Deleting the user takes the binding with it.
+		if err := st.DeleteUser(ctx, u.Name); err != nil {
+			t.Fatal(err)
+		}
+		if tn, _, err := st.UserTenant(ctx, u.ID); err != nil || tn != "" {
+			t.Fatalf("binding outlived its user: %q %v", tn, err)
+		}
+	})
+}

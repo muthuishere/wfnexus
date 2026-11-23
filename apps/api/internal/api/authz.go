@@ -14,7 +14,9 @@ import (
 // it likes — an OIDC id_token, a group claim, an `X-` header naming a role —
 // and none of it is read here. Authentication says WHO; this file says WHAT,
 // out of the local `roles` table, and a role revoked locally stops working on
-// the next request whatever the provider still asserts.
+// the next request whatever the provider still asserts. (ADR 0035: an
+// organization's role claim may only SELECT, at sign-in, among the roles the
+// operator's roleMap declares; it is never a role itself, and never read here.)
 
 // The permission vocabulary. It is named from the routes that EXIST rather
 // than invented, and it is stored in roles.permissions — the role set is rows,
