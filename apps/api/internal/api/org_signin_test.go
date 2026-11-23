@@ -14,8 +14,8 @@ import (
 )
 
 // Organizations at sign-in (#188, ADR 0035). The sign-in path is exercised
-// with orgScopingForTest on; TestOrgClaimIsRefusedUntilScopingIsEnforced
-// proves that without it a provider with orgClaim is not enabled at all.
+// with orgScopingForTest on; TestOrgClaimProviderIsEnabledNowScopingIsEnforced
+// proves the provider is enabled now that #189 enforces the scoping.
 
 // acmeID is the tenant the claim "acme" maps to on the test provider.
 var acmeID = store.OrgTenantID("sso", "acme")
@@ -211,23 +211,24 @@ func TestNoOrgClaimLeavesSignInUnchanged(t *testing.T) {
 	}
 }
 
-// While organization scoping (#189) is not enforced, a provider that sets
-// orgClaim is not enabled: it is not offered and its sign-in is not served.
-func TestOrgClaimIsRefusedUntilScopingIsEnforced(t *testing.T) {
-	if orgScopingEnforced {
-		t.Skip("organization scoping is enforced in this build")
+// Organization scoping (#189) is enforced in this build, so a provider that
+// sets orgClaim is enabled: it is offered on the sign-in page and its sign-in
+// starts. (Before #189 it was refused when the providers were built.)
+func TestOrgClaimProviderIsEnabledNowScopingIsEnforced(t *testing.T) {
+	if !orgScopingEnforced {
+		t.Fatal("organization scoping (#189) is wired, so orgScopingEnforced must be true")
 	}
 	op := newMockOP(t, "s3cret-value")
 	h, _ := orgServer(t, op, nil)
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, httptest.NewRequest("GET", "/api/auth/providers", nil))
-	if strings.Contains(res.Body.String(), `"sso"`) {
-		t.Fatalf("providers lists the refused provider: %s", res.Body)
+	if !strings.Contains(res.Body.String(), `"sso"`) {
+		t.Fatalf("providers does not list the organization provider: %s", res.Body)
 	}
 	start := httptest.NewRecorder()
 	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/sso/start", nil))
-	if start.Code == 302 {
-		t.Fatalf("start of a refused provider: %d %s", start.Code, start.Header())
+	if start.Code != 302 {
+		t.Fatalf("start of the organization provider: %d %s", start.Code, start.Header())
 	}
 }
 
