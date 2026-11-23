@@ -59,6 +59,10 @@ func (s *Server) orgStateWrite(w http.ResponseWriter, r *http.Request, scope, na
 		notFound(w)
 		return false
 	}
+	if !s.tenantWritable(r, project) {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("forbidden: this subject does not hold %s", PermStateWrite))
+		return false
+	}
 	ok := s.canAdminProject(r, project)
 	switch scope {
 	case model.StateScopeWorkflow:
@@ -153,6 +157,12 @@ func (s *Server) runStateAddress(w http.ResponseWriter, r *http.Request, scope, 
 	name, err := s.eng.RunStateAddress(r.Context(), id, scope, stepID)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return "", "", false
+	}
+	// The global namespace is the server's (#189): a run of an
+	// organization's does not reach it through this door either.
+	if !s.tenantVisible(r, s.stateProject(scope, name)) {
+		notFound(w)
 		return "", "", false
 	}
 	return scope, name, true

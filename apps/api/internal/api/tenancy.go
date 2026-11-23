@@ -81,6 +81,15 @@ func (s *Server) tenantVisible(r *http.Request, project string) bool {
 	return err == nil && owner == tenant
 }
 
+// tenantWritable is tenantVisible for the role checks, which decide what a
+// caller may CHANGE: the shipped templates are readable by every tenant and
+// so changeable by none — their env, state and memory would otherwise be a
+// channel between organizations. A person in no organization keeps what
+// they had.
+func (s *Server) tenantWritable(r *http.Request, project string) bool {
+	return s.tenantVisible(r, project) && (project != engine.TemplatesSource || orgPerson(r) == nil)
+}
+
 // projectTenant names a project's tenant from the bindings, read once per
 // request.
 func (s *Server) projectTenant(r *http.Request, project string) (string, error) {
@@ -210,12 +219,12 @@ func (s *Server) tenantGate(r *http.Request) bool {
 			return !org
 		}
 		return s.tenantVisible(r, b.Project)
+	case path == "/api/state" && method == http.MethodPut:
+		return true // the body names the namespace: setState (orgStateWrite)
 	case path == "/api/state" || strings.HasPrefix(path, "/api/state/"):
-		// The operator's door names its namespace in the query (a list, a
-		// delete) or in the body (a write: setState).
-		if q.Has("scope") {
-			return s.tenantVisible(r, s.stateProject(q.Get("scope"), q.Get("name")))
-		}
+		// A list or a delete names its namespace in the query. No scope, or
+		// the global one, is the server's (stateProject "").
+		return s.tenantVisible(r, s.stateProject(q.Get("scope"), q.Get("name")))
 	}
 	return true
 }

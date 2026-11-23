@@ -80,26 +80,27 @@ func (s *Server) holds(r *http.Request, scope, name string, roles ...string) boo
 // canAdminProject: a superadmin, a project_admin of it, or — inside their own
 // tenant only — an organization's org-admin (#189).
 func (s *Server) canAdminProject(r *http.Request, project string) bool {
-	return s.isSuper(r) || s.tenantVisible(r, project) &&
+	return s.isSuper(r) || s.tenantWritable(r, project) &&
 		(orgAdmin(r) || s.holds(r, store.MemberProject, project, store.ProjectAdmin))
 }
 
 func (s *Server) canAdminWorkflow(r *http.Request, wf string) bool {
-	return s.canAdminProject(r, s.eng.ProjectFor(wf)) || s.holds(r, store.MemberWorkflow, wf, store.WorkflowAdmin)
+	return s.canAdminProject(r, s.eng.ProjectFor(wf)) ||
+		s.holds(r, store.MemberWorkflow, wf, store.WorkflowAdmin) && s.tenantWritable(r, s.eng.ProjectFor(wf))
 }
 
 // canRunWorkflow: an admin of it, a workflow_runner of it, or any person in
 // the organization whose tenant it is in (#189).
 func (s *Server) canRunWorkflow(r *http.Request, wf string) bool {
 	return s.canAdminWorkflow(r, wf) || s.holds(r, store.MemberWorkflow, wf, store.WorkflowRunner) ||
-		orgMember(r) && s.tenantVisible(r, s.eng.ProjectFor(wf))
+		orgMember(r) && s.tenantWritable(r, s.eng.ProjectFor(wf))
 }
 
 // canSaveInto: may write a workflow into project — its admin, or any person
 // in the organization whose tenant it is in (a member edits the tenant's
 // workflows, #189).
 func (s *Server) canSaveInto(r *http.Request, project string) bool {
-	return s.canAdminProject(r, project) || orgMember(r) && s.tenantVisible(r, project)
+	return s.canAdminProject(r, project) || orgMember(r) && s.tenantWritable(r, project)
 }
 
 // orgMayAdmin is, for a person in an organization, the check a route that is

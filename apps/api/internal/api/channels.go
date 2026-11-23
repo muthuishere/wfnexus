@@ -32,6 +32,12 @@ func (s *Server) channelRoutes(r interface {
 }
 
 func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
+	// The adapters are the server's configuration, not an organization's
+	// (#189).
+	if orgMember(r) {
+		writeErr(w, http.StatusForbidden, errors.New("forbidden: channel adapters are the operator's"))
+		return
+	}
 	writeJSON(w, 200, map[string]any{"default": s.eng.DefaultChannel(), "channels": s.eng.Channels(r.Context())})
 }
 

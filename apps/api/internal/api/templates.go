@@ -98,6 +98,21 @@ func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"ok": true, "name": def.Name, "path": path,
-		"definition": s.eng.Definitions()[def.Name],
+		"definition": s.savedDefinition(r, into, def.Name),
 	})
+}
+
+// savedDefinition is the definition a save into project just made. The bare
+// name may belong to an earlier-loaded project — another tenant's (#163) —
+// so the project's own qualified key is read first, and a definition the
+// caller may not see is never the answer (#189).
+func (s *Server) savedDefinition(r *http.Request, project, name string) *workflow.Definition {
+	d := s.eng.Definitions()[project+"/"+name]
+	if d == nil {
+		d = s.eng.Definitions()[name]
+	}
+	if d == nil || !s.tenantVisible(r, sourceProject(d)) {
+		return nil
+	}
+	return d
 }
