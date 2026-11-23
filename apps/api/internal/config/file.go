@@ -43,6 +43,9 @@ type File struct {
 	// PublicURL is the address workers are told to reach, when this sits
 	// behind an ingress.
 	PublicURL string `yaml:"publicUrl,omitempty"`
+	// TrustedProxies are the reverse proxies (CIDRs or single addresses)
+	// whose X-Forwarded-For is believed. Empty: none, the peer is the client.
+	TrustedProxies []string `yaml:"trustedProxies,omitempty"`
 
 	Storage struct {
 		// Driver is "sqlite" or "postgres".

@@ -144,7 +144,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		}
 	}
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
+	// clientIP, not chi's RealIP: RealIP believes forwarding headers from
+	// anyone, which let any caller choose its own rate-limit key (clientip.go).
+	r.Use(middleware.RequestID, clientIP(eng.TrustedProxies()), middleware.Logger, middleware.Recoverer)
 	// Route on the ESCAPED path so an encoded slash survives routing.
 	//
 	// A workflow from an imported source is addressed as `source/name`, and chi

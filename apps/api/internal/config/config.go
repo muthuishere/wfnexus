@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -117,6 +118,11 @@ type Config struct {
 	// PublicURL is the address a worker can reach this server on, used to build
 	// the join command shown in the dashboard. Empty ⇒ inferred per request.
 	PublicURL string
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For names the
+	// client (WFX_TRUSTED_PROXIES, comma separated, or trustedProxies). Empty,
+	// the default, trusts none: the direct peer is the client, and a forwarded
+	// header is ignored, whoever sends it.
+	TrustedProxies []netip.Prefix
 	// LLMAPIKeyEnv names the env var holding the provider key — the NAME, never
 	// the value, so a key cannot end up in config, logs or an event.
 	LLMAPIKeyEnv string
@@ -311,6 +317,13 @@ func LoadWithFile(path string) (Config, error) {
 	if strings.EqualFold(strings.TrimSpace(env("WFX_TEMPLATES", f.Templates)), "off") {
 		cfg.TemplatesOff, cfg.TemplatesDir = true, ""
 	}
+	if tp, err := ParseTrustedProxies(splitList(env("WFX_TRUSTED_PROXIES", join(f.TrustedProxies)))); err != nil {
+		if merr == nil {
+			merr = err
+		}
+	} else {
+		cfg.TrustedProxies = tp
+	}
 	if ferr == nil {
 		ferr = merr
 	}
@@ -318,6 +331,38 @@ func LoadWithFile(path string) (Config, error) {
 		ferr = cfg.validate()
 	}
 	return cfg, ferr
+}
+
+// ParseTrustedProxies reads CIDRs, or single addresses as one-host prefixes.
+// A wrong entry is an error, never skipped: a proxy the operator named and the
+// server silently did not trust would put every client behind it on one key.
+func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, e := range entries {
+		if p, err := netip.ParsePrefix(e); err == nil {
+			out = append(out, netip.PrefixFrom(p.Addr().Unmap(), unmappedBits(p)).Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(e)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q is not a CIDR or an address", e)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+// unmappedBits keeps a v4-mapped prefix (::ffff:a.b.c.d/120) meaning the same
+// v4 range once its address is unmapped.
+func unmappedBits(p netip.Prefix) int {
+	if p.Addr().Is4In6() {
+		if b := p.Bits() - 96; b >= 0 {
+			return b
+		}
+		return 0
+	}
+	return p.Bits()
 }
 
 // validate refuses a driver nobody implements. Without it a typo in
