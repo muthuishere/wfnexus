@@ -102,11 +102,41 @@ func (s *Server) subjectFromJWT(ctx context.Context, tok string) (*Subject, erro
 	if err != nil || u.ID.String() != c.Sub {
 		return nil, errors.New("unauthenticated")
 	}
+	return s.userSubject(ctx, u, t)
+}
+
+// userSubject is the one place a person's Subject is built, from their user
+// row, the session row, and their organization binding (ADR 0035). The
+// tenant comes only from user_tenants. A store error there fails the
+// request: it is never read as "no organization", which would unscope the
+// person.
+func (s *Server) userSubject(ctx context.Context, u *store.User, t *store.UserToken) (*Subject, error) {
 	project := u.Project
 	if t.Project != "" {
 		project = t.Project
 	}
-	return &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, Project: project, User: u, SessionID: t.ID}, nil
+	tenant, orgRole, err := s.store.UserTenant(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case u.Role == RoleSuperadmin:
+		// A superadmin is the operator, across every tenant, whatever a
+		// binding made before they were promoted says (ADR 0035).
+		tenant, orgRole = "", ""
+	case tenant == "":
+		// A person who signs in through an organization provider must be
+		// in an organization. With no row (an operator moved them out, or
+		// the provider gained orgClaim after they signed in) they are
+		// refused rather than served unscoped; signing in again binds them.
+		if org, err := s.orgProviderOf(ctx, u); err != nil {
+			return nil, err
+		} else if org {
+			return nil, errOrgUnbound
+		}
+	}
+	return &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, Project: project, User: u, SessionID: t.ID,
+		Tenant: tenant, OrgRole: orgRole}, nil
 }
 
 // refreshAccess trades a refresh value for a new access token.
@@ -118,11 +148,11 @@ func (s *Server) refreshAccess(ctx context.Context, refresh string) (string, *Su
 	if err != nil || !isRefreshLabel(t.Label) {
 		return "", nil, errors.New("unauthenticated")
 	}
-	project := u.Project
-	if t.Project != "" {
-		project = t.Project
+	sub, err := s.userSubject(ctx, u, t)
+	if err != nil {
+		return "", nil, err
 	}
-	return s.mintAccess(u, t), &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, Project: project, User: u, SessionID: t.ID}, nil
+	return s.mintAccess(u, t), sub, nil
 }
 
 // refresh is POST /api/auth/refresh {refresh_token}. A browser sends nothing

@@ -1,0 +1,581 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/config"
+	"github.com/muthuishere/wfnexus/apps/api/internal/login"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
+)
+
+// Organizations at sign-in (#188, ADR 0035). The sign-in path is exercised
+// with orgScopingForTest on; TestOrgClaimIsRefusedUntilScopingIsEnforced
+// proves that without it a provider with orgClaim is not enabled at all.
+
+// acmeID is the tenant the claim "acme" maps to on the test provider.
+var acmeID = store.OrgTenantID("sso", "acme")
+
+// withOrgScoping switches the sign-in path on for one test.
+func withOrgScoping(t *testing.T) {
+	t.Helper()
+	orgScopingForTest = true
+	t.Cleanup(func() { orgScopingForTest = false })
+}
+
+// orgConfig is ssoConfig with organization settings.
+func orgConfig(op *mockOP, edit func(p *config.AuthProvider)) config.Auth {
+	a := ssoConfig(op)
+	// ssoConfig maps groups to server roles, which a provider with orgClaim
+	// is refused for: an organization's roles come only from roleMap.
+	a.Providers[0].GroupRoles = nil
+	a.Providers[0].OrgClaim = "tid"
+	a.Providers[0].RoleClaim = "roles"
+	a.Providers[0].RoleMap = map[string]string{"Org.Admin": config.OrgRoleAdmin, "Org.Reader": config.OrgRoleMember}
+	a.Providers[0].AutoCreateOrg = true
+	if edit != nil {
+		edit(&a.Providers[0])
+	}
+	return a
+}
+
+func orgServer(t *testing.T, op *mockOP, edit func(p *config.AuthProvider)) (http.Handler, *store.Store) {
+	t.Helper()
+	t.Setenv("TEST_SSO_SECRET", "s3cret-value")
+	return testServerPublic(t, orgConfig(op, edit), testPublicURL)
+}
+
+// idClaims makes the mock provider's id_token carry these claims.
+func idClaims(op *mockOP, extra map[string]any) {
+	op.claimsEdit = func(c map[string]any) {
+		for k, v := range extra {
+			c[k] = v
+		}
+	}
+}
+
+func TestOrgSignIn(t *testing.T) {
+	withOrgScoping(t)
+	for _, c := range []struct {
+		name     string
+		edit     func(p *config.AuthProvider)
+		precreat string         // a tenant the operator made beforehand
+		first    map[string]any // the first sign-in's id_token claims
+		second   map[string]any // a second sign-in's, nil for none
+		want     int            // the LAST sign-in's status
+		tenant   string         // whoami's tenant after it, when 303
+		role     string
+	}{
+		{name: "first sign-in creates the tenant and binds",
+			first: map[string]any{"tid": "acme", "roles": []any{"Org.Admin"}},
+			want:  303, tenant: acmeID, role: config.OrgRoleAdmin},
+		{name: "repeat sign-in keeps the binding and refreshes the role",
+			first:  map[string]any{"tid": "acme", "roles": []any{"Org.Admin"}},
+			second: map[string]any{"tid": "acme", "roles": "Org.Reader"},
+			want:   303, tenant: acmeID, role: config.OrgRoleMember},
+		{name: "a role value not in the map is member",
+			first: map[string]any{"tid": "acme", "roles": []any{"Global.Admin", "superadmin"}},
+			want:  303, tenant: acmeID, role: config.OrgRoleMember},
+		{name: "no role claim is member",
+			first: map[string]any{"tid": "acme"},
+			want:  303, tenant: acmeID, role: config.OrgRoleMember},
+		{name: "any mapped admin value wins",
+			first: map[string]any{"tid": "acme", "roles": []any{"Org.Reader", "Org.Admin"}},
+			want:  303, tenant: acmeID, role: config.OrgRoleAdmin},
+		{name: "a claim that is not a tenant id is derived the same way",
+			first: map[string]any{"tid": "Acme Corp"},
+			want:  303, tenant: store.OrgTenantID("sso", "Acme Corp"), role: config.OrgRoleMember},
+		{name: "a claim naming the default tenant gets its own tenant",
+			first: map[string]any{"tid": store.DefaultTenant},
+			want:  303, tenant: store.OrgTenantID("sso", store.DefaultTenant), role: config.OrgRoleMember},
+		{name: "a claim equal to another claim's derived id gets its own tenant",
+			first: map[string]any{"tid": acmeID},
+			want:  303, tenant: store.OrgTenantID("sso", acmeID), role: config.OrgRoleMember},
+		{name: "allowedOrgs admits a listed organization",
+			edit:  func(p *config.AuthProvider) { p.AllowedOrgs = []string{"globex", "acme"} },
+			first: map[string]any{"tid": "acme"},
+			want:  303, tenant: acmeID, role: config.OrgRoleMember},
+		{name: "allowedOrgs refuses any other",
+			edit:  func(p *config.AuthProvider) { p.AllowedOrgs = []string{"globex"} },
+			first: map[string]any{"tid": "acme"},
+			want:  401},
+		{name: "a claim too long is refused",
+			first: map[string]any{"tid": strings.Repeat("a", 300)},
+			want:  401},
+		{name: "missing claim is refused",
+			first: map[string]any{"roles": "Org.Admin"},
+			want:  401},
+		{name: "a claim that is not a string is refused",
+			first: map[string]any{"tid": 7},
+			want:  401},
+		{name: "a different organization later is refused",
+			first:  map[string]any{"tid": "acme"},
+			second: map[string]any{"tid": "globex"},
+			want:   401},
+		{name: "autoCreateOrg off refuses an unknown organization",
+			edit:  func(p *config.AuthProvider) { p.AutoCreateOrg = false },
+			first: map[string]any{"tid": "acme"},
+			want:  401},
+		{name: "autoCreateOrg off admits an organization the operator made",
+			edit:     func(p *config.AuthProvider) { p.AutoCreateOrg = false },
+			precreat: acmeID,
+			first:    map[string]any{"tid": "acme"},
+			want:     303, tenant: acmeID, role: config.OrgRoleMember},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			op := newMockOP(t, "s3cret-value")
+			h, st := orgServer(t, op, c.edit)
+			ctx := context.Background()
+			if c.precreat != "" {
+				if _, err := st.CreateTenant(ctx, c.precreat, c.precreat); err != nil {
+					t.Fatal(err)
+				}
+			}
+			idClaims(op, c.first)
+			w, _ := oauthFlow(t, h, "sso", nil)
+			if c.second != nil {
+				if w.Code != 303 {
+					t.Fatalf("first sign-in: %d %s", w.Code, w.Body)
+				}
+				idClaims(op, c.second)
+				w, _ = oauthFlow(t, h, "sso", nil)
+			}
+			if w.Code != c.want {
+				t.Fatalf("sign-in: %d %s, want %d", w.Code, w.Body, c.want)
+			}
+			if c.want != 303 {
+				if oauthSession(w) != "" {
+					t.Fatal("a refused sign-in set a session")
+				}
+				if strings.Contains(w.Body.String(), "acme") || strings.Contains(w.Body.String(), "globex") {
+					t.Fatalf("the refusal leaks the claim: %s", w.Body)
+				}
+				u, err := st.UserBySubject(ctx, "sso", "42")
+				switch {
+				case c.second == nil && !errors.Is(err, store.ErrNotFound):
+					t.Fatalf("a refused first sign-in made an account: %v %v", u, err)
+				case c.second != nil:
+					// The org switch: the account keeps its first binding.
+					if tn, _, _ := st.UserTenant(ctx, u.ID); tn != acmeID {
+						t.Fatalf("binding after a refused switch = %q", tn)
+					}
+					if _, err := st.GetTenant(ctx, store.OrgTenantID("sso", "globex")); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("a refused switch created its tenant: %v", err)
+					}
+				}
+				return
+			}
+			who := whoami(t, h, w)
+			if who["tenant"] != c.tenant || who["orgRole"] != c.role {
+				t.Fatalf("whoami tenant=%v orgRole=%v, want %s %s", who["tenant"], who["orgRole"], c.tenant, c.role)
+			}
+			if _, err := st.GetTenant(ctx, c.tenant); err != nil {
+				t.Fatalf("tenant %s: %v", c.tenant, err)
+			}
+		})
+	}
+}
+
+// The org claim is read from the signed id_token, never from userinfo: a
+// claim only userinfo carries is as good as no claim.
+func TestOrgClaimIsReadFromTheIDTokenOnly(t *testing.T) {
+	withOrgScoping(t)
+	op := newMockOP(t, "s3cret-value")
+	op.userinfo["tid"] = "acme"
+	h, _ := orgServer(t, op, nil)
+	if w, _ := oauthFlow(t, h, "sso", nil); w.Code != 401 {
+		t.Fatalf("sign-in with tid only in userinfo: %d %s", w.Code, w.Body)
+	}
+}
+
+// Without orgClaim on any provider nothing changes: the person signs in as
+// before, with their mapped roles, and is unscoped.
+func TestNoOrgClaimLeavesSignInUnchanged(t *testing.T) {
+	op := newMockOP(t, "s3cret-value")
+	idClaims(op, map[string]any{"tid": "acme", "roles": "Org.Admin"})
+	h, st := oidcServerStore(t, op)
+	w, _ := oauthFlow(t, h, "sso", nil)
+	if w.Code != 303 {
+		t.Fatalf("sign-in: %d %s", w.Code, w.Body)
+	}
+	who := whoami(t, h, w)
+	if who["name"] != "bob@sso" || who["role"] != RoleSuperadmin || who["tenant"] != "" || who["orgRole"] != "" {
+		t.Fatalf("whoami: %v", who)
+	}
+	if _, err := st.GetTenant(context.Background(), acmeID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a tenant was created without orgClaim: %v", err)
+	}
+}
+
+// While organization scoping (#189) is not enforced, a provider that sets
+// orgClaim is not enabled: it is not offered and its sign-in is not served.
+func TestOrgClaimIsRefusedUntilScopingIsEnforced(t *testing.T) {
+	if orgScopingEnforced {
+		t.Skip("organization scoping is enforced in this build")
+	}
+	op := newMockOP(t, "s3cret-value")
+	h, _ := orgServer(t, op, nil)
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, httptest.NewRequest("GET", "/api/auth/providers", nil))
+	if strings.Contains(res.Body.String(), `"sso"`) {
+		t.Fatalf("providers lists the refused provider: %s", res.Body)
+	}
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/sso/start", nil))
+	if start.Code == 302 {
+		t.Fatalf("start of a refused provider: %d %s", start.Code, start.Header())
+	}
+}
+
+// orgGuarded holds an organization's person to the guard unless their
+// provider says orgPolicy "full". It fails closed: a provider no longer
+// configured leaves them guarded. An unscoped person is never guarded here.
+func TestOrgGuarded(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		policy   string // "" = the default
+		provider bool   // the user's provider is still configured
+		tenant   string
+		want     bool
+	}{
+		{"default policy is guarded", "", true, "acme", true},
+		{"guarded", config.OrgPolicyGuarded, true, "acme", true},
+		{"full", config.OrgPolicyFull, true, "acme", false},
+		{"provider removed is guarded", config.OrgPolicyFull, false, "acme", true},
+		{"unscoped person", "", true, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, st := testServerPublic(t, config.Auth{}, testPublicURL)
+			ctx := context.Background()
+			u := &store.User{Name: "bob@sso"}
+			if err := st.CreateUser(ctx, u); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := st.SetSubject(ctx, u.ID, "sso", "42"); err != nil || !ok {
+				t.Fatalf("SetSubject: %v %v", ok, err)
+			}
+			pc := config.AuthProvider{Name: "sso", Type: "oidc", OrgClaim: "tid", OrgPolicy: c.policy}
+			if err := pc.NormalizeOrg(); err != nil {
+				t.Fatal(err)
+			}
+			s := &Server{store: st, providers: map[string]*login.Provider{}}
+			if c.provider {
+				s.providers["sso"] = &login.Provider{Config: pc}
+			}
+			r := httptest.NewRequest("GET", "/", nil)
+			r = r.WithContext(withSubject(ctx, &Subject{Kind: SubjectUser, Name: u.Name, User: u, Tenant: c.tenant}))
+			if got := s.orgGuarded(r); got != c.want {
+				t.Fatalf("orgGuarded = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Config validation: a half-written organization block, or one on a
+// provider with no id_token, is refused when the providers are built.
+func TestOrgConfigValidation(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		p    config.AuthProvider
+		ok   bool
+	}{
+		{"no org settings", config.AuthProvider{Type: "oidc"}, true},
+		{"orgClaim alone", config.AuthProvider{Type: "oidc", OrgClaim: "tid"}, true},
+		{"google", config.AuthProvider{Type: "google", OrgClaim: "hd"}, true},
+		{"github has no id_token", config.AuthProvider{Type: "github", OrgClaim: "org"}, false},
+		{"ldap", config.AuthProvider{Type: "ldap", OrgClaim: "o"}, false},
+		{"roleClaim without orgClaim", config.AuthProvider{Type: "oidc", RoleClaim: "roles"}, false},
+		{"roleMap without orgClaim", config.AuthProvider{Type: "oidc", RoleMap: map[string]string{"a": "member"}}, false},
+		{"autoCreateOrg without orgClaim", config.AuthProvider{Type: "oidc", AutoCreateOrg: true}, false},
+		{"orgPolicy without orgClaim", config.AuthProvider{Type: "oidc", OrgPolicy: "full"}, false},
+		{"roleMap without roleClaim", config.AuthProvider{Type: "oidc", OrgClaim: "tid", RoleMap: map[string]string{"a": "member"}}, false},
+		{"roleMap to a server role", config.AuthProvider{Type: "oidc", OrgClaim: "tid", RoleClaim: "roles", RoleMap: map[string]string{"a": "superadmin"}}, false},
+		{"unknown orgPolicy", config.AuthProvider{Type: "oidc", OrgClaim: "tid", OrgPolicy: "open"}, false},
+		{"defaultRole with orgClaim", config.AuthProvider{Type: "oidc", OrgClaim: "tid", DefaultRole: "workflow_runner:w"}, false},
+		{"groupRoles superadmin with orgClaim", config.AuthProvider{Type: "oidc", OrgClaim: "tid", GroupRoles: map[string]string{"admins": "superadmin"}}, false},
+		{"groupRoles a project role with orgClaim", config.AuthProvider{Type: "oidc", OrgClaim: "tid", GroupRoles: map[string]string{"admins": "project_admin:p"}}, false},
+		{"server roles without orgClaim are as before", config.AuthProvider{Type: "oidc", DefaultRole: "superadmin", GroupRoles: map[string]string{"admins": "superadmin"}}, true},
+		{"allowedOrgs", config.AuthProvider{Type: "oidc", OrgClaim: "tid", AllowedOrgs: []string{"acme"}}, true},
+		{"allowedOrgs without orgClaim", config.AuthProvider{Type: "oidc", AllowedOrgs: []string{"acme"}}, false},
+		{"allowedOrgs with an empty value", config.AuthProvider{Type: "oidc", OrgClaim: "tid", AllowedOrgs: []string{""}}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := c.p
+			err := p.NormalizeOrg()
+			if (err == nil) != c.ok {
+				t.Fatalf("NormalizeOrg: %v, want ok=%v", err, c.ok)
+			}
+			if c.ok && p.OrgClaim != "" && p.OrgPolicy != config.OrgPolicyGuarded {
+				t.Fatalf("orgPolicy default = %q", p.OrgPolicy)
+			}
+		})
+	}
+}
+
+// A provider with orgClaim that sets groupRoles (here, to superadmin) is not
+// enabled:
+// the refusal happens when the providers are built, so its sign-in is never
+// served, with organization scoping on.
+func TestOrgProviderWithServerRolesIsRefusedAtLoad(t *testing.T) {
+	withOrgScoping(t)
+	op := newMockOP(t, "s3cret-value")
+	h, _ := orgServer(t, op, func(p *config.AuthProvider) { p.GroupRoles = map[string]string{"admins": "superadmin"} })
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, httptest.NewRequest("GET", "/api/auth/providers", nil))
+	if strings.Contains(res.Body.String(), `"sso"`) {
+		t.Fatalf("providers lists the refused provider: %s", res.Body)
+	}
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/sso/start", nil))
+	if start.Code == 302 {
+		t.Fatalf("start of a refused provider: %d", start.Code)
+	}
+}
+
+// An account that already holds superadmin signs in through an org provider
+// without being bound: it stays unscoped and keeps superadmin. An ordinary
+// existing account is bound (TestOrgSignIn covers new accounts; this covers
+// one that existed before the sign-in).
+func TestOrgSignInOfAnExistingAccount(t *testing.T) {
+	withOrgScoping(t)
+	for _, c := range []struct {
+		name       string
+		superadmin bool
+		tenant     string
+		role       string
+	}{
+		{"an existing superadmin is not bound", true, "", RoleSuperadmin},
+		{"an existing ordinary account is bound", false, acmeID, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			op := newMockOP(t, "s3cret-value")
+			op.userinfo["groups"] = []string{} // no mapped project role either
+			h, st := orgServer(t, op, nil)
+			ctx := context.Background()
+			u := &store.User{Name: "bob@sso", DisplayName: "bob"}
+			if err := st.CreateUser(ctx, u); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := st.SetSubject(ctx, u.ID, "sso", "42"); err != nil || !ok {
+				t.Fatalf("SetSubject: %v %v", ok, err)
+			}
+			if c.superadmin {
+				if err := st.SetUserRole(ctx, u.Name, RoleSuperadmin); err != nil {
+					t.Fatal(err)
+				}
+			}
+			idClaims(op, map[string]any{"tid": "acme", "roles": "Org.Admin"})
+			w, _ := oauthFlow(t, h, "sso", nil)
+			if w.Code != 303 {
+				t.Fatalf("sign-in: %d %s", w.Code, w.Body)
+			}
+			who := whoami(t, h, w)
+			if who["name"] != "bob@sso" || who["tenant"] != c.tenant {
+				t.Fatalf("whoami: %v, want tenant %q", who, c.tenant)
+			}
+			if c.superadmin && who["role"] != RoleSuperadmin {
+				t.Fatalf("the superadmin lost its role: %v", who)
+			}
+			tn, _, err := st.UserTenant(ctx, u.ID)
+			if err != nil || tn != c.tenant {
+				t.Fatalf("binding = %q %v, want %q", tn, err, c.tenant)
+			}
+			if c.superadmin {
+				if _, err := st.GetTenant(ctx, acmeID); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("a superadmin's sign-in created a tenant: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// orgSignedIn signs bob in through the org provider as a member of acme and
+// returns the handler, the store, the sign-in response and bob's account.
+func orgSignedIn(t *testing.T) (http.Handler, *store.Store, *httptest.ResponseRecorder, *store.User) {
+	t.Helper()
+	op := newMockOP(t, "s3cret-value")
+	h, st := orgServer(t, op, nil)
+	idClaims(op, map[string]any{"tid": "acme", "roles": "Org.Admin"})
+	w, _ := oauthFlow(t, h, "sso", nil)
+	if w.Code != 303 {
+		t.Fatalf("sign-in: %d %s", w.Code, w.Body)
+	}
+	u, err := st.UserBySubject(context.Background(), "sso", "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, st, w, u
+}
+
+func execSQL(t *testing.T, st *store.Store, q string) {
+	t.Helper()
+	if _, err := st.DB().Exec(q); err != nil {
+		t.Fatalf("%s: %v", q, err)
+	}
+}
+
+// A person of an org provider with no binding is refused, never served
+// unscoped. Moving a person out (UnbindUserTenant) also ends every session
+// they hold.
+func TestOrgPersonWithoutABindingIsRefused(t *testing.T) {
+	withOrgScoping(t)
+	h, st, w, u := orgSignedIn(t)
+	ctx := context.Background()
+	execSQL(t, st, "DELETE FROM user_tenants")
+	if r := withCookie(h, "GET", "/api/whoami", oauthSession(w), nil); r.Code != 401 {
+		t.Fatalf("an unbound org person: %d %s", r.Code, r.Body)
+	}
+	if tn, _, _ := st.UserTenant(ctx, u.ID); tn != "" {
+		t.Fatalf("binding = %q", tn)
+	}
+
+	t.Run("unbind ends the sessions", func(t *testing.T) {
+		h, st, w, u := orgSignedIn(t)
+		if who := whoami(t, h, w); who["tenant"] != acmeID {
+			t.Fatalf("whoami: %v", who)
+		}
+		if err := st.UnbindUserTenant(context.Background(), u.ID); err != nil {
+			t.Fatal(err)
+		}
+		if r := withCookie(h, "GET", "/api/whoami", oauthSession(w), nil); r.Code != 401 {
+			t.Fatalf("after unbind: %d %s", r.Code, r.Body)
+		}
+		var n int
+		if err := st.DB().QueryRow("SELECT count(*) FROM user_tokens WHERE user_id=?", u.ID.String()).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("tokens survived the unbind: %d %v", n, err)
+		}
+	})
+}
+
+// Signing in again after the binding is gone binds afresh.
+func TestOrgPersonSigningInAgainIsBound(t *testing.T) {
+	withOrgScoping(t)
+	op := newMockOP(t, "s3cret-value")
+	h, st := orgServer(t, op, nil)
+	idClaims(op, map[string]any{"tid": "acme"})
+	if w, _ := oauthFlow(t, h, "sso", nil); w.Code != 303 {
+		t.Fatalf("sign-in: %d", w.Code)
+	}
+	execSQL(t, st, "DELETE FROM user_tenants")
+	w, _ := oauthFlow(t, h, "sso", nil)
+	if w.Code != 303 {
+		t.Fatalf("sign-in again: %d %s", w.Code, w.Body)
+	}
+	if who := whoami(t, h, w); who["tenant"] != acmeID {
+		t.Fatalf("whoami: %v", who)
+	}
+}
+
+// A person promoted to superadmin after being bound is unscoped from then on,
+// whatever the row says.
+func TestASuperadminIsUnscopedWhateverTheRowSays(t *testing.T) {
+	withOrgScoping(t)
+	h, st, w, u := orgSignedIn(t)
+	if err := st.SetUserRole(context.Background(), u.Name, RoleSuperadmin); err != nil {
+		t.Fatal(err)
+	}
+	who := whoami(t, h, w)
+	if who["role"] != RoleSuperadmin || who["tenant"] != "" || who["orgRole"] != "" {
+		t.Fatalf("whoami: %v", who)
+	}
+}
+
+// A failure reading the binding fails the request; it is never read as
+// "no organization".
+func TestAUserTenantStoreErrorFailsTheRequest(t *testing.T) {
+	withOrgScoping(t)
+	h, st, w, _ := orgSignedIn(t)
+	execSQL(t, st, "DROP TABLE user_tenants")
+	if r := withCookie(h, "GET", "/api/whoami", oauthSession(w), nil); r.Code != 401 {
+		t.Fatalf("whoami with the binding unreadable: %d %s", r.Code, r.Body)
+	}
+}
+
+// A binding that fails at the store leaves neither the account the sign-in
+// made nor the tenant it would have created.
+func TestABindingStoreErrorLeavesNoOrphans(t *testing.T) {
+	withOrgScoping(t)
+	op := newMockOP(t, "s3cret-value")
+	h, st := orgServer(t, op, nil)
+	execSQL(t, st, "CREATE TRIGGER refuse_bind BEFORE INSERT ON user_tenants BEGIN SELECT RAISE(ABORT, 'refused'); END")
+	idClaims(op, map[string]any{"tid": "acme"})
+	w, _ := oauthFlow(t, h, "sso", nil)
+	if w.Code == 303 || oauthSession(w) != "" {
+		t.Fatalf("sign-in with the binding failing: %d", w.Code)
+	}
+	ctx := context.Background()
+	if _, err := st.UserBySubject(ctx, "sso", "42"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the account the refused sign-in made is left: %v", err)
+	}
+	if _, err := st.GetTenant(ctx, acmeID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the tenant the refused sign-in made is left: %v", err)
+	}
+}
+
+// The browser's refresh path (an expired access cookie, a live refresh
+// cookie) builds the Subject through the same helper: Tenant comes back.
+func TestTheRefreshPathCarriesTheTenant(t *testing.T) {
+	withOrgScoping(t)
+	h, _, w, _ := orgSignedIn(t)
+	refresh := ""
+	for _, c := range w.Result().Cookies() {
+		if c.Name == refreshCookieName {
+			refresh = c.Value
+		}
+	}
+	if refresh == "" {
+		t.Fatal("no refresh cookie")
+	}
+	req := httptest.NewRequest("GET", "/api/whoami", nil)
+	req.Header.Set("Origin", "http://"+req.Host)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "expired.not.valid"})
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: refresh})
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != 200 {
+		t.Fatalf("whoami via refresh: %d %s", res.Code, res.Body)
+	}
+	if who := decode(t, res); who["tenant"] != acmeID || who["orgRole"] != config.OrgRoleAdmin {
+		t.Fatalf("whoami via refresh: %v", who)
+	}
+}
+
+// A CLI token from the device grant, approved by an org person, carries
+// their organization, read from the store on every request: a role change
+// shows on the next request, and a binding removed refuses it.
+func TestADeviceTokenReadsTheTenantPerRequest(t *testing.T) {
+	withOrgScoping(t)
+	h, st, w, u := orgSignedIn(t)
+	ctx := context.Background()
+	start := decode(t, do(h, "POST", "/api/device/code", "", map[string]string{"client_id": "wfx-cli"}))
+	deviceCode, userCode := start["device_code"].(string), start["user_code"].(string)
+	if r := withCookie(h, "POST", "/api/device/verify", oauthSession(w), map[string]string{"user_code": userCode}); r.Code != 200 {
+		t.Fatalf("approve: %d %s", r.Code, r.Body)
+	}
+	if _, err := st.TouchDevicePoll(ctx, normalizeUserCode(userCode), 0); err != nil {
+		t.Fatal(err)
+	}
+	issued := decode(t, do(h, "POST", "/api/device/token", "", map[string]string{"grant_type": deviceGrantType, "device_code": deviceCode}))
+	tok, _ := issued["access_token"].(string)
+	if tok == "" {
+		t.Fatalf("no token: %v", issued)
+	}
+	who := decode(t, do(h, "GET", "/api/whoami", tok, nil))
+	if who["name"] != u.Name || who["tenant"] != acmeID || who["orgRole"] != config.OrgRoleAdmin {
+		t.Fatalf("whoami with the CLI token: %v", who)
+	}
+	if err := st.BindUserTenant(ctx, u.ID, acmeID, config.OrgRoleMember); err != nil {
+		t.Fatal(err)
+	}
+	if who := decode(t, do(h, "GET", "/api/whoami", tok, nil)); who["orgRole"] != config.OrgRoleMember {
+		t.Fatalf("the role change did not show on the next request: %v", who)
+	}
+	execSQL(t, st, "DELETE FROM user_tenants")
+	if r := do(h, "GET", "/api/whoami", tok, nil); r.Code != 401 {
+		t.Fatalf("the CLI token with the binding gone: %d %s", r.Code, r.Body)
+	}
+}

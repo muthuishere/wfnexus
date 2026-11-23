@@ -28,6 +28,13 @@ type Identity struct {
 	LegacySubject string
 	Username      string
 	Groups        []string
+	// Org and OrgRoles are read from the verified id_token, and only when
+	// the provider sets orgClaim / roleClaim. Org is the claim's raw value
+	// ("" when absent); OrgRoles are the role claim's raw values, which the
+	// api package looks up in the operator's roleMap and never uses as
+	// roles themselves.
+	Org      string
+	OrgRoles []string
 }
 
 // ErrBadCredentials is the one refusal a password provider gives.
@@ -73,6 +80,10 @@ func Build(cfgs []config.AuthProvider, loopback bool) (map[string]*Provider, []e
 		}
 		if _, dup := out[c.Name]; dup || c.Name == "password" && c.Type != "password" {
 			errs = append(errs, fmt.Errorf("auth provider %q is named twice", c.Name))
+			continue
+		}
+		if err := c.NormalizeOrg(); err != nil {
+			errs = append(errs, fmt.Errorf("auth provider %q: %w", c.Name, err))
 			continue
 		}
 		p := &Provider{Config: c}

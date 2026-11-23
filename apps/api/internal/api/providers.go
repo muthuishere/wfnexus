@@ -49,6 +49,7 @@ func buildProviders(s *Server) {
 	for _, err := range errs {
 		log.Printf("auth: provider disabled: %v", err)
 	}
+	refuseUnscopedOrgProviders(ps)
 	if s.configuredPublicURL() == "" {
 		for name, p := range ps {
 			if p.Redirect != nil {
@@ -97,6 +98,12 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	if id.Subject == "" {
 		return nil, errors.New("the provider gave no stable id for the person")
 	}
+	// The organization is checked first, so a refused sign-in makes no
+	// account (ADR 0035). nil for a provider without orgClaim.
+	org, err := s.resolveOrg(ctx, p, id)
+	if err != nil {
+		return nil, err
+	}
 	provider := p.Config.Name
 	u, err := s.store.UserBySubject(ctx, provider, id.Subject)
 	if errors.Is(err, store.ErrNotFound) && id.LegacySubject != "" && id.LegacySubject != id.Subject {
@@ -119,12 +126,13 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 			return nil, errAmbiguousAccount
 		}
 	}
+	created := false
 	switch {
 	case err == nil:
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, err
 	default:
-		if u, err = s.bindOrCreate(ctx, p, id); err != nil {
+		if u, created, err = s.bindOrCreate(ctx, p, id); err != nil {
 			return nil, err
 		}
 	}
@@ -135,6 +143,23 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 		return nil, err
 	} else if st == store.LinkConfirm {
 		return nil, errLinkPending
+	}
+	if org != nil && u.Role == RoleSuperadmin {
+		// A superadmin is the operator, across every tenant; binding them
+		// to one organization would neither contain them nor be right. The
+		// account stays unscoped (Tenant "").
+		log.Printf("auth: AUDIT account %q is a superadmin: not bound to organization %q (tenant %s) on sign-in (%s)", u.Name, org.name, org.tenant, provider)
+	} else if org != nil {
+		if err := s.bindOrg(ctx, p, u, org); err != nil {
+			if created {
+				// An account this sign-in made and could not place in its
+				// organization is not left behind, unbound.
+				if derr := s.store.DeleteUser(ctx, u.Name); derr != nil {
+					log.Printf("auth: %s: removing account %q after a refused sign-in: %v", provider, u.Name, derr)
+				}
+			}
+			return nil, err
+		}
 	}
 	s.syncRoles(ctx, p, u, id.Groups)
 	return s.store.UserByName(ctx, u.Name)
@@ -153,6 +178,8 @@ func userNames(us []*store.User) string {
 }
 
 // bindOrCreate handles a (provider, subject) seen for the first time.
+// created says whether it made a new account (rather than binding an
+// existing one), so a sign-in refused after this can delete what it made.
 //
 // A legacy row named <user>@<provider> (one that existed before subjects were
 // kept) is bound according to the provider that carries its name:
@@ -161,7 +188,7 @@ func userNames(us []*store.User) string {
 //   - a redirect provider (oidc, google, github) binds it once, to the
 //     subject that signs in with that name, with an audit line; if it held
 //     roles its tokens are revoked and it waits for an admin's confirmation.
-func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.Identity) (*store.User, error) {
+func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.Identity) (u *store.User, created bool, err error) {
 	provider := p.Config.Name
 	name := id.Username + "@" + provider
 	if p.Redirect == nil {
@@ -170,18 +197,18 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 		// an audit line); several are left to an admin, unchanged.
 		legacies, err := s.store.LegacyUsersNamed(ctx, name)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(legacies) > 1 {
 			log.Printf("auth: AUDIT sign-in as %s (%s) refused: legacy accounts %s differ only in case; an admin removes or renames all but one (`wfx-server link list` shows them)", id.Username, provider, userNames(legacies))
-			return nil, errAmbiguousAccount
+			return nil, false, errAmbiguousAccount
 		}
 		if len(legacies) == 1 && legacies[0].Name != name {
 			if ok, err := s.store.BindLegacy(ctx, legacies[0].ID, provider, id.Subject, id.Username, ""); err != nil {
-				return nil, err
+				return nil, false, err
 			} else if ok {
 				log.Printf("auth: AUDIT account %s bound to directory id %s on sign-in as %s (%s); its name differs in case", legacies[0].Name, id.Subject, id.Username, provider)
-				return legacies[0], nil
+				return legacies[0], false, nil
 			}
 		}
 	}
@@ -189,32 +216,32 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 		if st, _ := s.store.LinkState(ctx, legacy.ID); st == store.LinkLegacy {
 			if p.Redirect == nil {
 				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, id.Username, ""); err != nil {
-					return nil, err
+					return nil, false, err
 				} else if ok {
-					return legacy, nil
+					return legacy, false, nil
 				}
 			} else {
 				grants, err := s.store.HasGrants(ctx, legacy.ID)
 				if err != nil {
-					return nil, err
+					return nil, false, err
 				}
 				state := store.LinkLinked
 				if grants {
 					state = store.LinkConfirm
 				}
 				if ok, err := s.store.BindLegacy(ctx, legacy.ID, provider, id.Subject, id.Username, state); err != nil {
-					return nil, err
+					return nil, false, err
 				} else if ok {
 					note := "review with `wfx-server link list`; `wfx-server link reject " + name + "` undoes it"
 					if grants {
 						// Nothing it held before keeps it signed in meanwhile.
 						if err := s.store.RevokeAllUserTokens(ctx, legacy.ID); err != nil {
-							return nil, err
+							return nil, false, err
 						}
 						note = "it held roles, so it signs in only after `wfx-server link confirm " + name + "`"
 					}
 					log.Printf("auth: AUDIT account %s linked to %s subject %s on first sign-in after upgrade; %s", name, provider, id.Subject, note)
-					return legacy, nil
+					return legacy, false, nil
 				}
 			}
 		}
@@ -223,25 +250,25 @@ func (s *Server) bindOrCreate(ctx context.Context, p *login.Provider, id *login.
 		sum := sha256.Sum256([]byte(provider + "\x00" + id.Subject))
 		name += "~" + hex.EncodeToString(sum[:4])
 	}
-	u := &store.User{Name: name, DisplayName: id.Username}
+	u = &store.User{Name: name, DisplayName: id.Username}
 	if err := s.store.CreateUser(ctx, u); err != nil {
 		// The same person signing in twice at once: the other request made it.
 		if linked, err2 := s.store.UserBySubject(ctx, provider, id.Subject); err2 == nil {
-			return linked, nil
+			return linked, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if ok, err := s.store.SetSubject(ctx, u.ID, provider, id.Subject); err != nil || !ok {
 		_ = s.store.DeleteUser(ctx, u.Name)
 		if linked, err2 := s.store.UserBySubject(ctx, provider, id.Subject); err2 == nil {
-			return linked, nil
+			return linked, false, nil
 		}
 		if err == nil {
 			err = errors.New("the account could not be bound")
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return u, nil
+	return u, true, nil
 }
 
 // syncRoles makes the user's provider-mapped roles match this sign-in: every

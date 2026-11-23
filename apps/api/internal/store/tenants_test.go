@@ -414,3 +414,131 @@ func TestTenantMigrationRollsBackAndReapplies(t *testing.T) {
 		migrateTo(t, "postgres", ".", pu.String(), pgTenants)
 	})
 }
+
+// A user is bound to one tenant: binding again to the same tenant refreshes
+// the role, binding to another is refused and changes nothing, and a user
+// with no binding is unscoped, not an error (ADR 0035).
+func TestUserTenantBinding(t *testing.T) {
+	bothDialects(t, func(t *testing.T, st *Store) {
+		ctx := context.Background()
+		// Unique ids: the Postgres database is shared by this package's tests.
+		sfx := uuid.NewString()[:8]
+		acme, globex := "acme-"+sfx, "globex-"+sfx
+		for _, id := range []string{acme, globex} {
+			if _, err := st.CreateTenant(ctx, id, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		u := &User{Name: "bob-" + uuid.NewString()[:8]}
+		if err := st.CreateUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+		if tn, role, err := st.UserTenant(ctx, u.ID); err != nil || tn != "" || role != "" {
+			t.Fatalf("unbound: %q %q %v", tn, role, err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "org-admin"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "member"); err != nil {
+			t.Fatalf("refresh role: %v", err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "member"); err != nil {
+			t.Fatalf("same role again: %v", err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, globex, "org-admin"); !errors.Is(err, ErrUserTenantBound) {
+			t.Fatalf("switch: %v, want ErrUserTenantBound", err)
+		}
+		if tn, role, err := st.UserTenant(ctx, u.ID); err != nil || tn != acme || role != "member" {
+			t.Fatalf("after switch attempt: %q %q %v", tn, role, err)
+		}
+		if err := st.BindUserTenant(ctx, u.ID, acme, "superadmin"); err == nil {
+			t.Fatal("a role outside org-admin/member was stored")
+		}
+		if p, err := st.UserProvider(ctx, u.ID); err != nil || p != "" {
+			t.Fatalf("UserProvider of a local user: %q %v", p, err)
+		}
+		// Deleting the user takes the binding with it.
+		if err := st.DeleteUser(ctx, u.Name); err != nil {
+			t.Fatal(err)
+		}
+		if tn, _, err := st.UserTenant(ctx, u.ID); err != nil || tn != "" {
+			t.Fatalf("binding outlived its user: %q %v", tn, err)
+		}
+	})
+}
+
+// An org tenant id is always derived from (provider, claim): valid, stable,
+// different per provider, and never the claim itself, so no claim names an
+// existing tenant or another claim's id.
+func TestOrgTenantID(t *testing.T) {
+	a := OrgTenantID("sso", "acme")
+	for _, c := range []struct {
+		name string
+		got  string
+		same bool
+	}{
+		{"stable", OrgTenantID("sso", "acme"), true},
+		{"another provider", OrgTenantID("other", "acme"), false},
+		{"another claim", OrgTenantID("sso", "Acme"), false},
+		{"the derived id as a claim", OrgTenantID("sso", a), false},
+		{"provider and claim do not run together", OrgTenantID("ss", "oacme"), false},
+	} {
+		if (c.got == a) != c.same {
+			t.Errorf("%s: %q vs %q", c.name, c.got, a)
+		}
+		if !ValidTenantID(c.got) || len(c.got) != len("org-")+32 {
+			t.Errorf("%s: %q is not a valid org tenant id", c.name, c.got)
+		}
+	}
+	for _, claim := range []string{"acme", DefaultTenant, ""} {
+		if OrgTenantID("sso", claim) == claim {
+			t.Errorf("claim %q used as its own id", claim)
+		}
+	}
+	if got := OrgTenantName("Acme\x1b[31m Corp\n"); got != "Acme[31m Corp" {
+		t.Errorf("OrgTenantName = %q", got)
+	}
+}
+
+// Creating a tenant and binding are one transaction: a bind refused (the
+// user bound elsewhere by a racing sign-in) leaves no tenant behind.
+// UnbindUserTenant removes the binding and every token.
+func TestBindUserTenantCreatingAndUnbind(t *testing.T) {
+	bothDialects(t, func(t *testing.T, st *Store) {
+		ctx := context.Background()
+		sfx := uuid.NewString()[:8]
+		a, b := OrgTenantID("sso", "acme-"+sfx), OrgTenantID("sso", "globex-"+sfx)
+		u := &User{Name: "bob-" + sfx}
+		if err := st.CreateUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+		if created, err := st.BindUserTenantCreating(ctx, u.ID, a, "acme", "member"); err != nil || !created {
+			t.Fatalf("first bind: %v %v", created, err)
+		}
+		if created, err := st.BindUserTenantCreating(ctx, u.ID, a, "acme", "org-admin"); err != nil || created {
+			t.Fatalf("repeat bind: %v %v", created, err)
+		}
+		if tn, role, _ := st.UserTenant(ctx, u.ID); tn != a || role != "org-admin" {
+			t.Fatalf("after repeat: %q %q", tn, role)
+		}
+		if _, err := st.BindUserTenantCreating(ctx, u.ID, b, "globex", "member"); !errors.Is(err, ErrUserTenantBound) {
+			t.Fatalf("racing bind: %v, want ErrUserTenantBound", err)
+		}
+		if _, err := st.GetTenant(ctx, b); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("the refused bind left its tenant: %v", err)
+		}
+		if _, err := st.IssueUserToken(ctx, u.ID, "hash-"+sfx, "cli", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.UnbindUserTenant(ctx, u.ID); err != nil {
+			t.Fatal(err)
+		}
+		if tn, _, err := st.UserTenant(ctx, u.ID); err != nil || tn != "" {
+			t.Fatalf("after unbind: %q %v", tn, err)
+		}
+		var n int
+		if err := st.qrow(ctx, `SELECT count(*) FROM user_tokens WHERE user_id=$1`, u.ID).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("tokens after unbind: %d %v", n, err)
+		}
+	})
+}
