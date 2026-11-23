@@ -60,15 +60,15 @@ func TestMain(m *testing.M) { pgtest.Main(m) }
 // ---------------------------------------------------------------------------
 // The ONE place a tenant-bound user subject is made.
 //
-// Until user->tenant binding (#188) lands, nothing in the request path puts a
-// tenant on a USER subject, so the subject is built here and placed on the
-// request context directly, the way actor_test.go and tenants_test.go do. The
-// server is bound to loopback so requireSubject passes a request without a
+// The subject is built here, as userSubject (#188) builds it from the stored
+// user_tenants row, and placed on the request context directly, the way
+// actor_test.go and tenants_test.go do. The fixture writes the same row
+// (BindUserTenant) and binds each organization person to the fixture's
+// organization provider (SetSubject), because the organization policy is
+// read from that provider (ADR 0035: orgPolicy is per provider). The server
+// is bound to loopback so requireSubject passes a request without a
 // credential through with its context intact; authorize and every handler
 // then see exactly this subject.
-//
-// When #188 lands, adapt orgSubject/orgAs (and only them): e.g. issue a real
-// session for a user bound to the tenant and send it as a bearer.
 // ---------------------------------------------------------------------------
 
 // Org roles as #188 names them.
@@ -86,14 +86,7 @@ type orgUser struct {
 
 // orgSubject is the subject #188 resolves for a user.
 func orgSubject(who *orgUser) *Subject {
-	sub := &Subject{Kind: SubjectUser, Name: who.u.Name, Role: who.u.Role, User: who.u, Tenant: who.tenant}
-	// Subject.OrgRole arrives with #188. Set it when the field exists so the
-	// helper keeps compiling on main and starts carrying the role the moment
-	// the field is there.
-	if f := reflect.ValueOf(sub).Elem().FieldByName("OrgRole"); f.IsValid() && f.CanSet() && f.Kind() == reflect.String {
-		f.SetString(who.orgRole)
-	}
-	return sub
+	return &Subject{Kind: SubjectUser, Name: who.u.Name, Role: who.u.Role, User: who.u, Tenant: who.tenant, OrgRole: who.orgRole}
 }
 
 // orgAs puts who's subject on the request. Every request in this file goes
@@ -283,7 +276,9 @@ func orgYAML(t *testing.T, dir, file, body string) {
 // belongs to globex — the name-collision trap of #163.
 //
 // cfgFile, when not empty, is a server config file loaded the way the server
-// loads one (orgGuardConfig).
+// loads one (orgGuardConfig). Empty, the server has the organization
+// provider with orgPolicy "full" (orgProviderFull): an organization person
+// is held to the tenant boundary but not to the authoring guard.
 func newOrgFixture(t *testing.T, cfgFile string) *orgFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -331,7 +326,7 @@ func newOrgFixture(t *testing.T, cfgFile string) *orgFixture {
 	}
 
 	const addr = "127.0.0.1:8090" // loopback: see orgAs
-	cfg := config.Config{}
+	cfg := config.Config{PublicURL: orgPublicURL, Auth: config.Auth{Providers: []config.AuthProvider{orgProviderFull}}}
 	if cfgFile != "" {
 		cfg = orgGuardConfig(t, cfgFile)
 	}
@@ -369,6 +364,16 @@ func newOrgFixture(t *testing.T, cfgFile string) *orgFixture {
 		u := &store.User{Name: name, Role: role}
 		if err := st.CreateUser(ctx, u); err != nil {
 			t.Fatal(err)
+		}
+		if tenant != "" {
+			// What a sign-in through the organization provider leaves
+			// behind (#188): the provider binding and the tenant row.
+			if ok, err := st.SetSubject(ctx, u.ID, orgProviderName, "sub-"+name); err != nil || !ok {
+				t.Fatalf("SetSubject %s: %v %v", name, ok, err)
+			}
+			if err := st.BindUserTenant(ctx, u.ID, tenant, orgRole); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return &orgUser{name: name, tenant: tenant, orgRole: orgRole, u: u}
 	}
@@ -508,9 +513,21 @@ func orgBundleRouter(eng *engine.Engine, st *store.Store, bl blob.Store) http.Ha
 	return r
 }
 
+// The organization provider every organization person in the fixture signed
+// in through. orgPolicy is a setting of the provider (ADR 0035), so "the
+// policy" of the spec is this provider's: "full" by default, "guarded" in
+// orgGuarded.
+const (
+	orgProviderName = "sso"
+	orgPublicURL    = "https://wfx.example.test"
+)
+
+var orgProviderFull = config.AuthProvider{Name: orgProviderName, Type: "oidc", Issuer: "https://idp.example.test",
+	ClientID: "wfx", OrgClaim: "tid", OrgPolicy: config.OrgPolicyFull}
+
 // orgGuardConfig loads a server config file the way the server does (strict:
-// an unknown key is an error). The file is expected to say `orgPolicy:
-// guarded`; on code without that setting this fails, by design.
+// an unknown key is an error). orgGuarded sets `orgPolicy: guarded` on the
+// organization provider.
 func orgGuardConfig(t *testing.T, body string) config.Config {
 	t.Helper()
 	// LoadWithFile derives defaults from the host; keep it off the host.
@@ -523,7 +540,7 @@ func orgGuardConfig(t *testing.T, body string) config.Config {
 	}
 	cfg, err := config.LoadWithFile(p)
 	if err != nil {
-		t.Fatalf("the server config %q does not load (a top-level orgPolicy key is part of #189): %v", strings.TrimSpace(body), err)
+		t.Fatalf("the server config %q does not load: %v", strings.TrimSpace(body), err)
 	}
 	return cfg
 }
@@ -1118,7 +1135,17 @@ func orgCronShellDef(name string) map[string]any {
 	return d
 }
 
-const orgGuarded = "orgPolicy: guarded\n"
+// orgGuarded is the server config with the organization provider set to
+// `orgPolicy: guarded` (orgProviderFull otherwise).
+const orgGuarded = "publicUrl: " + orgPublicURL + "\n" +
+	"auth:\n" +
+	"  providers:\n" +
+	"    - name: " + orgProviderName + "\n" +
+	"      type: oidc\n" +
+	"      issuer: https://idp.example.test\n" +
+	"      clientId: wfx\n" +
+	"      orgClaim: tid\n" +
+	"      orgPolicy: guarded\n"
 
 // orgGuardReq is one request the guard must refuse to an org member. Every
 // one of them SUCCEEDS for the superadmin without the policy
