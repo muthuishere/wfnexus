@@ -10,7 +10,13 @@ COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 COPY apps/api ./
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-runner ./cmd/wfx-runner
+# Stamped like the server image (infra/Dockerfile); unset reports "dev".
+ARG VERSION=""
+ARG COMMIT=""
+ARG DATE=""
+RUN BI=github.com/muthuishere/wfnexus/apps/api/internal/buildinfo \
+ && go build -trimpath -ldflags="-s -w -X $BI.Version=$VERSION -X $BI.Commit=$COMMIT -X $BI.Date=$DATE" \
+    -o /out/wfx-runner ./cmd/wfx-runner
 
 FROM alpine:3.21
 RUN apk add --no-cache git bash curl ca-certificates nodejs npm python3 \

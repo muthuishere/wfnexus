@@ -26,6 +26,7 @@ import (
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/auth"
 	"github.com/muthuishere/wfnexus/apps/api/internal/blob"
+	"github.com/muthuishere/wfnexus/apps/api/internal/buildinfo"
 	"github.com/muthuishere/wfnexus/apps/api/internal/catalog"
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/issuer"
@@ -227,7 +228,12 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		// Tenants, service principals and the tenant routes (tenants.go).
 		s.tenantRoutes(r)
 
-		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
+		// Public and cheap, and it says WHICH build answered: a deployment
+		// must be able to prove the release it runs.
+		r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+			bi := buildinfo.Get()
+			writeJSON(w, 200, map[string]any{"ok": true, "version": bi.Version, "commit": bi.Commit})
+		})
 		r.Get("/skills", s.listSkills)
 		s.skillSourceRoutes(r)
 		r.Get("/tools", s.listTools)
