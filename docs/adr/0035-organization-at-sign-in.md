@@ -34,6 +34,6 @@ ADR 0017 says authorization is never delegated to the provider: a group claim or
 ## Consequences
 
 - One server can serve many organizations behind one identity provider, once #189 lands.
-- The operator's `groupRoles` and `defaultRole` still apply to org-bound people. A mapping there can make one of them a server superadmin; the operator should not combine the two on one provider without meaning to.
-- A person who signed in before `orgClaim` was set is bound on their next sign-in, and from then on is guarded like any other member.
+- **No superadmin through an organization provider.** A superadmin sees across every tenant, so a provider that sets `orgClaim` is refused when the providers are built if its `defaultRole` or any `groupRoles` value grants superadmin. Its other mapped roles still apply.
+- **An existing superadmin is never bound.** An account that already holds superadmin signs in through an organization provider unbound (Tenant ""), with an audit line. An ordinary account that existed before `orgClaim` was set is bound on its next sign-in, and from then on is guarded like any other member.
 - Moving a person to another organization is an operator action (delete the row), never a sign-in.

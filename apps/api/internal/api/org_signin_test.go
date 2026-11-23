@@ -27,6 +27,9 @@ func withOrgScoping(t *testing.T) {
 // orgConfig is ssoConfig with organization settings.
 func orgConfig(op *mockOP, edit func(p *config.AuthProvider)) config.Auth {
 	a := ssoConfig(op)
+	// ssoConfig maps "admins" to superadmin, which a provider with orgClaim
+	// is refused for; here it maps to a project role instead.
+	a.Providers[0].GroupRoles = map[string]string{"admins": "project_admin:p1"}
 	a.Providers[0].OrgClaim = "tid"
 	a.Providers[0].RoleClaim = "roles"
 	a.Providers[0].RoleMap = map[string]string{"Org.Admin": config.OrgRoleAdmin, "Org.Reader": config.OrgRoleMember}
@@ -287,6 +290,11 @@ func TestOrgConfigValidation(t *testing.T) {
 		{"roleMap without roleClaim", config.AuthProvider{Type: "oidc", OrgClaim: "tid", RoleMap: map[string]string{"a": "member"}}, false},
 		{"roleMap to a server role", config.AuthProvider{Type: "oidc", OrgClaim: "tid", RoleClaim: "roles", RoleMap: map[string]string{"a": "superadmin"}}, false},
 		{"unknown orgPolicy", config.AuthProvider{Type: "oidc", OrgClaim: "tid", OrgPolicy: "open"}, false},
+		{"defaultRole superadmin", config.AuthProvider{Type: "oidc", OrgClaim: "tid", DefaultRole: "superadmin"}, false},
+		{"groupRoles superadmin", config.AuthProvider{Type: "oidc", OrgClaim: "tid", GroupRoles: map[string]string{"admins": "superadmin"}}, false},
+		{"groupRoles superadmin spelt otherwise", config.AuthProvider{Type: "oidc", OrgClaim: "tid", GroupRoles: map[string]string{"admins": " SuperAdmin "}}, false},
+		{"groupRoles a project role", config.AuthProvider{Type: "oidc", OrgClaim: "tid", DefaultRole: "workflow_runner:w", GroupRoles: map[string]string{"admins": "project_admin:p"}}, true},
+		{"superadmin without orgClaim is as before", config.AuthProvider{Type: "oidc", DefaultRole: "superadmin", GroupRoles: map[string]string{"admins": "superadmin"}}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := c.p
@@ -296,6 +304,82 @@ func TestOrgConfigValidation(t *testing.T) {
 			}
 			if c.ok && p.OrgClaim != "" && p.OrgPolicy != config.OrgPolicyGuarded {
 				t.Fatalf("orgPolicy default = %q", p.OrgPolicy)
+			}
+		})
+	}
+}
+
+// A provider with orgClaim that maps anything to superadmin is not enabled:
+// the refusal happens when the providers are built, so its sign-in is never
+// served, with organization scoping on.
+func TestOrgProviderGrantingSuperadminIsRefusedAtLoad(t *testing.T) {
+	withOrgScoping(t)
+	op := newMockOP(t, "s3cret-value")
+	h, _ := orgServer(t, op, func(p *config.AuthProvider) { p.GroupRoles = map[string]string{"admins": "superadmin"} })
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, httptest.NewRequest("GET", "/api/auth/providers", nil))
+	if strings.Contains(res.Body.String(), `"sso"`) {
+		t.Fatalf("providers lists the refused provider: %s", res.Body)
+	}
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest("GET", "/api/auth/oauth/sso/start", nil))
+	if start.Code == 302 {
+		t.Fatalf("start of a refused provider: %d", start.Code)
+	}
+}
+
+// An account that already holds superadmin signs in through an org provider
+// without being bound: it stays unscoped and keeps superadmin. An ordinary
+// existing account is bound (TestOrgSignIn covers new accounts; this covers
+// one that existed before the sign-in).
+func TestOrgSignInOfAnExistingAccount(t *testing.T) {
+	withOrgScoping(t)
+	for _, c := range []struct {
+		name       string
+		superadmin bool
+		tenant     string
+		role       string
+	}{
+		{"an existing superadmin is not bound", true, "", RoleSuperadmin},
+		{"an existing ordinary account is bound", false, "acme", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			op := newMockOP(t, "s3cret-value")
+			op.userinfo["groups"] = []string{} // no mapped project role either
+			h, st := orgServer(t, op, nil)
+			ctx := context.Background()
+			u := &store.User{Name: "bob@sso", DisplayName: "bob"}
+			if err := st.CreateUser(ctx, u); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := st.SetSubject(ctx, u.ID, "sso", "42"); err != nil || !ok {
+				t.Fatalf("SetSubject: %v %v", ok, err)
+			}
+			if c.superadmin {
+				if err := st.SetUserRole(ctx, u.Name, RoleSuperadmin); err != nil {
+					t.Fatal(err)
+				}
+			}
+			idClaims(op, map[string]any{"tid": "acme", "roles": "Org.Admin"})
+			w, _ := oauthFlow(t, h, "sso", nil)
+			if w.Code != 303 {
+				t.Fatalf("sign-in: %d %s", w.Code, w.Body)
+			}
+			who := whoami(t, h, w)
+			if who["name"] != "bob@sso" || who["tenant"] != c.tenant {
+				t.Fatalf("whoami: %v, want tenant %q", who, c.tenant)
+			}
+			if c.superadmin && who["role"] != RoleSuperadmin {
+				t.Fatalf("the superadmin lost its role: %v", who)
+			}
+			tn, _, err := st.UserTenant(ctx, u.ID)
+			if err != nil || tn != c.tenant {
+				t.Fatalf("binding = %q %v, want %q", tn, err, c.tenant)
+			}
+			if c.superadmin {
+				if _, err := st.GetTenant(ctx, "acme"); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("a superadmin's sign-in created a tenant: %v", err)
+				}
 			}
 		})
 	}

@@ -109,6 +109,17 @@ func (p *AuthProvider) NormalizeOrg() error {
 		// that issues none has nothing trustworthy to read it from.
 		return fmt.Errorf("orgClaim needs an OpenID Connect provider (oidc or google), not %q", p.Type)
 	}
+	// A superadmin sees across every tenant, so a provider that places
+	// people in organizations must never make one: that would turn an
+	// organization's sign-in into a way out of the organization.
+	if grantsSuperadmin(p.DefaultRole) {
+		return errors.New("defaultRole grants superadmin, which a provider with orgClaim never may")
+	}
+	for g, r := range p.GroupRoles {
+		if grantsSuperadmin(r) {
+			return fmt.Errorf("groupRoles[%q] grants superadmin, which a provider with orgClaim never may", g)
+		}
+	}
 	if len(p.RoleMap) > 0 && p.RoleClaim == "" {
 		return errors.New("roleMap needs roleClaim")
 	}
@@ -125,4 +136,15 @@ func (p *AuthProvider) NormalizeOrg() error {
 		return fmt.Errorf("orgPolicy %q: use %q or %q", p.OrgPolicy, OrgPolicyGuarded, OrgPolicyFull)
 	}
 	return nil
+}
+
+// grantsSuperadmin reads a role spec ("superadmin", "project_admin:<p>", ...)
+// the way the api package grants it — the part before ":", trimmed,
+// lowercased, "-" and " " read as "_" — and says whether it is superadmin.
+// The same reading, so no spelling (" SuperAdmin ") slips past this check
+// and is still granted.
+func grantsSuperadmin(spec string) bool {
+	role, _, _ := strings.Cut(strings.TrimSpace(spec), ":")
+	role = strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(role)))
+	return role == "superadmin"
 }

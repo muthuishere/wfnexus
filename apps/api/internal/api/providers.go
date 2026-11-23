@@ -143,7 +143,12 @@ func (s *Server) externalUser(ctx context.Context, p *login.Provider, id *login.
 	} else if st == store.LinkConfirm {
 		return nil, errLinkPending
 	}
-	if org != nil {
+	if org != nil && u.Role == RoleSuperadmin {
+		// A superadmin is the operator, across every tenant; binding them
+		// to one organization would neither contain them nor be right. The
+		// account stays unscoped (Tenant "").
+		log.Printf("auth: AUDIT account %s is a superadmin: not bound to organization %q (tenant %s) on sign-in (%s)", u.Name, org.name, org.tenant, provider)
+	} else if org != nil {
 		if err := s.bindOrg(ctx, p, u, org); err != nil {
 			return nil, err
 		}
