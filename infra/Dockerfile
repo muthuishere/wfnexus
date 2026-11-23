@@ -21,9 +21,17 @@ RUN go mod download
 COPY apps/api ./
 # Static, so the runtime image needs no libc and the same binary runs anywhere.
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/wfx-server . \
- && go build -trimpath -ldflags="-s -w" -o /out/wfx ./cmd/wfx \
- && go build -trimpath -ldflags="-s -w" -o /out/wfx-runner ./cmd/wfx-runner
+# The same stamp the release binaries get (Taskfile LDFLAGS). .git is not in
+# the build context, so the release passes these as build args; an image built
+# without them reports "dev", which is true of it.
+ARG VERSION=""
+ARG COMMIT=""
+ARG DATE=""
+RUN BI=github.com/muthuishere/wfnexus/apps/api/internal/buildinfo \
+ && LDF="-s -w -X $BI.Version=$VERSION -X $BI.Commit=$COMMIT -X $BI.Date=$DATE" \
+ && go build -trimpath -ldflags="$LDF" -o /out/wfx-server . \
+ && go build -trimpath -ldflags="$LDF" -o /out/wfx ./cmd/wfx \
+ && go build -trimpath -ldflags="$LDF" -o /out/wfx-runner ./cmd/wfx-runner
 
 # ---- what actually ships --------------------------------------------------
 FROM alpine:3.21

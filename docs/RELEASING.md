@@ -16,7 +16,9 @@ earlier step passed:
    `docker buildx`, `helm` and a `gh` token with `write:packages`.
 2. The gate: `task ci`.
 3. Tag locally, `task release`.
-4. The host binary reports the tag; every artifact is listed in `checksums.txt`.
+4. The host binary reports the tag; every artifact is listed in `checksums.txt`;
+   unless `SKIP_IMAGES=1`, a host-architecture build of the server image answers
+   `wfx-server --version` with exactly the tag.
 5. Push the tag, create the GitHub release, push the images and the chart to ghcr.io.
 
 A failure before the tag is pushed deletes the local tag again.
@@ -26,6 +28,8 @@ A failure before the tag is pushed deletes the local tag again.
 - `checksums.txt` (SHA-256 of every artifact), attached to the release. The
   installers refuse a file whose digest is not in it.
 - The version every binary reports (`wfx version`), asserted against the tag.
+- The version a running server reports: the images are stamped with the tag at
+  build time, and `GET /api/health` answers `{"ok":true,"version":…,"commit":…}`.
 
 ## What is not provided
 

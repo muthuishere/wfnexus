@@ -10,8 +10,8 @@
 #   2. gate       task ci (a release does not skip the gate)
 #   3. build      tag locally, task release (every binary, the tarballs,
 #                 checksums.txt)
-#   4. assert     the host binary reports the tag; every artifact is in
-#                 checksums.txt
+#   4. assert     the host binary and the server image report the tag; every
+#                 artifact is in checksums.txt
 #   5. publish    push the tag, create the GitHub release, push the server and
 #                 worker images and the Helm chart to ghcr.io
 #
@@ -84,6 +84,16 @@ step "assert: every artifact is covered by checksums.txt"
   [ "$missing" -eq 0 ]
 ) || die "an artifact is not covered by checksums.txt"
 
+# The image is stamped from build args (.git is not in its context), so it is
+# asked too: an image that answers anything but exactly the tag is not this
+# release. Host architecture only, loaded locally; nothing is pushed yet.
+IMAGE_ARGS=(--build-arg "VERSION=$TAG" --build-arg "COMMIT=$(git rev-parse --short HEAD)"
+  --build-arg "DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+if [ "${SKIP_IMAGES:-}" != 1 ]; then
+  step "assert: the server image reports the tag"
+  bash scripts/release-image-check.sh "$TAG" "${IMAGE_ARGS[@]}" || die "the server image is not $TAG"
+fi
+
 # ---- 5. publish ------------------------------------------------------------
 step "publish: tag and GitHub release"
 git push origin "refs/tags/$TAG"
@@ -127,7 +137,7 @@ gh auth token | docker login ghcr.io -u "$GH_USER" --password-stdin >/dev/null
 # definitions) is untouched: it must keep working with no registry at all.
 for img in "wfx-server:infra/Dockerfile" "wfx-runner:infra/Dockerfile.runner"; do
   name="${img%%:*}"; file="${img#*:}"
-  docker buildx build --platform linux/amd64,linux/arm64 -f "$file" \
+  docker buildx build --platform linux/amd64,linux/arm64 -f "$file" "${IMAGE_ARGS[@]}" \
     -t "ghcr.io/$OWNER/$name:$V" -t "ghcr.io/$OWNER/$name:$MINOR" -t "ghcr.io/$OWNER/$name:latest" \
     --push .
 done

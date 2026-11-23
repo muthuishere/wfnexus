@@ -26,6 +26,12 @@ addr: ":8090"
 # Get it wrong and every machine you try to add is wrong in the same way.
 # publicUrl: https://wfx.example.com
 
+# The reverse proxies (CIDRs or addresses) whose X-Forwarded-For names the
+# client (or WFX_TRUSTED_PROXIES, comma separated). Unset, none is trusted: the
+# connecting address is the client, and behind a proxy every client then shares
+# the proxy's sign-in rate limit. Name only proxies you run.
+# trustedProxies: ["<your proxy's CIDR>"]
+
 storage:
   # sqlite | postgres
   driver: sqlite

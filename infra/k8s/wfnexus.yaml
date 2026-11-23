@@ -52,6 +52,10 @@ spec:
             - { name: WFX_WORKDIR, value: "/data/runs" }
             # The address workers are told to reach, shown in the join command.
             - { name: WFX_PUBLIC_URL, value: "https://wfx.example.com" }
+            # Behind an ingress, set this to the ingress controller's pod CIDR
+            # (comma separated, plus a CDN's ranges if one is in front), or
+            # every client shares one sign-in rate-limit address.
+            # - { name: WFX_TRUSTED_PROXIES, value: "<ingress pod CIDR>" }
             # Labels this pod serves ITSELF. Leave `local` only; anything a
             # step should run elsewhere gets a different label and a worker.
             - { name: WFX_RUNNER_LABELS, value: "local" }

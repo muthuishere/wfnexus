@@ -28,6 +28,24 @@ so, and it must therefore have an administrator.
    "Loopback" therefore means "this machine is the trust boundary". That is the
    single-machine premise, stated rather than assumed.
 
+## Behind a reverse proxy: trusted proxies
+
+The per-address sign-in limit keys on the connecting address. Behind a proxy
+that is the proxy, so every client would share one limit, and one person failing
+logins would lock everyone out of password sign-in. Name the proxies with
+`trustedProxies` (config file) or `WFX_TRUSTED_PROXIES` (comma separated CIDRs or
+addresses); only then is `X-Forwarded-For` read, from the right, skipping trusted
+hops. The default trusts none, and a catch-all (`0.0.0.0/0`, `::/0`) is refused.
+A server bound off loopback with none set logs a warning at startup.
+
+- **Kamal / kamal-proxy:** trust the Docker network the proxy reaches the
+  container on (`WFX_TRUSTED_PROXIES=<the kamal network's subnet>`, read with
+  `docker network inspect kamal --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`),
+  plus the CDN's published ranges if a CDN is in front of kamal-proxy, e.g.
+  `WFX_TRUSTED_PROXIES=<kamal subnet>,198.51.100.0/24`.
+- **Kubernetes:** the ingress controller's pod CIDR (`server.trustedProxies`
+  in the Helm chart).
+
 ## Logging in
 
 `wfx login --url <host>` uses the OAuth 2.0 Device Authorization Grant
