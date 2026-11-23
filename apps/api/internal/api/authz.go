@@ -259,9 +259,9 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 		}
 		// #189: another tenant's thing is a 404, asked BEFORE the role
 		// question so it is never a 403 (tenancy.go). A person in an
-		// organization addresses the tenant's projects by their short
-		// names; those become the stored names first.
-		s.addressShortProjects(r)
+		// organization addresses the tenant's projects and workflows by
+		// short and bare names; those become the tenant's own first.
+		s.addressInTenant(r)
 		if !s.tenantGate(r) {
 			notFound(w)
 			return

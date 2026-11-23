@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
+	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -58,6 +59,41 @@ func stateNameFor(scope, workflowName, project, stepID string) (string, error) {
 	return "", fmt.Errorf("unknown state scope %q — one of %s", scope, strings.Join(model.StateScopes, ", "))
 }
 
+// StateWorkflow is the name a workflow's state (and its steps') lives under.
+// A workflow of a project bound to a tenant keeps it under its qualified
+// name, project/name, so two tenants' "deploy" never share state (#189).
+// Every other workflow keeps the name it always had, so nothing moves on an
+// install without tenants. project "" is the workflow's own. When the
+// project's tenant cannot be read the qualified name is used: a workflow
+// may lose sight of its state for a moment, but never reads another's.
+func (e *Engine) StateWorkflow(ctx context.Context, wf, project string) string {
+	if wf == "" {
+		return wf
+	}
+	if project == "" {
+		project = e.ProjectFor(wf)
+	}
+	ps, ok := e.store.(interface {
+		ProjectTenant(ctx context.Context, project string) (string, error)
+	})
+	if !ok {
+		return wf
+	}
+	if t, err := ps.ProjectTenant(ctx, project); err == nil && t == store.DefaultTenant {
+		return wf
+	}
+	if i := strings.LastIndexByte(wf, '/'); i >= 0 {
+		wf = wf[i+1:]
+	}
+	return project + "/" + wf
+}
+
+// stateKey is stateNameFor with the workflow named as StateWorkflow names it:
+// every path from a run to its state goes through here.
+func (e *Engine) stateKey(ctx context.Context, scope, workflowName, project, stepID string) (string, error) {
+	return stateNameFor(scope, e.StateWorkflow(ctx, workflowName, project), project, stepID)
+}
+
 // stateData loads the four namespaces a step's templates may read.
 //
 // It is read FRESH for each step rather than once per run, because a step that
@@ -72,7 +108,7 @@ func (e *Engine) stateData(ctx context.Context, workflowName, project, stepID st
 		return
 	}
 	load := func(scope string, dst *map[string]string) {
-		name, err := stateNameFor(scope, workflowName, project, stepID)
+		name, err := e.stateKey(ctx, scope, workflowName, project, stepID)
 		if err != nil {
 			return // that scope has no address for this step; stays empty
 		}
@@ -127,7 +163,7 @@ func (e *Engine) persistStepState(ctx context.Context, def *workflow.Definition,
 		if len(entries) == 0 {
 			continue
 		}
-		scopeName, err := stateNameFor(scope, name, project, step.ID)
+		scopeName, err := e.stateKey(ctx, scope, name, project, step.ID)
 		if err != nil {
 			e.emit(ctx, uuidOrNil(data.RunID), step.ID, "error", map[string]any{"message": "state: " + err.Error()})
 			continue
@@ -221,6 +257,7 @@ func (e *Engine) WorkflowState(ctx context.Context, name string) ([]model.StateV
 		return nil, ErrNoStateStore
 	}
 	out := []model.StateVar{}
+	name = e.StateWorkflow(ctx, name, "")
 	wf, err := e.store.ListState(ctx, model.StateScopeWorkflow, name)
 	if err != nil {
 		return nil, err
@@ -250,5 +287,5 @@ func (e *Engine) RunStateAddress(ctx context.Context, runID uuid.UUID, scope, st
 	if err != nil {
 		return "", err
 	}
-	return stateNameFor(scope, run.Workflow, run.Project, stepID)
+	return e.stateKey(ctx, scope, run.Workflow, run.Project, stepID)
 }

@@ -184,8 +184,9 @@ func tenantArgs(tenant string, args ...any) []any {
 }
 
 // MetricsFor is Metrics for one tenant's runs; "" is every tenant. What runs
-// did, cost and wait on is counted for the tenant only; the runners
-// (workers and their job queue) are the server's and are not split.
+// did, cost and wait on is counted for the tenant only. The runners (workers
+// and their job queue) are the server's: they are left out for a tenant other
+// than the default one, and shown, whole, to everyone else.
 func (s *Store) MetricsFor(ctx context.Context, window string, now time.Time, tenant string) (*Metrics, error) {
 	d, ok := MetricsWindows[window]
 	if !ok {
@@ -488,11 +489,16 @@ func (s *Store) metricsLive(ctx context.Context, m *Metrics, tenant string) erro
 	if err != nil && !isNoRows(err) {
 		return err
 	}
+	m.Queue.OldestQueued = runQ
+	m.Workers.Workers = []WorkerHealth{}
+	if tenant != "" && tenant != DefaultTenant {
+		m.Queue.JobsQueued, m.Queue.JobsLeased = 0, 0
+		return nil
+	}
 	jobQ, err := oldest(`SELECT created_at FROM worker_jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1`)
 	if err != nil && !isNoRows(err) {
 		return err
 	}
-	m.Queue.OldestQueued = runQ
 	if jobQ != nil && (runQ == nil || jobQ.Before(*runQ)) {
 		m.Queue.OldestQueued = jobQ
 	}
@@ -501,7 +507,6 @@ func (s *Store) metricsLive(ctx context.Context, m *Metrics, tenant string) erro
 	if err != nil {
 		return err
 	}
-	m.Workers.Workers = []WorkerHealth{}
 	for _, w := range workers {
 		m.Workers.Total++
 		if w.Online() {

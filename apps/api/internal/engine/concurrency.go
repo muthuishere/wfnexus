@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/model"
+	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
 // activeStatuses hold a concurrency group. A run parked on a human
@@ -39,6 +40,12 @@ func (b *BusyError) Unwrap() error { return ErrConcurrencyBusy }
 // Per-process, like the scheduler: one engine owns the runs it starts.
 func (e *Engine) CreateRunAdmitted(ctx context.Context, name string, input json.RawMessage, force bool) (*model.Run, error) {
 	def := e.Definitions()[name]
+	// Every new run passes here — the API, a schedule, a message, a hook, an
+	// MCP call, a module command, a `start:` step — so the run guard is
+	// asked here, before the run exists.
+	if err := e.checkRunGuard(ctx, e.ProjectFor(name), def); err != nil {
+		return nil, err
+	}
 	if def == nil || def.Concurrency == nil || force {
 		return e.store.CreateRun(ctx, e.ProjectFor(name), name, input)
 	}
@@ -70,4 +77,20 @@ func (e *Engine) groupOf(name string) string {
 		return ""
 	}
 	return d.Concurrency.GroupFor(d.Name)
+}
+
+// RunGuard decides whether a workflow of a project may execute at all, by
+// whoever starts it (#189: an organization whose policy is guarded runs no
+// shell step and no file-writing tool on the shared runners). nil allows.
+type RunGuard func(ctx context.Context, project string, def *workflow.Definition) error
+
+// SetRunGuard installs the guard the api package builds from the sign-in
+// providers' organization policies. Set once, when the server is built.
+func (e *Engine) SetRunGuard(g RunGuard) { e.runGuard = g }
+
+func (e *Engine) checkRunGuard(ctx context.Context, project string, def *workflow.Definition) error {
+	if e.runGuard == nil || def == nil {
+		return nil
+	}
+	return e.runGuard(ctx, project, def)
 }

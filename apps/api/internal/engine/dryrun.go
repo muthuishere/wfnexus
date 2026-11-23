@@ -671,10 +671,12 @@ func (e *Engine) dryState(def *workflow.Definition) map[string]map[string]string
 	if e.store != nil {
 		ctx := context.Background()
 		for _, scope := range model.StateScopes {
-			name, err := stateNameFor(scope, def.Name, "", "")
+			// The workflow's own project names its state (StateWorkflow);
+			// project state itself has no project in a dry run.
+			name, err := stateNameFor(scope, e.StateWorkflow(ctx, def.Name, def.Source), "", "")
 			if scope == model.StateScopeStep {
 				// Every step of this workflow, whatever it is called.
-				if vars, err := e.store.ListStateByPrefix(ctx, scope, def.Name+"/"); err == nil {
+				if vars, err := e.store.ListStateByPrefix(ctx, scope, e.StateWorkflow(ctx, def.Name, def.Source)+"/"); err == nil {
 					for _, v := range vars {
 						out[scope][v.Key] = v.Value
 					}

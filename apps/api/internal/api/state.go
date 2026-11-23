@@ -37,7 +37,7 @@ type stateBody struct {
 
 func (s *Server) listState(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
-	vars, err := s.eng.ListState(r.Context(), scope, r.URL.Query().Get("name"))
+	vars, err := s.eng.ListState(r.Context(), scope, s.stateStoreName(r, scope, r.URL.Query().Get("name")))
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
@@ -85,10 +85,11 @@ func (s *Server) setState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	b.Name = s.tenantStateName(r, b.Scope, b.Name)
 	if !s.orgStateWrite(w, r, b.Scope, b.Name) {
 		return
 	}
-	if err := s.eng.SetState(r.Context(), b.Scope, b.Name, b.Key, b.Value); err != nil {
+	if err := s.eng.SetState(r.Context(), b.Scope, s.stateStoreName(r, b.Scope, b.Name), b.Key, b.Value); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
@@ -104,7 +105,8 @@ func (s *Server) deleteState(w http.ResponseWriter, r *http.Request) {
 	if !s.orgStateWrite(w, r, r.URL.Query().Get("scope"), r.URL.Query().Get("name")) {
 		return
 	}
-	if err := s.eng.DeleteState(r.Context(), r.URL.Query().Get("scope"), r.URL.Query().Get("name"), key); err != nil {
+	scope := r.URL.Query().Get("scope")
+	if err := s.eng.DeleteState(r.Context(), scope, s.stateStoreName(r, scope, r.URL.Query().Get("name")), key); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}

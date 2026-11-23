@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -175,9 +176,10 @@ func (s *Server) tenantGate(r *http.Request) bool {
 		if method == http.MethodPost && sub == "" && (name == "reload" || name == "validate") {
 			return true
 		}
-		// A NEW workflow saved into ?project= belongs to that project,
-		// checked above.
-		if method == http.MethodPut && sub == "" && q.Get("project") != "" && s.eng.Definitions()[name] == nil {
+		// A save into ?project= writes into that project, checked above.
+		// Whether the name is held elsewhere — by another tenant — does
+		// not matter and must not show (orgWorkflow).
+		if method == http.MethodPut && sub == "" && q.Get("project") != "" {
 			return true
 		}
 		return s.tenantVisible(r, s.eng.ProjectFor(name))
@@ -292,37 +294,133 @@ func (s *Server) resolveProject(r *http.Request, name string) string {
 	return name
 }
 
-// addressShortProjects rewrites a request from a person in an organization
-// that names a project by its short name — /api/projects/{name}… or
-// ?project= — to the stored name, in the URL and in the router's path, so
-// every handler and every check after this one sees the stored name. It runs
-// in authorize, before tenantGate.
-func (s *Server) addressShortProjects(r *http.Request) {
+// orgWorkflow resolves the workflow name a person in an organization
+// addressed INSIDE their tenant (#189): the name itself when it is one of
+// the tenant's, else the tenant's own project/name of that bare name, else
+// unchanged — and then another tenant's workflow of that name answers as one
+// that never existed. Only the in-memory definitions and the request's
+// already-loaded bindings are read, so a name another tenant holds costs
+// exactly what a name nobody holds costs.
+func (s *Server) orgWorkflow(r *http.Request, name string) string {
+	if orgPerson(r) == nil || name == "" {
+		return name
+	}
+	defs := s.eng.Definitions()
+	if d := defs[name]; d != nil && s.tenantVisible(r, sourceProject(d)) {
+		return name
+	}
+	if strings.Contains(name, "/") {
+		return name // qualified: tenantGate decides
+	}
+	for _, src := range s.eng.Sources() {
+		if src.Name != engine.TemplatesSource && defs[src.Name+"/"+name] != nil && s.tenantVisible(r, src.Name) {
+			return src.Name + "/" + name
+		}
+	}
+	return name
+}
+
+// addressInTenant rewrites a request from a person in an organization so
+// that every name in it means the tenant's own thing, before tenantGate and
+// every handler see it:
+//
+//   - a project named by its short name — /api/projects/{name}… or
+//     ?project= — becomes the stored name (resolveProject);
+//   - a workflow named by a bare name — /api/workflows/{name}…, and the
+//     workflow (or step) namespace of /api/state?name= — becomes the
+//     tenant's own (orgWorkflow). A save (PUT) keeps the bare name, which
+//     is the definition's, and names the project in ?project= instead.
+//
+// The URL and the router's path are both rewritten, so the router, the
+// checks and the handlers agree on what was asked for.
+func (s *Server) addressInTenant(r *http.Request) {
 	if orgPerson(r) == nil {
 		return
 	}
-	if q := r.URL.Query(); q.Get("project") != "" {
-		if stored := s.resolveProject(r, q.Get("project")); stored != q.Get("project") {
+	q := r.URL.Query()
+	if p := q.Get("project"); p != "" {
+		if stored := s.resolveProject(r, p); stored != p {
 			q.Set("project", stored)
 			r.URL.RawQuery = q.Encode()
 		}
 	}
-	const prefix = "/api/projects/"
 	path := r.URL.EscapedPath()
+	if (path == "/api/state" || strings.HasPrefix(path, "/api/state/")) && q.Get("name") != "" {
+		if n := s.tenantStateName(r, q.Get("scope"), q.Get("name")); n != q.Get("name") {
+			q.Set("name", n)
+			r.URL.RawQuery = q.Encode()
+		}
+	}
+	if name, ok := pathSegment(path, "/api/projects/"); ok {
+		if stored := s.resolveProject(r, name); stored != name {
+			rewriteSegment(r, "/api/projects/", stored)
+		}
+		return
+	}
+	if name, ok := pathSegment(path, "/api/workflows/"); ok {
+		key := s.orgWorkflow(r, name)
+		if key == name {
+			return
+		}
+		project, bare, _ := strings.Cut(key, "/")
+		if r.Method == http.MethodPut && strings.TrimPrefix(path, "/api/workflows/"+url.PathEscape(name)) == "" {
+			if q.Get("project") == "" {
+				q.Set("project", project)
+				r.URL.RawQuery = q.Encode()
+			}
+			if bare == name {
+				return
+			}
+		}
+		rewriteSegment(r, "/api/workflows/", key)
+	}
+}
+
+// tenantStateName is orgWorkflow for a state namespace's name: a
+// workflow's, or a step's (<workflow>/<step>).
+func (s *Server) tenantStateName(r *http.Request, scope, name string) string {
+	switch scope {
+	case model.StateScopeWorkflow:
+		return s.orgWorkflow(r, name)
+	case model.StateScopeStep:
+		if i := strings.LastIndexByte(name, '/'); i > 0 {
+			return s.orgWorkflow(r, name[:i]) + name[i:]
+		}
+	}
+	return name
+}
+
+// stateStoreName is the name a namespace is STORED under: a workflow's (or
+// its steps') as engine.StateWorkflow keys it, anything else as named.
+func (s *Server) stateStoreName(r *http.Request, scope, name string) string {
+	switch scope {
+	case model.StateScopeWorkflow:
+		return s.eng.StateWorkflow(r.Context(), name, "")
+	case model.StateScopeStep:
+		if i := strings.LastIndexByte(name, '/'); i > 0 {
+			return s.eng.StateWorkflow(r.Context(), name[:i], "") + name[i:]
+		}
+	}
+	return name
+}
+
+// pathSegment is the first path segment after prefix, unescaped.
+func pathSegment(path, prefix string) (string, bool) {
 	if !strings.HasPrefix(path, prefix) {
-		return
+		return "", false
 	}
-	seg, rest, _ := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+	seg, _, _ := strings.Cut(strings.TrimPrefix(path, prefix), "/")
 	name, err := url.PathUnescape(seg)
-	if err != nil {
-		return
-	}
-	stored := s.resolveProject(r, name)
-	if stored == name {
-		return
-	}
-	escaped := prefix + url.PathEscape(stored)
-	if rest != "" || strings.HasSuffix(path, seg+"/") {
+	return name, err == nil && name != ""
+}
+
+// rewriteSegment replaces the first path segment after prefix with name, in
+// the URL and in the router's path.
+func rewriteSegment(r *http.Request, prefix, name string) {
+	path := r.URL.EscapedPath()
+	_, rest, slash := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+	escaped := prefix + url.PathEscape(name)
+	if slash {
 		escaped += "/" + rest
 	}
 	if rctx := chi.RouteContext(r.Context()); rctx != nil && strings.HasSuffix(rctx.RoutePath, strings.TrimPrefix(path, "/api")) {
@@ -384,4 +482,44 @@ func (s *Server) tenantSkips(r *http.Request, skips []workflow.Skip) []workflow.
 		out = append(out, sk)
 	}
 	return out
+}
+
+// tenantRunGuard is the engine's run guard (engine.SetRunGuard): asked before
+// every execution, whoever or whatever starts it — a person, a schedule, a
+// message, a hook, an MCP call, a retry, a run continuing after an approval.
+// A workflow of a tenant whose policy is guarded (tenantGuarded) must pass
+// customerRunGuard. The default tenant, and a tenant with no people, are not
+// guarded.
+func (s *Server) tenantRunGuard(ctx context.Context, project string, def *workflow.Definition) error {
+	if s.store == nil {
+		return nil
+	}
+	tenant, err := s.store.ProjectTenant(ctx, project)
+	if err != nil {
+		return fmt.Errorf("refused: the tenant of project %q cannot be read: %w", project, err)
+	}
+	if tenant == store.DefaultTenant || !s.tenantGuarded(ctx, tenant) {
+		return nil
+	}
+	if err := customerRunGuard(def); err != nil {
+		return fmt.Errorf("refused by the organization's policy (guarded): %w", err)
+	}
+	return nil
+}
+
+// tenantGuarded: a tenant's policy is guarded when any person in it signs in
+// through a provider that does not say orgPolicy "full" (orgGuarded's rule,
+// for the tenant). It fails closed: a lookup that fails, or a provider no
+// longer configured, is guarded.
+func (s *Server) tenantGuarded(ctx context.Context, tenant string) bool {
+	provs, err := s.store.TenantPeopleProviders(ctx, tenant)
+	if err != nil {
+		return true
+	}
+	for _, name := range provs {
+		if p := s.providers[name]; p == nil || p.Config.OrgPolicy != config.OrgPolicyFull {
+			return true
+		}
+	}
+	return false
 }

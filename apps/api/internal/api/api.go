@@ -134,6 +134,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.issuer = issuerForTest
 	}
 	buildProviders(s)
+	// Every execution asks the tenant's organization policy first (#189).
+	eng.SetRunGuard(s.tenantRunGuard)
 	s.events = newEventLoop()
 	if st != nil {
 		eng.OnRunStatus(s.recordRunEvent)
@@ -713,6 +715,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	// a URL to clone or a folder on this server — is the operator's to add.
 	org := orgPerson(r)
 	if org != nil {
+		// "--" joins a tenant to a short name (orgProjectSep): a name that
+		// carries it could pose as another tenant's stored name. Refused
+		// whatever the request would do with it — create, clone or import.
+		if strings.Contains(body.Name, orgProjectSep) {
+			writeErr(w, 400, fmt.Errorf("a project name may not contain %q", orgProjectSep))
+			return
+		}
 		if !body.Create || body.Repo != "" {
 			writeErr(w, http.StatusForbidden, errors.New("forbidden: in an organization, start an empty project (`create: true`, no `repo`)"))
 			return
@@ -943,7 +952,7 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "path": path, "definition": s.eng.Definitions()[name]})
+	writeJSON(w, 200, map[string]any{"ok": true, "path": path, "definition": s.savedDefinition(r, project, name)})
 }
 
 func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -1361,7 +1370,7 @@ func resolveErr(w http.ResponseWriter, err error) {
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	by := actorOf(r, b)
@@ -1393,7 +1402,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	by := actorOf(r, b)
@@ -1410,7 +1419,7 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 // answer resolves an ask_human suspension.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	ans := tn.Answer{Ok: b.Ok == nil || *b.Ok, Reason: b.Reason,
@@ -1426,9 +1435,30 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+// resumeAllowed refuses, up front, to continue a run its workflow could not
+// be started for (#189): a guarded organization's person approving,
+// answering, filling in or retrying a run of a workflow with a shell step or
+// a file-writing tool — say one a superadmin started. The engine asks its run
+// guard again when the run resumes; this says so before anything changes.
+func (s *Server) resumeAllowed(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	if !orgMember(r) {
+		return true
+	}
+	run, err := s.store.GetRun(r.Context(), id)
+	if err != nil {
+		notFound(w)
+		return false
+	}
+	if err := s.orgGuardRun(r, s.eng.Definitions()[run.Workflow]); err != nil {
+		writeErr(w, 400, err)
+		return false
+	}
+	return true
+}
+
 func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	if err := s.eng.Retry(r.Context(), id, b.StepID); err != nil {

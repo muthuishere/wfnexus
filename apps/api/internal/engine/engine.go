@@ -44,12 +44,14 @@ type Engine struct {
 	// testHookBeforeCallStep runs before a call's step starts (tests only).
 	testHookBeforeCallStep func(step *workflow.Step, dir string)
 
-	cfg     config.Config
-	store   Store
-	blob    Artifacts
-	defs    map[string]*workflow.Definition
-	skills  *skills.Registry
-	catalog *catalog.Catalog
+	cfg   config.Config
+	store Store
+	// runGuard is asked before every execution (concurrency.go).
+	runGuard RunGuard
+	blob     Artifacts
+	defs     map[string]*workflow.Definition
+	skills   *skills.Registry
+	catalog  *catalog.Catalog
 	// priceTab is the model_prices table in memory (prices.go).
 	priceTab priceTable
 	// sourceSkips records workflow sources that did not load — a broken file in
@@ -1107,6 +1109,9 @@ func (e *Engine) Retry(ctx context.Context, runID uuid.UUID, stepID string) erro
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
 	}
+	if err := e.checkRunGuard(ctx, run.Project, def); err != nil {
+		return err
+	}
 	if s := def.Lookup(stepID); s != nil && s.WriteEffect && !isIterationRow(stepID) {
 		stepID = callHeadRow(s)
 	}
@@ -1128,6 +1133,14 @@ func (e *Engine) resume(ctx context.Context, runID uuid.UUID) error {
 	def := e.defs[run.Workflow]
 	if def == nil {
 		return fmt.Errorf("unknown workflow %q", run.Workflow)
+	}
+	// Every execution — a new run, a retry, a run continuing after an
+	// approval, an answer or an input — resumes here, so the run guard is
+	// asked again: a run admitted before its tenant's policy changed stops
+	// here, failed with the reason, instead of running.
+	if err := e.checkRunGuard(ctx, run.Project, def); err != nil {
+		e.setRun(ctx, runID, "failed", run.CurrentStep, err.Error())
+		return nil
 	}
 	// What every remote `use:` RESOLVED to, on this run's own event stream. The
 	// COMMIT is recorded and the tag is not, because a tag can move and a

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -36,7 +37,23 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 // does run Prometheus. Gauges over the last 24h plus the live state: the
 // server keeps no in-process counters, so a counter type here would lie
 // across restarts.
+//
+// On an install with tenants the numbers are the whole server's, every
+// tenant together, so only a superadmin reads them there (#189); without
+// tenants, whoever could before still can.
 func (s *Server) prometheus(w http.ResponseWriter, r *http.Request) {
+	if !s.isSuper(r) {
+		ts, err := s.store.ListTenants(r.Context())
+		for _, t := range ts {
+			if t.ID != store.DefaultTenant {
+				err = errors.New("forbidden: server-wide metrics are the operator's on an install with organizations")
+			}
+		}
+		if err != nil {
+			writeErr(w, http.StatusForbidden, err)
+			return
+		}
+	}
 	m, err := s.store.Metrics(r.Context(), "24h", time.Now())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
