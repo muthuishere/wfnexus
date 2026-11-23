@@ -64,8 +64,15 @@ type AuthProvider struct {
 	RoleClaim string            `yaml:"roleClaim,omitempty"`
 	RoleMap   map[string]string `yaml:"roleMap,omitempty"`
 	// AutoCreateOrg creates the tenant on its first sign-in. Off, a sign-in
-	// naming an organization the operator has not created is refused.
+	// naming an organization the operator has not created is refused. The
+	// tenant id is always derived from (provider, claim) — see
+	// store.OrgTenantID — and an operator pre-creates a tenant by that id.
 	AutoCreateOrg bool `yaml:"autoCreateOrg,omitempty"`
+	// AllowedOrgs, when set, lists the org-claim values that may sign in at
+	// all; any other organization is refused before anything is created.
+	// On an identity provider that serves many organizations,
+	// autoCreateOrg without allowedOrgs lets ANY of them create a tenant.
+	AllowedOrgs []string `yaml:"allowedOrgs,omitempty"`
 	// OrgPolicy: "guarded" (the default once orgClaim is set) holds an
 	// organization's people to the customer authoring guard; "full" does
 	// not. Anything but "full" is read as guarded.
@@ -97,6 +104,8 @@ func (p *AuthProvider) NormalizeOrg() error {
 			return errors.New("roleClaim and roleMap need orgClaim")
 		case p.AutoCreateOrg:
 			return errors.New("autoCreateOrg needs orgClaim")
+		case len(p.AllowedOrgs) > 0:
+			return errors.New("allowedOrgs needs orgClaim")
 		case p.OrgPolicy != "":
 			return errors.New("orgPolicy needs orgClaim")
 		}
@@ -109,15 +118,16 @@ func (p *AuthProvider) NormalizeOrg() error {
 		// that issues none has nothing trustworthy to read it from.
 		return fmt.Errorf("orgClaim needs an OpenID Connect provider (oidc or google), not %q", p.Type)
 	}
-	// A superadmin sees across every tenant, so a provider that places
-	// people in organizations must never make one: that would turn an
-	// organization's sign-in into a way out of the organization.
-	if grantsSuperadmin(p.DefaultRole) {
-		return errors.New("defaultRole grants superadmin, which a provider with orgClaim never may")
+	// An organization's people get their role from roleMap and nothing
+	// else. defaultRole and groupRoles grant server roles — superadmin, or
+	// a project or workflow role that may sit in ANOTHER tenant — so a
+	// provider that places people in organizations may not set them.
+	if p.DefaultRole != "" || len(p.GroupRoles) > 0 {
+		return errors.New("defaultRole and groupRoles grant server roles, which a provider with orgClaim never may; an organization's roles come from roleMap")
 	}
-	for g, r := range p.GroupRoles {
-		if grantsSuperadmin(r) {
-			return fmt.Errorf("groupRoles[%q] grants superadmin, which a provider with orgClaim never may", g)
+	for _, o := range p.AllowedOrgs {
+		if o == "" {
+			return errors.New("allowedOrgs lists an empty value")
 		}
 	}
 	if len(p.RoleMap) > 0 && p.RoleClaim == "" {
@@ -136,15 +146,4 @@ func (p *AuthProvider) NormalizeOrg() error {
 		return fmt.Errorf("orgPolicy %q: use %q or %q", p.OrgPolicy, OrgPolicyGuarded, OrgPolicyFull)
 	}
 	return nil
-}
-
-// grantsSuperadmin reads a role spec ("superadmin", "project_admin:<p>", ...)
-// the way the api package grants it — the part before ":", trimmed,
-// lowercased, "-" and " " read as "_" — and says whether it is superadmin.
-// The same reading, so no spelling (" SuperAdmin ") slips past this check
-// and is still granted.
-func grantsSuperadmin(spec string) bool {
-	role, _, _ := strings.Cut(strings.TrimSpace(spec), ":")
-	role = strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(role)))
-	return role == "superadmin"
 }

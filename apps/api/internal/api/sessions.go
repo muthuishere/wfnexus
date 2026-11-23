@@ -119,6 +119,22 @@ func (s *Server) userSubject(ctx context.Context, u *store.User, t *store.UserTo
 	if err != nil {
 		return nil, err
 	}
+	switch {
+	case u.Role == RoleSuperadmin:
+		// A superadmin is the operator, across every tenant, whatever a
+		// binding made before they were promoted says (ADR 0035).
+		tenant, orgRole = "", ""
+	case tenant == "":
+		// A person who signs in through an organization provider must be
+		// in an organization. With no row (an operator moved them out, or
+		// the provider gained orgClaim after they signed in) they are
+		// refused rather than served unscoped; signing in again binds them.
+		if org, err := s.orgProviderOf(ctx, u); err != nil {
+			return nil, err
+		} else if org {
+			return nil, errOrgUnbound
+		}
+	}
 	return &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, Project: project, User: u, SessionID: t.ID,
 		Tenant: tenant, OrgRole: orgRole}, nil
 }

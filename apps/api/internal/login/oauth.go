@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"slices"
@@ -374,10 +375,13 @@ func (o *OAuth) orgClaims(idt *oidc.IDToken, id *Identity) error {
 	case nil:
 	case string:
 		if len(v) > maxOrgClaim {
+			// Not echoed: a value this long is not an organization id.
+			log.Printf("auth: AUDIT sign-in as %q (%s) refused: the %s claim is %d bytes, over %d", id.Username, o.cfg.Name, o.cfg.OrgClaim, len(v), maxOrgClaim)
 			return fmt.Errorf("the %s claim is too long", o.cfg.OrgClaim)
 		}
 		id.Org = v
 	default:
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: the %s claim is a %T, not a string", id.Username, o.cfg.Name, o.cfg.OrgClaim, v)
 		return fmt.Errorf("the %s claim is not a string", o.cfg.OrgClaim)
 	}
 	if o.cfg.RoleClaim == "" {

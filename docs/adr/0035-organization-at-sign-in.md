@@ -12,20 +12,22 @@ ADR 0017 says authorization is never delegated to the provider: a group claim or
 
 ## Decision
 
-1. **Opt-in, per provider.** An `oidc` or `google` provider may set `orgClaim`, `roleClaim`, `roleMap`, `autoCreateOrg` and `orgPolicy`. A provider without `orgClaim` changes nothing: its people stay unscoped (`Tenant ""`), with the roles they had. The settings other than `orgClaim` are refused without it, and `orgClaim` is refused on a provider that issues no id_token (github, ldap).
+1. **Opt-in, per provider.** An `oidc` or `google` provider may set `orgClaim`, `roleClaim`, `roleMap`, `allowedOrgs`, `autoCreateOrg` and `orgPolicy`. A provider without `orgClaim` changes nothing: its people stay unscoped (`Tenant ""`), with the roles they had. The settings other than `orgClaim` are refused without it, and `orgClaim` is refused on a provider that issues no id_token (github, ldap).
 
-2. **The claims come from the verified id_token only**, never from userinfo or anything in the request. The org claim must be a string; the role claim may be a string or an array of strings.
+2. **The claims come from the verified id_token only**, never from userinfo or anything in the request. The org claim must be a string of at most 256 bytes; the role claim may be a string or an array of strings.
 
 3. **A token value is only a lookup key; the operator's config decides.** `roleMap` is written by the operator and maps a role-claim value to `org-admin` or `member`. A value not in the map, or no role claim, is `member`. The provider never names a role that is granted as is, so ADR 0017's rule holds: the decision is local config, re-read at every sign-in. This amends 0017 only in allowing a claim to SELECT among roles the operator declared.
 
-4. **The tenant id is derived, never trusted as is.**
-   - A claim value that is already a valid tenant id is used unchanged. It is not lowercased, so `Acme` and `acme` stay apart.
-   - Any other value becomes `org-` plus 32 hex characters of its sha256.
-   - A claim naming `default` is refused: that tenant owns every unbound project.
+4. **The tenant id is always derived: `org-` + the first 32 hex characters of sha256(provider + NUL + claim)** (`store.OrgTenantID`). The claim is never the id. So:
+   - no claim can name an existing tenant (`default`, or one the operator made for something else) and join it;
+   - the same claim on two providers is two tenants, so one identity provider cannot speak for another's organizations;
+   - no literal claim can equal another claim's derived id.
 
-5. **One tenant per person, stored server side** (`user_tenants`). The first sign-in binds; a later one naming another organization is refused, not re-bound; the role (only ever `org-admin` or `member`) is refreshed from `roleMap` at every sign-in. A missing claim is refused. An organization not yet a tenant is created when `autoCreateOrg` is on and refused when it is off. A refused first sign-in makes no account, and every refusal is written to the audit log.
+   The readable claim is kept only as the tenant's name, with unprintable characters dropped (`store.OrgTenantName`). An operator who wants a tenant to exist before anyone signs in (with `autoCreateOrg` off) creates it under `OrgTenantID(provider name, claim)`.
 
-6. **`Subject.Tenant` for a person comes only from that row** (with `Subject.OrgRole`). A failure to read it fails the request rather than unscope the person.
+5. **One tenant per person, stored server side** (`user_tenants`). The first sign-in binds; a later one naming another organization is refused, not re-bound; the role (only ever `org-admin` or `member`) is refreshed from `roleMap` at every sign-in. A missing claim is refused; with `allowedOrgs` set, any organization not listed is refused before anything is created. An organization not yet a tenant is created when `autoCreateOrg` is on and refused when it is off. Creating the tenant and binding are one transaction, and an account the sign-in made is deleted if the binding fails, so a refused sign-in leaves neither an orphan account nor an orphan tenant. Every refusal is written to the audit log, claim values and names quoted.
+
+6. **`Subject.Tenant` for a person comes only from that row** (with `Subject.OrgRole`), read on every request, whatever the credential (browser session, refresh, CLI token). A failure to read it fails the request rather than unscope the person. A person whose provider sets `orgClaim` and who has no row is refused (401) rather than served unscoped; signing in again binds them. A superadmin is always unscoped (`Tenant ""`, `OrgRole ""`), whatever a row made before their promotion says.
 
 7. **`orgPolicy`**: `guarded` (the default) holds an organization's people to the customer authoring guard; `full` does not. Anything but an explicit `full` on the person's provider, including a provider no longer configured, is guarded.
 
@@ -34,6 +36,8 @@ ADR 0017 says authorization is never delegated to the provider: a group claim or
 ## Consequences
 
 - One server can serve many organizations behind one identity provider, once #189 lands.
-- **No superadmin through an organization provider.** A superadmin sees across every tenant, so a provider that sets `orgClaim` is refused when the providers are built if its `defaultRole` or any `groupRoles` value grants superadmin. Its other mapped roles still apply.
-- **An existing superadmin is never bound.** An account that already holds superadmin signs in through an organization provider unbound (Tenant ""), with an audit line. An ordinary account that existed before `orgClaim` was set is bound on its next sign-in, and from then on is guarded like any other member.
-- Moving a person to another organization is an operator action (delete the row), never a sign-in.
+- **An organization's roles come only from `roleMap`.** `defaultRole` and `groupRoles` grant server roles: superadmin, which sees across every tenant, or a project or workflow role that may sit in another tenant. A provider that sets `orgClaim` is refused when the providers are built if it sets either.
+- **An existing superadmin is never bound.** An account that already holds superadmin signs in through an organization provider unbound, with an audit line. An ordinary account that existed before `orgClaim` was set is bound on its next sign-in, and from then on is guarded like any other member.
+- **Moving a person out of an organization** is an operator action, never a sign-in: delete their row AND revoke their tokens, in one call (`store.UnbindUserTenant`). Their next sign-in binds them from the claim.
+- **`autoCreateOrg` without `allowedOrgs` is open.** On an identity provider that serves many organizations, any organization whose people can sign in to the app registration creates a tenant here. List the organizations in `allowedOrgs`, or leave `autoCreateOrg` off and create tenants yourself.
+- **Multi-tenant Microsoft Entra.** Each Entra tenant issues id_tokens under its own issuer (`https://login.microsoftonline.com/<tid>/v2.0`), and the id_token check here is strict: the issuer must equal the configured one. One provider therefore serves one Entra tenant's issuer; several Entra tenants need one provider each (and so, by decision 4, get distinct tenants here even for equal claims) until a templated-issuer check is designed.

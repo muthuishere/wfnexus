@@ -2,11 +2,10 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/config"
 	"github.com/muthuishere/wfnexus/apps/api/internal/login"
@@ -39,38 +38,18 @@ func orgScopingOn() bool { return orgScopingEnforced || orgScopingForTest }
 // The sign-in refusals. Each is logged with its detail; the browser sees only
 // "sign-in failed".
 var (
-	errOrgMissing  = errors.New("the provider named no organization")
-	errOrgUnknown  = errors.New("the organization is not set up on this server")
-	errOrgReserved = errors.New("the organization claim names the default tenant")
-	errOrgSwitch   = errors.New("this account belongs to another organization")
+	errOrgMissing    = errors.New("the provider named no organization")
+	errOrgNotAllowed = errors.New("the organization is not allowed on this provider")
+	errOrgUnknown    = errors.New("the organization is not set up on this server")
+	errOrgSwitch     = errors.New("this account belongs to another organization")
+	errOrgUnbound    = errors.New("unauthenticated: sign in again to join your organization")
 )
 
 // orgSignIn is what one sign-in says about the person's organization.
 type orgSignIn struct {
-	tenant string // the tenant id derived from the claim
-	name   string // the claim's raw value, kept as the tenant's name
+	tenant string // store.OrgTenantID(provider, claim)
+	name   string // the claim, printable characters only: the tenant's name
 	role   string // config.OrgRoleAdmin or config.OrgRoleMember
-	exists bool   // the tenant is already there
-}
-
-// orgTenantID turns an organization claim into a tenant id. A value that is
-// already a valid tenant id is used as it is, unchanged: lowercasing would
-// merge "Acme" into "acme". Any other value becomes "org-" plus 32 hex
-// characters of its sha256: stable for the same claim, valid, and long
-// enough that two organizations do not meet by accident.
-//
-// The default tenant owns every project not bound elsewhere, so a claim
-// naming it is refused rather than hashed: an operator who sees that error
-// in the log has a provider worth looking at.
-func orgTenantID(claim string) (string, error) {
-	if claim == store.DefaultTenant {
-		return "", errOrgReserved
-	}
-	if store.ValidTenantID(claim) {
-		return claim, nil
-	}
-	sum := sha256.Sum256([]byte(claim))
-	return "org-" + hex.EncodeToString(sum[:16]), nil
 }
 
 // orgRole looks the role claim's values up in the operator's roleMap. Any
@@ -88,40 +67,40 @@ func orgRole(c config.AuthProvider, values []string) string {
 
 // resolveOrg checks a sign-in's organization BEFORE any account is found or
 // made, so a refused sign-in leaves no user row behind: the claim must be
-// there, and the tenant must exist unless autoCreateOrg says to make it. It
-// returns nil for a provider without orgClaim.
+// there, allowed by allowedOrgs when that is set, and its tenant must exist
+// unless autoCreateOrg says to make it. It returns nil for a provider
+// without orgClaim.
 func (s *Server) resolveOrg(ctx context.Context, p *login.Provider, id *login.Identity) (*orgSignIn, error) {
 	c := p.Config
 	if c.OrgClaim == "" {
 		return nil, nil
 	}
 	if id.Org == "" {
-		log.Printf("auth: AUDIT sign-in as %s (%s) refused: no %s claim", id.Username, c.Name, c.OrgClaim)
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: no %s claim", id.Username, c.Name, c.OrgClaim)
 		return nil, errOrgMissing
 	}
-	tenant, err := orgTenantID(id.Org)
-	if err != nil {
-		log.Printf("auth: AUDIT sign-in as %s (%s) refused: %s claim %q: %v", id.Username, c.Name, c.OrgClaim, id.Org, err)
-		return nil, err
+	if len(c.AllowedOrgs) > 0 && !slices.Contains(c.AllowedOrgs, id.Org) {
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: organization %q is not in allowedOrgs", id.Username, c.Name, id.Org)
+		return nil, errOrgNotAllowed
 	}
-	o := &orgSignIn{tenant: tenant, name: id.Org, role: orgRole(c, id.OrgRoles)}
-	switch _, err := s.store.GetTenant(ctx, tenant); {
+	o := &orgSignIn{tenant: store.OrgTenantID(c.Name, id.Org), name: store.OrgTenantName(id.Org), role: orgRole(c, id.OrgRoles)}
+	switch _, err := s.store.GetTenant(ctx, o.tenant); {
 	case err == nil:
-		o.exists = true
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, err
 	case !c.AutoCreateOrg:
-		log.Printf("auth: AUDIT sign-in as %s (%s) refused: organization %q (tenant %s) is not set up and autoCreateOrg is off", id.Username, c.Name, id.Org, tenant)
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: organization %q (tenant %s) is not set up and autoCreateOrg is off", id.Username, c.Name, id.Org, o.tenant)
 		return nil, errOrgUnknown
 	}
 	return o, nil
 }
 
-// bindOrg puts the signed-in user in the organization resolved above: makes
-// the tenant if it is new, binds a first sign-in, refreshes the role of a
-// repeat one, and refuses one naming a different organization than the
-// account is bound to. It runs before role sync, so a refused sign-in
-// changes nothing the account holds.
+// bindOrg puts the signed-in user in the organization resolved above: binds
+// a first sign-in, refreshes the role of a repeat one, and refuses one
+// naming a different organization than the account is bound to. Creating
+// the tenant and binding are one transaction, so a refusal leaves no orphan
+// tenant. It runs before role sync, so a refused sign-in changes nothing the
+// account holds.
 func (s *Server) bindOrg(ctx context.Context, p *login.Provider, u *store.User, o *orgSignIn) error {
 	name := p.Config.Name
 	cur, curRole, err := s.store.UserTenant(ctx, u.ID)
@@ -129,30 +108,47 @@ func (s *Server) bindOrg(ctx context.Context, p *login.Provider, u *store.User, 
 		return err
 	}
 	if cur != "" && cur != o.tenant {
-		log.Printf("auth: AUDIT sign-in as %s (%s) refused: bound to tenant %s, this sign-in names %s", u.Name, name, cur, o.tenant)
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: bound to tenant %s, this sign-in names %s", u.Name, name, cur, o.tenant)
 		return errOrgSwitch
 	}
-	if !o.exists {
-		if _, err := s.store.CreateTenant(ctx, o.tenant, o.name); err == nil {
-			log.Printf("auth: AUDIT tenant %s created on first sign-in by %s (%s), organization %q", o.tenant, u.Name, name, o.name)
-		} else if !errors.Is(err, store.ErrTenantExists) {
-			// ErrTenantExists: a concurrent first sign-in made it.
-			return err
-		}
-	}
-	if err := s.store.BindUserTenant(ctx, u.ID, o.tenant, o.role); errors.Is(err, store.ErrUserTenantBound) {
-		log.Printf("auth: AUDIT sign-in as %s (%s) refused: bound to another tenant than %s", u.Name, name, o.tenant)
+	created, err := s.store.BindUserTenantCreating(ctx, u.ID, o.tenant, o.name, o.role)
+	if errors.Is(err, store.ErrUserTenantBound) {
+		// A sign-in naming another organization bound the account between
+		// the read above and this write.
+		log.Printf("auth: AUDIT sign-in as %q (%s) refused: bound to another tenant than %s", u.Name, name, o.tenant)
 		return errOrgSwitch
 	} else if err != nil {
 		return err
 	}
+	if created {
+		log.Printf("auth: AUDIT tenant %s created on first sign-in by %q (%s), organization %q", o.tenant, u.Name, name, o.name)
+	}
 	switch {
 	case cur == "":
-		log.Printf("auth: AUDIT account %s bound to tenant %s as %s (%s)", u.Name, o.tenant, o.role, name)
+		log.Printf("auth: AUDIT account %q bound to tenant %s as %s (%s)", u.Name, o.tenant, o.role, name)
 	case curRole != o.role:
-		log.Printf("auth: AUDIT account %s role in tenant %s changed from %s to %s (%s)", u.Name, o.tenant, curRole, o.role, name)
+		log.Printf("auth: AUDIT account %q role in tenant %s changed from %s to %s (%s)", u.Name, o.tenant, curRole, o.role, name)
 	}
 	return nil
+}
+
+// orgProviderOf says whether the provider a user is bound to sets orgClaim.
+// It reads the store only when some configured provider sets orgClaim, so an
+// install without organizations does no extra work per request.
+func (s *Server) orgProviderOf(ctx context.Context, u *store.User) (bool, error) {
+	any := false
+	for _, p := range s.providers {
+		any = any || p.Config.OrgClaim != ""
+	}
+	if !any {
+		return false, nil
+	}
+	prov, err := s.store.UserProvider(ctx, u.ID)
+	if err != nil {
+		return false, err
+	}
+	p := s.providers[prov]
+	return p != nil && p.Config.OrgClaim != "", nil
 }
 
 // orgGuarded says whether the caller is a person in an organization whose
