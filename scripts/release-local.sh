@@ -91,12 +91,7 @@ IMAGE_ARGS=(--build-arg "VERSION=$TAG" --build-arg "COMMIT=$(git rev-parse --sho
   --build-arg "DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
 if [ "${SKIP_IMAGES:-}" != 1 ]; then
   step "assert: the server image reports the tag"
-  CHECK="wfx-server-release-check:$TAG"
-  docker buildx build --load -f infra/Dockerfile "${IMAGE_ARGS[@]}" -t "$CHECK" .
-  GOT="$(docker run --rm --entrypoint wfx-server "$CHECK" --version | head -n1)"
-  docker image rm "$CHECK" >/dev/null 2>&1 || true
-  echo "tag=$TAG image=$GOT"
-  case "$GOT" in *" $TAG ("*) ;; *) die "server image reports '$GOT', not exactly $TAG" ;; esac
+  bash scripts/release-image-check.sh "$TAG" "${IMAGE_ARGS[@]}" || die "the server image is not $TAG"
 fi
 
 # ---- 5. publish ------------------------------------------------------------

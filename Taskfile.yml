@@ -210,6 +210,7 @@ tasks:
       - task: test:hostile
       - task: test:race
       - task: e2e
+      - bash scripts/release-image-check_test.sh
   check:
     desc: Tests, vet, every build, the UI and the workflows (part of task ci)
     cmds: [task: test, task: vet, task: build:all, task: ui:check, task: workflows:validate, task: adapters:test, task: agentadapter:test]
