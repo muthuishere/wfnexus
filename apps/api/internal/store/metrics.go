@@ -161,6 +161,32 @@ func (s *Store) timeArg(t time.Time) any {
 
 // Metrics aggregates everything since `now - window`.
 func (s *Store) Metrics(ctx context.Context, window string, now time.Time) (*Metrics, error) {
+	return s.MetricsFor(ctx, window, now, "")
+}
+
+// runsOf is the condition that keeps a metric to one tenant's runs (#189):
+// `col IN (the tenant's runs)`, with the fail-closed tenant condition of
+// tenantRunWhere. param is the tenant's placeholder. An empty tenant keeps
+// every run and adds nothing.
+func runsOf(col, tenant, param string) string {
+	if tenant == "" {
+		return ""
+	}
+	return ` AND ` + col + ` IN (SELECT id FROM workflow_runs WHERE ` + tenantRunWhere(param) + `)`
+}
+
+// tenantArgs appends the tenant to a query's arguments when it filters.
+func tenantArgs(tenant string, args ...any) []any {
+	if tenant == "" {
+		return args
+	}
+	return append(args, tenant)
+}
+
+// MetricsFor is Metrics for one tenant's runs; "" is every tenant. What runs
+// did, cost and wait on is counted for the tenant only; the runners
+// (workers and their job queue) are the server's and are not split.
+func (s *Store) MetricsFor(ctx context.Context, window string, now time.Time, tenant string) (*Metrics, error) {
 	d, ok := MetricsWindows[window]
 	if !ok {
 		d, window = MetricsWindows["24h"], "24h"
@@ -171,23 +197,23 @@ func (s *Store) Metrics(ctx context.Context, window string, now time.Time) (*Met
 		bucket = 24 * time.Hour
 	}
 	m := &Metrics{Window: window, Since: since, GeneratedAt: now, BucketSeconds: int64(bucket / time.Second)}
-	if err := s.metricsRuns(ctx, m, since, bucket); err != nil {
+	if err := s.metricsRuns(ctx, m, since, bucket, tenant); err != nil {
 		return nil, err
 	}
-	if err := s.metricsSteps(ctx, m, since); err != nil {
+	if err := s.metricsSteps(ctx, m, since, tenant); err != nil {
 		return nil, err
 	}
-	if err := s.metricsLive(ctx, m); err != nil {
+	if err := s.metricsLive(ctx, m, tenant); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (s *Store) metricsRuns(ctx context.Context, m *Metrics, since time.Time, bucket time.Duration) error {
+func (s *Store) metricsRuns(ctx context.Context, m *Metrics, since time.Time, bucket time.Duration, tenant string) error {
 	// One row per run in the window, five narrow columns, on the created_at
 	// index. Status counts by workflow and by time bucket both come from it.
 	rows, err := s.query(ctx, `SELECT project, workflow, status, created_at, started_at, updated_at
-		FROM workflow_runs WHERE created_at >= $1`, s.timeArg(since))
+		FROM workflow_runs WHERE created_at >= $1`+runsOf("id", tenant, "$2"), tenantArgs(tenant, s.timeArg(since))...)
 	if err != nil {
 		return err
 	}
@@ -278,11 +304,11 @@ type stepUsage struct {
 	} `json:"models"`
 }
 
-func (s *Store) metricsSteps(ctx context.Context, m *Metrics, since time.Time) error {
+func (s *Store) metricsSteps(ctx context.Context, m *Metrics, since time.Time, tenant string) error {
 	rows, err := s.query(ctx, `SELECT r.project, r.workflow, s.step_id, s.status, s.attempts,
 			s.started_at, s.finished_at, s.usage, s.resolution, s.resolved_at
 		FROM step_runs s JOIN workflow_runs r ON r.id = s.run_id
-		WHERE r.created_at >= $1`, s.timeArg(since))
+		WHERE r.created_at >= $1`+runsOf("r.id", tenant, "$2"), tenantArgs(tenant, s.timeArg(since))...)
 	if err != nil {
 		return err
 	}
@@ -429,36 +455,36 @@ func (s *Store) metricsSteps(ctx context.Context, m *Metrics, since time.Time) e
 	// A fallback is written as a log line by the step that took it
 	// (engine/step.go); counted in SQL on the event table's kind.
 	return s.qrow(ctx, `SELECT count(*) FROM run_events
-		WHERE kind = 'log' AND created_at >= $1 AND payload::text LIKE '%falling back to%'`,
-		s.timeArg(since)).Scan(&m.LLM.Fallbacks)
+		WHERE kind = 'log' AND created_at >= $1 AND payload::text LIKE '%falling back to%'`+runsOf("run_id", tenant, "$2"),
+		tenantArgs(tenant, s.timeArg(since))...).Scan(&m.LLM.Fallbacks)
 }
 
 // metricsLive is the part that is a state, not a window: what is queued,
 // waiting and connected right now.
-func (s *Store) metricsLive(ctx context.Context, m *Metrics) error {
+func (s *Store) metricsLive(ctx context.Context, m *Metrics, tenant string) error {
 	if err := s.qrow(ctx, `SELECT
-			(SELECT count(*) FROM workflow_runs WHERE status = 'queued'),
-			(SELECT count(*) FROM workflow_runs WHERE status = 'running'),
+			(SELECT count(*) FROM workflow_runs WHERE status = 'queued'`+runsOf("id", tenant, "$1")+`),
+			(SELECT count(*) FROM workflow_runs WHERE status = 'running'`+runsOf("id", tenant, "$1")+`),
 			(SELECT count(*) FROM worker_jobs WHERE status = 'queued'),
 			(SELECT count(*) FROM worker_jobs WHERE status = 'leased'),
-			(SELECT count(*) FROM step_runs WHERE status IN ('awaiting_approval','needs_input'))`).
+			(SELECT count(*) FROM step_runs WHERE status IN ('awaiting_approval','needs_input')`+runsOf("run_id", tenant, "$1")+`)`, tenantArgs(tenant)...).
 		Scan(&m.Queue.RunsQueued, &m.Queue.RunsRunning, &m.Queue.JobsQueued, &m.Queue.JobsLeased, &m.Approvals.Waiting); err != nil {
 		return err
 	}
-	oldest := func(q string) (*time.Time, error) {
+	oldest := func(q string, args ...any) (*time.Time, error) {
 		var t *time.Time
-		err := s.qrow(ctx, q).Scan(&t)
+		err := s.qrow(ctx, q, args...).Scan(&t)
 		return t, err
 	}
 	var err error
 	// min() over a timestamp column loses its type on SQLite (it comes back
 	// as text), so the oldest is read with ORDER BY … LIMIT 1 instead.
 	if m.Approvals.OldestWaiting, err = oldest(`SELECT started_at FROM step_runs
-		WHERE status IN ('awaiting_approval','needs_input') AND started_at IS NOT NULL
-		ORDER BY started_at LIMIT 1`); err != nil && !isNoRows(err) {
+		WHERE status IN ('awaiting_approval','needs_input') AND started_at IS NOT NULL`+runsOf("run_id", tenant, "$1")+`
+		ORDER BY started_at LIMIT 1`, tenantArgs(tenant)...); err != nil && !isNoRows(err) {
 		return err
 	}
-	runQ, err := oldest(`SELECT created_at FROM workflow_runs WHERE status = 'queued' ORDER BY created_at LIMIT 1`)
+	runQ, err := oldest(`SELECT created_at FROM workflow_runs WHERE status = 'queued'`+runsOf("id", tenant, "$1")+` ORDER BY created_at LIMIT 1`, tenantArgs(tenant)...)
 	if err != nil && !isNoRows(err) {
 		return err
 	}
