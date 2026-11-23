@@ -178,11 +178,17 @@ func (s *Server) listProposals(w http.ResponseWriter, r *http.Request) {
 		}
 		project = scope
 	}
-	rows, err := s.store.ListProposals(r.Context(), store.ProposalFilter{
+	all, err := s.store.ListProposals(r.Context(), store.ProposalFilter{
 		Project: project, Workflow: q.Get("workflow"), Status: q.Get("status")})
 	if err != nil {
 		writeErr(w, 500, err)
 		return
+	}
+	rows := []*store.Proposal{}
+	for _, p := range all {
+		if s.tenantVisible(r, p.Project) {
+			rows = append(rows, p)
+		}
 	}
 	writeJSON(w, 200, rows)
 }
@@ -240,7 +246,7 @@ func decodeDecide(r *http.Request) decideBody {
 // POST /api/proposals/{id}/approve {actor}
 func (s *Server) approveProposalRoute(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.proposalFor(w, r)
-	if !ok {
+	if !ok || !s.orgMayAdmin(w, r, p.Project) {
 		return
 	}
 	b := decodeDecide(r)
@@ -290,7 +296,7 @@ func (s *Server) approveProposal(ctx context.Context, p *store.Proposal, by stri
 // POST /api/proposals/{id}/reject {actor, reason}
 func (s *Server) rejectProposalRoute(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.proposalFor(w, r)
-	if !ok {
+	if !ok || !s.orgMayAdmin(w, r, p.Project) {
 		return
 	}
 	b := decodeDecide(r)
@@ -370,8 +376,12 @@ func (s *Server) proposeDrift(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errors.New("body needs `project` and `workflow`"))
 		return
 	}
+	b.Project = s.resolveProject(r, b.Project)
 	if !s.inScope(r, b.Project) {
 		notFound(w)
+		return
+	}
+	if !s.orgMayAdmin(w, r, b.Project) {
 		return
 	}
 	t, err := s.eng.TargetForProject(r.Context(), b.Project, b.Workflow)

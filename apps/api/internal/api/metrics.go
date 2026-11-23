@@ -21,7 +21,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("window must be one of 24h, 7d, 30d; got %q", window))
 		return
 	}
-	m, err := s.store.Metrics(r.Context(), window, time.Now())
+	// Only the caller's tenant's runs are counted (#189): callerTenant is
+	// tenantVisible's rule, pushed into the SQL.
+	tenant, _ := s.callerTenant(r)
+	m, err := s.store.MetricsFor(r.Context(), window, time.Now(), tenant)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

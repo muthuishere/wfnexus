@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/store"
 )
 
@@ -24,12 +25,31 @@ func (s *Server) conversationRoutes(r interface {
 
 func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	list, err := s.eng.Conversations(r.Context(), limit)
+	all, err := s.eng.Conversations(r.Context(), limit)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
 	}
+	// The conversations of the caller's tenant's workflows (#189).
+	list := []model.Conversation{}
+	for _, c := range all {
+		if s.tenantVisible(r, s.conversationProject(c)) {
+			list = append(list, c)
+		}
+	}
 	writeJSON(w, 200, map[string]any{"conversations": list})
+}
+
+// conversationProject is the project a conversation belongs to: its own, or
+// its workflow's. One with neither is the server's (the default tenant's).
+func (s *Server) conversationProject(c model.Conversation) string {
+	if c.Project != "" {
+		return c.Project
+	}
+	if c.Workflow != "" {
+		return s.eng.ProjectFor(c.Workflow)
+	}
+	return ""
 }
 
 func (s *Server) setConversationState(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +61,20 @@ func (s *Server) setConversationState(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	// authorize lets a person in an organization through to here (#189):
+	// another tenant's conversation is a 404, and moving one of the
+	// tenant's needs someone who may run its workflow.
+	if orgMember(r) {
+		c, err := s.store.GetConversation(r.Context(), body.Channel, body.Chat)
+		if err != nil || !s.tenantVisible(r, s.conversationProject(c)) {
+			notFound(w)
+			return
+		}
+		if !s.canRunWorkflow(r, c.Workflow) {
+			writeErr(w, http.StatusForbidden, errors.New("forbidden: this subject does not hold runs:write"))
+			return
+		}
 	}
 	err := s.eng.SetConversationState(r.Context(), engine.ConversationKey{Channel: body.Channel, Chat: body.Chat}, body.State)
 	switch {
