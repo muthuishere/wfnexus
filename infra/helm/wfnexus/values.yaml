@@ -156,6 +156,12 @@ carry:
 server:
   # Always 1: the engine holds running steps in memory. Scale with runners.
   port: 8090
+  # The proxies whose X-Forwarded-For names the client (WFX_TRUSTED_PROXIES):
+  # your ingress controller's pod CIDR, plus a CDN's ranges if one is in front.
+  # Empty trusts none, and then every client behind the ingress shares one
+  # sign-in rate-limit address. A catch-all (0.0.0.0/0, ::/0) is refused.
+  #   trustedProxies: ["<ingress pod CIDR>"]
+  trustedProxies: []
   podAnnotations: {}
   podLabels: {}
   resources:

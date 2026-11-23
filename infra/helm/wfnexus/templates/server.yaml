@@ -55,6 +55,9 @@ spec:
             - { name: WFX_MODE, value: "server" }
             - { name: WFX_ADDR, value: ":{{ .Values.server.port }}" }
             - { name: WFX_WORKDIR, value: "/data/runs" }
+            {{- with .Values.server.trustedProxies }}
+            - { name: WFX_TRUSTED_PROXIES, value: {{ join "," . | quote }} }
+            {{- end }}
             - { name: WFX_STORAGE_DRIVER, value: {{ $db.driver | quote }} }
             {{- if eq $db.driver "sqlite" }}
             - { name: DATABASE_URL, value: {{ $db.sqlite.path | quote }} }
