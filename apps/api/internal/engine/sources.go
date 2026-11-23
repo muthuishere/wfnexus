@@ -42,6 +42,10 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 // templatesSource is the source name the shipped templates load under.
 const templatesSource = "templates"
 
+// TemplatesSource is templatesSource for the api package: the shipped
+// templates belong to no tenant (#189).
+const TemplatesSource = templatesSource
+
 func (e *Engine) Sources() []workflow.Source {
 	out := []workflow.Source{{Name: "local", Dir: e.cfg.WorkflowsDir}}
 	// The templates the platform ships. They are loaded by the same loader as

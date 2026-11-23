@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/google/uuid"
+
+	"github.com/muthuishere/wfnexus/apps/api/internal/model"
 	"github.com/muthuishere/wfnexus/apps/api/internal/notify"
 )
 
@@ -29,16 +32,37 @@ func (s *Server) channelRoutes(r interface {
 }
 
 func (s *Server) listChannels(w http.ResponseWriter, r *http.Request) {
+	// The adapters are the server's configuration, not an organization's
+	// (#189).
+	if orgMember(r) {
+		writeErr(w, http.StatusForbidden, errors.New("forbidden: channel adapters are the operator's"))
+		return
+	}
 	writeJSON(w, 200, map[string]any{"default": s.eng.DefaultChannel(), "channels": s.eng.Channels(r.Context())})
 }
 
 func (s *Server) listChannelMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	msgs, err := s.eng.ChannelMessages(r.Context(), q.Get("channel"), q.Get("run"), limit)
+	all, err := s.eng.ChannelMessages(r.Context(), q.Get("channel"), q.Get("run"), limit)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
+	}
+	// A message is in the tenant of the run it started or answered; one
+	// that touched no run is the server's (the default tenant's) (#189).
+	msgs := make([]*model.ChannelMessage, 0, len(all))
+	for _, m := range all {
+		// A run that can no longer be read leaves the message the server's.
+		project := ""
+		if id, err := uuid.Parse(m.RunID); err == nil {
+			if run, err := s.store.GetRun(r.Context(), id); err == nil {
+				project = run.Project
+			}
+		}
+		if s.tenantVisible(r, project) {
+			msgs = append(msgs, m)
+		}
 	}
 	writeJSON(w, 200, msgs)
 }

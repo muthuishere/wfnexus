@@ -24,7 +24,7 @@ import (
 // stranger in with an unscoped view and shell steps, so every provider that
 // sets orgClaim is REFUSED when the providers are built. The change that
 // wires #189 sets this to true, and nothing else does.
-const orgScopingEnforced = false
+const orgScopingEnforced = true
 
 // orgScopingForTest is how a test exercises the sign-in path before #189.
 // Nothing outside _test.go files assigns it.

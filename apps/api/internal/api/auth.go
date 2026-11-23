@@ -57,9 +57,12 @@ type Subject struct {
 	Worker  *store.Worker
 	// Tenant is set only from a stored row, never from anything in the
 	// request: a service subject's principal row, an account's issuer link,
-	// or a user's user_tenants row (ADR 0035). For a user, "" means
-	// unscoped, as every user was before organizations. Readers that mean
-	// "a service or account caller" check Kind, not Tenant.
+	// or a user's user_tenants row (ADR 0035). For a user, "" means in no
+	// organization, as every user was before organizations: such a person
+	// sees the default tenant (every project not bound to one), which on
+	// an install without organizations is everything (tenantVisible).
+	// Readers that mean "a service or account caller" check Kind, not
+	// Tenant.
 	Tenant string
 	// OrgRole is a user's role in Tenant ("org-admin" or "member"), from the
 	// same row; "" when Tenant is "".
@@ -72,6 +75,11 @@ type Subject struct {
 	// The caller's member rows, loaded once per request (roles.go).
 	grants       []*store.Member
 	grantsLoaded bool
+	// Which tenant each bound project is in, loaded once per request
+	// (tenancy.go).
+	projectTenants       map[string]string
+	projectTenantsErr    error
+	projectTenantsLoaded bool
 }
 
 type subjectCtxKey struct{}

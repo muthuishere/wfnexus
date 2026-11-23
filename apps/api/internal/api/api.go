@@ -134,6 +134,8 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.issuer = issuerForTest
 	}
 	buildProviders(s)
+	// Every execution asks the tenant's organization policy first (#189).
+	eng.SetRunGuard(s.tenantRunGuard)
 	s.events = newEventLoop()
 	if st != nil {
 		eng.OnRunStatus(s.recordRunEvent)
@@ -470,12 +472,19 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-func (s *Server) reloadWorkflows(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) reloadWorkflows(w http.ResponseWriter, r *http.Request) {
 	if err := s.eng.ReloadDefinitions(); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, workflow.Sorted(s.eng.Definitions()))
+	// The answer is the caller's tenant's definitions only (#189).
+	out := []*workflow.Definition{}
+	for _, d := range workflow.Sorted(s.eng.Definitions()) {
+		if s.tenantVisible(r, sourceProject(d)) {
+			out = append(out, d)
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +509,12 @@ func (s *Server) validateWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.eng.CheckWorkflow(def); err != nil {
+		writeJSON(w, 200, map[string]any{"valid": false, "error": err.Error()})
+		return
+	}
+	// A draft the organization's guard would refuse to save is not valid
+	// for this person (#189).
+	if err := s.orgGuardSave(r, def); err != nil {
 		writeJSON(w, 200, map[string]any{"valid": false, "error": err.Error()})
 		return
 	}
@@ -609,6 +624,10 @@ func (s *Server) dryRun(w http.ResponseWriter, r *http.Request) {
 	if !s.workflowInScope(w, r, urlName(r, "name")) {
 		return
 	}
+	if err := s.orgGuardRun(r, s.eng.Definitions()[urlName(r, "name")]); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	out, err := s.eng.DryRunWorkflow(urlName(r, "name"), input)
 	if err != nil {
 		writeErr(w, 404, err)
@@ -630,6 +649,10 @@ func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	if err := s.orgGuardRun(r, def); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	writeJSON(w, 200, s.eng.DryRunDraft(def, envelope.Input))
 }
 
@@ -637,10 +660,18 @@ func (s *Server) dryRunDraft(w http.ResponseWriter, r *http.Request) {
 // workflows and their runs: project → workflow → runs, the same hierarchy
 // GitHub Actions has.
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
-	out, err := s.eng.Projects(r.Context())
+	all, err := s.eng.Projects(r.Context())
 	if err != nil {
 		writeErr(w, 500, err)
 		return
+	}
+	// The caller's tenant's projects, by the names it knows them by (#189).
+	out := make([]engine.Project, 0, len(all))
+	for _, p := range all {
+		if s.tenantVisible(r, p.Name) {
+			p.Name, p.Problems = shortProjectName(r, p.Name), s.tenantSkips(r, p.Problems)
+			out = append(out, p)
+		}
 	}
 	writeJSON(w, 200, out)
 }
@@ -651,6 +682,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	p.Name, p.Problems = shortProjectName(r, p.Name), s.tenantSkips(r, p.Problems)
 	writeJSON(w, 200, p)
 }
 
@@ -678,10 +710,38 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	// A person in an organization starts an empty project, bound to the
+	// tenant and stored under the tenant's namespace (#189). A repository —
+	// a URL to clone or a folder on this server — is the operator's to add.
+	org := orgPerson(r)
+	if org != nil {
+		// "--" joins a tenant to a short name (orgProjectSep): a name that
+		// carries it could pose as another tenant's stored name. Refused
+		// whatever the request would do with it — create, clone or import.
+		if strings.Contains(body.Name, orgProjectSep) {
+			writeErr(w, 400, fmt.Errorf("a project name may not contain %q", orgProjectSep))
+			return
+		}
+		if !body.Create || body.Repo != "" {
+			writeErr(w, http.StatusForbidden, errors.New("forbidden: in an organization, start an empty project (`create: true`, no `repo`)"))
+			return
+		}
+		if body.Name == "" {
+			writeErr(w, 400, errors.New("a new project needs a name"))
+			return
+		}
+		body.Name = storedProjectName(org.Tenant, body.Name)
+	}
+	// An organization's project is made and bound as one act: the caller
+	// going away must not cut it short half way, leaving it unbound.
+	ctx := r.Context()
+	if org != nil {
+		ctx = context.WithoutCancel(ctx)
+	}
 	var src workflow.Source
 	var err error
 	if body.Create {
-		src, err = s.eng.CreateProject(r.Context(), body.Name, body.Repo)
+		src, err = s.eng.CreateProject(ctx, body.Name, body.Repo)
 	} else if body.Repo == "" {
 		writeErr(w, 400, fmt.Errorf("`repo` is required — a URL to clone, or a local path to use in place; "+
 			"to start an empty project, send `create: true`"))
@@ -692,6 +752,22 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	if org != nil {
+		if err := s.store.BindProject(ctx, org.Tenant, src.Name); err != nil {
+			// Not bound is not kept: an unbound project is the default
+			// tenant's, never the organization's.
+			_ = s.eng.ForgetRepo(src.Name)
+			writeErr(w, 500, err)
+			return
+		}
+		// Whoever starts a project administers it.
+		if !orgAdmin(r) && org.User != nil {
+			if err := s.store.SetMember(ctx, store.MemberProject, src.Name, org.User.ID, store.ProjectAdmin); err != nil {
+				writeErr(w, 500, err)
+				return
+			}
+		}
 	}
 	if body.Category != "" {
 		if err := s.eng.SetProjectCategory(src.Name, body.Category); err != nil {
@@ -704,6 +780,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
+	p.Name, p.Problems = shortProjectName(r, p.Name), s.tenantSkips(r, p.Problems)
 	writeJSON(w, 201, p)
 }
 
@@ -733,6 +810,7 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	p.Name, p.Problems = shortProjectName(r, p.Name), s.tenantSkips(r, p.Problems)
 	writeJSON(w, 200, p)
 }
 
@@ -752,14 +830,28 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 // listSources returns every place workflows are loaded from, and anything that
 // failed to load — a broken file in one imported repository is recorded rather
 // than fatal, so it needs somewhere to be seen.
-func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
+	// The caller's tenant's sources only (#189).
+	sources := []workflow.Source{}
+	for _, src := range workflow.SortedSources(s.eng.Sources()) {
+		if s.tenantVisible(r, src.Name) {
+			sources = append(sources, src)
+		}
+	}
+	contents := map[string][]engine.WorkflowContents{}
+	for name, c := range s.eng.SourceContents() {
+		if s.tenantVisible(r, name) {
+			contents[name] = c
+		}
+	}
+	skipped := s.tenantSkips(r, s.eng.SourceSkips())
 	writeJSON(w, 200, map[string]any{
-		"sources": workflow.SortedSources(s.eng.Sources()),
-		"skipped": s.eng.SourceSkips(),
+		"sources": sources,
+		"skipped": skipped,
 		// The whole of each workflow, not just its name: a source is listed so
 		// somebody can reuse from it, and a name alone does not say that the
 		// thing they are about to copy ships a run.js.
-		"contents": s.eng.SourceContents(),
+		"contents": contents,
 	})
 }
 
@@ -846,6 +938,10 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("definition name %q does not match the url %q", def.Name, name))
 		return
 	}
+	if err := s.orgGuardSave(r, def); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
 	// A git-backed project gets a PROPOSAL (branch + commit, and a PR when
 	// there is a remote), answered 202; a plain directory is written directly.
 	if s.proposeSave(w, r, project, def) {
@@ -856,7 +952,7 @@ func (s *Server) saveWorkflow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "path": path, "definition": s.eng.Definitions()[name]})
+	writeJSON(w, 200, map[string]any{"ok": true, "path": path, "definition": s.savedDefinition(r, project, name)})
 }
 
 func (s *Server) deleteWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -880,6 +976,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.eng.Definitions()[name] == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
+		return
+	}
+	if err := s.orgGuardRun(r, s.eng.Definitions()[name]); err != nil {
+		writeErr(w, 400, err)
 		return
 	}
 	var input json.RawMessage
@@ -961,6 +1061,10 @@ func (s *Server) repositoryDispatch(w http.ResponseWriter, r *http.Request) {
 	def := s.eng.Definitions()[name]
 	if def == nil {
 		writeErr(w, 404, fmt.Errorf("workflow not found"))
+		return
+	}
+	if err := s.orgGuardRun(r, def); err != nil {
+		writeErr(w, 400, err)
 		return
 	}
 	if def.On.RepositoryDispatch != nil && !def.On.RepositoryDispatch.Accepts(body.EventType) {
@@ -1266,7 +1370,7 @@ func resolveErr(w http.ResponseWriter, err error) {
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	by := actorOf(r, b)
@@ -1298,7 +1402,7 @@ func (s *Server) reject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	by := actorOf(r, b)
@@ -1315,7 +1419,7 @@ func (s *Server) provideInput(w http.ResponseWriter, r *http.Request) {
 // answer resolves an ask_human suspension.
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	ans := tn.Answer{Ok: b.Ok == nil || *b.Ok, Reason: b.Reason,
@@ -1331,9 +1435,30 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
+// resumeAllowed refuses, up front, to continue a run its workflow could not
+// be started for (#189): a guarded organization's person approving,
+// answering, filling in or retrying a run of a workflow with a shell step or
+// a file-writing tool — say one a superadmin started. The engine asks its run
+// guard again when the run resumes; this says so before anything changes.
+func (s *Server) resumeAllowed(w http.ResponseWriter, r *http.Request, id uuid.UUID) bool {
+	if !orgMember(r) {
+		return true
+	}
+	run, err := s.store.GetRun(r.Context(), id)
+	if err != nil {
+		notFound(w)
+		return false
+	}
+	if err := s.orgGuardRun(r, s.eng.Definitions()[run.Workflow]); err != nil {
+		writeErr(w, 400, err)
+		return false
+	}
+	return true
+}
+
 func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
 	id, b, ok := s.decodeStep(w, r)
-	if !ok {
+	if !ok || !s.resumeAllowed(w, r, id) {
 		return
 	}
 	if err := s.eng.Retry(r.Context(), id, b.StepID); err != nil {

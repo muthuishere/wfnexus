@@ -166,6 +166,28 @@ func (s *Server) customerSaveWorkflow(w http.ResponseWriter, r *http.Request, su
 // code, reaches a worker, a mount, the env store, a module, an mcp server,
 // another workflow or a channel is refused.
 func customerWorkflowGuard(d *workflow.Definition) error {
+	if err := guardDefinition(d); err != nil {
+		return err
+	}
+	if !triggersEmpty(d.On) {
+		return errors.New("triggers are not available to customer workflows: start runs through the API")
+	}
+	return guardSteps(d.Steps)
+}
+
+// customerRunGuard is customerWorkflowGuard without the triggers check: what
+// a run started by a person may not use. An organization's guarded people
+// (orgGuardRun) are held to it when they run, dispatch or dry-run a workflow
+// already on disk.
+func customerRunGuard(d *workflow.Definition) error {
+	if err := guardDefinition(d); err != nil {
+		return err
+	}
+	return guardSteps(d.Steps)
+}
+
+// guardDefinition is the workflow-level half of the guard.
+func guardDefinition(d *workflow.Definition) error {
 	switch {
 	case len(d.Mount) > 0:
 		return errors.New("mount is not available to customer workflows")
@@ -179,10 +201,8 @@ func customerWorkflowGuard(d *workflow.Definition) error {
 		return errors.New("env is not available to customer workflows")
 	case d.RunsOn != "":
 		return errors.New("runs-on is not available to customer workflows")
-	case !triggersEmpty(d.On):
-		return errors.New("triggers are not available to customer workflows: start runs through the API")
 	}
-	return guardSteps(d.Steps)
+	return nil
 }
 
 // triggersEmpty: no schedule, no inbound hook, no message trigger and no

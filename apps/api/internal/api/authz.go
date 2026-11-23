@@ -257,6 +257,15 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			writeErr(w, http.StatusForbidden, errors.New("password change required: set a new password first"))
 			return
 		}
+		// #189: another tenant's thing is a 404, asked BEFORE the role
+		// question so it is never a 403 (tenancy.go). A person in an
+		// organization addresses the tenant's projects and workflows by
+		// short and bare names; those become the tenant's own first.
+		s.addressInTenant(r)
+		if !s.tenantGate(r) {
+			notFound(w)
+			return
+		}
 		// A grant at the addressed scope (ADR 0028) allows what reading
 		// alone does not.
 		if !s.can(r, perm) && !s.scopedAllows(r) {
@@ -288,10 +297,12 @@ func (s *Server) scopeOf(r *http.Request) string {
 	return sub.Project
 }
 
-// inScope reports whether a resource's project is within the caller's scope.
+// inScope reports whether a resource's project is within the caller's scope:
+// the project a scoped token is confined to, and the caller's tenant
+// (tenantVisible, #189).
 func (s *Server) inScope(r *http.Request, project string) bool {
 	scope := s.scopeOf(r)
-	return scope == "" || scope == project
+	return (scope == "" || scope == project) && s.tenantVisible(r, project)
 }
 
 // workflowInScope is the gate every workflow-addressed route goes through. It

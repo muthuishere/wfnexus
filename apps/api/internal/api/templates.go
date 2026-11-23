@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
+	"github.com/muthuishere/wfnexus/apps/api/internal/engine"
 	"github.com/muthuishere/wfnexus/apps/api/internal/workflow"
 )
 
@@ -13,8 +15,19 @@ import (
 // there is no separate store, no template language and no second validator —
 // which is why a template that would not run cannot reach the gallery.
 
-func (s *Server) listTemplates(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.eng.Templates())
+func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
+	// The shipped templates and the caller's tenant's (#189).
+	out := []engine.Template{}
+	for _, t := range s.eng.Templates() {
+		src := t.Source
+		if src == "" {
+			src = "local"
+		}
+		if s.tenantVisible(r, src) {
+			out = append(out, t)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // getTemplate returns the whole definition, which is what the builder opens.
@@ -60,12 +73,22 @@ func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	into := body.Project
+	into := s.resolveProject(r, body.Project)
 	if into == "" {
 		into = "local"
 	}
+	// Another tenant's project is a 404 (#189), and a person in an
+	// organization writes only where they may save.
 	if !s.inScope(r, into) {
 		notFound(w)
+		return
+	}
+	if orgMember(r) && !s.canSaveInto(r, into) {
+		writeErr(w, http.StatusForbidden, errors.New("forbidden: you may not save workflows into this project"))
+		return
+	}
+	if err := s.orgGuardSave(r, def); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	path, err := s.eng.SaveWorkflowIn(into, def)
@@ -75,6 +98,21 @@ func (s *Server) copy(w http.ResponseWriter, r *http.Request, take copyFn) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"ok": true, "name": def.Name, "path": path,
-		"definition": s.eng.Definitions()[def.Name],
+		"definition": s.savedDefinition(r, into, def.Name),
 	})
+}
+
+// savedDefinition is the definition a save into project just made. The bare
+// name may belong to an earlier-loaded project — another tenant's (#163) —
+// so the project's own qualified key is read first, and a definition the
+// caller may not see is never the answer (#189).
+func (s *Server) savedDefinition(r *http.Request, project, name string) *workflow.Definition {
+	d := s.eng.Definitions()[project+"/"+name]
+	if d == nil {
+		d = s.eng.Definitions()[name]
+	}
+	if d == nil || !s.tenantVisible(r, sourceProject(d)) {
+		return nil
+	}
+	return d
 }

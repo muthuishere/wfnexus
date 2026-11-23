@@ -285,6 +285,12 @@ type Visibility struct {
 	TriggeredBy string
 	Workflows   []string
 	Projects    []string
+	// Tenant, when set, confines every run to that tenant (#189), whatever
+	// the lines above allow: a grant never reaches across the boundary.
+	Tenant string
+	// TenantWide makes every run of Tenant visible, not only the ones the
+	// lines above name (an organization's people see their tenant's runs).
+	TenantWide bool
 }
 
 // RunsInStatus lists runs currently in any of these states, oldest first.
@@ -320,7 +326,12 @@ func (s *Store) FindRuns(ctx context.Context, f RunFilter) ([]*Run, error) {
 		args = append(args, f.Conversation)
 		where = append(where, fmt.Sprintf("conversation=$%d", len(args)))
 	}
-	if v := f.Visible; v != nil {
+	if v := f.Visible; v != nil && v.Tenant != "" {
+		// #189: the fail-closed tenant condition (tenantRunWhere).
+		args = append(args, v.Tenant)
+		where = append(where, tenantRunWhere(fmt.Sprintf("$%d", len(args))))
+	}
+	if v := f.Visible; v != nil && !(v.TenantWide && v.Tenant != "") {
 		// ADR 0028: own runs OR runs of a granted workflow OR of an
 		// administered project.
 		args = append(args, v.TriggeredBy)

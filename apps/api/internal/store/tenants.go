@@ -93,6 +93,26 @@ func (s *Store) ProjectTenant(ctx context.Context, project string) (string, erro
 	return t, err
 }
 
+// ProjectTenants names the tenant of every BOUND project; a project not in
+// the map is the default tenant's. One query, so a request that decides
+// visibility for a whole listing (#189) reads the bindings once.
+func (s *Store) ProjectTenants(ctx context.Context) (map[string]string, error) {
+	rows, err := s.query(ctx, `SELECT project, tenant_id FROM tenant_projects`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var p, t string
+		if err := rows.Scan(&p, &t); err != nil {
+			return nil, err
+		}
+		out[p] = t
+	}
+	return out, rows.Err()
+}
+
 // BindProject puts a project in a tenant and moves its existing runs and
 // bundles with it, in one transaction. Binding a project to the tenant it is
 // already in is a no-op; binding it to a different one is ErrProjectBound.

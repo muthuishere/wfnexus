@@ -90,6 +90,14 @@ func (s *Server) publishBundle(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	// Another tenant's project is a 404 (#189), before anything is unpacked.
+	if !s.tenantVisible(r, b.Project) {
+		notFound(w)
+		return
+	}
+	if !s.orgMayAdmin(w, r, b.Project) {
+		return
+	}
 	if b.Name == "" || b.Version == "" {
 		writeErr(w, 400, errors.New("`name` and `version` are required"))
 		return
@@ -196,10 +204,16 @@ func (s *Server) listBundles(w http.ResponseWriter, r *http.Request) {
 	if scope := s.scopeOf(r); scope != "" {
 		f.Project = scope
 	}
-	out, err := s.store.ListBundles(r.Context(), f)
+	all, err := s.store.ListBundles(r.Context(), f)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
+	}
+	out := []*store.PublishedBundle{}
+	for _, b := range all {
+		if s.tenantVisible(r, b.Project) {
+			out = append(out, b)
+		}
 	}
 	writeJSON(w, 200, out)
 }
@@ -256,6 +270,12 @@ func (s *Server) getBundleTar(w http.ResponseWriter, r *http.Request) {
 func (s *Server) installBundle(w http.ResponseWriter, r *http.Request) {
 	row, ok := s.bundleInScope(w, r)
 	if !ok {
+		return
+	}
+	// An install saves into the platform's own directory and adds a skill
+	// root for the whole server: neither is any organization's (#189).
+	if orgMember(r) {
+		writeErr(w, http.StatusForbidden, errors.New("forbidden: installing a bundle changes the whole server; ask an operator"))
 		return
 	}
 	raw, err := bundle.Load(r.Context(), s.blob, row.Digest)
@@ -338,6 +358,9 @@ func (s *Server) setBundleTag(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.inScope(r, b.Project) {
 		notFound(w)
+		return
+	}
+	if !s.orgMayAdmin(w, r, b.Project) {
 		return
 	}
 	if _, err := s.store.Bundle(r.Context(), b.Project, b.Kind, b.Name, b.Version); err != nil {

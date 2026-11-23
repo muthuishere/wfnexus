@@ -151,3 +151,24 @@ func (s *Store) UnbindUserTenant(ctx context.Context, userID uuid.UUID) error {
 	}
 	return tx.Commit()
 }
+
+// TenantPeopleProviders names the login provider of every person bound to a
+// tenant, once each (#189: a tenant's run policy is its people's). A tenant
+// with no people — a service tenant (ADR 0030) — has none.
+func (s *Store) TenantPeopleProviders(ctx context.Context, tenant string) ([]string, error) {
+	rows, err := s.query(ctx, `SELECT DISTINCT u.auth_provider FROM user_tenants ut
+		JOIN users u ON u.id = ut.user_id WHERE ut.tenant_id = $1`, tenant)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

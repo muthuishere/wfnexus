@@ -38,14 +38,27 @@ func (s *Server) isSuper(r *http.Request) bool {
 	return sub.Kind == SubjectWorker || sub.Role == RoleSuperadmin
 }
 
-// grants loads the caller's member rows once per request.
+// grants loads the caller's member rows once per request. A row on a project
+// or workflow outside the caller's tenant is dropped (#189): a grant never
+// reaches across the tenant boundary, whatever rows a person holds from
+// before a project was bound.
 func (s *Server) grants(r *http.Request) []*store.Member {
 	sub, ok := SubjectFrom(r.Context())
 	if !ok || sub.User == nil {
 		return nil
 	}
 	if !sub.grantsLoaded {
-		sub.grants, _ = s.store.GrantsOf(r.Context(), sub.User.ID)
+		all, _ := s.store.GrantsOf(r.Context(), sub.User.ID)
+		sub.grants = nil
+		for _, g := range all {
+			project := g.Name
+			if g.Scope == store.MemberWorkflow {
+				project = s.eng.ProjectFor(g.Name)
+			}
+			if s.tenantVisible(r, project) {
+				sub.grants = append(sub.grants, g)
+			}
+		}
 		sub.grantsLoaded = true
 	}
 	return sub.grants
@@ -64,23 +77,48 @@ func (s *Server) holds(r *http.Request, scope, name string, roles ...string) boo
 	return false
 }
 
+// canAdminProject: a superadmin, a project_admin of it, or — inside their own
+// tenant only — an organization's org-admin (#189).
 func (s *Server) canAdminProject(r *http.Request, project string) bool {
-	return s.isSuper(r) || s.holds(r, store.MemberProject, project, store.ProjectAdmin)
+	return s.isSuper(r) || s.tenantWritable(r, project) &&
+		(orgAdmin(r) || s.holds(r, store.MemberProject, project, store.ProjectAdmin))
 }
 
 func (s *Server) canAdminWorkflow(r *http.Request, wf string) bool {
-	return s.canAdminProject(r, s.eng.ProjectFor(wf)) || s.holds(r, store.MemberWorkflow, wf, store.WorkflowAdmin)
+	return s.canAdminProject(r, s.eng.ProjectFor(wf)) ||
+		s.holds(r, store.MemberWorkflow, wf, store.WorkflowAdmin) && s.tenantWritable(r, s.eng.ProjectFor(wf))
 }
 
+// canRunWorkflow: an admin of it, a workflow_runner of it, or any person in
+// the organization whose tenant it is in (#189).
 func (s *Server) canRunWorkflow(r *http.Request, wf string) bool {
-	return s.canAdminWorkflow(r, wf) || s.holds(r, store.MemberWorkflow, wf, store.WorkflowRunner)
+	return s.canAdminWorkflow(r, wf) || s.holds(r, store.MemberWorkflow, wf, store.WorkflowRunner) ||
+		orgMember(r) && s.tenantWritable(r, s.eng.ProjectFor(wf))
+}
+
+// canSaveInto: may write a workflow into project — its admin, or any person
+// in the organization whose tenant it is in (a member edits the tenant's
+// workflows, #189).
+func (s *Server) canSaveInto(r *http.Request, project string) bool {
+	return s.canAdminProject(r, project) || orgMember(r) && s.tenantWritable(r, project)
+}
+
+// orgMayAdmin is, for a person in an organization, the check a route that is
+// "admin anywhere" for everyone else gets: admin of the project the request
+// is about. It answers 403 itself; for anyone else it says yes.
+func (s *Server) orgMayAdmin(w http.ResponseWriter, r *http.Request, project string) bool {
+	if orgMember(r) && !s.canAdminProject(r, project) {
+		writeErr(w, http.StatusForbidden, errors.New("forbidden: you do not administer this project"))
+		return false
+	}
+	return true
 }
 
 // adminAnywhere: holds an admin role at some scope. Publishing a bundle,
 // validating or dry-running a draft and proposing a change are not addressed
 // to one workflow, so they need only that.
 func (s *Server) adminAnywhere(r *http.Request) bool {
-	if s.isSuper(r) {
+	if s.isSuper(r) || orgAdmin(r) {
 		return true
 	}
 	for _, g := range s.grants(r) {
@@ -109,6 +147,17 @@ func (s *Server) scopedAllows(r *http.Request) bool {
 		return name, sub
 	}
 	switch {
+	// #189: a person in an organization may create a project (bound to the
+	// tenant, createProject), reload the definitions when they administer
+	// something (the answer is filtered to the tenant), and reach the
+	// state and conversation writes, whose handlers check the tenant and
+	// the role of what the body names. Everyone else: as before.
+	case orgMember(r) && method == http.MethodPost && path == "/api/projects":
+		return true
+	case orgMember(r) && method == http.MethodPost && path == "/api/workflows/reload":
+		return s.adminAnywhere(r)
+	case orgMember(r) && !read && (path == "/api/state" || strings.HasPrefix(path, "/api/state/") || path == "/api/conversations/state"):
+		return true
 	case !read && (strings.HasPrefix(path, "/api/bundles") || path == "/api/workflows/validate" ||
 		path == "/api/dryrun" || strings.HasPrefix(path, "/api/proposals") ||
 		(strings.HasPrefix(path, "/api/templates/") && strings.HasSuffix(path, "/copy"))):
@@ -117,7 +166,18 @@ func (s *Server) scopedAllows(r *http.Request) bool {
 		name, sub := seg(strings.TrimPrefix(path, "/api/workflows/"))
 		switch sub {
 		case "":
-			return (method == http.MethodPut || method == http.MethodDelete) && s.canAdminWorkflow(r, name)
+			// A save with ?project= writes into that project, so that is
+			// the project it is authorized against — not the name's own,
+			// which for a new name is "local".
+			if method == http.MethodPut {
+				if p := r.URL.Query().Get("project"); p != "" {
+					// …or the workflow's own admin, saving it where it is.
+					return s.canSaveInto(r, p) ||
+						s.eng.Definitions()[name] != nil && s.eng.ProjectFor(name) == p && s.canAdminWorkflow(r, name)
+				}
+				return s.canAdminWorkflow(r, name) || s.canSaveInto(r, s.eng.ProjectFor(name)) && orgMember(r)
+			}
+			return method == http.MethodDelete && s.canAdminWorkflow(r, name)
 		case "memory", "expose", "members":
 			return s.canAdminWorkflow(r, name)
 		case "runs", "dryrun", "dispatches":
@@ -143,14 +203,19 @@ func (s *Server) scopedAllows(r *http.Request) bool {
 	return false
 }
 
-// runVisible: a superadmin sees every run; anyone else the runs it started
-// and the runs of workflows (or projects) it holds a role on.
+// runVisible: a superadmin sees every run; anyone else only runs of its
+// tenant (#189), and of those the runs it started and the runs of workflows
+// (or projects) it holds a role on — a person in an organization, every run
+// of the tenant.
 func (s *Server) runVisible(r *http.Request, run *store.Run) bool {
 	if s.isSuper(r) {
 		return true
 	}
+	if !s.tenantVisible(r, run.Project) {
+		return false
+	}
 	sub, _ := SubjectFrom(r.Context())
-	return (sub != nil && run.TriggeredBy == sub.Name) || s.canRunWorkflow(r, run.Workflow) || s.canAdminProject(r, run.Project)
+	return orgMember(r) || (sub != nil && run.TriggeredBy == sub.Name) || s.canRunWorkflow(r, run.Workflow) || s.canAdminProject(r, run.Project)
 }
 
 // visibility is runVisible as a listing filter; nil for a superadmin.
@@ -159,7 +224,8 @@ func (s *Server) visibility(r *http.Request) *store.Visibility {
 		return nil
 	}
 	sub, _ := SubjectFrom(r.Context())
-	v := &store.Visibility{TriggeredBy: sub.Name}
+	v := &store.Visibility{TriggeredBy: sub.Name, TenantWide: orgMember(r)}
+	v.Tenant, _ = s.callerTenant(r)
 	for _, g := range s.grants(r) {
 		if g.Scope == store.MemberWorkflow {
 			v.Workflows = append(v.Workflows, g.Name)
@@ -217,7 +283,7 @@ func (s *Server) setMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := s.store.UserByName(r.Context(), urlName(r, "user"))
-	if err != nil {
+	if err != nil || !s.granteeSees(r, u, scope, name) {
 		notFound(w)
 		return
 	}
@@ -226,6 +292,23 @@ func (s *Server) setMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"scope": scope, "name": name, "user": u.Name, "role": role})
+}
+
+// granteeSees: a grant never crosses the tenant boundary (#189). The person
+// being granted must be able to see what the grant is on — asked of
+// tenantVisible as that person would be asked, from their own binding. A
+// person of another organization is answered as an unknown user.
+func (s *Server) granteeSees(r *http.Request, u *store.User, scope, name string) bool {
+	tenant, orgRole, err := s.store.UserTenant(r.Context(), u.ID)
+	if err != nil {
+		return false
+	}
+	project := name
+	if scope == store.MemberWorkflow {
+		project = s.eng.ProjectFor(name)
+	}
+	as := &Subject{Kind: SubjectUser, Name: u.Name, Role: u.Role, User: u, Tenant: tenant, OrgRole: orgRole}
+	return s.tenantVisible(r.WithContext(withSubject(r.Context(), as)), project)
 }
 
 func (s *Server) removeMember(w http.ResponseWriter, r *http.Request) {
