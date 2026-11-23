@@ -135,6 +135,9 @@ func New(eng *engine.Engine, st *store.Store, bl blob.Store, addr, uiDir string,
 		s.issuer = issuerForTest
 	}
 	buildProviders(s)
+	if w := proxyWarning(s.loopbackOnly, eng.TrustedProxies()); w != "" {
+		log.Print(w)
+	}
 	s.events = newEventLoop()
 	if st != nil {
 		eng.OnRunStatus(s.recordRunEvent)

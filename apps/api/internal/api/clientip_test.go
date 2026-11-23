@@ -120,6 +120,7 @@ func TestForwardedClient(t *testing.T) {
 		{"untrusted peer", "203.0.113.5:1", []string{"198.51.100.1"}, ""},
 		{"rightmost untrusted", "192.0.2.10:1", []string{"198.51.100.9, 198.51.100.1, 192.0.2.11"}, "198.51.100.1"},
 		{"several header lines", "192.0.2.10:1", []string{"198.51.100.9", "198.51.100.2"}, "198.51.100.2"},
+		{"client in an earlier header line", "192.0.2.10:1", []string{"203.0.113.250, 198.51.100.6", "192.0.2.11", "192.0.2.12, 192.0.2.13"}, "198.51.100.6"},
 		{"no header", "192.0.2.10:1", nil, ""},
 		{"all hops trusted", "192.0.2.10:1", []string{"192.0.2.12"}, ""},
 		{"garbage hop", "192.0.2.10:1", []string{"198.51.100.1, not-an-ip"}, ""},
@@ -143,5 +144,44 @@ func TestForwardedClient(t *testing.T) {
 				t.Fatalf("got %v %v, want %s", got, ok, tc.want)
 			}
 		})
+	}
+}
+
+// A sign-in through two trusted hops, each appending its own header line: the
+// client named in the first line is the one limited.
+func TestAClientInAnEarlierForwardedForLineIsTheKey(t *testing.T) {
+	h := testServerProxies(t, "192.0.2.0/24")
+	send := func(client string, n int) int {
+		raw, _ := json.Marshal(map[string]string{"username": "nobody-" + string(rune('a'+n)), "password": "wrong-password-x"})
+		req := httptest.NewRequest("POST", "/api/auth/password", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = proxyPeer + ":40000"
+		req.Header.Add("X-Forwarded-For", client)
+		req.Header.Add("X-Forwarded-For", "192.0.2.11")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	for i := 0; i < verifyPerMinute; i++ {
+		send("198.51.100.1", i)
+	}
+	if c := send("198.51.100.1", verifyPerMinute); c != http.StatusTooManyRequests {
+		t.Fatalf("the client in the first line was not limited: %d", c)
+	}
+	if c := send("198.51.100.2", 0); c == http.StatusTooManyRequests {
+		t.Fatal("another client was limited: the key was a proxy hop, not the client")
+	}
+}
+
+func TestProxyWarning(t *testing.T) {
+	some, _ := config.ParseTrustedProxies([]string{"192.0.2.0/24"})
+	if proxyWarning(false, nil) == "" {
+		t.Error("no warning for a non-loopback bind that trusts no proxy")
+	}
+	if w := proxyWarning(true, nil); w != "" {
+		t.Errorf("loopback warned: %s", w)
+	}
+	if w := proxyWarning(false, some); w != "" {
+		t.Errorf("configured proxies warned: %s", w)
 	}
 }

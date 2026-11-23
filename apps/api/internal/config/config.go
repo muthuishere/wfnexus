@@ -340,7 +340,13 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, e := range entries {
 		if p, err := netip.ParsePrefix(e); err == nil {
-			out = append(out, netip.PrefixFrom(p.Addr().Unmap(), unmappedBits(p)).Masked())
+			p = netip.PrefixFrom(p.Addr().Unmap(), unmappedBits(p)).Masked()
+			if p.Bits() == 0 {
+				// Every address a proxy is every caller a proxy: anyone could
+				// name their own client address again.
+				return nil, fmt.Errorf("trusted proxy %q trusts every address; name the proxies' own range", e)
+			}
+			out = append(out, p)
 			continue
 		}
 		a, err := netip.ParseAddr(e)

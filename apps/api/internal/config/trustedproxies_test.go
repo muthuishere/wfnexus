@@ -49,3 +49,15 @@ func TestAWrongTrustedProxyIsRefused(t *testing.T) {
 		t.Fatal("an entry that is not an address was accepted")
 	}
 }
+
+func TestACatchAllTrustedProxyIsRefused(t *testing.T) {
+	for _, e := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96", "198.51.100.0/0"} {
+		if _, err := ParseTrustedProxies([]string{e}); err == nil {
+			t.Errorf("%s was accepted; it trusts every address", e)
+		}
+	}
+	t.Setenv("WFX_TRUSTED_PROXIES", "0.0.0.0/0")
+	if _, err := LoadWithFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
+		t.Fatal("config load accepted a catch-all trusted proxy")
+	}
+}

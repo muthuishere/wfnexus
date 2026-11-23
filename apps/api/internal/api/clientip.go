@@ -42,6 +42,8 @@ func forwardedClient(r *http.Request, trusted []netip.Prefix) (netip.Addr, bool)
 	if !ok || !isTrusted(peer, trusted) {
 		return netip.Addr{}, false
 	}
+	// Every header line, in order, is one list: a proxy may append a line
+	// rather than extend the last one.
 	var hops []string
 	for _, v := range r.Header.Values("X-Forwarded-For") {
 		hops = append(hops, strings.Split(v, ",")...)
@@ -71,6 +73,16 @@ func parseHop(s string) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return a.Unmap(), true
+}
+
+// proxyWarning is said once at startup when a server reachable from other
+// machines trusts no proxy: correct when nothing sits in front of it, and the
+// reason every client shares one sign-in limit when something does.
+func proxyWarning(loopbackOnly bool, trusted []netip.Prefix) string {
+	if loopbackOnly || len(trusted) > 0 {
+		return ""
+	}
+	return "WARNING behind a reverse proxy, set trustedProxies (WFX_TRUSTED_PROXIES) or every client shares one rate-limit address"
 }
 
 func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
